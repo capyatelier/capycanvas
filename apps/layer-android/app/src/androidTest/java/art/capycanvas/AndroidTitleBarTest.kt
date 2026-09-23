@@ -653,7 +653,7 @@ class AndroidTitleBarTest {
         if (state().getJSONObject("customization").isNull("drawer")) tap(select)
         assertEquals("[[\"tools\"],[\"tool_settings\"]]", state().getJSONObject("customization").getJSONObject("drawer").getJSONArray("columns").toString())
         val choices = state().getJSONObject("tool_set").array("subtools").objects()
-        assertEquals(6, choices.size)
+        assertEquals(7, choices.size)
         val modes = listOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
         for ((i, choice) in choices.withIndex()) {
             tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[i % 3]
@@ -662,21 +662,22 @@ class AndroidTitleBarTest {
             tap(tag)
             assertEquals(choice.getString("icon"), command("select").getString("icon"))
             assertFalse(state().getJSONObject("customization").isNull("drawer"))
-            assertNotNull(node("tool-setting-selection_feather"))
-            assertNotNull(node("tool-action-selection_antialias"))
+            val brush = choice.getString("icon") == "selection-brush"
+            assertNotNull(node("tool-setting-" + if(brush)"selection_brush_size" else "selection_feather"))
+            if(!brush) assertNotNull(node("tool-action-selection_antialias"))
+            val availableModes = if(brush) listOf("selection_add", "selection_subtract") else modes
             val row = bounds("selection-mode-row")
-            for (id in modes) {
+            for (id in availableModes) {
                 val button = bounds("tool-action-$id")
                 assertEquals(row.top, button.top, 1f)
                 assertTrue(button.right <= row.right + 1f)
                 tap("tool-action-$id")
                 assertTrue(command(id).getBoolean("selected"))
-                assertEquals(1, modes.count { command(it).getBoolean("selected") })
+                assertEquals(1, availableModes.count { command(it).getBoolean("selected") })
                 assertNull("Modes have no caption", node("tool-action-$id")!!.second.config.getOrNull(SemanticsProperties.Text))
             }
         }
-        tap("tool-action-selection_new")
-        invoke("rectangle_select"); tap("tool-action-selection_fixed_size")
+        invoke("rectangle_select"); tap("tool-action-selection_new"); tap("tool-action-selection_fixed_size")
         assertNotNull(node("tool-setting-selection_width")); assertNotNull(node("tool-setting-selection_height"))
         tap("tool-action-selection_fixed_size")
         invoke("color_select")

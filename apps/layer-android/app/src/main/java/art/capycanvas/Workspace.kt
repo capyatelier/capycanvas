@@ -360,6 +360,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
         }
+        state?.let { SelectionMaskActions(host, it, Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 40.dp).chromeRegion(dock)) }
         WorkspaceDropHint(dock)
         dock.contextMenu?.let { menu ->
             val anchor = dock.contextAnchor

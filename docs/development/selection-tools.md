@@ -13,7 +13,8 @@ including while another category is active. Rust publishes the icon from shared
 workspace memory; hosts update their retained header and toolbar images.
 Selection modes use one compact row of icon toggles, with names and explanations
 in accessible labels and tooltips instead of permanent text. The overlapping
-rectangle symbols follow the familiar New/Add/Subtract/Intersect order. Select by Color uses the wand motif with RGB sparkles.
+rectangle symbols follow the familiar New/Add/Subtract/Intersect order.
+Select by Color uses the wand motif with RGB sparkles.
 
 Selection gestures, settings, completion/cancellation, document coordinates,
 and one-edit history are in `crates/layer-ui/src/selection_tools.rs`. All six
@@ -109,7 +110,8 @@ Saved previews use a cached GPU union and a packed integer texture, keeping the
 presenter within the portable four-storage-buffer limit. Their grayscale 32px
 thumbnails and tint are excluded from artwork sampling/export.
 
-GTK and Web present 44px actions, a pinned Quick Mask row, a persistent editing strip,
+GTK and Web present 44px actions; Android uses 48dp. All three have a pinned
+Quick Mask row, a persistent editing strip,
 explicit Load buttons and Ctrl-thumbnail loading (Shift add, Alt subtract,
 Shift+Alt intersect). Shared Select/Layer/View menus expose lifecycle, coverage
 sources, saved destinations and display actions without keyboard modifiers.
@@ -135,6 +137,14 @@ Additional reproducible checks:
   physical pen sensor. Keep the tablet awake before starting the harness; it
   holds a screen wake lock during this suite and preserves recovery prompts
   using Keep for Later.
+- Android `AndroidRasterTest#paintableSelectionsOnDevice` tests Selection Brush
+  GPU history, native stylus Quick Mask contacts, mask menus, independent colors,
+  the saved-layer Load button and artwork export isolation. Light/dark captures
+  are written to the app’s external files directory. Run alongside
+  `AndroidRasterTest#selectionToolsRenderAndCombineOnDevice` and
+  `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons`. Huion tests
+  use the actual Vulkan device and Android input dispatcher with injected stylus
+  events; they do not establish physical pressure/tilt feel.
 - Run `native_quick_mask_input` through the native GTK harness above. It checks
   coverage and tint pixels, saves/edits/loads a mask, and captures both themes.
 - `cargo test --locked -p layer-render-wgpu --release selection_paint_latency

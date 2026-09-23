@@ -272,6 +272,93 @@ class AndroidRasterTest {
         println("PASS native selection geometry, polygon completion, undo/redo, feathered GPU masks and disconnected color islands")
     }
 
+    @Test fun paintableSelectionsOnDevice() {
+        fun send(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            compose.waitUntil(30_000) { !tick() }
+            val published = java.util.concurrent.atomic.AtomicBoolean(false)
+            compose.runOnUiThread { host.documentChanged { published.set(true) } }
+            compose.waitUntil(30_000) { published.get() }
+            compose.waitForIdle()
+        }
+        fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
+        fun view() = host.snapshot!!.getJSONObject("state").getJSONObject("layer_tools")
+        invoke("fit_canvas")
+        val blank = hash(png("selection-blank.png"))
+        invoke("selection_brush"); invoke("selection_add")
+        point(1,-60.0,-45.0); point(2,60.0,-45.0); point(2,60.0,45.0); point(2,-60.0,45.0); point(3,-60.0,-45.0)
+        send(obj("type" to "close_settings"))
+        assertTrue(view().getBoolean("has_selection"))
+        invoke("undo"); assertFalse(view().getBoolean("has_selection"))
+        invoke("redo"); assertTrue(view().getBoolean("has_selection"))
+        invoke("deselect")
+        send(obj("type" to "select_brush", "id" to 1))
+        send(obj("type" to "set_brush_size", "value" to 90))
+        val artColors = host.snapshot!!.getJSONObject("state").getJSONObject("colors").toString()
+        invoke("quick_mask")
+        assertTrue(view().getBoolean("quick_mask"))
+        invoke("quick_mask"); assertFalse(view().getBoolean("has_selection")); invoke("quick_mask")
+        compose.onNodeWithTag("selection-mask-actions").assertIsDisplayed()
+        compose.onNodeWithTag("quick-mask-row").assertIsDisplayed()
+        assertEquals(0,host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").length())
+        compose.onNodeWithTag("selection-menu-overlay").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Red").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Overlay Protected Areas").assertIsDisplayed()
+        compose.onNodeWithText("Red").performClick()
+        compose.waitForIdle()
+        compose.waitUntil(10_000) { activity.window.decorView.hasWindowFocus() }
+        send(obj("type" to "close_settings"))
+        // Inject through Android's actual input dispatcher and CanvasSurfaceView.
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val camera = host.snapshot!!.getJSONObject("state").getJSONObject("camera")
+        val viewport = camera.getJSONArray("viewport")
+        val origin = host.surfaceOrigin
+        val start = SystemClock.uptimeMillis()
+        for (i in 0..12) {
+            val phase = when(i) { 0 -> android.view.MotionEvent.ACTION_DOWN; 12 -> android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
+            val properties = arrayOf(android.view.MotionEvent.PointerProperties().apply { id=7; toolType=android.view.MotionEvent.TOOL_TYPE_STYLUS })
+            val coordinates = arrayOf(android.view.MotionEvent.PointerCoords().apply {
+                x=origin.x+viewport.getDouble(0).toFloat()/2-70+i*12; y=origin.y+viewport.getDouble(1).toFloat()/2
+                pressure=if(i==12)0f else .7f
+            })
+            val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coordinates,0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_STYLUS,0)
+            try { assertTrue(automation.injectInputEvent(event,true)) } finally { event.recycle() }
+            SystemClock.sleep(16)
+        }
+        compose.waitUntil(30_000) { !tick() }
+        invoke("swap_mask_colors")
+        assertEquals(1f,view().getJSONObject("mask_editing").number("gray"),0f)
+        assertEquals(artColors,host.snapshot!!.getJSONObject("state").getJSONObject("colors").toString())
+        for (theme in listOf("light","dark")) {
+            send(obj("type" to "set_theme", "theme" to theme))
+            SystemClock.sleep(150)
+            val shot=requireNotNull(automation.takeScreenshot())
+            try {
+                File(activity.getExternalFilesDir(null),"quick-mask-$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }
+                val x=(origin.x+viewport.getDouble(0)/2-100).toInt()
+                val y=(origin.y+viewport.getDouble(1)/2-45).toInt()
+                val pixels=IntArray(200*90); shot.getPixels(pixels,0,200,x,y,200,90)
+                assertTrue("$theme: protected mask reaches Vulkan presentation",pixels.count { android.graphics.Color.red(it)>android.graphics.Color.green(it)+40 && android.graphics.Color.red(it)>android.graphics.Color.blue(it)+40 }>100)
+            } finally { shot.recycle() }
+        }
+        compose.onNodeWithTag("mask-done").performClick()
+        compose.waitUntil(30_000) { !view().optBoolean("quick_mask") }
+        assertTrue(view().getBoolean("has_selection"))
+        invoke("save_selection_layer")
+        send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
+        val id=host.snapshot!!.getJSONObject("state").array("layers").objects().first {it.optBoolean("selection_layer")}.getLong("id")
+        send(obj("type" to "selection", "action" to obj("op" to "edit_layer", "id" to id)))
+        assertEquals(id,view().getJSONObject("mask_editing").getLong("layer"))
+        invoke("clear_selection_mask"); invoke("return_to_artwork")
+        invoke("deselect")
+        compose.onNodeWithTag("selection-load-$id").assertIsDisplayed().performClick()
+        compose.waitUntil(30_000) { view().getBoolean("has_selection") }
+        assertTrue("An explicitly empty selection is retained",view().getBoolean("has_selection"))
+        assertEquals("Selection overlays never enter exported artwork",blank,hash(png("selection-overlay-export.png")))
+        assertNull(host.failure); assertNull(host.actionError)
+        println("PASS Selection Brush GPU history, Android stylus Quick Mask, independent colors, saved masks and clean artwork export")
+    }
+
     @Test fun portablePhotoGainmapDelivery() {
         val root=requireNotNull(InstrumentationRegistry.getArguments().getString("photoDirectory")){"Supply -e photoDirectory with the portable photo fixtures"}
         require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))

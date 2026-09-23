@@ -1,6 +1,6 @@
 # Paintable selection specification
 
-Date: 2026-09-22. Status: implementation in progress.
+Date: 2026-09-23. Status: Core implementation complete on GTK, Web, and Android.
 Selection Brush, Quick Mask with a temporary Layers row, and persistent
 Selection Layers are in scope.
 
@@ -390,10 +390,13 @@ Implementation milestones, in delivery order:
    Native GTK light/dark journeys check coverage, exit, save/edit/load, and tint
    persistence. Grayscale thumbnails and multiple visible saved-mask previews
    are GPU-rendered; previews never affect artwork or the current selection.
-4. Web: project the same controls and actions; validate on the attached tablet.
-   Pending.
-5. Android: native projection and tablet validation, following the reviewed GTK
-   control hierarchy and spacing. Pending.
+4. Web: shared controls, independent mask colors, typed menus and asynchronous
+   saved-mask thumbnails. Implemented; the seven-tool and mask workflow suite
+   passes on Huion Chrome with injected mouse/touch/pen input.
+5. Android: native projection with 48dp controls, following the reviewed GTK
+   hierarchy and spacing. Implemented; Huion Vulkan/stylus checks cover painted
+   coverage, saved-mask load/edit, history, and export isolation. Physical pen
+   feel remains a manual check; automated device contacts are injected.
 
 Build the selection editing target, ordered transactions, and overlay first.
 Then deliver Selection Brush, Quick Mask with its temporary row, and persistent

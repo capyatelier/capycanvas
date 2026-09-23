@@ -83,13 +83,13 @@ import org.json.JSONObject
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").objects().associateBy { it.getString("id") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().selectableGroup().testTag("selection-mode-row")) {
+        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().selectableGroup().testTag("selection-mode-row"), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             actions.filter { it.getString("command") in modes }.forEach { action ->
                 val id = action.getString("command")
                 val command = commands.getValue(id)
                 val selected = command.getBoolean("selected")
                 HoverTip(command.getString("tooltip"), Modifier.weight(1f)) {
-                    Box(Modifier.fillMaxWidth().height(36.dp).testTag("tool-action-$id")
+                    Box(Modifier.fillMaxWidth().height(48.dp).testTag("tool-action-$id")
                         .background(if (selected) LocalPalette.current.active else LocalPalette.current.panel, RoundedCornerShape(6.dp))
                         .selectable(selected = selected, enabled = command.getBoolean("enabled"), role = Role.RadioButton) { host.invoke(id) },
                         contentAlignment = Alignment.Center) {
@@ -98,6 +98,7 @@ import org.json.JSONObject
                 }
             }
         }
+        if (actions.any { it.getString("command") in modes }) SelectionMenuButton(host, "Selection Actions…", "selection")
         var group = ""
         state.array("tool_settings").objects().forEach { field ->
             val next = field.getString("group")

@@ -191,7 +191,7 @@ import kotlin.math.roundToInt
     }
 }
 @Composable internal fun ColorControls(host: CanvasHost) {
-    val state = host.panelContent?.objectOrNull("state")?.objectOrNull("colors") ?: return
+    val state = host.panelContent?.objectOrNull("state")?.displayColors() ?: return
     val slot = if (state.optString("slot") == "background") "background" else "foreground"
     ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
         host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
