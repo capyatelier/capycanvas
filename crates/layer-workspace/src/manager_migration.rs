@@ -1,6 +1,65 @@
 use super::*;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+#[test]
+fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
+    use layer_ui::{LayoutHistory, Panel, ToolbarControl, WorkspacePreset};
+    for (index, preset) in [
+        (0, WorkspacePreset::Painter),
+        (2, WorkspacePreset::Photographer),
+    ] {
+        let old = preset.legacy_toolbar_components_layout(Platform::Gtk);
+        let working = preset.working_state();
+        let mut entity = Entity::workspace(
+            preset.name(),
+            WorkspaceCapture {
+                history: LayoutHistory::new(&old),
+                working: working.clone(),
+            },
+            old.clone(),
+            None,
+            1,
+        );
+        entity.id = DEFAULT_WORKSPACES[index].0.into();
+        entity.metadata.builtin = true;
+        let update = |e: &Entity, p| {
+            if index == 0 {
+                updated_painter_default(e, p)
+            } else {
+                updated_photographer_default(e, p)
+            }
+        };
+        let updated = update(&entity, Platform::Gtk).unwrap();
+        let ItemContent::Workspace {
+            baseline, history, ..
+        } = &updated
+        else {
+            panic!()
+        };
+        assert_eq!(**baseline, preset.layout(Platform::Gtk));
+        assert_eq!(history.layout(), baseline.as_ref());
+        assert_eq!(entity.working.as_ref(), Some(&working));
+        entity.content = updated;
+        assert!(update(&entity, Platform::Gtk).is_none());
+        let mut customized = old;
+        customized
+            .insert_tools(Panel::Commands, None, &[ToolbarControl::Color])
+            .unwrap();
+        if let ItemContent::Workspace {
+            baseline, history, ..
+        } = &mut entity.content
+        {
+            **baseline = customized.clone();
+            *history = LayoutHistory::new(&customized);
+        }
+        assert!(
+            update(&entity, Platform::Gtk).is_none(),
+            "customized baseline is retained"
+        );
+    }
+}
+
 /// Migrate only the untouched shipped Painter, while holding its lease. An
 /// edited history (even after Undo), a custom baseline or a copy is never reset.
 pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Option<ItemContent> {
@@ -17,6 +76,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let previous_components = layer_ui::WorkspacePreset::Painter.legacy_toolbar_components_layout(platform);
     let previous_selection = layer_ui::WorkspacePreset::Painter.legacy_selection_layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
     let previous_paint_drawer = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
@@ -45,6 +105,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
             && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
             && baseline.as_ref() != &previous_native_settings
             && baseline.as_ref() != &previous_paint_drawer
+            && baseline.as_ref() != &previous_components
             && baseline.as_ref() != &previous_selection)
 
     {
@@ -236,6 +297,7 @@ pub(super) fn updated_photographer_default(
         return None;
     }
     let layout = WorkspacePreset::Photographer.layout(platform);
+    let previous_components = WorkspacePreset::Photographer.legacy_toolbar_components_layout(platform);
     let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
@@ -249,7 +311,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components) {
         return None;
     }
     let mut content = entity.content.clone();

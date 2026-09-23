@@ -75,6 +75,7 @@ struct ToolbarBody {
     strip: TileStrip,
     key: RefCell<Option<PanelConfig>>,
     buttons: RefCell<Vec<gtk::Button>>,
+    components: RefCell<Vec<Rc<toolbar_components::Component>>>,
 }
 impl ToolbarBody {
     fn new(panel: Panel) -> Self {
@@ -86,18 +87,27 @@ impl ToolbarBody {
             strip,
             key: RefCell::default(),
             buttons: RefCell::default(),
+            components: RefCell::default(),
         }
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
         let config = state.workspace.layout.panel(self.panel).unwrap();
         if self.key.borrow().as_ref() != Some(config) {
             self.strip.clear();
+            self.components.borrow_mut().clear();
             self.strip.set_tiles(config.tiles());
             self.strip.set_style(config.tile_style);
             let buttons: Vec<_> = config
                 .tiles()
                 .iter()
                 .map(|t| {
+                    if t.control.is_component() {
+                        let component = toolbar_components::Component::new(w, self.panel, t);
+                        self.strip.append(&component.root);
+                        let button = component.button.clone();
+                        self.components.borrow_mut().push(component);
+                        return button;
+                    }
                     let b = customization::tile_button(w, config, t);
                     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                     b.set_hexpand(true);
@@ -131,10 +141,14 @@ impl ToolbarBody {
             .and_then(|g| g.session.panel_view(self.panel).ok())
         {
             for (button, tile) in self.buttons.borrow().iter().zip(view.tiles) {
+                if tile.choice.control.is_component() { continue; }
                 selected(button, tile.choice.selected);
                 button.set_sensitive(tile.enabled);
                 button.set_tooltip_text(Some(&tile.tooltip));
             }
+        }
+        for component in self.components.borrow().iter() {
+            if let Some(view) = state.toolbar_component(component.control) { component.refresh(w, &view); }
         }
     }
 }
@@ -526,7 +540,8 @@ impl Drawer {
                 if !button.is_mapped() {
                     continue;
                 }
-                let Some(b) = button.compute_bounds(&w.surface) else {
+                let target: gtk::Widget = if tile.control.is_component() { button.parent().unwrap() } else { button.clone().upcast() };
+                let Some(b) = target.compute_bounds(&w.surface) else {
                     continue;
                 };
                 let Some(bounds) = (Bounds {

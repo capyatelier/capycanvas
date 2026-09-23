@@ -34,6 +34,75 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_toolbar_components_layout(platform);
+        if platform == crate::Platform::Gtk {
+            match self {
+                Self::Painter => {
+                    let config = layout
+                        .panels
+                        .iter_mut()
+                        .find(|p| p.id == Panel::Commands)
+                        .unwrap();
+                    config.content = PanelContent::Toolbar {
+                        name: "Brush controls".into(),
+                        tiles: Vec::new(),
+                    };
+                    layout
+                        .insert_tools(
+                            Panel::Commands,
+                            None,
+                            &[
+                                ToolbarControl::BrushSizeSlider,
+                                ToolbarControl::BrushOpacitySlider,
+                            ],
+                        )
+                        .unwrap();
+                    let id = layout.next_id;
+                    layout.next_id += 2;
+                    layout.bands.push(DockBand {
+                        id,
+                        edge: Edge::Bottom,
+                        extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
+                        root: DockNode::Tabs {
+                            id: id + 1,
+                            panels: vec![Panel::Commands],
+                            active: Panel::Commands,
+                            tab_style: crate::TabStyle::default(),
+                        },
+                    });
+                }
+                Self::Photographer => {
+                    let config = layout
+                        .panels
+                        .iter_mut()
+                        .find(|p| p.id == Panel::Commands)
+                        .unwrap();
+                    config.tiles_mut().unwrap().retain(|t| {
+                        !matches!(
+                            t.control,
+                            ToolbarControl::Command {
+                                command: crate::CommandId::ClearLayer
+                                    | crate::CommandId::FillSelection
+                            }
+                        )
+                    });
+                    layout
+                        .insert_tools(
+                            Panel::Commands,
+                            None,
+                            &[ToolbarControl::Divider, ToolbarControl::ToolOptions],
+                        )
+                        .unwrap();
+                }
+                Self::Illustrator => (),
+            }
+        }
+        layout
+    }
+
+    /// Exact defaults before inline GTK toolbar components; migrate untouched
+    /// included workspaces without replacing any customized arrangement.
+    pub fn legacy_toolbar_components_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_selection_layout(platform);
         if crate::CommandId::Select.available_on(platform) {
             if self == Self::Painter {
@@ -568,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_sketch_has_only_individual_header_tools() {
+    fn projected_sketch_keeps_header_tools_and_gtk_brush_sliders() {
         for platform in [
             crate::Platform::Gtk,
             crate::Platform::Web,
@@ -578,7 +647,11 @@ mod tests {
             crate::Platform::Windows,
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
-            assert!(layout.bands.is_empty() && layout.floating.is_empty());
+            assert!(layout.floating.is_empty());
+            if platform == crate::Platform::Gtk {
+                assert_eq!(layout.bands.len(), 1);
+                assert_eq!(layout.bands[0].edge, Edge::Bottom);
+            } else { assert!(layout.bands.is_empty()); }
             assert_eq!(
                 layout.header,
                 crate::HeaderLayout::painter_for_platform(platform)
@@ -599,7 +672,7 @@ mod tests {
     fn photo_adopts_the_reviewed_layout_and_paint_restores_its_original_default() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
             for (preset,mut previous) in [(WorkspacePreset::Photographer,WorkspacePreset::legacy_illustrator_primary_layout(platform)),(WorkspacePreset::Illustrator,WorkspacePreset::legacy_illustrator_layout(platform))] {
-                let mut current=preset.layout(platform);
+                let mut current=preset.legacy_toolbar_components_layout(platform);
                 if preset == WorkspacePreset::Photographer && crate::CommandId::Select.available_on(platform) {
                     use crate::CommandId::*;
                     current.panels.iter_mut().find(|p| p.id == Panel::Toolbar).unwrap().tiles_mut().unwrap().retain(|t|

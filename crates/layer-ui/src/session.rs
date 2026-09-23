@@ -88,6 +88,7 @@ struct FloatingResize {
 pub struct UiSession<R: CanvasRenderer> {
     engine: CanvasEngine<R>,
     state: UiState,
+    last_toolbar_context: Option<ToolbarContext>,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
     rendering_suspended: bool,
@@ -216,6 +217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 colors,
                 tool_settings: Vec::new(),
+                toolbar_context_generation: 0,
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
                 tool_panels: ToolPanels::default(),
@@ -242,11 +244,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 camera,
             },
             effect_catalog,
+            last_toolbar_context: None,
             pending_filters: None,
         };
         session.apply_brush()?;
         session.refresh_document();
         session.refresh_commands();
+        session.update_toolbar_context();
         Ok(session)
     }
 
@@ -1983,6 +1987,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if let UiAction::ToolbarEdit { context, action } = action {
+            if context != self.state.toolbar_context() || !self.state.toolbar_edit_allowed(&action) {
+                return Err("This toolbar control belongs to a previous tool or edit target".into());
+            }
+            return self.dispatch(*action);
+        }
         if self.operation.placing() && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
             | UiAction::SetLayerOpacity { .. } | UiAction::MoveLayer { .. }
@@ -2136,6 +2146,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::ToolbarEdit { .. } => unreachable!("validated before dispatch"),
             UiAction::WorkspaceManager { command } => {
                 if self.managed_workspace.is_none() {
                     return Err("Workspace management is not connected".into());
@@ -4286,6 +4297,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        self.update_toolbar_context();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
         }
@@ -4307,6 +4319,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: self.state.revision,
             regions,
             canvas_wake,
+        }
+    }
+    fn update_toolbar_context(&mut self) {
+        let mut target = self.state.toolbar_context();
+        target.generation = 0;
+        if self.last_toolbar_context != Some(target) {
+            self.last_toolbar_context = Some(target);
+            self.state.toolbar_context_generation += 1;
         }
     }
     fn refresh_commands(&mut self) -> bool {
@@ -4725,6 +4745,7 @@ mod tests {
     include!("session_color_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("toolbar_component_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

@@ -361,6 +361,9 @@ impl HeaderLayout {
             }
             if let HeaderItem::Tool { control } = e.item {
                 control.validate()?;
+                if control.is_component() {
+                    return Err("Place this component in a toolbar".into());
+                }
             }
         }
         Ok(())

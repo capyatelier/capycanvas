@@ -71,6 +71,10 @@ serialize and restore the workspace; automatic storage depends on the host.
 The detailed [panel contract](panel-customization.md) covers drag targets, menus,
 resize behavior and configuration.
 
+GTK [toolbar components](toolbar-components.md) provide inline brush size/opacity
+sliders and a contextual Tool Options bar, with shared sizing, overflow and
+workspace behavior.
+
 GTK also has a [workspace window-bar builder](window-bar.md) for arranging
 individual application controls and tools in left, center and right regions,
 with workspace-owned size and canvas-info visibility. It does not dock toolbar

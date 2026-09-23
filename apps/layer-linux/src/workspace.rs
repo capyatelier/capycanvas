@@ -17,6 +17,8 @@ use std::{
 mod columns;
 #[path = "workspace_customization.rs"]
 mod customization;
+#[path = "toolbar_components.rs"]
+pub(crate) mod toolbar_components;
 #[path = "workspace_drawer.rs"]
 mod drawers;
 #[path = "workspace_header.rs"]
@@ -316,7 +318,7 @@ mod allocation {
                     }
                 }
                 owner.queue_panel_measurements();
-                owner.customization.present_popovers();
+                owner.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
                     owner.area.width().max(1) as u32 * scale,
@@ -876,6 +878,11 @@ impl Drop for Workspace {
         self.gpu.get_mut().take();
         self.backdrop.get_mut().take();
         self.customization.dispose();
+        // Retained drawer bodies can outlive the native surface. Retire their
+        // surface-owned component popups before GTK finalizes that surface.
+        for popover in self.popovers.get_mut().drain(..).filter_map(|p| p.upgrade()) {
+            if popover.parent().as_ref() == Some(self.surface.upcast_ref()) { popover.unparent(); }
+        }
         gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
     }
 }
@@ -1484,6 +1491,17 @@ impl Workspace {
             self,
             move |_| this.update_zen()
         ));
+    }
+
+    // Surface-owned popups, including retained toolbar editors, need the
+    // allocation hook that GtkMenuButton normally supplies for its popover.
+    pub(crate) fn present_popovers(&self) {
+        let popovers: Vec<_> = self.popovers.borrow().iter().filter_map(|p| p.upgrade()).collect();
+        for popover in popovers {
+            if popover.is_visible() && popover.parent().as_ref() == Some(self.surface.upcast_ref()) {
+                popover.present();
+            }
+        }
     }
 
     fn update_zen(&self) {
@@ -2993,7 +3011,7 @@ impl Workspace {
             self.surface
                 .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
         while let Some(widget) = picked {
-            if widget.has_css_class("catalog-add") {
+            if widget.has_css_class("catalog-add") || widget.has_css_class("toolbar-component") {
                 return None;
             }
             if let Some(target) = self

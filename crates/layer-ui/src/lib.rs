@@ -37,6 +37,8 @@ pub use navigator::NavigatorGeometry;
 pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
+mod toolbar_components;
+pub use toolbar_components::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
@@ -159,6 +161,9 @@ pub enum ToolbarControl {
     Size { pixels: u16 },
     Color,
     Opacity,
+    BrushSizeSlider,
+    BrushOpacitySlider,
+    ToolOptions,
     Panel { panel: Panel },
     Divider,
 }
@@ -1073,6 +1078,7 @@ pub struct UiState {
     pub brush: BrushState,
     pub colors: ColorState,
     pub tool_settings: Vec<ToolSetting>,
+    pub toolbar_context_generation: u64,
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
     pub tool_panels: ToolPanels,
@@ -1226,6 +1232,11 @@ pub enum UiAction {
     SetToolSetting {
         id: String,
         value: f32,
+    },
+    /// A retained toolbar editor must never apply to a different tool/target.
+    ToolbarEdit {
+        context: ToolbarContext,
+        action: Box<UiAction>,
     },
     SetColorSampleSize {
         width: u32,

@@ -88,6 +88,9 @@ mod imp {
                 );
             };
             for (child, bounds) in children.iter().zip(layout.tiles) {
+                if let Some(component) = child.downcast_ref::<crate::workspace::toolbar_components::ComponentBody>() {
+                    component.set_axis(axis);
+                }
                 allocate(child, bounds);
             }
             if let Some(grip) = self.grip.borrow().as_ref() {

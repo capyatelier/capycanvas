@@ -193,6 +193,13 @@ window, label, text { font-size: var(--ui-text-size); }
 .expanded-panel.configuration-flush.configuration-left .panel-preview { border-top-left-radius: 0; }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
+.toolbar-component { padding: 0; }
+.toolbar-component > button { min-width: 0; min-height: 0; padding: 0 2px; font-feature-settings: "tnum"; }
+.toolbar-component > scale { min-width: 0; min-height: 0; margin: 0 6px; padding: 0; }
+.toolbar-component.vertical-component > scale { margin: 6px 0; }
+.toolbar-component.vertical-component > .panel-grip { -gtk-icon-transform: rotate(90deg); }
+.toolbar-component dropdown > button { min-height: 24px; padding: 2px 6px; }
+.toolbar-component .number-control { margin: 0; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
 .zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: 6px; }

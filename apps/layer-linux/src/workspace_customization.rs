@@ -97,6 +97,7 @@ pub(super) struct ToolbarView {
     pub strip: TileStrip,
     tiles: Vec<ToolbarTile>,
     buttons: Vec<gtk::Button>,
+    components: Vec<Rc<toolbar_components::Component>>,
     style: TileStyle,
 }
 
@@ -509,18 +510,9 @@ impl Customization {
 
     pub fn dispose(&self) {
         self.collapse_panel();
+        self.toolbars.borrow_mut().clear();
         for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             popover.unparent();
-        }
-    }
-
-    // Popovers parented to a custom widget need the native layout hook, unlike
-    // those owned by a GtkMenuButton. Keep them placed on window reallocations.
-    pub fn present_popovers(&self) {
-        for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
-            if popover.is_visible() {
-                popover.present();
-            }
         }
     }
 
@@ -834,6 +826,7 @@ impl Customization {
                         strip,
                         tiles: Vec::new(),
                         buttons: Vec::new(),
+                        components: Vec::new(),
                         style: TileStyle::Small,
                     });
                     toolbars.len() - 1
@@ -847,9 +840,17 @@ impl Customization {
             toolbar.strip.set_style(config.tile_style);
             toolbar.style = config.tile_style;
             toolbar.buttons.clear();
+            toolbar.components.clear();
             for tile in config.tiles() {
                 let panel = config.id;
                 let id = tile.id;
+                if tile.control.is_component() {
+                    let component = toolbar_components::Component::new(w, panel, tile);
+                    toolbar.strip.append(&component.root);
+                    toolbar.buttons.push(component.button.clone());
+                    toolbar.components.push(component);
+                    continue;
+                }
                 let button = tile_button(w, config, tile);
                 // The wrapper stays targetable even when the command button is
                 // disabled, so an unavailable command can still be moved/removed.
@@ -945,6 +946,7 @@ impl Customization {
         for toolbar in self.toolbars.borrow().iter() {
             if let Some(view) = views.iter().find(|v| v.id == toolbar.id) {
                 for (button, tile) in toolbar.buttons.iter().zip(&view.tiles) {
+                    if tile.choice.control.is_component() { continue; }
                     selected(button, tile.choice.selected);
                     button.set_sensitive(tile.enabled);
                     button.set_tooltip_text(Some(&tile.tooltip));
@@ -957,6 +959,10 @@ impl Customization {
                         }
                     }
                 }
+                let components: Vec<_> = w.gpu.borrow().as_ref().map(|g| toolbar.components.iter()
+                    .filter_map(|c| g.session.state().toolbar_component(c.control).map(|v| (c.clone(), v)))
+                    .collect()).unwrap_or_default();
+                for (component, view) in components { component.refresh(w, &view); }
             }
         }
         self.refresh_expansion(w, &views);
@@ -1131,7 +1137,7 @@ impl Customization {
             self.toolbar_dialog.close();
         }
         self.updating.set(false);
-        self.present_popovers();
+        w.present_popovers();
     }
 }
 

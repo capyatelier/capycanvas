@@ -3145,3 +3145,5 @@ fn native_header_window_actions_input() {
 
 #[path = "selection_tests.rs"]
 mod selection_tools;
+#[path = "toolbar_component_tests.rs"]
+mod toolbar_components;

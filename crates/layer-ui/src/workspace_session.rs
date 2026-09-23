@@ -353,6 +353,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
+        self.state.toolbar_context_generation += 1;
         self.state.workspace = WorkspaceState {
             version: 1,
             layout: capture.history.layout().clone(),

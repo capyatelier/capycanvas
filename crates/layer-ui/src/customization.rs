@@ -344,7 +344,8 @@ impl ToolbarControl {
             Self::Size { pixels } => UiAction::SetBrushSize {
                 value: pixels as f32,
             },
-            Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider => return None,
+            Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider
+            | Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions => return None,
         })
     }
     pub fn validate(self) -> Result<(), String> {
@@ -1063,6 +1064,15 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             "Adjust the strength of the current brush".into(),
             "opacity",
         ),
+        ToolbarControl::BrushSizeSlider => (
+            "Brush size slider".into(), "Adjust brush size directly in the toolbar".into(), "size",
+        ),
+        ToolbarControl::BrushOpacitySlider => (
+            "Brush opacity slider".into(), "Adjust brush opacity directly in the toolbar".into(), "opacity",
+        ),
+        ToolbarControl::ToolOptions => (
+            "Tool Options".into(), "Settings for the current tool; fills the remaining toolbar width".into(), "settings",
+        ),
         ToolbarControl::Panel { panel } => (
             format!("{} panel", panel.label()),
             "Open this panel in a drawer".into(),
@@ -1088,6 +1098,8 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
+        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::ToolOptions]
+            .into_iter().filter(move |_| matches!(platform, Platform::Gtk | Platform::Generic)))
         .chain(
             matches!(
                 platform,
@@ -1315,6 +1327,9 @@ impl ToolPicker {
                 }
             }
             ToolDestination::Header { zone, before } => {
+                if self.selected.iter().any(|c| c.is_component()) {
+                    return Err("Place this component in a toolbar".into());
+                }
                 layout.header.insertion(*zone, *before)?;
                 if layout.header.entries().count() + self.selected.len() > 128 {
                     return Err("Too many title-bar items".into());
@@ -1334,6 +1349,7 @@ impl ToolPicker {
         let words = self.query.to_lowercase();
         let choices = tool_catalog(platform)
             .into_iter()
+            .filter(|c| !matches!(self.destination, ToolDestination::Header { .. }) || !c.control.is_component())
             .filter_map(|mut choice| {
                 choice.selected = self.selected.contains(&choice.control);
                 let text = format!("{} {}", choice.label, choice.description).to_lowercase();
@@ -2705,6 +2721,7 @@ mod tests {
         assert_eq!(
             native.len(),
             web.len()
+                + 3 // GTK inline toolbar components
                 + CommandId::ALL
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))

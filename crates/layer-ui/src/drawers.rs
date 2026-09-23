@@ -313,6 +313,8 @@ impl ToolbarControl {
             Self::Brush { .. } => Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]),
             Self::Color => Some(vec![vec![Panel::Color]]),
             Self::Opacity => Some(vec![vec![Panel::ToolSettings]]),
+            Self::BrushSizeSlider | Self::BrushOpacitySlider => Some(vec![vec![Panel::ToolSettings]]),
+            Self::ToolOptions => Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]),
             Self::Panel { panel: Panel::Adjustments } => Some(vec![vec![Panel::FilterTypes], vec![Panel::Adjustments], vec![Panel::Properties]]),
             Self::Panel { panel } => Some(vec![vec![panel]]),
             _ => None,
