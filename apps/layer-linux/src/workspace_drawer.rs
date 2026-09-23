@@ -74,8 +74,7 @@ struct ToolbarBody {
     panel: Panel,
     strip: TileStrip,
     key: RefCell<Option<PanelConfig>>,
-    buttons: RefCell<Vec<gtk::Button>>,
-    components: RefCell<Vec<Rc<toolbar_components::Component>>>,
+    items: RefCell<Vec<toolbar_components::TileWidget>>,
 }
 impl ToolbarBody {
     fn new(panel: Panel) -> Self {
@@ -86,69 +85,27 @@ impl ToolbarBody {
             panel,
             strip,
             key: RefCell::default(),
-            buttons: RefCell::default(),
-            components: RefCell::default(),
+            items: RefCell::default(),
         }
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
         let config = state.workspace.layout.panel(self.panel).unwrap();
         if self.key.borrow().as_ref() != Some(config) {
             self.strip.clear();
-            self.components.borrow_mut().clear();
             self.strip.set_tiles(config.tiles());
             self.strip.set_style(config.tile_style);
-            let buttons: Vec<_> = config
-                .tiles()
-                .iter()
-                .map(|t| {
-                    if t.control.is_component() {
-                        let component = toolbar_components::Component::new(w, self.panel, t);
-                        self.strip.append(&component.root);
-                        let button = component.button.clone();
-                        self.components.borrow_mut().push(component);
-                        return button;
-                    }
-                    let b = customization::tile_button(w, config, t);
-                    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                    b.set_hexpand(true);
-                    b.set_vexpand(true);
-                    root.append(&b);
-                    w.install_panel_drag(
-                        &root,
-                        DockItem::Tile {
-                            panel: self.panel,
-                            tile: t.id,
-                        },
-                    );
-                    w.install_context(
-                        &root,
-                        ContextTarget::Tile {
-                            panel: self.panel,
-                            tile: t.id,
-                        },
-                    );
-                    self.strip.append(&root);
-                    b
-                })
-                .collect();
-            *self.buttons.borrow_mut() = buttons;
+            *self.items.borrow_mut() = config.tiles().iter().map(|tile| {
+                let item = toolbar_components::TileWidget::new(w, config, tile);
+                self.strip.append(&item.root());
+                item
+            }).collect();
             *self.key.borrow_mut() = Some(config.clone());
         }
-        if let Some(view) = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.session.panel_view(self.panel).ok())
-        {
-            for (button, tile) in self.buttons.borrow().iter().zip(view.tiles) {
-                if tile.choice.control.is_component() { continue; }
-                selected(button, tile.choice.selected);
-                button.set_sensitive(tile.enabled);
-                button.set_tooltip_text(Some(&tile.tooltip));
+        let view = w.gpu.borrow().as_ref().and_then(|g| g.session.panel_view(self.panel).ok());
+        if let Some(view) = view {
+            for (item, tile) in self.items.borrow().iter().zip(&view.tiles) {
+                item.refresh(w, tile, state.toolbar_component(tile.choice.control).as_ref());
             }
-        }
-        for component in self.components.borrow().iter() {
-            if let Some(view) = state.toolbar_component(component.control) { component.refresh(w, &view); }
         }
     }
 }
@@ -536,11 +493,11 @@ impl Drawer {
             };
             let key = bar.key.borrow();
             let Some(config) = key.as_ref() else { continue };
-            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
-                if !button.is_mapped() {
+            for (tile, item) in config.tiles().iter().zip(bar.items.borrow().iter()) {
+                if !item.root().is_mapped() {
                     continue;
                 }
-                let target: gtk::Widget = if tile.control.is_component() { button.parent().unwrap() } else { button.clone().upcast() };
+                let target = item.root();
                 let Some(b) = target.compute_bounds(&w.surface) else {
                     continue;
                 };
@@ -579,7 +536,7 @@ impl Drawer {
                 .tiles()
                 .iter()
                 .position(|t| t.id == anchor.tile)?;
-            bar.buttons.borrow().get(index).cloned()
+            bar.items.borrow().get(index).map(|item| item.button())
         })
     }
     pub fn mark_tile_origin(&self, origin: Option<(TileAnchor, Edge)>) {
@@ -594,9 +551,9 @@ impl Drawer {
             }
             let key = bar.key.borrow();
             let Some(config) = key.as_ref() else { continue };
-            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
+            for (tile, item) in config.tiles().iter().zip(bar.items.borrow().iter()) {
                 customization::drawer_origin(
-                    button,
+                    &item.button(),
                     origin
                         .filter(|(a, _)| a.panel == bar.panel && a.tile == tile.id)
                         .map(|(_, edge)| edge),

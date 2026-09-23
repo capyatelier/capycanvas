@@ -12,6 +12,41 @@ pub struct ToolSettingAction {
     pub checkable: bool,
 }
 
+/// Mutually exclusive actions share one choice in compact presentations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolActionGroup {
+    SelectionMode,
+    SelectionSource,
+}
+impl ToolActionGroup {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::SelectionMode => "selection-mode",
+            Self::SelectionSource => "selection-source",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SelectionMode => "Mode",
+            Self::SelectionSource => "Source",
+        }
+    }
+}
+impl ToolSettingAction {
+    pub fn group(self) -> Option<ToolActionGroup> {
+        use crate::CommandId::*;
+        match self.command {
+            SelectionNew | SelectionAdd | SelectionSubtract | SelectionIntersect => {
+                Some(ToolActionGroup::SelectionMode)
+            }
+            SelectionVisible | SelectionEditing | SelectionReference => {
+                Some(ToolActionGroup::SelectionSource)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSetting {
     pub id: &'static str,

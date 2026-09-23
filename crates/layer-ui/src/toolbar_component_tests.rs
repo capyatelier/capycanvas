@@ -157,13 +157,24 @@ fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
             serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
         assert_eq!(layout, loaded);
         if preset == WorkspacePreset::Painter {
+            let panel = layout
+                .panels
+                .iter()
+                .find(|p| {
+                    p.tiles()
+                        .iter()
+                        .any(|t| t.control == ToolbarControl::BrushSizeSlider)
+                })
+                .unwrap()
+                .id;
+            assert!(matches!(panel, Panel::CustomToolbar(_)));
             assert_eq!(
-                layout.group_edge(layout.panel_group(Panel::Commands).unwrap()),
+                layout.group_edge(layout.panel_group(panel).unwrap()),
                 Some(Edge::Bottom)
             );
             assert_eq!(
                 layout
-                    .panel(Panel::Commands)
+                    .panel(panel)
                     .unwrap()
                     .tiles()
                     .iter()
@@ -257,10 +268,18 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
     let last = layout.tiles.last().unwrap();
     assert!(last.width > 500.);
     assert!((last.x + last.width + 2. - layout.grip.unwrap().x).abs() < 0.1);
-    let (_, fields, more) = tool_options_layout(330., 36., Axis::Horizontal, &[100., 100., 100.]);
+    let ToolOptionsLayout { fields, more } = tool_options_layout(
+        330.,
+        36.,
+        Axis::Horizontal,
+        &[[100., 30.]; 3],
+        [32., 32.],
+        6.,
+    );
     assert!(fields[0].is_some() && fields[1].is_some() && fields[2].is_none());
     assert!(more.x + more.width <= 330.);
-    let (_, fields, more) = tool_options_layout(36., 36., Axis::Vertical, &[100.]);
+    let ToolOptionsLayout { fields, more } =
+        tool_options_layout(36., 36., Axis::Vertical, &[[100., 30.]], [32., 32.], 6.);
     assert!(fields[0].is_none() && more.height > 0.);
     let duplicates = vec![
         ToolbarTile {
@@ -283,21 +302,18 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
     assert_eq!(layout.tiles[0].width, layout.tiles[1].width);
     for axis in [Axis::Horizontal, Axis::Vertical] {
         for size in [0., 1., 20., 36., 80., 200., f32::NAN, f32::INFINITY] {
-            let parts = toolbar_slider_layout(size, size, axis);
+            let parts = toolbar_slider_layout(size, size, axis, 40.);
             for b in parts {
                 assert!(
                     b.width.is_finite() && b.height.is_finite() && b.width >= 0. && b.height >= 0.
                 );
             }
             let track = if axis == Axis::Horizontal {
-                parts[2].width
+                parts[1].width
             } else {
-                parts[2].height
+                parts[1].height
             };
-            assert!(
-                track == 0. || track >= 32.,
-                "tiny tracks become value-only launchers"
-            );
+            assert!(track >= 0., "tiny tracks become value-only launchers");
         }
     }
 }
@@ -386,4 +402,103 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
         s.state().customization.drawer.as_ref().unwrap().columns,
         vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]
     );
+}
+
+#[test]
+fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::Eyedropper,
+    })
+    .unwrap();
+    s.dispatch(UiAction::SetColorSampleSize { width: 3 })
+        .unwrap();
+    let options = s.state().tool_options();
+    for id in ["variant", "sample-size"] {
+        let ToolOption::Choice { items, .. } = options
+            .iter()
+            .find(|o| matches!(o, ToolOption::Choice { id: key, .. } if *key == id))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(items.iter().filter(|i| i.selected).count(), 1);
+    }
+    assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_none());
+    let context = s.state().toolbar_context();
+    assert!(
+        s.dispatch(UiAction::ToolbarEdit {
+            context,
+            action: Box::new(ToolbarNumericBinding::BrushSize.action(17.))
+        })
+        .is_err()
+    );
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::AutoSelect,
+    })
+    .unwrap();
+    let options = s.state().tool_options();
+    assert!(options.iter().any(|o| matches!(
+        o,
+        ToolOption::Choice {
+            id: "selection-source",
+            ..
+        }
+    )));
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::Brush,
+    })
+    .unwrap();
+    assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_some());
+}
+
+#[test]
+fn toolbar_drawer_measurement_contains_all_components_across_styles_and_widths() {
+    let controls = [
+        ToolbarControl::Color,
+        ToolbarControl::BrushSizeSlider,
+        ToolbarControl::BrushOpacitySlider,
+        ToolbarControl::Divider,
+        ToolbarControl::ToolOptions,
+    ];
+    for style in [
+        TileStyle::Small,
+        TileStyle::Medium,
+        TileStyle::Large,
+        TileStyle::MediumLabeled,
+        TileStyle::Labeled,
+    ] {
+        for count in 1..=5 {
+            for shift in 0..controls.len() {
+                let tiles: Vec<_> = (0..count)
+                    .map(|i| ToolbarTile {
+                        id: i as u32 + 1,
+                        control: controls[(i + shift) % controls.len()],
+                    })
+                    .collect();
+                for extra in (0..600).step_by(11) {
+                    let width = style.size()[0] + 8. + extra as f32;
+                    let height = toolbar_content_height(width, &tiles, style);
+                    let layout =
+                        toolbar_tile_layout(width, height, Axis::Vertical, &tiles, false, style);
+                    for (i, b) in layout.tiles.iter().enumerate() {
+                        assert!(
+                            b.x >= 0.
+                                && b.y >= 0.
+                                && b.x + b.width <= width + 0.01
+                                && b.y + b.height <= height + 0.01,
+                            "{style:?} {width}×{height}: {b:?}"
+                        );
+                        for next in &layout.tiles[i + 1..] {
+                            assert!(b.intersection(*next).is_none());
+                        }
+                        if tiles[i].control.slider().is_some() {
+                            assert!(b.height >= 4. * (style.size()[1] + 2.) - 2.);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

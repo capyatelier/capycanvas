@@ -3011,7 +3011,7 @@ impl Workspace {
             self.surface
                 .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
         while let Some(widget) = picked {
-            if widget.has_css_class("catalog-add") || widget.has_css_class("toolbar-component") {
+            if widget.has_css_class("catalog-add") {
                 return None;
             }
             if let Some(target) = self

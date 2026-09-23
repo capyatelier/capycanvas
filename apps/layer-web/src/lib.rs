@@ -750,6 +750,7 @@ impl WebApp {
             requests,
             host_error,
             camera,
+            toolbar_context_generation: _,
         } = state;
         let result = js_sys::Object::new();
         macro_rules! field {

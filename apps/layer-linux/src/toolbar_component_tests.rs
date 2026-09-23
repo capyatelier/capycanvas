@@ -14,10 +14,9 @@ fn component_id(d: &Driver, control: ToolbarControl) -> u32 {
     state(&d.w)
         .workspace
         .layout
-        .panel(Panel::Commands)
-        .unwrap()
-        .tiles()
+        .panels
         .iter()
+        .flat_map(|p| p.tiles())
         .find(|t| t.control == control)
         .unwrap()
         .id
@@ -97,17 +96,23 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
             );
             assert!(d.w.workspace_drag.borrow().is_none());
         }
-        // Component handles reorder immediately with all three devices.
+        // The value cap requires a hold with all three devices.
         let before = state(&d.w).workspace;
-        let handle = d.named(&format!("component-grip-{opacity}"));
-        let target = d.named(&format!("component-grip-{size}"));
+        let handle = d.named(&format!("tile-{opacity}"));
+        let target = d.named(&format!("tile-{size}"));
         let a = d.point(&handle);
         let b = d.point(&target);
         drag(d, device, a, b, false);
+        assert_eq!(
+            state(&d.w).workspace,
+            before,
+            "quick cap movement must not reorder"
+        );
+        drag(d, device, a, b, true);
         assert_ne!(
             state(&d.w).workspace,
             before,
-            "{device}: immediate component handle"
+            "{device}: held component cap"
         );
         d.w.dispatch(UiAction::Invoke {
             command: CommandId::UndoWorkspace,
@@ -139,6 +144,8 @@ fn native_toolbar_components_input() {
         let value = d.named(&format!("tile-{size}"));
         d.click(&value);
         let root = value
+            .parent()
+            .unwrap()
             .parent()
             .unwrap()
             .downcast::<crate::workspace::toolbar_components::ComponentBody>()
@@ -186,12 +193,12 @@ fn native_toolbar_components_input() {
         ] {
             d.w.dispatch(UiAction::Customize {
                 action: CustomizationAction::SetTileStyle {
-                    panel: Panel::Commands,
+                    panel: brush_panel(&d),
                     style,
                 },
             });
             d.w.dispatch(UiAction::MovePanel {
-                panel: Panel::Commands,
+                panel: brush_panel(&d),
                 target: DockTarget::Edge {
                     edge: Edge::Left,
                     outer: false,
@@ -205,6 +212,14 @@ fn native_toolbar_components_input() {
                 .unwrap();
             assert_eq!(scale.orientation(), gtk::Orientation::Vertical);
             assert!(scale.is_inverted());
+            d.w.dispatch(UiAction::SetBrushSize { value: 2047.9 });
+            pump(80);
+            let cap = d.named(&format!("tile-{size}"));
+            let readout = descendant::<gtk::Label>(&cap).unwrap();
+            assert!(
+                readout.layout().pixel_size().0 <= readout.width(),
+                "full six-character slider value at {style:?}"
+            );
             let b = scale.compute_bounds(&d.w.window).unwrap();
             drag(
                 &mut d,
@@ -216,7 +231,7 @@ fn native_toolbar_components_input() {
             assert!(state(&d.w).brush.diameter > 24.);
         }
         d.w.dispatch(UiAction::MovePanel {
-            panel: Panel::Commands,
+            panel: brush_panel(&d),
             target: DockTarget::Float {
                 position: [200., 250.],
             },
@@ -235,7 +250,12 @@ fn native_toolbar_components_input() {
             0.,
         );
         let canvas = top.work_area;
-        let root = d.named(&format!("tile-{options}")).parent().unwrap();
+        let root = d
+            .named(&format!("tile-{options}"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
         assert!(root.width() > 400, "Photo options fill remaining width");
         for command in [
             CommandId::Brush,
@@ -246,7 +266,14 @@ fn native_toolbar_components_input() {
         ] {
             d.w.dispatch(UiAction::Invoke { command });
             pump(120);
-            assert_eq!(root, d.named(&format!("tile-{options}")).parent().unwrap());
+            assert_eq!(
+                root,
+                d.named(&format!("tile-{options}"))
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+            );
             let now = state(&d.w).workspace.layout.workspace(
                 d.w.surface.width() as f32,
                 d.w.surface.height() as f32,
@@ -261,6 +288,30 @@ fn native_toolbar_components_input() {
         pump(150);
         let number = d.named("toolbar-setting-tolerance");
         assert!(number.is_mapped());
+        let scale = descendant::<gtk::Scale>(&number).unwrap();
+        let bounds = scale.compute_bounds(&d.w.window).unwrap();
+        drag(
+            &mut d,
+            "mouse",
+            [
+                bounds.x() + bounds.width() * 0.2,
+                bounds.y() + bounds.height() / 2.,
+            ],
+            [
+                bounds.x() + bounds.width() * 0.7,
+                bounds.y() + bounds.height() / 2.,
+            ],
+            false,
+        );
+        assert!(
+            state(&d.w)
+                .tool_settings
+                .iter()
+                .find(|f| f.id == "tolerance")
+                .unwrap()
+                .value
+                > 0.4
+        );
         d.number(&number, "17");
         assert_eq!(
             state(&d.w)
@@ -297,6 +348,47 @@ fn native_toolbar_components_input() {
                 .any(|c| c.id == CommandId::SelectionAdd && c.selected)
         );
 
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::Eyedropper,
+        });
+        pump(150);
+        d.w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::PickVisible,
+            },
+        });
+        d.w.dispatch(UiAction::SetColorSampleSize { width: 1 });
+        pump(100);
+        d.click_name("toolbar-choice-sample-size");
+        d.key(0xff54);
+        d.key(0xff0d);
+        let view = state(&d.w);
+        let selected: Vec<_> = view
+            .tool_set
+            .subtools
+            .iter()
+            .filter(|i| i.selected)
+            .collect();
+        assert_eq!(selected.len(), 2, "sample source and size are independent");
+        assert!(
+            selected
+                .iter()
+                .any(|i| matches!(i.action, UiAction::SetColorSampleSize { width: 3 }))
+        );
+        d.click_name("toolbar-choice-variant");
+        d.key(0xff54);
+        d.key(0xff0d);
+        let view = state(&d.w);
+        assert_eq!(view.layer_tools.tool, LayerCanvasTool::PickLayer);
+        assert!(
+            view.tool_set.subtools.iter().any(
+                |i| i.selected && matches!(i.action, UiAction::SetColorSampleSize { width: 3 })
+            )
+        );
+        d.click_name("toolbar-choice-variant");
+        d.capture_canvas(&format!("eyedropper-menu-{theme:?}.png"));
+        d.key(0xff1b);
+
         // Actual canvas content enables a transform. Completion actions stay
         // at the start of the bar, and both exit the active operation.
         d.w.dispatch(UiAction::Invoke {
@@ -315,7 +407,7 @@ fn native_toolbar_components_input() {
             assert!(!state(&d.w).toolbar_context().operation);
         }
 
-        // Vertical options are a launcher, not a clipped row of editors.
+        // Vertical options expose individual controls as well as the full drawer.
         d.w.dispatch(UiAction::Invoke {
             command: CommandId::Brush,
         });
@@ -329,6 +421,17 @@ fn native_toolbar_components_input() {
         });
         pump(200);
         assert!(!d.named("toolbar-setting-size").is_mapped());
+        assert!(d.named("toolbar-choice-tool").is_mapped());
+        assert!(d.named("toolbar-value-size").is_mapped());
+        d.click_name("toolbar-value-size");
+        let menu = d
+            .named("toolbar-value-size")
+            .downcast::<gtk::MenuButton>()
+            .unwrap();
+        d.number(&menu.popover().unwrap().child().unwrap(), "51");
+        assert_eq!(state(&d.w).brush.diameter, 51.);
+        d.key(0xff1b);
+        d.capture_canvas(&format!("vertical-options-{theme:?}.png"));
         d.click_name(&format!("tile-{options}"));
         assert!(state(&d.w).customization.drawer.is_some());
         assert!(d.named("drawer-panel-ToolSettings").is_mapped());
@@ -380,7 +483,7 @@ fn native_toolbar_components_drawer_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarComponentsDrawer");
     restore(&d, WorkspacePreset::Painter);
     d.w.dispatch(UiAction::MovePanel {
-        panel: Panel::Commands,
+        panel: brush_panel(&d),
         target: DockTarget::Edge {
             edge: Edge::Right,
             outer: false,
@@ -390,7 +493,7 @@ fn native_toolbar_components_drawer_input() {
     let group = state(&d.w)
         .workspace
         .layout
-        .panel_group(Panel::Commands)
+        .panel_group(brush_panel(&d))
         .unwrap();
     // Standalone toolbars deliberately cannot collapse. A tab group containing
     // ordinary content exercises the supported retained toolbar drawer path.
@@ -407,7 +510,7 @@ fn native_toolbar_components_drawer_input() {
     });
     d.w.dispatch(UiAction::SelectPanelTab {
         group,
-        panel: Panel::Commands,
+        panel: brush_panel(&d),
     });
     d.w.dispatch(UiAction::Customize {
         action: CustomizationAction::SetColumnCollapsed {
@@ -428,8 +531,8 @@ fn native_toolbar_components_drawer_input() {
     });
     pump(200);
     let size = component_id(&d, ToolbarControl::BrushSizeSlider);
-    d.click_name("column-icon-Commands");
-    let body = d.named("drawer-panel-Commands");
+    d.click_name(&format!("column-icon-{:?}", brush_panel(&d)));
+    let body = d.named(&format!("drawer-panel-{:?}", brush_panel(&d)));
     let scale = find_named(&body, &format!("component-slider-{size}")).unwrap();
     assert!(scale.is_mapped());
     for device in ["mouse", "touch"] {
@@ -452,14 +555,45 @@ fn native_toolbar_components_drawer_input() {
     let root = value
         .parent()
         .unwrap()
+        .parent()
+        .unwrap()
         .downcast::<crate::workspace::toolbar_components::ComponentBody>()
         .unwrap();
     let popup = root.imp().popover.borrow().as_ref().unwrap().clone();
     d.number(&popup.child().unwrap(), "33");
     assert_eq!(state(&d.w).brush.diameter, 33.);
     d.key(0xff1b);
-    d.click_name("column-icon-Commands");
+    d.click_name(&format!("column-icon-{:?}", brush_panel(&d)));
     assert!(state(&d.w).customization.column_drawers.is_empty());
     assert!(!popup.is_visible());
     d.finish();
+}
+
+fn brush_panel(d: &Driver) -> Panel {
+    state(&d.w)
+        .workspace
+        .layout
+        .panels
+        .iter()
+        .find(|p| {
+            p.tiles()
+                .iter()
+                .any(|t| t.control == ToolbarControl::BrushSizeSlider)
+        })
+        .unwrap()
+        .id
+}
+
+fn descendant<T: IsA<gtk::Widget> + glib::object::IsClass>(root: &gtk::Widget) -> Option<T> {
+    if let Ok(widget) = root.clone().downcast::<T>() {
+        return Some(widget);
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = descendant(&widget) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
 }

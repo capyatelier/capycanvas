@@ -9,54 +9,62 @@ fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
     ] {
-        let old = preset.legacy_toolbar_components_layout(Platform::Gtk);
-        let working = preset.working_state();
-        let mut entity = Entity::workspace(
-            preset.name(),
-            WorkspaceCapture {
-                history: LayoutHistory::new(&old),
-                working: working.clone(),
-            },
-            old.clone(),
-            None,
-            1,
-        );
-        entity.id = DEFAULT_WORKSPACES[index].0.into();
-        entity.metadata.builtin = true;
-        let update = |e: &Entity, p| {
+        for old in [
+            preset.legacy_toolbar_components_layout(Platform::Gtk),
             if index == 0 {
-                updated_painter_default(e, p)
+                WorkspacePreset::legacy_brush_controls_layout(Platform::Gtk)
             } else {
-                updated_photographer_default(e, p)
+                preset.legacy_toolbar_components_layout(Platform::Gtk)
+            },
+        ] {
+            let working = preset.working_state();
+            let mut entity = Entity::workspace(
+                preset.name(),
+                WorkspaceCapture {
+                    history: LayoutHistory::new(&old),
+                    working: working.clone(),
+                },
+                old.clone(),
+                None,
+                1,
+            );
+            entity.id = DEFAULT_WORKSPACES[index].0.into();
+            entity.metadata.builtin = true;
+            let update = |e: &Entity, p| {
+                if index == 0 {
+                    updated_painter_default(e, p)
+                } else {
+                    updated_photographer_default(e, p)
+                }
+            };
+            let updated = update(&entity, Platform::Gtk).unwrap();
+            let ItemContent::Workspace {
+                baseline, history, ..
+            } = &updated
+            else {
+                panic!()
+            };
+            assert_eq!(**baseline, preset.layout(Platform::Gtk));
+            assert_eq!(history.layout(), baseline.as_ref());
+            assert_eq!(entity.working.as_ref(), Some(&working));
+            entity.content = updated;
+            assert!(update(&entity, Platform::Gtk).is_none());
+            let mut customized = old;
+            customized
+                .insert_tools(Panel::Commands, None, &[ToolbarControl::Color])
+                .unwrap();
+            if let ItemContent::Workspace {
+                baseline, history, ..
+            } = &mut entity.content
+            {
+                **baseline = customized.clone();
+                *history = LayoutHistory::new(&customized);
             }
-        };
-        let updated = update(&entity, Platform::Gtk).unwrap();
-        let ItemContent::Workspace {
-            baseline, history, ..
-        } = &updated
-        else {
-            panic!()
-        };
-        assert_eq!(**baseline, preset.layout(Platform::Gtk));
-        assert_eq!(history.layout(), baseline.as_ref());
-        assert_eq!(entity.working.as_ref(), Some(&working));
-        entity.content = updated;
-        assert!(update(&entity, Platform::Gtk).is_none());
-        let mut customized = old;
-        customized
-            .insert_tools(Panel::Commands, None, &[ToolbarControl::Color])
-            .unwrap();
-        if let ItemContent::Workspace {
-            baseline, history, ..
-        } = &mut entity.content
-        {
-            **baseline = customized.clone();
-            *history = LayoutHistory::new(&customized);
+            assert!(
+                update(&entity, Platform::Gtk).is_none(),
+                "customized baseline is retained"
+            );
         }
-        assert!(
-            update(&entity, Platform::Gtk).is_none(),
-            "customized baseline is retained"
-        );
     }
 }
 
@@ -76,6 +84,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let previous_brush_controls = layer_ui::WorkspacePreset::legacy_brush_controls_layout(platform);
     let previous_components = layer_ui::WorkspacePreset::Painter.legacy_toolbar_components_layout(platform);
     let previous_selection = layer_ui::WorkspacePreset::Painter.legacy_selection_layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
@@ -105,6 +114,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
             && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
             && baseline.as_ref() != &previous_native_settings
             && baseline.as_ref() != &previous_paint_drawer
+            && baseline.as_ref() != &previous_brush_controls
             && baseline.as_ref() != &previous_components
             && baseline.as_ref() != &previous_selection)
 

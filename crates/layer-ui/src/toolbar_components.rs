@@ -43,37 +43,26 @@ pub struct ToolbarComponentView {
 pub enum ToolbarNumericBinding {
     BrushSize,
     BrushOpacity,
-    ToolSetting(String),
 }
 impl ToolbarNumericBinding {
     pub fn action(&self, value: f32) -> UiAction {
         match self {
-            Self::BrushSize => UiAction::SetBrushSize { value },
-            Self::BrushOpacity => UiAction::SetBrushOpacity { value },
-            Self::ToolSetting(id) => UiAction::SetToolSetting {
-                id: id.clone(),
+            Self::BrushSize => UiAction::SetToolSetting {
+                id: "size".into(),
+                value,
+            },
+            Self::BrushOpacity => UiAction::SetToolSetting {
+                id: "opacity".into(),
                 value,
             },
         }
     }
     pub fn field(&self, state: &UiState) -> Option<ToolSetting> {
-        Some(match self {
-            Self::BrushSize => ToolSetting {
-                id: "size",
-                label: "Brush size",
-                group: "",
-                numeric: NumericControl::brush_size(),
-                value: state.brush.diameter,
-            },
-            Self::BrushOpacity => ToolSetting {
-                id: "opacity",
-                label: "Brush opacity",
-                group: "",
-                numeric: NumericControl::percent(),
-                value: state.brush.opacity,
-            },
-            Self::ToolSetting(id) => state.tool_settings.iter().find(|f| f.id == id)?.clone(),
-        })
+        let id = match self {
+            Self::BrushSize => "size",
+            Self::BrushOpacity => "opacity",
+        };
+        state.tool_settings.iter().find(|f| f.id == id).cloned()
     }
 }
 
@@ -131,7 +120,11 @@ impl UiState {
         control.is_component().then(|| ToolbarComponentView {
             context: self.toolbar_context(),
             numeric: control.slider().and_then(|binding| binding.field(self)),
-            options: if control == ToolbarControl::ToolOptions { self.tool_options() } else { Vec::new() },
+            options: if control == ToolbarControl::ToolOptions {
+                self.tool_options()
+            } else {
+                Vec::new()
+            },
         })
     }
     pub fn toolbar_context(&self) -> ToolbarContext {
@@ -154,7 +147,12 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
-            UiAction::SetBrushSize { .. } | UiAction::SetBrushOpacity { .. } => true,
+            UiAction::SetBrushSize { .. } => {
+                self.layer_tools.tool == LayerCanvasTool::Paint && !self.toolbar_context().operation
+            }
+            UiAction::SetBrushOpacity { .. } => {
+                self.layer_tools.tool == LayerCanvasTool::Paint && !self.toolbar_context().operation
+            }
             UiAction::SetToolSetting { id, .. } => self.tool_settings.iter().any(|f| f.id == id),
             UiAction::Invoke { command }
                 if self.tool_actions.iter().any(|a| a.command == *command) =>
@@ -195,173 +193,169 @@ impl UiState {
                 .filter(|a| completion(a.command))
                 .filter_map(action),
         );
-        for (id, label, items) in [
-            ("tool", "Tool", &self.tool_set.groups),
-            ("variant", "Variant", &self.tool_set.subtools),
-        ] {
-            if items.len() > 1 && !self.toolbar_context().operation {
-                options.push(ToolOption::Choice {
-                    id,
-                    label,
-                    items: items.clone(),
-                });
-            }
+        let choice = |id, label, items: Vec<ToolSetItem>| {
+            (items.len() > 1).then_some(ToolOption::Choice { id, label, items })
+        };
+        if !self.toolbar_context().operation {
+            options.extend(choice("tool", "Tool", self.tool_set.groups.clone()));
+            let (samples, variants): (Vec<_>, Vec<_>) = self
+                .tool_set
+                .subtools
+                .iter()
+                .cloned()
+                .partition(|i| matches!(i.action, UiAction::SetColorSampleSize { .. }));
+            let label = if self.layer_tools.tool.picks_color()
+                || matches!(self.layer_tools.tool, LayerCanvasTool::Region { .. })
+            {
+                "Source"
+            } else {
+                "Variant"
+            };
+            options.extend(choice("variant", label, variants));
+            options.extend(choice("sample-size", "Sample size", samples));
         }
-        let modes = [
-            SelectionNew,
-            SelectionAdd,
-            SelectionSubtract,
-            SelectionIntersect,
-        ];
-        let items: Vec<_> = self
-            .tool_actions
-            .iter()
-            .filter(|a| modes.contains(&a.command))
-            .filter_map(|a| {
-                let c = self.commands.iter().find(|c| c.id == a.command)?;
-                Some(ToolSetItem {
+        for group in [
+            ToolActionGroup::SelectionMode,
+            ToolActionGroup::SelectionSource,
+        ] {
+            let items = self
+                .tool_actions
+                .iter()
+                .filter(|a| a.group() == Some(group))
+                .filter_map(|a| self.commands.iter().find(|c| c.id == a.command))
+                .map(|c| ToolSetItem {
                     label: c.label,
                     icon: c.icon.unwrap_or("select"),
                     action: UiAction::Invoke { command: c.id },
                     selected: c.selected,
                     preview: None,
                 })
-            })
-            .collect();
-        if !items.is_empty() {
-            options.push(ToolOption::Choice {
-                id: "selection-mode",
-                label: "Mode",
-                items,
-            });
+                .collect();
+            options.extend(choice(group.id(), group.label(), items));
         }
         options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
         options.extend(
             self.tool_actions
                 .iter()
-                .filter(|a| !completion(a.command) && !modes.contains(&a.command))
+                .filter(|a| !completion(a.command) && a.group().is_none())
                 .filter_map(action),
         );
         options
     }
 }
 
-/// A single row has an explicit grip and an always-reachable complete-options
-/// launcher. Fitting uses native natural widths, preserving the shared order.
-/// Vertical placement intentionally uses only the launcher.
+/// Native natural sizes and theme spacing are supplied by the host. The core
+/// chooses a contiguous prefix and always reserves access to the complete form.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ToolOptionsLayout {
+    pub fields: Vec<Option<Bounds>>,
+    pub more: Bounds,
+}
 pub fn tool_options_layout(
     width: f32,
     height: f32,
     axis: Axis,
-    widths: &[f32],
-) -> (Bounds, Vec<Option<Bounds>>, Bounds) {
+    sizes: &[[f32; 2]],
+    button: [f32; 2],
+    gap: f32,
+) -> ToolOptionsLayout {
     let width = finite_size(width);
     let height = finite_size(height);
+    let gap = finite_size(gap);
     let vertical = axis == Axis::Vertical;
-    let grip = if vertical {
-        Bounds {
-            width,
-            height: 12.0_f32.min(height),
-            ..Bounds::default()
-        }
-    } else {
-        Bounds {
-            width: 12.0_f32.min(width),
-            height,
-            ..Bounds::default()
-        }
-    };
-    let button_width = 32.0_f32.min((width - grip.width).max(0.0));
     let more = if vertical {
+        let h = finite_size(button[1]).min(height);
         Bounds {
-            y: grip.height,
+            y: height - h,
             width,
-            height: (height - grip.height).max(0.0),
+            height: h,
             ..Bounds::default()
         }
     } else {
+        let w = finite_size(button[0]).min(width);
         Bounds {
-            x: (width - button_width).max(grip.width),
-            width: button_width,
+            x: width - w,
+            width: w,
             height,
             ..Bounds::default()
         }
     };
-    let mut x = grip.width + 4.0;
-    let mut fitting = !vertical;
-    let fields = widths
+    let mut offset = 0.0;
+    let mut fitting = true;
+    let fields = sizes
         .iter()
-        .map(|w| {
-            let w = finite_size(*w);
-            fitting &= w > 0.0 && x + w + 4.0 <= more.x;
+        .map(|size| {
+            let w = finite_size(size[0]);
+            let h = finite_size(size[1]);
+            fitting &= w > 0.0
+                && h > 0.0
+                && if vertical {
+                    w <= width && offset + h + gap <= more.y
+                } else {
+                    h <= height && offset + w + gap <= more.x
+                };
             if !fitting {
                 return None;
             }
-            let b = Bounds {
-                x,
-                y: 0.0,
-                width: w,
-                height,
+            let b = if vertical {
+                Bounds {
+                    x: 0.,
+                    y: offset,
+                    width,
+                    height: h,
+                }
+            } else {
+                Bounds {
+                    x: offset,
+                    y: 0.,
+                    width: w,
+                    height,
+                }
             };
-            x += w + 8.0;
+            offset += if vertical { h + gap } else { w + gap };
             Some(b)
         })
         .collect();
-    (grip, fields, more)
+    ToolOptionsLayout { fields, more }
 }
 
 fn finite_size(v: f32) -> f32 {
     if v.is_finite() { v.max(0.0) } else { 0.0 }
 }
 
-/// Geometry for one compact slider; values open the full native number editor.
-pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 3] {
+/// Measured value cap followed by the directly editable track. The cap is also
+/// the hold-to-reorder target; no separate grip consumes slider space.
+pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [Bounds; 2] {
     let width = finite_size(width);
     let height = finite_size(height);
-    if axis == Axis::Vertical {
-        let grip = 12.0_f32.min(height);
-        let value = 40.0_f32.min((height - grip).max(0.0));
-        let track = height - grip - value;
+    let vertical = axis == Axis::Vertical;
+    let cap = finite_size(cap).min(if vertical { height } else { width });
+    if vertical {
         [
             Bounds {
                 width,
-                height: grip,
+                height: cap,
                 ..Bounds::default()
             },
             Bounds {
-                y: grip,
+                y: cap,
                 width,
-                height: value,
+                height: height - cap,
                 ..Bounds::default()
-            },
-            Bounds {
-                x: 0.,
-                y: grip + value,
-                width,
-                height: if track >= 32.0 { track } else { 0.0 },
             },
         ]
     } else {
-        let grip = 12.0_f32.min(width);
-        let value = 64.0_f32.min((width - grip).max(0.));
-        let track = width - grip - value;
         [
             Bounds {
-                width: grip,
+                width: cap,
                 height,
                 ..Bounds::default()
             },
             Bounds {
-                x: grip,
-                width: value,
+                x: cap,
+                width: width - cap,
                 height,
                 ..Bounds::default()
-            },
-            Bounds {
-                x: grip + value,
-                y: 0.,
-                width: if track >= 32.0 { track } else { 0.0 },
-                height,
             },
         ]
     }

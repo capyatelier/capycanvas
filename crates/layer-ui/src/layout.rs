@@ -37,40 +37,60 @@ fn ribbon_lanes(length: f32, count: usize, along: f32) -> usize {
     count.max(1).div_ceil(slots)
 }
 
-fn toolbar_extent(tile: &ToolbarTile, along: f32, axis: Axis) -> f32 {
-    match tile.control {
+/// Minimum and preferred along-axis lengths, with optional lane expansion.
+/// All nonuniform items use this policy for docking, floats and drawer bodies.
+#[derive(Clone, Copy)]
+struct ItemSpan {
+    min: f32,
+    preferred: f32,
+    fill: bool,
+}
+fn toolbar_item_span(tile: &ToolbarTile, along: f32, axis: Axis, capacity: f32) -> ItemSpan {
+    let length = match tile.control {
         ToolbarControl::Divider => TOOLBAR_DIVIDER_SIZE,
-        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushOpacitySlider => 4.0 * (along + 2.0) - 2.0,
-        ToolbarControl::ToolOptions if axis == Axis::Horizontal => 4.0 * (along + 2.0) - 2.0,
+        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushOpacitySlider => {
+            4.0 * (along + 2.0) - 2.0
+        }
+        ToolbarControl::ToolOptions => {
+            (if axis == Axis::Vertical { 8.0 } else { 4.0 }) * (along + 2.0) - 2.0
+        }
         _ => along,
+    }
+    .min(capacity);
+    let fill = tile.control == ToolbarControl::ToolOptions && axis == Axis::Horizontal;
+    ItemSpan {
+        min: if fill { along.min(capacity) } else { length },
+        preferred: length,
+        fill,
     }
 }
 fn collapse_toolbar_dividers(tiles: &mut Vec<ToolbarTile>) {
-    // Keep the first separator's identity; only empty groups disappear.
     tiles.dedup_by(|a, b| {
         a.control == ToolbarControl::Divider && b.control == ToolbarControl::Divider
     });
 }
 fn toolbar_span(tiles: &[ToolbarTile], along: f32, axis: Axis) -> f32 {
-    tiles.iter().map(|t| toolbar_extent(t, along, axis) + 2.0).sum()
+    tiles
+        .iter()
+        .map(|t| toolbar_item_span(t, along, axis, f32::INFINITY).preferred + 2.0)
+        .sum()
 }
 fn toolbar_lanes(length: f32, tiles: &[ToolbarTile], along: f32, axis: Axis) -> usize {
-    let capacity = (length - 20.0).max(along + 2.0);
+    let capacity = (length - 22.0).max(1.0);
     let (mut lanes, mut used) = (1, 0.0);
     for tile in tiles {
-        let size = if tile.control == ToolbarControl::ToolOptions { along + 2.0 }
-            else { (toolbar_extent(tile, along, axis) + 2.0).min(capacity) };
+        let size = toolbar_item_span(tile, along, axis, capacity).min;
         if used > 0.0 && used + size > capacity {
             lanes += 1;
             used = 0.0;
         }
-        used += size;
+        used += size + 2.0;
     }
     lanes
 }
 
-/// Dividers retain stable insertion slots but occupy eight logical pixels.
-/// The same compact extents determine ribbon thickness and actual wrapping.
+/// One allocator for dividers and extended components. A uniform grid remains
+/// the fast path; all item lengths use the same min/preferred/fill semantics.
 pub fn toolbar_tile_layout(
     width: f32,
     height: f32,
@@ -79,50 +99,73 @@ pub fn toolbar_tile_layout(
     standalone: bool,
     style: TileStyle,
 ) -> TileLayout {
-    if tiles.iter().any(|t| t.control.is_component()) {
-        return component_tile_layout(width, height, axis, tiles, standalone, style);
-    }
-    if !tiles.iter().any(|t| t.control == ToolbarControl::Divider) {
+    if tiles
+        .iter()
+        .all(|t| !t.control.is_component() && t.control != ToolbarControl::Divider)
+    {
         return tile_layout(width, height, axis, tiles.len(), standalone, style);
     }
     let horizontal = axis == Axis::Horizontal;
     let [w, h] = style.size();
-    let (length, cross, along_size, cross_size) = if horizontal {
+    let (length, cross, along, across) = if horizontal {
         (width, height, w, h)
     } else {
         (height, width, h, w)
     };
-    let padding = if standalone { 0.0 } else { 4.0 };
-    let lanes = (((cross - padding * 2.0 + 2.0) / (cross_size + 2.0)).floor() as usize)
-        .max(1)
-        .max(if standalone {
-            toolbar_lanes(length, tiles, along_size, axis)
-        } else {
-            1
-        });
-    let capacity =
-        (length - padding * 2.0 - if standalone { 20.0 } else { 0.0 }).max(along_size + 2.0);
-    // Next-fit with a balanced target uses at most the available lanes: each
-    // finished lane exceeds total/lanes unless the viewport itself is limiting.
-    let target = capacity.min(toolbar_span(tiles, along_size, axis) / lanes as f32 + along_size + 2.0);
-    let inset = ((cross - (lanes as f32 * (cross_size + 2.0) - 2.0)) * 0.5).max(padding);
-    let (mut lane, mut used) = (0, 0.0);
-    let mut bounds = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        let size = toolbar_extent(tile, along_size, axis);
-        if used > 0.0 && used + size + 2.0 > target {
-            lane += 1;
+    let pad = if standalone { 0.0 } else { 4.0 };
+    let capacity = (length - pad * 2.0 - if standalone { 22.0 } else { 0.0 }).max(1.0);
+    let lanes = ((cross - pad * 2.0 + 2.0) / (across + 2.0))
+        .floor()
+        .max(1.0);
+    let spans: Vec<_> = tiles
+        .iter()
+        .map(|tile| toolbar_item_span(tile, along, axis, capacity))
+        .collect();
+    let total: f32 = spans.iter().map(|v| v.min + 2.0).sum();
+    let largest = spans.iter().map(|s| s.min).fold(along, f32::max);
+    let target = if lanes > 1.0 && !(horizontal && standalone) {
+        capacity.min(total / lanes + largest + 2.0)
+    } else {
+        capacity
+    };
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut used = 0.0;
+    for (i, span) in spans.iter().enumerate() {
+        if used > 0.0 && used + span.min > target {
+            rows.push(Vec::new());
             used = 0.0;
         }
-        let along = padding + used;
-        let across = inset + lane as f32 * (cross_size + 2.0);
-        bounds.push(Bounds {
-            x: if horizontal { along } else { across },
-            y: if horizontal { across } else { along },
-            width: if horizontal { size } else { w },
-            height: if horizontal { h } else { size },
-        });
-        used += size + 2.0;
+        rows.last_mut().unwrap().push(i);
+        used += span.min + 2.0;
+    }
+    let inset = ((cross - (rows.len() as f32 * (across + 2.0) - 2.0)) * 0.5).max(pad);
+    let mut bounds = vec![Bounds::default(); tiles.len()];
+    for (lane, items) in rows.iter().enumerate() {
+        let mut sizes: Vec<_> = items.iter().map(|&i| spans[i].min).collect();
+        let mut spare = (capacity - sizes.iter().map(|s| s + 2.0).sum::<f32>() + 2.0).max(0.0);
+        for (size, &i) in sizes.iter_mut().zip(items) {
+            let growth = (spans[i].preferred - *size).min(spare);
+            *size += growth;
+            spare -= growth;
+        }
+        let fills = items.iter().filter(|&&i| spans[i].fill).count();
+        let mut position = pad;
+        for (&i, size) in items.iter().zip(sizes) {
+            let size = size
+                + if spans[i].fill {
+                    spare / fills as f32
+                } else {
+                    0.0
+                };
+            let cross = inset + lane as f32 * (across + 2.0);
+            bounds[i] = Bounds {
+                x: if horizontal { position } else { cross },
+                y: if horizontal { cross } else { position },
+                width: if horizontal { size } else { w },
+                height: if horizontal { h } else { size },
+            };
+            position += size + 2.0;
+        }
     }
     allocated_toolbar_layout(bounds, width, height, axis, standalone)
 }
@@ -175,98 +218,6 @@ fn allocated_toolbar_layout(
             }
         }),
     }
-}
-
-/// Extended components keep atomic insertion slots. Flexible options consume
-/// spare lane space after fixed controls; their content never changes these bounds.
-fn component_tile_layout(
-    width: f32,
-    height: f32,
-    axis: Axis,
-    tiles: &[ToolbarTile],
-    standalone: bool,
-    style: TileStyle,
-) -> TileLayout {
-    let horizontal = axis == Axis::Horizontal;
-    let [w, h] = style.size();
-    let (length, cross, along, across) = if horizontal {
-        (width, height, w, h)
-    } else {
-        (height, width, h, w)
-    };
-    let pad = if standalone { 0.0 } else { 4.0 };
-    let capacity = (length - pad * 2.0 - if standalone { 22.0 } else { 0.0 }).max(1.0);
-    let available_lanes = ((cross - pad * 2.0 + 2.0) / (across + 2.0))
-        .floor()
-        .max(1.0);
-    let extents: Vec<_> = tiles
-        .iter()
-        .map(|tile| {
-            if tile.control == ToolbarControl::ToolOptions {
-                along.min(capacity)
-            } else {
-                toolbar_extent(tile, along, axis).min(capacity)
-            }
-        })
-        .collect();
-    let total: f32 = extents.iter().map(|v| v + 2.0).sum();
-    let largest = extents.iter().copied().fold(along, f32::max);
-    let target = if available_lanes > 1.0 && !(horizontal && standalone) {
-        capacity.min(total / available_lanes + largest + 2.0)
-    } else {
-        capacity
-    };
-    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
-    let mut used = 0.0;
-    for (i, size) in extents.iter().enumerate() {
-        if used > 0.0 && used + size > target {
-            rows.push(Vec::new());
-            used = 0.0;
-        }
-        rows.last_mut().unwrap().push(i);
-        used += size + 2.0;
-    }
-    let inset = ((cross - (rows.len() as f32 * (across + 2.0) - 2.0)) * 0.5).max(pad);
-    let mut bounds = vec![Bounds::default(); tiles.len()];
-    for (lane, items) in rows.iter().enumerate() {
-        let used: f32 = items.iter().map(|&i| extents[i] + 2.0).sum::<f32>() - 2.0;
-        let flexible = items
-            .iter()
-            .filter(|&&i| horizontal && tiles[i].control == ToolbarControl::ToolOptions)
-            .count();
-        let extra = if flexible > 0 {
-            (target - used).max(0.0) / flexible as f32
-        } else {
-            0.0
-        };
-        let mut position = pad;
-        for &i in items {
-            let size = extents[i]
-                + if horizontal && tiles[i].control == ToolbarControl::ToolOptions {
-                    extra
-                } else {
-                    0.0
-                };
-            let cross = inset + lane as f32 * (across + 2.0);
-            bounds[i] = if horizontal {
-                Bounds {
-                    x: position,
-                    y: cross,
-                    width: size,
-                    height: h,
-                }
-            } else {
-                Bounds {
-                    x: cross,
-                    y: position,
-                    width: w,
-                    height: size,
-                }
-            };
-            position += size + 2.0;
-        }
-    }
-    allocated_toolbar_layout(bounds, width, height, axis, standalone)
 }
 
 /// Natural height for a padded toolbar body at a measured drawer/panel width.
@@ -4857,7 +4808,7 @@ mod tests {
                             } else {
                                 b.height
                             },
-                            toolbar_extent(tile, along, axis)
+                            toolbar_item_span(tile, along, axis, f32::INFINITY).preferred
                         );
                         let line = layout.insertion[index];
                         let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];

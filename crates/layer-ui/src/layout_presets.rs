@@ -38,38 +38,32 @@ impl WorkspacePreset {
         if platform == crate::Platform::Gtk {
             match self {
                 Self::Painter => {
-                    let config = layout
-                        .panels
-                        .iter_mut()
-                        .find(|p| p.id == Panel::Commands)
-                        .unwrap();
-                    config.content = PanelContent::Toolbar {
-                        name: "Brush controls".into(),
-                        tiles: Vec::new(),
-                    };
-                    layout
-                        .insert_tools(
-                            Panel::Commands,
+                    let panel = layout
+                        .add_toolbar(
                             None,
+                            "Brush controls",
                             &[
                                 ToolbarControl::BrushSizeSlider,
                                 ToolbarControl::BrushOpacitySlider,
                             ],
                         )
-                        .unwrap();
-                    let id = layout.next_id;
-                    layout.next_id += 2;
-                    layout.bands.push(DockBand {
-                        id,
-                        edge: Edge::Bottom,
-                        extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
-                        root: DockNode::Tabs {
-                            id: id + 1,
-                            panels: vec![Panel::Commands],
-                            active: Panel::Commands,
-                            tab_style: crate::TabStyle::default(),
-                        },
-                    });
+                        .expect("built-in brush controls");
+                    layout
+                        .panels
+                        .iter_mut()
+                        .find(|p| p.id == panel)
+                        .unwrap()
+                        .tile_style = TileStyle::Medium;
+                    layout
+                        .move_panel(
+                            [1600., 1000.],
+                            panel,
+                            DockTarget::Edge {
+                                edge: Edge::Bottom,
+                                outer: false,
+                            },
+                        )
+                        .expect("bottom brush toolbar");
                 }
                 Self::Photographer => {
                     let config = layout
@@ -100,6 +94,7 @@ impl WorkspacePreset {
         layout
     }
 
+
     /// Exact defaults before inline GTK toolbar components; migrate untouched
     /// included workspaces without replacing any customized arrangement.
     pub fn legacy_toolbar_components_layout(self, platform: crate::Platform) -> DockLayout {
@@ -119,6 +114,47 @@ impl WorkspacePreset {
         }
         layout
     }
+
+    /// Exact first GTK component default, used only to upgrade untouched saves.
+    pub fn legacy_brush_controls_layout(platform: crate::Platform) -> DockLayout {
+        let mut layout = Self::Painter.legacy_toolbar_components_layout(platform);
+        if platform == crate::Platform::Gtk {
+            let config = layout
+                .panels
+                .iter_mut()
+                .find(|p| p.id == Panel::Commands)
+                .unwrap();
+            config.content = PanelContent::Toolbar {
+                name: "Brush controls".into(),
+                tiles: Vec::new(),
+            };
+            layout
+                .insert_tools(
+                    Panel::Commands,
+                    None,
+                    &[
+                        ToolbarControl::BrushSizeSlider,
+                        ToolbarControl::BrushOpacitySlider,
+                    ],
+                )
+                .unwrap();
+            let id = layout.next_id;
+            layout.next_id += 2;
+            layout.bands.push(DockBand {
+                id,
+                edge: Edge::Bottom,
+                extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
+                root: DockNode::Tabs {
+                    id: id + 1,
+                    panels: vec![Panel::Commands],
+                    active: Panel::Commands,
+                    tab_style: crate::TabStyle::default(),
+                },
+            });
+        }
+        layout
+    }
+
 
     /// Last shipped defaults before the selection family rollout.
     pub fn legacy_selection_layout(self, platform: crate::Platform) -> DockLayout {

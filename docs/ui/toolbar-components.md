@@ -5,8 +5,8 @@
 
 GTK toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
-stable tile identity and one explicit grip; the entire component moves, copies,
-removes, docks, and participates in workspace undo/redo as a single item.
+stable tile identity; the entire component moves, copies, removes, docks, and
+participates in workspace undo/redo as a single item.
 They are not title-bar items. Other hosts do not yet offer these components.
 
 ## Included workspaces
@@ -22,48 +22,54 @@ baselines, copied workspaces and edited histories are preserved.
 
 Sliders occupy one lane and prefer four tiles of length, including tile gaps.
 They work horizontally or vertically; vertical values increase upward. They
-always edit remembered **brush** parameters, not layer opacity or whichever
-numeric field happens to belong to the selected tool. Multiple instances and
-existing panels share the same state and brush-preset memory.
+follow the active tool’s size and opacity settings and disable when unavailable.
+Multiple instances and existing panels share the same state and preset memory.
+Size tracks widen toward larger values; opacity tracks show transparency over
+a checkerboard. Values remain horizontal in both orientations.
 
 Click the value to open the full numeric editor, including expressions, stepping
 and the shared bounds/rounding policy. Size is logarithmic, 0.5–2048 px; opacity
 is a percentage. Short allocations reduce the track before the value editor.
-Tool changes dismiss the popup and cancel unfinished text. Numeric edits do not
-create workspace-layout history entries.
+Tool, document and workspace changes dismiss the popup and cancel unfinished
+text. Numeric edits do not create workspace-layout history entries.
 
 ## Contextual options
 
 Rust derives the ordered form from existing tool settings, subtools and actions:
-completion actions first, tool/variant choices, selection combination mode,
-numeric fields, then remaining actions/toggles. A tool switch changes the form,
+completion actions first, tool/variant choices, independent eyedropper sample
+size, selection combination and sampling-source choices, numeric fields, then
+remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
 
-GTK measures native controls. Rust fits complete fields in order, reserving
-**More tool options** at the trailing end. That button always opens the complete
-tool/variant and settings drawer, including actions that did not fit. A vertical
-Tool Options component is a compact drawer launcher. Multiple horizontal Tool
-Options components share remaining space in their lane. Wrapped components stay
+Horizontal numeric fields include inline sliders and editable values. Vertical
+options stack icon choices, compact value buttons with full numeric popovers,
+and action buttons. GTK supplies natural sizes and theme spacing; Rust fits
+complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete
+tool/variant and settings drawer, including actions that did not fit. Multiple
+horizontal Tool Options components share remaining space in their lane. Wrapped components stay
 atomic; child fields are never independent drop destinations.
 
 ## Ownership and implementation
 
 - `layer-ui/toolbar_components.rs` owns bindings, contextual form metadata,
   stale-target validation and inner fitting. `layout.rs` owns component extents,
-  wrapping, floating sizing, insertion markers and shared drop geometry.
+  wrapping, floating sizing, insertion markers and shared drop geometry. One
+  min/preferred/fill allocator handles dividers and extended items, including
+  natural-height measurement for tabbed and drawer toolbars.
 - `ToolbarEdit` carries the original tool, brush, layer/mask, operation and
   document generation. Switching away and back cannot revive an obsolete edit.
   Existing action validation and document/workspace history remain authoritative.
 - GTK `toolbar_components.rs` owns retained native widgets, measurement, focus,
   pointer capture and popovers. Both normal toolbars and nested drawer toolbars
-  use it. The existing numeric editor supplies parsing and keyboard behavior.
+  use the same typed `TileWidget` builder and refresh path. The existing numeric
+  editor supplies parsing and keyboard behavior.
 - Numeric values, native measurements and overflow visibility are not saved in
   toolbar configuration. Only typed component kinds and ordinary tile IDs persist.
 
-Controls respond immediately to mouse, touch and pen. Only their explicit grips
-reorder; those grips drag immediately after movement slop with every device.
-Holding a slider does not open a context menu or start a workspace drag. The
-normal tile-body hold convention is unchanged elsewhere.
+Slider tracks and option controls respond immediately to mouse, touch and pen.
+Press, hold, then drag the slider icon/value cap or the options More button to
+reorder the component. A quick cap drag never reorders. Holding a track remains
+a numeric interaction. Disabled controls retain a draggable cap wrapper.
 
 ## Validation
 
@@ -74,8 +80,9 @@ GTK native-input regressions run through
 `tools/performance/workspace-motion.sh gtk` on a private Mutter display:
 
 - `--native-test=native_toolbar_components_input`: mouse/touch editing and
-  handles, exact expressions and errors, context changes, vertical/floating
-  placement, dropdowns, Apply/Cancel, and light/dark screenshots.
+  hold-to-reorder caps, exact expressions and errors, context changes, full-width
+  values, inline sliders, vertical/floating placement, independent eyedropper
+  choices, Apply/Cancel, and light/dark screenshots.
 - `--native-test=native_toolbar_components_pen_input --tablet`: the same slider
   and reorder gestures with GDK tablet events in both themes.
 - `--native-test=native_toolbar_components_narrow_input` with
