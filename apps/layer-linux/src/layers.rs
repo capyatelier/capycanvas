@@ -15,6 +15,7 @@ pub struct LayerPanel {
     pub footer: gtk::Box,
     pub list: gtk::ScrolledWindow,
     pub opacity: NumberControl,
+    quick_mask: crate::selection_masks::QuickMaskRow,
     model: gio::ListStore,
     blend: gtk::DropDown,
     alpha: gtk::ToggleButton,
@@ -45,6 +46,7 @@ struct Row {
     thumbnails: gtk::Box,
     clipping: gtk::Box,
     content: gtk::Button,
+    load_selection: gtk::Button,
     content_preview: gtk::Overlay,
     content_frame: gtk::DrawingArea,
     mask: gtk::Button,
@@ -261,6 +263,9 @@ fn drop_hint(root: &gtk::Box, state: Option<LayerState>, y: f64) {
     });
 }
 fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
+    if kind == 5 {
+        return UiAction::Selection { action: layer_ui::SelectionAction::LoadLayer { id: row.id, mode: layer_ui::SelectionMode::New, inverted: false } };
+    }
     if kind == 0 {
         return UiAction::SetLayerVisibility {
             id: row.id,
@@ -364,6 +369,8 @@ impl LayerPanel {
         let header = gtk::Box::new(gtk::Orientation::Vertical, 2);
         header.add_css_class("layer-header");
         root.append(&header);
+        let quick_mask = crate::selection_masks::QuickMaskRow::new();
+        root.append(&quick_mask.root);
         let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         options.set_homogeneous(true);
         let labels: Vec<_> = layer_core::LayerBlend::ALL
@@ -482,6 +489,10 @@ impl LayerPanel {
                 meta.set_width_chars(1);
                 text.append(&meta);
                 root.append(&text);
+                let load_selection = gtk::Button::with_label("Load");
+                load_selection.set_size_request(-1,44);
+                load_selection.set_tooltip_text(Some("Load a copy as the current selection"));
+                root.append(&load_selection);
                 let lock = gtk::Image::new();
                 lock.set_pixel_size(12);
                 lock.set_size_request(12, -1);
@@ -497,6 +508,7 @@ impl LayerPanel {
                     (&content, 2),
                     (&link, 3),
                     (&mask, 4),
+                    (&load_selection, 5),
                 ] {
                     if let Some(w) = owner.borrow().upgrade() {
                         w.tooltips.bind(b, glib::clone!(
@@ -532,6 +544,23 @@ impl LayerPanel {
                             w.dispatch(row_button_action(&row, kind));
                         }
                     ));
+                }
+                for (button,is_mask) in [(&content,false),(&mask,true)] {
+                    let load = gtk::GestureClick::new();
+                    load.set_button(1);
+                    load.set_propagation_phase(gtk::PropagationPhase::Capture);
+                    load.connect_pressed(glib::clone!(#[weak] item, #[strong] owner, move |gesture,_,_,_| {
+                        let modifiers=gesture.current_event_state();
+                        if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {return}
+                        let Some(row)=row_state(&item) else {return};
+                        if row.group {return}
+                        let Some(w)=owner.borrow().upgrade() else {return};
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                        w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::LoadThumbnail {
+                            id:row.id, mask:is_mask, shift:modifiers.contains(gdk::ModifierType::SHIFT_MASK), alt:modifiers.contains(gdk::ModifierType::ALT_MASK),
+                        }});
+                    }));
+                    button.add_controller(load);
                 }
                 let click = gtk::GestureClick::new();
                 click.set_button(1);
@@ -812,6 +841,7 @@ impl LayerPanel {
                         thumbnails,
                         clipping,
                         content,
+                        load_selection,
                         content_preview,
                         content_frame,
                         mask,
@@ -878,6 +908,7 @@ impl LayerPanel {
             footer,
             list,
             opacity,
+            quick_mask,
             model,
             blend,
             alpha,
@@ -927,6 +958,7 @@ impl LayerPanel {
 
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.owner.borrow_mut() = Rc::downgrade(w);
+        self.quick_mask.bind(w);
         w.watch_popover(self.context.upcast_ref());
         if self.root == w.layer_panel.root {
             let click = gtk::GestureClick::new();
@@ -990,6 +1022,9 @@ impl LayerPanel {
             ));
             self.footer.append(&b);
         }
+        let selection = button("layer-selection-brush-symbolic", "New Selection Layer");
+        selection.connect_clicked(glib::clone!(#[weak] w, move |_| w.dispatch(UiAction::Invoke { command: layer_ui::CommandId::NewSelectionLayer })));
+        self.footer.append(&selection);
         let mask = &self.mask_action;
         w.bind_dynamic_action_tooltip(mask, |s| {
             Some(UiAction::Layer {
@@ -1172,6 +1207,8 @@ impl LayerPanel {
         }
     }
     pub fn refresh(&self, state: &UiState) {
+        self.quick_mask.refresh(state);
+        self.header.set_visible(!state.layer_tools.quick_mask && !state.layer_tools.editing_layer.as_ref().is_some_and(|l| l.selection_layer));
         self.updating.set(true);
         // Update only changed rows; list virtualization bounds GTK widget count.
         let same = self.model.n_items() as usize == state.layers.len()
@@ -1307,7 +1344,7 @@ impl LayerPanel {
             for (mask, target, revision, picture) in [
                 (
                     false,
-                    (state.content_icon.is_none() || state.content_icon_color.is_some()).then_some(state.id),
+                    (state.selection_layer || state.content_icon.is_none() || state.content_icon_color.is_some()).then_some(state.id),
                     state.paint_revision,
                     &row.content_image,
                 ),
@@ -1389,9 +1426,10 @@ impl Row {
         }
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.swipe.set_can_delete(s.can_delete);
-        self.effect_icon.set_visible(s.content_icon.is_some());
-        self.content_image.set_visible(s.content_icon.is_none() || s.content_icon_color.is_some());
+        self.effect_icon.set_visible(s.content_icon.is_some() && !s.selection_layer);
+        self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
         crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
+        self.load_selection.set_visible(s.selection_layer);
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));
         self.thumbnails
@@ -1425,10 +1463,9 @@ impl Row {
                 "layer-eye-hidden-symbolic"
             },
         );
-        self.eye.set_tooltip_text(Some(if s.visible {
-            "Hide layer"
-        } else {
-            "Show layer"
+        self.eye.set_tooltip_text(Some(match (s.selection_layer,s.visible) {
+            (true,true) => "Hide selection overlay", (true,false) => "Show selection overlay",
+            (false,true) => "Hide layer", (false,false) => "Show layer",
         }));
         self.link.set_visible(s.has_mask);
         self.mask.set_visible(s.has_mask);

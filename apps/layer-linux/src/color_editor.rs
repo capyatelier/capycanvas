@@ -97,7 +97,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         .gpu
         .borrow()
         .as_ref()
-        .map(|g| g.session.state().colors.clone())
+        .map(|g| g.session.state().display_colors().clone())
     else {
         return;
     };
@@ -131,7 +131,7 @@ fn choose_with_intensity(
 ) {
     let Some((space, epoch, depth)) = workspace.gpu.borrow().as_ref().map(|g| {
         (
-            g.session.state().colors.rgb_space(),
+            g.session.state().display_colors().rgb_space(),
             g.session.state().document_file.epoch,
             g.session.engine().document().color.depth,
         )

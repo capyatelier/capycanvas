@@ -268,3 +268,6 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 }
 .document-tab.drop-before { box-shadow: inset 2px 0 var(--accent-color); }
 .document-tab.drop-after { box-shadow: inset -2px 0 var(--accent-color); }
+
+.selection-mask-actions { background: var(--panel-bg); color: var(--window-fg-color); padding: 12px; border-radius: 10px; box-shadow: 0 2px 8px alpha(black, .22); }
+.selection-mask-row { background: alpha(var(--accent-bg-color), .16); border-radius: 6px; padding: 6px; }

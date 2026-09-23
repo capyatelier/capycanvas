@@ -1062,7 +1062,7 @@ impl Worker {
                 }
                 Command::FinishStartupCache => self.renderer.finish_startup_cache(),
                 Command::SelectionPaint(generation, update) => {
-                    selection_generation = generation;
+                    if generation != selection_generation { continue; }
                     let result = self.renderer.paint_selection(&update).map_err(error);
                     reply.send(Reply::SelectionPaintAck(generation, result)).map_err(error)?;
                 }

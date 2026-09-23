@@ -950,6 +950,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Liquify => "Push and twist existing paint",
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Select => "Choose a selection tool",
+                CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
                 CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
                 CommandId::SelectionBrushPressure => "Use pen pressure to vary selection brush size",
                 CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",

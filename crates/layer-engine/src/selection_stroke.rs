@@ -7,6 +7,9 @@ use layer_render::Dab;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub struct SelectionStroke {
+    id: u64,
+    replay_points: Vec<layer_core::StrokePoint>,
+    real_points: usize,
     brush: BrushSnapshot,
     generator: DabGenerator,
     transform: ViewTransform,
@@ -27,6 +30,9 @@ impl SelectionStroke {
         let [a, b, c, d, _, _] = transform.surface_to_document;
         let snap = close_distance.unwrap_or(0.) * a.hypot(b).max(c.hypot(d));
         Self {
+            id,
+            replay_points: Vec::new(),
+            real_points: 0,
             brush,
             generator,
             transform,
@@ -34,6 +40,12 @@ impl SelectionStroke {
             start_ns: 0,
             loops: close_distance.map(|_| Loops::new(snap)),
         }
+    }
+    pub fn input_budget_exhausted(&self) -> bool {
+        self.real_points >= crate::canvas::MAX_CONTACT_POINTS
+    }
+    pub fn style(&self) -> layer_render::DabStyle {
+        crate::canvas::style_for(&self.brush, layer_core::StrokeTool::Brush)
     }
     /// Predicted samples and late correction deliveries cannot close a loop.
     pub fn push(&mut self, event: PenEvent, dabs: &mut Vec<Dab>) -> Vec<Selection> {
@@ -50,6 +62,10 @@ impl SelectionStroke {
         if !point.position.x.is_finite() || !point.position.y.is_finite() {
             return Vec::new();
         }
+        if self.brush.taper.end_distance_diameters > 0. {
+            self.replay_points.push(point);
+        }
+        self.real_points += 1;
         self.generator.append(point, &self.brush, dabs);
         if event.phase == PenPhase::Up {
             self.generator.finish(&self.brush, dabs);
@@ -57,6 +73,24 @@ impl SelectionStroke {
         self.loops
             .as_mut()
             .map_or_else(Vec::new, |loops| loops.push(point.position))
+    }
+    /// End taper depends on completed path length. The caller replaces the
+    /// provisional footprint, retaining the same immutable starting coverage.
+    pub fn finished_replay(&mut self) -> Option<Vec<Dab>> {
+        if self.replay_points.is_empty() {
+            return None;
+        }
+        let stroke = layer_core::Stroke::new(
+            StrokeId(self.id),
+            layer_core::LayerId(0),
+            layer_core::StrokeTool::Brush,
+            self.brush.clone(),
+            std::mem::take(&mut self.replay_points),
+        )
+        .ok()?;
+        let mut dabs = Vec::new();
+        DabGenerator::generate(&stroke, layer_core::color::RgbSpace::Srgb, &mut dabs);
+        Some(dabs)
     }
     pub fn cursor(&self, event: PenEvent) -> Vec<Dab> {
         let mut point = to_stroke_point(event, self.transform, self.curve, self.start_ns);

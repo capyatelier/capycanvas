@@ -371,6 +371,11 @@ impl ToolSettings {
                 else { self.root.append(&widget); }
                 actions.push((*action, widget));
             }
+            if state.layer_tools.tool.selection_tool().is_some() {
+                let menu = crate::selection_masks::menu_button(workspace, "Selection Actions…", crate::selection_masks::Menu::Selection);
+                menu.set_widget_name("selection-actions-menu");
+                self.root.append(&menu);
+            }
         }
         for ((_, input), control) in fields.iter().zip(controls) {
             input.set_value(control.value as f64);
@@ -901,11 +906,11 @@ impl ColorPanel {
             workspace.dispatch(UiAction::Color { action: ColorAction::HdrIntensity { stops: i.value() as f32 } });
             // Rejected out-of-storage-range edits leave the native control at
             // the accepted value, including in retained color-panel drawers.
-            let colors = workspace.gpu.borrow().as_ref().map(|g| g.session.state().colors.clone());
+            let colors = workspace.gpu.borrow().as_ref().map(|g| g.session.state().display_colors().clone());
             if let Some(colors) = colors { i.refresh(&colors, workspace.view_color(), workspace.picker_headroom()); }
         }));
         self.edit_color.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
-            let slot = workspace.gpu.borrow().as_ref().map(|g| g.session.state().colors.slot);
+            let slot = workspace.gpu.borrow().as_ref().map(|g| g.session.state().display_colors().slot);
             if let Some(slot) = slot { crate::color_editor::show(&workspace, slot); }
         }));
         workspace.watch_popover(self.wheel.imp().menu.borrow().as_ref().unwrap());

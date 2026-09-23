@@ -66,6 +66,7 @@ pub enum SelectionConstraint {
 pub struct SelectionOptions {
     pub tool: SelectionTool,
     pub brush: super::painted_selections::SelectionBrushOptions,
+    pub display: SelectionDisplayOptions,
     pub constraint: SelectionConstraint,
     pub from_center: bool,
     pub mode: SelectionMode,
@@ -80,6 +81,7 @@ impl Default for SelectionOptions {
         Self {
             tool: SelectionTool::Lasso,
             brush: Default::default(),
+            display: Default::default(),
             constraint: SelectionConstraint::Free,
             from_center: false,
             mode: SelectionMode::New,
@@ -94,6 +96,7 @@ impl Default for SelectionOptions {
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), String> {
         self.brush.validate()?;
+        self.display.validate()?;
         NumericControl::number(
             0.,
             layer_render::SelectionRefinement::MAX_FEATHER as f64,

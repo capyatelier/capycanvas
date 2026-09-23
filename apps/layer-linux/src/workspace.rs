@@ -844,6 +844,7 @@ pub struct Workspace {
     pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
     placement_actions: crate::tool_panels::PlacementActions,
+    mask_actions: crate::selection_masks::MaskActions,
     color_panel: crate::tool_panels::ColorPanel,
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
@@ -1032,6 +1033,8 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         let placement_actions = crate::tool_panels::PlacementActions::new();
         content.add_overlay(&placement_actions.root);
+        let mask_actions = crate::selection_masks::MaskActions::new();
+        content.add_overlay(&mask_actions.root);
         window.set_content(Some(&content));
         let this = Rc::new(Self {
             window,
@@ -1090,6 +1093,7 @@ impl Workspace {
             color_editors: RefCell::default(),
             tool_settings,
             placement_actions,
+            mask_actions,
             color_panel,
             proof_panel,
             navigator,
@@ -1127,6 +1131,7 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.placement_actions.bind(&this);
+        this.mask_actions.bind(&this);
         this.color_panel.bind(&this);
         this.navigator.bind(&this);
         this.navigator_overviews.bind(&this);
@@ -2288,15 +2293,16 @@ impl Workspace {
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
             self.placement_actions.refresh(&state);
+            self.mask_actions.refresh(&state);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
-            self.color_panel.refresh(&state.colors, self.view_color(), self.picker_headroom());
+            self.color_panel.refresh(state.display_colors(), self.view_color(), self.picker_headroom());
             crate::color_editor::refresh_display(self);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
-            self.color.set_display_color(state.colors.definition(), self.view_color(), self.picker_headroom());
+            self.color.set_display_color(state.display_colors().definition(), self.view_color(), self.picker_headroom());
             self.toolbar.queue_draw();
             for (value, button) in self.size_buttons.borrow().iter() {
                 selected(button, *value == state.brush.diameter);

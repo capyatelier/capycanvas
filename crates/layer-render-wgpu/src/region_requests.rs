@@ -48,7 +48,7 @@ impl RegionRequests {
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
-        let extent = match request.source { layer_render::RegionSource::Layer(id) => r.target_extent(id), _ => r.document_extent };
+        let extent = match request.source { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(id), _ => r.document_extent };
         if extent.contains(&0)
             || request.position[0] >= extent[0]
             || request.position[1] >= extent[1]
@@ -56,7 +56,7 @@ impl RegionRequests {
             || !(0.0..=1.).contains(&request.tolerance)
             || !request.refinement.is_valid()
             || request.selection.as_ref().is_some_and(|s| !s.is_valid())
-            || (matches!(request.source, layer_render::RegionSource::Selection(_)) && request.selection.is_none())
+            || (matches!(request.source, layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Coverage(_)) && request.selection.is_none())
         {
             return Err(GpuRasterError::InvalidExtent);
         }
@@ -67,7 +67,7 @@ impl RegionRequests {
             startup.compiler.check()?;
             let mut ready = true;
             if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
-                ready &= self.flood.prepare(&startup.compiler, request.refinement);
+                if !matches!(request.source, layer_render::RegionSource::Coverage(_)) { ready &= self.flood.prepare(&startup.compiler, request.refinement); }
                 ready &= self.raw.prepare(&startup.compiler);
             }
             if request.selection.is_some() { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler); }
@@ -113,11 +113,13 @@ impl RegionRequests {
             flood::Region { coverage: copy, bounds_offset: 0 }
         } else {
             let classified = self.raw.encode(r, &request, &mut encoder)?;
-            self.flood.encode_input(
+            if matches!(request.source, layer_render::RegionSource::Coverage(_)) {
+                flood::Region { coverage: classified, bounds_offset: 0 }
+            } else { self.flood.encode_input(
                 &r.device, &mut encoder, &r.empty_view, extent, request.position,
                 request.tolerance, request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
                 request.refinement, Some(&classified), request.contiguous,
-            )?
+            )? }
         };
         #[cfg(test)]
         let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);

@@ -16,7 +16,7 @@ use std::fmt;
 mod outline;
 mod telemetry;
 mod selection;
-pub use selection::{SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
+pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
@@ -314,6 +314,8 @@ pub enum RegionSource {
     Composite,
     /// Raw paint, in layer-local coordinates.
     Layer(LayerId),
+    /// Raw content alpha or a visibility mask's stored coverage, before artwork compositing.
+    Coverage(LayerId),
     /// Composition snapshot with original indices and selected visibility.
     Layers(Vec<Layer>),
     /// Rasterize selection geometry without color classification.

@@ -1,17 +1,16 @@
 struct Params {
     extent: vec2<u32>, origin: vec2<u32>,
-    count: u32, mode: u32, fresh: u32, textured: u32,
+    count: u32, mode: u32, fresh: u32, uniform_stroke: u32,
     opacity: f32, gray: f32, enclosed: u32, unused: u32,
+    gradient_points: vec4<f32>, gradient: vec4<f32>,
 }
-struct Contact { pose: vec4<f32>, rotation_flow: vec4<f32>, texture_alpha: vec4<f32> }
-struct Contacts { values: array<Contact,256> }
+struct Contacts { values: array<Dab,64> }
 struct Output { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<uniform> contacts: Contacts;
 @group(0) @binding(2) var<storage, read_write> footprint: array<f32>;
 @group(0) @binding(3) var<storage, read_write> output: Output;
-@group(0) @binding(4) var tip: texture_2d<f32>;
-@group(0) @binding(5) var tip_sampler: sampler;
+@group(0) @binding(8) var<uniform> style: Style;
 // Bindings 6/7 and sampling helpers come from selection_clip.wgsl.
 
 @compute @workgroup_size(64)
@@ -40,27 +39,35 @@ fn paint(@builtin(global_invocation_id) id: vec3<u32>) {
         let index = id.y*256u+id.x*4u+sample;
         let base = before_at(p);
         var value = footprint[index];
-        if params.fresh != 0u { value = select(0.,base,params.mode == 2u); }
+        let flowing = params.mode == 2u && params.uniform_stroke == 0u;
+        if params.fresh != 0u { value = select(0.,base,flowing); }
+        let field = contact_field(p);
         for(var i=0u;i<params.count;i++) {
             let d = contacts.values[i];
-            let q = p-d.pose.xy;
-            let local = vec2<f32>(dot(q,d.rotation_flow.xy),dot(q,vec2<f32>(-d.rotation_flow.y,d.rotation_flow.x)))/d.pose.zw;
-            if dot(local,local) >= 1. { continue; }
-            var coverage = analytic_coverage(local,d.rotation_flow.w,min(d.pose.z,d.pose.w));
-            if params.textured != 0u {
-                coverage = textureSampleLevel(tip,tip_sampler,local*d.texture_alpha.xy*.5+.5,0.).r;
-            }
-            let alpha = clamp(coverage*d.rotation_flow.z*d.texture_alpha.z,0.,1.);
-            if params.mode == 2u { value = mix(value,params.gray,alpha*params.opacity); }
+            let coverage = brush_footprint(d,p,field);
+            let alpha = clamp(coverage*d.flow*d.color.a,0.,1.);
+            if flowing { value = mix(value,params.gray,alpha*params.opacity); }
             else { value = max(value,alpha); }
         }
+        var gray = params.gray;
+        var gradient_alpha = 1.;
+        if params.gradient.x > 0. {
+            let delta = params.gradient_points.zw - params.gradient_points.xy;
+            let offset = p - params.gradient_points.xy;
+            let distance2 = max(dot(delta,delta),0.000001);
+            var progress = clamp(dot(offset,delta)/distance2,0.,1.);
+            if params.gradient.x > 1.5 { progress = clamp(length(offset)/sqrt(distance2),0.,1.); }
+            if params.gradient.z > .5 { gradient_alpha = 1.-progress; }
+            else { gray = mix(gray,params.gradient.y,progress); }
+        }
         if params.enclosed != 0u {
-            let area = enclosed_at(p);
-            if params.mode == 2u { value = mix(value,params.gray,area*params.opacity); }
+            let area = enclosed_at(p) * gradient_alpha;
+            if flowing { value = mix(value,gray,area*params.opacity); }
             else { value = max(value,area); }
         }
         footprint[index] = value;
         var result = value;
+        if params.mode == 2u && !flowing { result = mix(base,gray,value*params.opacity); }
         if params.mode == 0u { result = base+(1.-base)*value*params.opacity; }
         if params.mode == 1u { result = base*(1.-value*params.opacity); }
         packed |= u32(round(clamp(result,0.,1.)*255.)) << (sample*8u);

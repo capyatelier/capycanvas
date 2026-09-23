@@ -12,10 +12,12 @@ fn request(id: u64, before: Selection, mode: SelectionPaintMode, opacity: f32) -
         mode,
         opacity,
         gray: 0.5,
-        tip: BrushTip::AnalyticEllipse,
+        gradient: None,
+        style: crate::tests::test_style(BrushExecution::Dry),
         dabs: vec![contact],
         enclosed: None,
         finish: false,
+        restart: false,
     }
 }
 fn receive(r: &mut WgpuRasterizer, mut request: SelectionPaint) -> Selection {
@@ -90,6 +92,145 @@ fn selection_paint_gray_uses_float_working_coverage_and_cancel_discards_preview(
     let paint = request(3, Selection::empty(), SelectionPaintMode::Gray, 1.);
     assert!(r.paint_selection(&paint).unwrap());
     assert_eq!(value(&receive(&mut r, paint), 64, 64), 128);
+}
+
+#[test]
+fn selection_paint_coherent_brush_sweeps_between_contacts_and_respects_uniform_opacity() {
+    let mut r = renderer();
+    let mut paint = request(1, Selection::full(), SelectionPaintMode::Gray, 0.5);
+    paint.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+    paint.gray = 0.;
+    let d = &mut paint.dabs[0];
+    d.center = Point { x: 100., y: 64. };
+    d.radii = [4.; 2];
+    d.motion = [72., 0.];
+    d.previous = [4., 4., 1., 0.];
+    d.contact = [1., 0., 0., 0.];
+    d.previous_contact = d.contact;
+    assert!(r.paint_selection(&paint).unwrap());
+    let first = receive(&mut r, paint.clone());
+    assert!(
+        value(&first, 64, 64) < 255,
+        "the real swept segment is covered"
+    );
+    paint.id = 2;
+    assert!(r.paint_selection(&paint).unwrap());
+    assert!(r.paint_selection(&paint).unwrap());
+    let repeated = receive(&mut r, paint);
+    assert_eq!(
+        value(&first, 64, 64),
+        value(&repeated, 64, 64),
+        "uniform dry paint does not build opacity within a contact"
+    );
+}
+
+#[test]
+fn selection_paint_gradient_blends_scalar_values_and_transparency() {
+    let mut r = renderer();
+    let mut paint = request(1, Selection::full(), SelectionPaintMode::Gray, 1.);
+    paint.dabs.clear();
+    paint.gray = 0.;
+    paint.enclosed = Some(Arc::new(Selection::full()));
+    paint.gradient = Some(layer_render::SelectionGradient {
+        start: Point { x: 0., y: 64. },
+        end: Point { x: 128., y: 64. },
+        background: 1.,
+        radial: false,
+        transparent: false,
+    });
+    assert!(r.paint_selection(&paint).unwrap());
+    let s = receive(&mut r, paint.clone());
+    assert!((126..=130).contains(&value(&s, 64, 64)));
+    assert!(value(&s, 0, 64) < 3 && value(&s, 127, 64) > 252);
+    paint.id = 2;
+    paint.before = Arc::new(Selection::pixels(match &s.shape {
+        layer_core::SelectionShape::Pixels(p) => p.clone(),
+        _ => unreachable!(),
+    }));
+    paint.gray = 1.;
+    paint.gradient.as_mut().unwrap().transparent = true;
+    assert!(r.paint_selection(&paint).unwrap());
+    let s = receive(&mut r, paint);
+    assert!((189..=194).contains(&value(&s, 64, 64)));
+}
+
+#[test]
+fn selection_paint_loads_raw_alpha_and_disabled_mask_with_independent_placement() {
+    use layer_core::{Affine, LayerMask};
+    use layer_render::{RegionRequest, RegionSource, SelectionRefinement};
+    let mut r = renderer();
+    let mut layer = Layer::paint(LayerId(1), "hidden source");
+    layer.visible = false;
+    layer.opacity = 0.2;
+    let mut mask = LayerMask::reveal_all(LayerId(3), Point::default());
+    mask.default_coverage = 0.25;
+    mask.enabled = false;
+    mask.inverted = true;
+    layer.mask = Some(mask);
+    let mut d = dab([1., 1., 1., 0.5]);
+    d.flow = 1.;
+    d.hardness = 1.;
+    let batch = batch(1);
+    let mut initial_layer = Layer::paint(LayerId(2), "hidden initial mask");
+    initial_layer.visible = false;
+    let mut initial = LayerMask::reveal_all(LayerId(4), Point::default());
+    initial.enabled = false;
+    initial.default_coverage = 0.;
+    initial.initial = Some(
+        Selection::polygon(vec![
+            Point { x: 32., y: 32. },
+            Point { x: 96., y: 32. },
+            Point { x: 96., y: 96. },
+            Point { x: 32., y: 96. },
+        ])
+        .unwrap(),
+    );
+    initial_layer.mask = Some(initial);
+    submit(&mut r, &[layer, initial_layer], &[d], &[batch], true);
+    let mut load = |id, offset| {
+        assert!(
+            r.request_region(RegionRequest {
+                request_id: id,
+                source: RegionSource::Coverage(LayerId(id)),
+                contiguous: false,
+                position: [0, 0],
+                tolerance: 0.,
+                refinement: Default::default(),
+                limit: None,
+                selection: Some(SelectionRefinement {
+                    mode: layer_core::SelectionMode::New,
+                    previous: None,
+                    antialias: true,
+                    feather: 0.,
+                    source_to_document: Affine::translation(Point { x: offset, y: 0. })
+                }),
+            })
+            .unwrap()
+        );
+        let until = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            if let Some(result) = r.take_region() {
+                break Selection::pixels(result.unwrap().pixels);
+            }
+            assert!(std::time::Instant::now() < until);
+            std::thread::yield_now();
+        }
+    };
+    let alpha = load(1, 10.);
+    assert!(
+        (126..=129).contains(&value(&alpha, 74, 64)),
+        "layer opacity, visibility and attached mask do not alter raw alpha"
+    );
+    assert_eq!(value(&alpha, 2, 2), 0);
+    let mask = load(3, 0.);
+    assert!(
+        (190..=193).contains(&value(&mask, 2, 2)),
+        "disabled inverted mask loads its own scalar coverage"
+    );
+    assert_eq!(value(&mask, 2, 2), value(&mask, 64, 64));
+    let initial = load(4, 0.);
+    assert_eq!(value(&initial, 2, 2), 0);
+    assert_eq!(value(&initial, 64, 64), 255);
 }
 
 #[test]
@@ -170,6 +311,8 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
     let paint = request(1, Selection::empty(), SelectionPaintMode::Add, 0.5);
     assert!(r.paint_selection(&paint).unwrap());
     r.set_selection_overlay(Some(layer_render::SelectionOverlay {
+        active: true,
+        editing: None,
         color: [1., 0., 0., 0.5],
         protected: false,
     }));
@@ -304,6 +447,8 @@ fn selection_paint_retained_preview_repaints_strokes_without_artwork_or_cursor_d
         crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
     presenter.set_target_retention(true);
     r.set_selection_overlay(Some(layer_render::SelectionOverlay {
+        active: true,
+        editing: None,
         color: [1., 0., 0., 0.5],
         protected: false,
     }));
@@ -335,4 +480,100 @@ fn selection_paint_retained_preview_repaints_strokes_without_artwork_or_cursor_d
             "update at {x}"
         );
     }
+}
+
+#[test]
+fn selection_paint_saved_previews_union_visibility_thumbnails_and_export_isolation() {
+    let mut r = renderer();
+    let artwork = r.readback_srgb_rgba8().unwrap();
+    let rect = |x| {
+        Selection::polygon(vec![
+            Point { x, y: 20. },
+            Point { x: x + 25., y: 20. },
+            Point { x: x + 25., y: 80. },
+            Point { x, y: 80. },
+        ])
+        .unwrap()
+    };
+    let mut layers = vec![
+        Layer::paint(LayerId(1), "art"),
+        Layer::selection(LayerId(2), "left", rect(15.)),
+        Layer::selection(LayerId(3), "right", rect(80.)),
+    ];
+    r.set_selection_overlay(Some(layer_render::SelectionOverlay {
+        active: false,
+        editing: None,
+        color: [1., 0., 0., 0.5],
+        protected: false,
+    }));
+    submit(&mut r, &layers, &[], &[], false);
+    let first = r.selection_previews.buffer.clone().unwrap();
+    submit(&mut r, &layers, &[], &[], false);
+    assert_eq!(
+        r.selection_previews.buffer.as_ref(),
+        Some(&first),
+        "unchanged preview must reuse GPU union"
+    );
+    let target = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("saved mask display test"),
+        size: wgpu::Extent3d {
+            width: 128,
+            height: 128,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut presenter = crate::ViewportPresenter::for_surface(
+        &r,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        crate::SdrSurfaceColor::Srgb,
+    )
+    .unwrap();
+    let render = |r: &WgpuRasterizer, presenter: &mut crate::ViewportPresenter| {
+        presenter
+            .present(
+                r,
+                &target.create_view(&Default::default()),
+                ViewState {
+                    background_rgba_linear: [1.; 4],
+                    ..view()
+                },
+                [1.; 4],
+            )
+            .unwrap();
+        page_bytes(r, &target)
+    };
+    let pixels = render(&r, &mut presenter);
+    for x in [25, 90] {
+        let p = &pixels[(50 * 128 + x) * 4..][..4];
+        assert!(p[0] > p[1] + 40, "{p:?}");
+    }
+    layers[1].visible = false;
+    submit(&mut r, &layers, &[], &[], false);
+    let pixels = render(&r, &mut presenter);
+    let p = &pixels[(50 * 128 + 25) * 4..][..4];
+    assert_eq!(p[0], p[1]);
+    let p = &pixels[(50 * 128 + 90) * 4..][..4];
+    assert!(p[0] > p[1] + 40);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
+    r.request_thumbnail(42, LayerId(2)).unwrap();
+    let until = std::time::Instant::now() + READBACK_TIMEOUT;
+    let image = loop {
+        let _ = r.device.poll(wgpu::PollType::Poll);
+        if let Some(image) = r.take_thumbnail() {
+            break image.unwrap();
+        };
+        assert!(std::time::Instant::now() < until);
+        std::thread::yield_now();
+    };
+    assert_eq!(image.request_id, 42);
+    let inside = &image.bytes[(12 * image.stride + 6 * 4) as usize..][..4];
+    let outside = &image.bytes[(12 * image.stride + 25 * 4) as usize..][..4];
+    assert_eq!(inside, [255, 255, 255, 255]);
+    assert_eq!(outside, [0, 0, 0, 255]);
 }

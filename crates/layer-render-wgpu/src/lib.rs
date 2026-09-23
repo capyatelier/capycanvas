@@ -80,6 +80,7 @@ mod scene;
 mod selection_clip;
 mod selection_refine;
 mod selection_paint;
+mod selection_previews;
 mod selection_readback;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
@@ -866,6 +867,7 @@ pub struct WgpuRasterizer {
     display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
     selection_painter: Option<selection_paint::SelectionPainter>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
+    selection_previews: selection_previews::SelectionPreviews,
     selection_paint_revision: u64,
     selection_paint_damage: PixelRect,
     regions: Option<region_requests::RegionRequests>,
@@ -1246,6 +1248,7 @@ impl WgpuRasterizer {
             display_selection: None,
             selection_painter: None,
             selection_overlay: None,
+            selection_previews: Default::default(),
             selection_paint_revision: 0,
             selection_paint_damage: PixelRect::EMPTY,
             regions: None,
@@ -2226,6 +2229,7 @@ impl WgpuRasterizer {
             .saturating_add(u64::from(RESERVOIR_SIZE * RESERVOIR_SIZE) * pixel_bytes * 2)
             .saturating_add(self.selection_clip.storage_bytes())
             .saturating_add(self.selection_painter.as_ref().map_or(0, |p| p.storage_bytes()))
+            .saturating_add(self.selection_previews.buffer.as_ref().map_or(0, |b|b.size()*2))
             .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
@@ -3404,7 +3408,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 let buffer = self.selection_clip.pixel_buffer(&self.device, pixels);
                 self.display_selection = Some((selection.clone(), buffer));
             }
-        } else if let Some(selection) = selection.filter(|_| self.selection_overlay.is_some()) {
+        } else if let Some(selection) = selection.filter(|_| self.selection_overlay.is_some_and(|o|o.active)) {
             if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
                 if let Some(startup) = &self.startup {
                     startup.compiler.check()?;
@@ -3709,6 +3713,7 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
+        self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
             let end = start.checked_add(batch.dab_count as usize)
@@ -4979,7 +4984,12 @@ impl StyleGpu {
     }
 
     fn brush(extent: [u32; 2], batch: &DabBatch) -> Self {
-        let style = &batch.style;
+        let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count);
+        style.canvas_opacity[3] = f32::from(batch.stroke_start);
+        style
+    }
+
+    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32) -> Self {
         let plan = BrushPassPlan::for_style(style);
         let grain = style.grain.as_ref();
         let dual = style.dual.as_deref();
@@ -5055,8 +5065,8 @@ impl StyleGpu {
             style.wet_mix.wetness_jitter,
         ];
         result.operation = [
-            batch.first_dab,
-            batch.dab_count,
+            first,
+            count,
             plan.material as u32,
             u32::from(style.mode == DabMode::Erase),
         ];
@@ -5104,7 +5114,6 @@ impl StyleGpu {
         }
         // This lane is unused by dry and composite shaders and avoids growing
         // every style upload solely for one material-stage lifecycle bit.
-        result.canvas_opacity[3] = f32::from(batch.stroke_start);
         result.color[3] = f32::from(style.alpha_locked);
         result
     }

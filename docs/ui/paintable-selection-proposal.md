@@ -260,7 +260,11 @@ Export and color sampling use artwork without the selection overlay.
 
 Provide named **Selection Layer** rows with a coverage thumbnail, selection icon,
 eye for overlay preview, and an explicit **Load Selection** action. Their coverage
-does not render as artwork or continuously control another layer's visibility.
+does not render as artwork or continuously control another layer's visibility. Saving a
+snapshot starts its overlay hidden; explicitly editing that row reveals it.
+Visible saved layers preview selected coverage. Quick Mask and the active stored
+mask also offer protected-area display. The shared overlay color/opacity affects
+only display, and several visible saved layers combine by maximum for preview.
 There is still only one current selection restricting artwork edits.
 
 | Action | Required behavior |
@@ -382,7 +386,10 @@ Implementation milestones, in delivery order:
    GTK mouse and injected Wayland pen journeys pass; light/dark controls reviewed.
    Overlay preferences remain part of the shared mask interface below.
 3. GTK Quick Mask and Selection Layers: temporary row, grayscale editing,
-   saved-mask actions, display preferences, and editing indicator. Pending.
+   saved-mask actions, display preferences, and editing indicator. Implemented.
+   Native GTK light/dark journeys check coverage, exit, save/edit/load, and tint
+   persistence. Grayscale thumbnails and multiple visible saved-mask previews
+   are GPU-rendered; previews never affect artwork or the current selection.
 4. Web: project the same controls and actions; validate on the attached tablet.
    Pending.
 5. Android: native projection and tablet validation, following the reviewed GTK

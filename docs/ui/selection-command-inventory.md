@@ -1,6 +1,8 @@
 # Selection command inventory
 
-Date: 2026-09-22. Status: design inventory; implementation pending for new items.
+Date: 2026-09-23. Status: shared actions and GTK Core integration implemented;
+Web/Android presentation and device validation in progress. Next/Later remain
+separate work.
 Companion to the [paintable-selection specification](paintable-selection-proposal.md)
 and [Selection Layer design](saved-selections-assessment.md).
 
@@ -81,8 +83,8 @@ Keep this the complete, discoverable home for current-selection commands.
 | Modify | Border…; Smooth… | Next. Border creates a selected band; Smooth reduces small irregularities. |
 | Geometry | Move Selection; Transform Selection… | Next. Affect coverage/placement only; artwork stays stationary. |
 | Store | Save as Selection Layer… | Core. Named snapshot; default root placement; keeps current editing target. |
-| Recall | Load Selection… | Core. Picker with name/thumbnail/group path, Replace/Add/Subtract/Intersect, and Invert source checkbox. Works when Layers is closed. |
-| Update stored | Replace Selection Layer from Current Selection… | Core. Explicit destination picker; never infer an overwrite from the last loaded source. Row context skips the picker. |
+| Recall | Load Selection… | Core. Named submenu with group path, Replace/Add/Subtract/Intersect, and Load Inverted Selection. Works when Layers is closed; Layers provides the coverage thumbnail. |
+| Update stored | Replace Selection Layer from Current Selection… | Core. Explicit named destination submenu; never infer an overwrite from the last loaded source. Row context targets its own row. |
 | Display | Show Selection Outline | Core. Same action and checked state as View. Never deselects. |
 
 Use Grow/Shrink consistently; searchable aliases may include Expand/Contract.

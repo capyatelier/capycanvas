@@ -17,6 +17,7 @@ mod icons;
 mod image_selector;
 mod input;
 mod layers;
+mod selection_masks;
 mod swipe_row;
 mod navigator;
 mod number_control;

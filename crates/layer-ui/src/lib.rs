@@ -111,7 +111,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform,
     PreferenceAction,
@@ -504,6 +504,19 @@ pub enum CommandId {
     PolygonSelect,
     ColorSelect,
     SelectionBrush,
+    QuickMask,
+    ReturnToArtwork,
+    NewSelectionLayer,
+    SaveSelectionLayer,
+    Reselect,
+    SelectionOutline,
+    MaskOverlay,
+    MaskOverlayProtected,
+    ResetMaskColors,
+    SwapMaskColors,
+    FillSelectionMask,
+    ClearSelectionMask,
+
     SelectionBrushPressure,
     SelectionNew,
     SelectionAdd,
@@ -575,7 +588,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
@@ -642,7 +655,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::ZenMode
@@ -687,6 +700,19 @@ impl CommandId {
             Self::PolygonSelect => "polygon-select",
             Self::ColorSelect => "color-select",
             Self::SelectionBrush => "selection-brush",
+            Self::QuickMask => "mask",
+            Self::ReturnToArtwork => "brush",
+            Self::NewSelectionLayer => "add-layer",
+            Self::SaveSelectionLayer => "save-document",
+            Self::Reselect => "select-all",
+            Self::SelectionOutline => "select",
+            Self::MaskOverlay => "eye",
+            Self::MaskOverlayProtected => "mask",
+            Self::ResetMaskColors => "color",
+            Self::SwapMaskColors => "swap",
+            Self::FillSelectionMask => "fill",
+            Self::ClearSelectionMask => "clear",
+
             Self::SelectionBrushPressure => "pen",
             Self::SelectionNew => "selection-new",
             Self::SelectionAdd => "selection-add",
@@ -750,7 +776,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 102] = [
+    pub const ALL: [Self; 114] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -788,6 +814,19 @@ impl CommandId {
         Self::PolygonSelect,
         Self::ColorSelect,
         Self::SelectionBrush,
+        Self::QuickMask,
+        Self::ReturnToArtwork,
+        Self::NewSelectionLayer,
+        Self::SaveSelectionLayer,
+        Self::Reselect,
+        Self::SelectionOutline,
+        Self::MaskOverlay,
+        Self::MaskOverlayProtected,
+        Self::ResetMaskColors,
+        Self::SwapMaskColors,
+        Self::FillSelectionMask,
+        Self::ClearSelectionMask,
+
         Self::SelectionBrushPressure,
         Self::SelectionNew,
         Self::SelectionAdd,
@@ -926,6 +965,19 @@ impl CommandId {
             Self::PolygonSelect => "Polygonal lasso",
             Self::ColorSelect => "Select by color",
             Self::SelectionBrush => "Selection Brush",
+            Self::QuickMask => "Quick Mask",
+            Self::ReturnToArtwork => "Return to Artwork",
+            Self::NewSelectionLayer => "New Selection Layer",
+            Self::SaveSelectionLayer => "Save as Selection Layer",
+            Self::Reselect => "Reselect",
+            Self::SelectionOutline => "Show Selection Outline",
+            Self::MaskOverlay => "Show Mask Overlay",
+            Self::MaskOverlayProtected => "Overlay Protected Areas",
+            Self::ResetMaskColors => "Reset to Black / White",
+            Self::SwapMaskColors => "Swap Mask Colors",
+            Self::FillSelectionMask => "Fill Mask",
+            Self::ClearSelectionMask => "Clear Selection Coverage",
+
             Self::SelectionBrushPressure => "Pressure controls size",
             Self::SelectionNew => "New selection",
             Self::SelectionAdd => "Add to selection",
@@ -1023,6 +1075,7 @@ pub struct BrushState {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LayerState {
     pub id: u64,
+    pub selection_layer: bool,
     pub content_icon: Option<String>,
     pub content_icon_color: Option<HexColor>,
     pub label: String,
@@ -1116,6 +1169,7 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Selection { action: SelectionAction },
     ActivateHeaderItem {
         id: u32,
     },

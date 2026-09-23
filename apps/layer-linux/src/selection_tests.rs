@@ -47,6 +47,55 @@ fn wait_selection(d: &Driver) -> layer_core::Selection {
         );
     }
 }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_quick_mask_input"]
+fn native_quick_mask_input() {
+    let mut d = Driver::new("art.capycanvas.QuickMask");
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| d.dir.to_string_lossy().into()));
+    std::fs::create_dir_all(&output).unwrap();
+    d.key(b'q' as u32);
+    assert!(state(&d.w).layer_tools.quick_mask);
+    assert!(selection(&d).is_none(), "entering is display state only");
+    assert!(d.named("selection-mask-actions").is_visible());
+    d.w.dispatch(UiAction::SetBrushSize { value: 80. });
+    let _=crate::snapshot(&d.w); pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("quick-mask-before.png")).unwrap();
+    canvas_drag(&mut d, [600.,600.], [900.,600.], false);
+    let first = wait_selection(&d);
+    assert!(byte_pixel(&first,750,600) < 32);
+    assert_eq!(byte_pixel(&first,100,100),255);
+    let layers = d.header_tool(ToolbarControl::Panel { panel:Panel::Layers });
+    d.click_name(&layers); pump(150);
+    assert!(d.named("quick-mask-layer").is_visible());
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);
+        let _ = crate::snapshot(&d.w); pump(100);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("quick-mask-{theme:?}.png"))).unwrap();
+        let capture=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+        let tinted=capture.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30) && p[0]>p[2].saturating_add(30)).count();
+        assert!(tinted>100,"{theme:?} mask overlay disappeared: {tinted} pixels");
+    }
+    d.click_name(&layers); pump(100);
+    d.click_name("selection-mask-done"); pump(100);
+    assert!(!state(&d.w).layer_tools.quick_mask);
+    assert_eq!(selection(&d),Some(first.clone()));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SaveSelectionLayer}); pump(150);
+    let id = state(&d.w).layers.iter().find(|l|l.selection_layer).unwrap().id;
+    d.w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::CancelRename});
+    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::EditLayer {id}}); pump(100);
+    assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ClearSelectionMask}); pump(100);
+    assert_eq!(selection(&d),Some(first));
+    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::LoadLayer {id,mode:layer_ui::SelectionMode::New,inverted:false}}); pump(100);
+    assert_eq!(selection(&d),Some(layer_core::Selection::empty()));
+    assert!(state(&d.w).layer_tools.mask_editing.is_none());
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.click_name(&layers); pump(150);
+    let _ = crate::snapshot(&d.w); pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("selection-layer.png")).unwrap();
+    d.w.window.destroy(); pump(80);
+}
 fn pixel(s: &layer_core::Selection, x: u32, y: u32) -> u32 {
     let layer_core::SelectionShape::Pixels(p) = &s.shape else {
         panic!("pixel selection")
@@ -331,6 +380,7 @@ fn native_selection_pen_input() {
         assert!(state(&d.w).customization.drawer.is_some());
         d.header_icon(CommandId::Select, tool.command().icon().unwrap());
     }
+    d.click_name("tool-choice-RectangleSelect");
     for command in [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionIntersect, CommandId::SelectionNew] {
         let button = d.named(&format!("tool-action-{command:?}"));
         let p = d.point(&button);
@@ -419,7 +469,7 @@ fn native_selection_options_input() {
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&opener);
     }
-    for tool in SelectionTool::ALL {
+    for tool in SelectionTool::ALL.into_iter().filter(|t| *t != SelectionTool::Brush) {
         d.click_name(&format!("tool-choice-{:?}", tool.command()));
         assert!(d.named("tool-setting-selection_feather").is_visible());
         let settings = d.named("drawer-panel-ToolSettings");

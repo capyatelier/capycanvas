@@ -58,6 +58,8 @@ pub struct ViewportPresenter {
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
     selection_buffer: Option<wgpu::Buffer>,
+    saved_selection_buffer: Option<wgpu::TextureView>,
+    empty_saved_selection:wgpu::TextureView,
     composite_view: Option<wgpu::TextureView>,
     coarse_view: Option<wgpu::TextureView>,
     next_view: Option<wgpu::TextureView>,
@@ -407,6 +409,7 @@ impl ViewportPresenter {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry { binding:11,visibility:wgpu::ShaderStages::FRAGMENT,ty:wgpu::BindingType::Texture {sample_type:wgpu::TextureSampleType::Uint,view_dimension:wgpu::TextureViewDimension::D2,multisampled:false},count:None },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -633,6 +636,8 @@ impl ViewportPresenter {
             proof_lut: None,
             bind_group: None,
             selection_buffer: None,
+            saved_selection_buffer: None,
+            empty_saved_selection: device.create_texture(&wgpu::TextureDescriptor {label:Some("empty saved overlay"),size:wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1},mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::R32Uint,usage:wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[]}).create_view(&Default::default()),
             composite_view: None,
             coarse_view: None,
             next_view: None,
@@ -893,7 +898,9 @@ impl ViewportPresenter {
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
+        let saved = renderer.selection_previews.texture.as_ref().unwrap_or(&self.empty_saved_selection);
         let bindings_changed = self.bind_group.is_none()
+            || self.saved_selection_buffer.as_ref() != Some(saved)
             || self.document_extent != renderer.document_extent
             || self.selection_buffer.as_ref() != Some(coverage)
             || self.composite_view.as_ref() != Some(composite)
@@ -945,6 +952,7 @@ impl ViewportPresenter {
                         binding: 9,
                         resource: self.hdr_uniform.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry { binding:11, resource:wgpu::BindingResource::TextureView(saved) },
                     wgpu::BindGroupEntry {
                         binding: 10,
                         resource: self.local_buffer.as_entire_binding(),
@@ -953,6 +961,7 @@ impl ViewportPresenter {
             }));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
+            self.saved_selection_buffer = Some(saved.clone());
             self.composite_view = Some(composite.clone());
             self.coarse_view = Some(coarse.clone());
             self.next_view = Some(next.clone());
@@ -997,7 +1006,7 @@ impl ViewportPresenter {
             inverse[1],
             inverse[2],
             inverse[3],
-            self.quarter_turns as f32, overlay.map_or(0.,|o| if o.protected { 2. } else { 1. }), 0., 0.,
+            self.quarter_turns as f32, overlay.filter(|o|o.active).map_or(0.,|o| if o.protected { 2. } else { 1. }), f32::from(renderer.selection_previews.buffer.is_some()), 0.,
             overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
         ];
         // A fixed f32 array has no padding or uninitialized bytes.

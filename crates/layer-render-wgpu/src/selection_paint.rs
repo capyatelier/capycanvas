@@ -9,7 +9,6 @@ use wgpu::util::DeviceExt;
 pub(super) struct SelectionPainter {
     layout: wgpu::BindGroupLayout,
     pipelines: [Deferred<wgpu::ComputePipeline>; 3],
-    blank_tip: wgpu::TextureView,
     pub active: Option<Painting>,
     pending: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<SelectionPaintResult, GpuRasterError>>,
@@ -29,13 +28,13 @@ impl SelectionPainter {
                 p.before.size() + p.output.size() + p.pages.values().map(|b| b.size()).sum::<u64>()
             })
     }
-    pub fn new(device: &PipelineDevice) -> Self {
-        let mut entries: Vec<_> = [0, 1, 2, 3, 6, 7]
+    pub fn new(device: &PipelineDevice, textures: &wgpu::BindGroupLayout) -> Self {
+        let entries: Vec<_> = [0, 1, 2, 3, 6, 7, 8]
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: if binding <= 1 {
+                    ty: if binding <= 1 || binding == 8 {
                         wgpu::BufferBindingType::Uniform
                     } else {
                         wgpu::BufferBindingType::Storage {
@@ -48,24 +47,6 @@ impl SelectionPainter {
                 count: None,
             })
             .into();
-        entries.extend([
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 5,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ]);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("selection paint"),
             entries: &entries,
@@ -82,7 +63,12 @@ impl SelectionPainter {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("incremental selection coverage"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                include_str!("brush_types.wgsl"),
+                &include_str!("brush_textures.wgsl").replace("@group(3)", "@group(1)"),
                 include_str!("analytic_coverage.wgsl"),
+                include_str!("brush_coverage.wgsl"),
+                include_str!("contact.wgsl"),
+                include_str!("brush_footprint.wgsl"),
                 &shader_source("before", 6),
                 &shader_source("enclosed", 7),
                 include_str!("selection_paint.wgsl"),
@@ -90,7 +76,7 @@ impl SelectionPainter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection paint"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), Some(textures)],
             immediate_size: 0,
         });
         let pipelines = ["initialize", "paint", "bounds"].map(|entry| {
@@ -110,27 +96,10 @@ impl SelectionPainter {
                 )
             })
         });
-        let blank_tip = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("analytic selection tip binding"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
         let (tx, rx) = mpsc::channel();
         Self {
             layout,
             pipelines,
-            blank_tip,
             active: None,
             pending: None,
             tx,
@@ -141,12 +110,12 @@ impl SelectionPainter {
     fn binding(
         &self,
         r: &WgpuRasterizer,
-        params: &[u32; 12],
+        params: &[u32; 20],
         contacts: &wgpu::Buffer,
         page: &wgpu::Buffer,
         active: &Painting,
         enclosed: &wgpu::Buffer,
-        tip: &wgpu::TextureView,
+        style: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         let params = r
             .device
@@ -158,29 +127,20 @@ impl SelectionPainter {
                     .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let mut entries: Vec<_> = [
+        let entries: Vec<_> = [
             (0, &params),
             (1, contacts),
             (2, page),
             (3, &active.output),
             (6, &active.before),
             (7, enclosed),
+            (8, style),
         ]
         .map(|(binding, buffer)| wgpu::BindGroupEntry {
             binding,
             resource: buffer.as_entire_binding(),
         })
         .into();
-        entries.extend([
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(tip),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::Sampler(&r.sampler),
-            },
-        ]);
         r.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("selection paint"),
             layout: &self.layout,
@@ -201,16 +161,18 @@ impl SelectionPainter {
         }
         // A uniform contact block keeps the portable four-storage-buffer limit.
         // Partitioning retains the same float footprint and blend order.
-        if update.dabs.len() > 256 {
-            for (i, dabs) in update.dabs.chunks(256).enumerate() {
-                let last = (i + 1) * 256 >= update.dabs.len();
+        if update.dabs.len() > 64 {
+            for (i, dabs) in update.dabs.chunks(64).enumerate() {
+                let last = (i + 1) * 64 >= update.dabs.len();
                 let part = SelectionPaint {
                     id: update.id,
+                    restart: update.restart && i == 0,
                     before: update.before.clone(),
                     mode: update.mode,
                     opacity: update.opacity,
                     gray: update.gray,
-                    tip: update.tip.clone(),
+                    style: update.style.clone(),
+                    gradient: update.gradient,
                     dabs: dabs.to_vec(),
                     finish: update.finish && last,
                     enclosed: if last { update.enclosed.clone() } else { None },
@@ -251,10 +213,11 @@ impl SelectionPainter {
                 label: Some("selection paint"),
             },
         );
-        let fresh = self
-            .active
-            .as_ref()
-            .is_none_or(|a| a.id != update.id || a.extent != extent);
+        let fresh = update.restart
+            || self
+                .active
+                .as_ref()
+                .is_none_or(|a| a.id != update.id || a.extent != extent);
         if fresh {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, &update.before)?;
@@ -304,32 +267,33 @@ impl SelectionPainter {
         } else {
             self.active.as_ref().unwrap().before.clone()
         };
-        let tip = match &update.tip {
-            BrushTip::Mask(id) => &r.mask(id)?.view,
-            _ => &self.blank_tip,
-        };
-        let mut data: Vec<_> = update
-            .dabs
+        let key = WgpuRasterizer::texture_set_key(&update.style);
+        r.ensure_texture_set(key.clone())?;
+        let textures = r
+            .texture_sets
             .iter()
-            .flat_map(|d| {
-                [
-                    d.center.x,
-                    d.center.y,
-                    d.radii[0],
-                    d.radii[1],
-                    d.rotation[0],
-                    d.rotation[1],
-                    d.flow,
-                    d.hardness,
-                    d.texture_sign[0],
-                    d.texture_sign[1],
-                    d.color_rgba_linear[3],
-                    0.,
-                ]
-            })
-            .flat_map(f32::to_ne_bytes)
-            .collect();
-        data.resize(256 * 48, 0);
+            .find(|t| t.key == key)
+            .unwrap()
+            .bind_group
+            .clone();
+        let style = r
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("selection brush style"),
+                contents: style_bytes(&StyleGpu::for_brush(
+                    extent,
+                    &update.style,
+                    0,
+                    update.dabs.len() as u32,
+                )),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let data: Vec<DabGpu> = update.dabs.iter().copied().map(DabGpu::from).collect();
+        // Uniform storage is portable down to 16 KiB. Pad with an existing
+        // valid contact; the count excludes unused records.
+        let bytes = dab_bytes(&data).to_vec();
+        let mut data = bytes;
+        data.resize(64 * mem::size_of::<DabGpu>(), 0);
         let contacts = r
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -349,10 +313,24 @@ impl SelectionPainter {
                 SelectionPaintMode::Gray => 2,
             },
             0,
-            u32::from(matches!(update.tip, BrushTip::Mask(_))),
+            u32::from(update.style.rendering.accumulation == BrushAccumulation::Uniform),
             update.opacity.to_bits(),
             update.gray.to_bits(),
             u32::from(update.enclosed.is_some()),
+            0,
+            update.gradient.map_or(0, |g| g.start.x.to_bits()),
+            update.gradient.map_or(0, |g| g.start.y.to_bits()),
+            update.gradient.map_or(0, |g| g.end.x.to_bits()),
+            update.gradient.map_or(0, |g| g.end.y.to_bits()),
+            update
+                .gradient
+                .map_or(0., |g| if g.radial { 2_f32 } else { 1. })
+                .to_bits(),
+            update.gradient.map_or(0, |g| g.background.to_bits()),
+            update
+                .gradient
+                .map_or(0., |g| f32::from(g.transparent))
+                .to_bits(),
             0,
         ];
         let dummy = r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -368,13 +346,14 @@ impl SelectionPainter {
             &dummy,
             self.active.as_ref().unwrap(),
             &enclosed,
-            tip,
+            &style,
         );
         if fresh {
             dispatch(
                 &mut encoder,
                 &self.pipelines[0],
                 &binding,
+                &textures,
                 [extent[0].div_ceil(4).div_ceil(64), extent[1]],
             );
         }
@@ -404,15 +383,22 @@ impl SelectionPainter {
                 &page,
                 self.active.as_ref().unwrap(),
                 &enclosed,
-                tip,
+                &style,
             );
-            dispatch(&mut encoder, &self.pipelines[1], &binding, [1, 256]);
+            dispatch(
+                &mut encoder,
+                &self.pipelines[1],
+                &binding,
+                &textures,
+                [1, 256],
+            );
         }
         if update.finish {
             dispatch(
                 &mut encoder,
                 &self.pipelines[2],
                 &binding,
+                &textures,
                 [extent[0].div_ceil(4).div_ceil(64), extent[1]],
             );
             let readback = r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -470,6 +456,7 @@ fn dispatch(
     encoder: &mut crate::submission::CommandEncoder,
     pipeline: &wgpu::ComputePipeline,
     binding: &wgpu::BindGroup,
+    textures: &wgpu::BindGroup,
     groups: [u32; 2],
 ) {
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -478,6 +465,7 @@ fn dispatch(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, binding, &[]);
+    pass.set_bind_group(1, textures, &[]);
     pass.dispatch_workgroups(groups[0], groups[1], 1);
 }
 
@@ -494,12 +482,16 @@ impl WgpuRasterizer {
         let mut painter = self
             .selection_painter
             .take()
-            .unwrap_or_else(|| SelectionPainter::new(&self.device));
+            .unwrap_or_else(|| SelectionPainter::new(&self.device, &self.advanced_texture_layout));
         let result = painter.update(self, update);
         if matches!(&result, Ok(true)) {
             self.selection_paint_revision = self.selection_paint_revision.wrapping_add(1);
             let extent = self.document_extent;
-            self.selection_paint_damage = paint_damage(update, extent);
+            self.selection_paint_damage = if update.restart {
+                PixelRect::full(extent)
+            } else {
+                paint_damage(update, extent)
+            };
             self.display_selection = Some((
                 Selection::empty(),
                 painter.active.as_ref().unwrap().output.clone(),

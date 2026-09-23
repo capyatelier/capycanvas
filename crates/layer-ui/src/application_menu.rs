@@ -89,6 +89,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .collect(),
                 ],
             },
+            M::Layer if self.selection_masks.quick() => self.quick_mask_menu(),
+            M::Select => ContextMenu { title: menu.label().into(), sections: vec![
+                [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
+                [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso, CommandId::PolygonSelect, CommandId::AutoSelect, CommandId::ColorSelect, CommandId::SelectionBrush].into_iter().map(command).collect(),
+                [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
+                self.selection_source_menu_items(),
+                vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
+                vec![command(CommandId::SelectionOutline), ContextMenuItem::submenu("Mask Overlay", self.selection_overlay_menu().sections)],
+            ] },
             M::Layer => self
                 .layer_menu(
                     self.engine.document().active_layer.0,
@@ -118,7 +127,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                             f.label.to_string(),
                                             f.action.clone(),
                                         );
-                                        item.enabled = self.require_document_idle().is_ok();
+                                        item.enabled = self.selection_masks.target().is_none() && self.require_document_idle().is_ok();
                                         item
                                     })
                                     .collect();
@@ -132,14 +141,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let sections: &[&[CommandId]] = match menu {
                     M::File => FILE_MENU.sections,
                     M::Edit => EDIT_MENU.sections,
-                    M::Select => &[
-                        &[
-                            CommandId::SelectAll,
-                            CommandId::Deselect,
-                            CommandId::InvertSelection,
-                        ],
-                        &[CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso, CommandId::PolygonSelect, CommandId::AutoSelect, CommandId::ColorSelect, CommandId::SelectionBrush],
-                    ],
                     M::View => VIEW_MENU.sections,
                     M::Help => &[
                         &[CommandId::KeyboardShortcuts],
@@ -176,6 +177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         };
+        if menu==M::View && CommandId::SelectionOutline.available_on(self.state.platform) {model.sections.push(vec![command(CommandId::SelectionOutline),ContextMenuItem::submenu("Mask Overlay",self.selection_overlay_menu().sections)]);}
         model.title = menu.label().into();
         model.with_shortcuts(&self.state.settings, self.state.platform)
     }

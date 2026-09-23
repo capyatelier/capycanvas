@@ -32,6 +32,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("Wait for drawing capture before switching drawings".into());
         }
+        self.return_to_artwork()?;
         self.release_idle_document_buffers();
         self.rendering_suspended = true;
         self.refresh_commands();

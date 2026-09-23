@@ -71,6 +71,8 @@ impl LayerCanvasTool {
 pub struct LayersView {
     pub tool: LayerCanvasTool,
     pub has_selection: bool,
+    pub quick_mask: bool,
+    pub mask_editing: Option<MaskEditingView>,
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,
@@ -94,7 +96,7 @@ pub struct LayerControls {
 impl LayerControls {
     pub(super) fn for_layer(doc: &Document, l: &Layer) -> Self {
         let unlocked = !doc.is_locked(l.id);
-        let editable = l.kind != LayerKind::Background;
+        let editable = l.kind != LayerKind::Background && l.kind != LayerKind::Selection;
         Self {
             opacity: editable && unlocked,
             blend: editable && unlocked,
@@ -104,7 +106,7 @@ impl LayerControls {
                 && unlocked
                 && (l.properties.clipped || doc.clipping_base(l.id).is_some()),
             mask: editable && unlocked,
-            move_layer: editable && unlocked,
+            move_layer: l.kind != LayerKind::Background && unlocked,
             fill: l.kind == LayerKind::Paint && unlocked && !doc.active_mask,
         }
     }
@@ -712,7 +714,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.operation.placing() {
             return Err("Apply or cancel the photo placement first".into());
         }
-        self.engine.apply_edit(edit).map_err(error)
+        let previous = self.engine.document().selection.clone();
+        self.engine.apply_edit(edit).map_err(error)?;
+        if previous.is_some() && self.engine.document().selection.is_none() { self.selection_masks.reselect = previous; }
+        Ok(())
     }
     /// Layer headers and generic Properties fields share the same edit policy.
     /// Paper may change opacity; direct and inherited locks still prevent edits.
@@ -751,6 +756,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(layer.clone())
     }
     pub(super) fn layer_action(&mut self, action: LayerAction) -> Result<(), String> {
+        if self.selection_masks.target().is_some() && matches!(action,
+            LayerAction::Clear {..}|LayerAction::FillSelection|LayerAction::ApplyMask {..}|LayerAction::AddMask {..}|LayerAction::PasteMask {..}|LayerAction::MaskSelection {..}|LayerAction::ClearMask {..}|LayerAction::InvertMask {..}|LayerAction::RasterizeSource {..}|LayerAction::RepairSourceProfile {..}) {
+            return Err("Return to artwork before changing artwork pixels or layer masks".into());
+        }
+        if self.selection_masks.quick() && matches!(action,LayerAction::Delete {..}|LayerAction::DeleteSelected) {return Err("Return to artwork before deleting artwork layers".into());}
+
         if self.operation.placing() && !matches!(action, LayerAction::Tool { .. }) {
             return Err("Apply or cancel the photo placement first".into());
         }
@@ -904,6 +915,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::New { group, clipped } => {
+                self.return_to_artwork()?;
                 let doc = self.engine.document();
                 let active = doc.layer(doc.active_layer);
                 if clipped && !active.is_some_and(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage)) {
@@ -929,6 +941,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ]))?;
             }
             LayerAction::Select { id, mask } => {
+                if self.engine.document().layer(LayerId(id)).is_some_and(|l| l.kind == LayerKind::Selection) {
+                    return self.begin_selection_mask(layer_core::SelectionTarget::Saved(LayerId(id)));
+                }
+                self.return_to_artwork()?;
                 self.state.layer_tools.rename_layer = None;
                 self.engine.set_active_layer(LayerId(id)).map_err(error)?;
                 self.layer_edit(Edit::SetMaskTarget(mask))?;
@@ -956,6 +972,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if tool.selection_tool().is_some() { self.return_to_artwork()?; }
+                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
+                    return Err("Return to artwork to use this tool".into());
+                }
                 if let LayerCanvasTool::Selection { kind } = tool
                     && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
                     return Err("Invalid geometric selection tool".into());
@@ -993,14 +1013,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.layer_tools.tool = tool;
                 self.refresh_tools();
             }
-            LayerAction::Deselect => self.layer_edit(Edit::SetSelection(None))?,
+            LayerAction::Deselect => { self.return_to_artwork()?; self.layer_edit(Edit::SetSelection(None))?; },
             LayerAction::InvertSelection => {
-                let mut selection = self
-                    .engine
-                    .document()
-                    .selection
-                    .clone()
-                    .ok_or("Make a selection first")?;
+                if !self.selection_masks.quick() { self.return_to_artwork()?; }
+                let mut selection = self.current_selection().ok_or("Make a selection first")?;
                 selection.inverted = !selection.inverted;
                 self.layer_edit(Edit::SetSelection(Some(selection)))?;
             }
@@ -1340,6 +1356,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         use LayerAction as A;
         let doc = self.engine.document();
         let l = doc.layer(LayerId(id)).ok_or("Unknown layer")?;
+        if l.kind == LayerKind::Selection { return self.selection_layer_menu(l.id); }
         let locked = doc.is_locked(l.id);
         let paint = l.kind == LayerKind::Paint;
         let editable = l.kind != LayerKind::Background;
@@ -1431,7 +1448,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ),
             ]
         };
-        let sections = if !editable {
+        let mut sections = if !editable {
             vec![
                 vec![
                     item(
@@ -1548,32 +1565,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                     vec![item("Paste mask", A::PasteMask { id })],
                 ]
             };
-            let selection = vec![
-                vec![
-                    item("Select all layers", A::SelectAllLayers { selected: true }),
-                    item(
-                        "Clear layer selection",
-                        A::SelectAllLayers { selected: false },
-                    ),
-                ],
-                vec![
-                    item(
-                        "Lasso selection",
-                        A::Tool {
-                            tool: LayerCanvasTool::Select,
-                        },
-                    ),
-                    item(
-                        "Lasso Fill",
-                        A::Tool {
-                            tool: LayerCanvasTool::LassoFill,
-                        },
-                    ),
-                    item("Fill selection", A::FillSelection),
-                    item("Invert selection", A::InvertSelection),
-                    item("Deselect pixels", A::Deselect),
-                ],
-            ];
+            let rows = vec![vec![
+                item("Select All Layer Rows", A::SelectAllLayers { selected: true }),
+                item("Clear Layer Row Selection", A::SelectAllLayers { selected: false }),
+            ]];
+            let mut selection = vec![vec![
+                item("Fill Selection", A::FillSelection),
+                item("Invert Selection", A::InvertSelection), item("Deselect Pixels", A::Deselect),
+            ]];
+            if matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+                selection.insert(0,self.coverage_menu_items(id,false));
+            }
             let visibility = vec![vec![
                 check(
                     "Show layer",
@@ -1679,7 +1681,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 protection,
                 vec![
                     ContextMenuItem::submenu("Mask", mask_menu),
-                    ContextMenuItem::submenu("Selection", selection),
+                    ContextMenuItem::submenu("Pixel Selection", selection),
+                    ContextMenuItem::submenu("Layer Row Selection", rows),
                     ContextMenuItem::submenu("Visibility", visibility),
                     item(
                         "Move layer / mask",
@@ -1691,6 +1694,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 destructive,
             ]
         };
+        if mask { sections.push(vec![ContextMenuItem::submenu("Pixel Selection",vec![self.coverage_menu_items(id,true)])]); }
+        if l.kind == LayerKind::Group {
+            sections.insert(0, vec![
+                ContextMenuItem::command("New Selection Layer in Group…", UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: false } }),
+                ContextMenuItem::command("Save Current Selection in Group…", UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }),
+            ]);
+        }
         Ok(ContextMenu {
             title: format!(
                 "{} {}",
@@ -1739,7 +1749,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 match self.layer_interaction.tool {
                     LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
                     LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
-                        if doc.drawing_content().is_none() =>
+                        if doc.drawing_content().is_none() && self.selection_masks.target().is_none() =>
                     {
                         return Ok(());
                     }
@@ -1873,6 +1883,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         radial: bool,
         transparent: bool,
     ) -> Result<(), String> {
+        if let Some(target) = self.selection_masks.target() {
+            return self.queue_mask_gradient(target, layer_render::SelectionGradient {
+                start, end, radial, transparent, background: self.selection_masks.background(),
+            });
+        }
         let doc = self.engine.document();
         let target = doc.drawing_content().ok_or("Select a drawing layer")?;
         let offset = doc.layer_offset(target);
@@ -1968,7 +1983,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 distance += (to[0] - from[0]).hypot(to[1] - from[1]);
             }
         };
-        if !self.selection_brush_active() && let Some(selection) = self.engine.display_selection() {
+        if !self.selection_brush_active() && self.selection_masks.target().is_none() && self.selection_tools.options.display.outline && let Some(selection) = self.engine.display_selection() {
             for contour in selection.contours() {
                 path(contour, true, selection.affine);
             }

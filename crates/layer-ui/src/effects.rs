@@ -548,6 +548,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
+        if self.selection_masks.target().is_some() {return Err("Return to artwork before applying a filter".into());}
         match action {
             EffectAction::CancelFilter => {
                 let doc = self.engine.document();

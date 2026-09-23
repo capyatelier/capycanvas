@@ -13,6 +13,7 @@ struct Camera {
 @group(0) @binding(2) var canvas_sampler: sampler;
 struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
+@group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
 struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
@@ -215,11 +216,18 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.
+    var tint = 0.;
+    if camera.rotation.z > .5 {
+        let q=vec2<u32>(p);
+        let word=textureLoad(saved_selection,vec2<i32>(i32(q.x/4u),i32(q.y)),0).r;
+        tint=f32((word>>((q.x%4u)*8u))&255u)/255.;
+    }
     if camera.selection.z > .5 && camera.rotation.y > .5 {
         let coverage = selection_coverage(p);
-        let tint = select(coverage,1.-coverage,camera.rotation.y > 1.5);
-        rgb = mix(rgb,view_ui_rgb(camera.overlay.rgb),clamp(tint*camera.overlay.a,0.,1.));
-    } else if camera.selection.z > .5 {
+        tint = max(tint,select(coverage,1.-coverage,camera.rotation.y > 1.5));
+    }
+    rgb = mix(rgb,view_ui_rgb(camera.overlay.rgb),clamp(tint*camera.overlay.a,0.,1.));
+    if camera.selection.z > .5 && camera.rotation.y < .5 {
         let dx = camera.inverse.xy * .6;
         let dy = camera.inverse.zw * .6;
         if selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy) {

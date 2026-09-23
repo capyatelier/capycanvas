@@ -82,3 +82,53 @@ Hardware checks live in `layer_tests::selection_options`, the existing selection
 and region tests, and `layer_tests::selected_brush_latency` (ignored, release,
 serial). The brush probe covers no selection, legacy masks, and byte masks.
 Keep machine-specific logs and screenshots in ignored `artifacts/`, not Git.
+
+## Paintable coverage and saved masks
+
+`selection_stroke.rs` shares the ordinary dab generator; Selection Brush indexes
+real centerline crossings, while grayscale mask editing uses the configured dry
+brush. `painted_selections.rs` serializes completed contacts and GPU captures.
+A submitted chunk stays immutable until acknowledged, including when final end
+taper replaces the provisional footprint. Mode/target changes wait behind
+completed contacts; unfinished contacts cancel. Retained real input and queued
+contacts are bounded. Native estimated corrections/predictions do not modify
+these masks; committed real samples determine coverage.
+
+`selection_masks.rs` owns Quick Mask lifecycle, independent grayscale colors,
+explicit saved-mask actions, reselect, and display settings. A temporary Layers
+row is host presentation, without a document ID. Saved coverage uses independent
+Selection Layers, shared history and project persistence. Loading copies coverage;
+editing and replacing a stored layer are explicit operations. Returning to a
+parked document and adopting a project reset temporary editing state. Filters
+and destructive artwork actions are blocked during mask editing.
+
+The GPU material and mask paths share `brush_footprint.wgsl`, contact geometry,
+tip/grain/dual textures and accumulation semantics. Mask gradients and fills
+write scalar coverage; connected fills classify artwork. Raw-alpha and stored
+layer-mask loading share the region/refinement pipeline and preserve soft values.
+Saved previews use a cached GPU union and a packed integer texture, keeping the
+presenter within the portable four-storage-buffer limit. Their grayscale 32px
+thumbnails and tint are excluded from artwork sampling/export.
+
+GTK presents 44px actions, a pinned Quick Mask row, a persistent editing strip,
+explicit Load buttons and Ctrl-thumbnail loading (Shift add, Alt subtract,
+Shift+Alt intersect). Shared Select/Layer/View menus expose lifecycle, coverage
+sources, saved destinations and display actions without keyboard modifiers.
+
+Additional reproducible checks:
+
+- `cargo test --locked -p layer-ui painted_selection_checks` covers ordered
+  captures, final replay/backpressure, independent colors, saved masks, locks,
+  adoption, and artwork restrictions.
+- `cargo test --locked -p layer-render-wgpu selection_paint -- --test-threads=1`
+  covers scalar blending, coherent brush sweeps, gradients, source coverage,
+  previews, thumbnails and export isolation (requires a GPU).
+- Run `native_quick_mask_input` through the native GTK harness above. It checks
+  coverage and tint pixels, saves/edits/loads a mask, and captures both themes.
+- `cargo test --locked -p layer-render-wgpu --release selection_paint_latency
+  -- --ignored --nocapture --test-threads=1` measures a 4096² mask. On NVIDIA
+  RTX PRO 6000 Blackwell Max-Q/Vulkan 610.57.04, the shared-footprint path measured
+  0.027 ms submit p95, 0.090 ms GPU-complete p95 per eight contacts, and 32.482 ms
+  final asynchronous capture. First-use pipeline/init completion was 74.695 ms;
+  interactive hosts compile pipelines asynchronously. These are workstation
+  measurements, not tablet latency claims.

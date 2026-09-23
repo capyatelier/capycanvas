@@ -237,6 +237,18 @@ impl Default for ColorState {
     }
 }
 impl ColorState {
+    /// Scalar-mask colors are display-encoded gray, independent of artwork
+    /// transfer curves. Preserve the active paint slot while updating the pair.
+    pub(crate) fn constrain_grayscale(&mut self) -> Result<(), String> {
+        let selected = self.paint_slot;
+        for (slot, color) in [(ColorSlot::Foreground,self.foreground),(ColorSlot::Background,self.background)] {
+            let rgba = color.encoded_in(RgbSpace::Srgb)?;
+            let gray = (rgba[0]*0.2126 + rgba[1]*0.7152 + rgba[2]*0.0722).clamp(0.,1.);
+            self.apply(ColorAction::SetSlot {slot,color:RgbColor::new(RgbSpace::Srgb,[gray,gray,gray,1.])?})?;
+        }
+        self.paint_slot = selected;
+        Ok(())
+    }
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.library.validate()?;
         self.validate_hdr_picker()?;

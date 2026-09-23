@@ -34,6 +34,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         recovered: bool,
     ) -> Result<Box<Self>, (String, Box<Self>)> {
         let checked = (|| {
+            self.require_document_snapshot_idle()?;
             self.require_document_idle()?;
             if epoch != self.state.document_file.epoch
                 || revision != self.engine.document().revision
@@ -85,6 +86,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.navigator_preview = Default::default();
         self.eyedropper = Default::default();
         self.region_tools = Default::default();
+        self.painted_selections = Default::default();
+        self.selection_masks = Default::default();
         self.operation = Default::default();
         self.rulers.selected = None;
         self.layer_interaction = Default::default();
