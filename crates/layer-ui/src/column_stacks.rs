@@ -422,6 +422,7 @@ impl DockLayout {
                         let icon = g.icons.iter().find(|i| i.panel == g.active)?;
                         let anchor = icon.bounds.intersection(c.content)?;
                         crate::DrawerPlacement {
+                            detached: false,
                             bounds: body,
                             anchor,
                             direction,

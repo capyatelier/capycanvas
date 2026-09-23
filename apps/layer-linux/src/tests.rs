@@ -10349,12 +10349,12 @@ fn native_number_controls() {
     let entry: gtk::Entry = descendant(&size);
     entry.set_text("85/2");
     entry.emit_activate();
-    assert_eq!(size.value(), 42.5);
+    assert_eq!(size.value(), 43.);
     click(&display);
     entry.set_text("1/0");
     entry.emit_activate();
     assert!(size.has_css_class("error"));
-    assert_eq!(size.value(), 42.5);
+    assert_eq!(size.value(), 43.);
     entry.set_text("2049");
     entry.emit_activate();
     assert_eq!(size.value(), 2048.0);

@@ -93,8 +93,8 @@ mod imp {
         pub vertical: Cell<bool>,
         pub slider: Cell<bool>,
         pub opacity: Cell<bool>,
-        pub readout_scale: Cell<f64>,
-        pub popover: RefCell<Option<gtk::Popover>>,
+        pub style: Cell<TileStyle>,
+        pub options: Cell<ToolOptionsStyle>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for ComponentBody {
@@ -104,11 +104,6 @@ mod imp {
     }
     impl ObjectImpl for ComponentBody {
         fn dispose(&self) {
-            if let Some(p) = self.popover.take() {
-                if p.parent().is_some() {
-                    p.unparent();
-                }
-            }
             for child in self.children.take() {
                 child.unparent();
             }
@@ -144,29 +139,6 @@ mod imp {
                 }
             };
             if self.slider.get() {
-                if let Some(label) = children[0]
-                    .first_child()
-                    .and_downcast::<gtk::Button>()
-                    .and_then(|b| b.child())
-                    .and_then(|row| row.last_child())
-                    .and_downcast::<gtk::Label>()
-                {
-                    let text_width = label
-                        .create_pango_layout(Some(&label.text()))
-                        .pixel_size()
-                        .0
-                        .max(1);
-                    let factor = if self.vertical.get() {
-                        ((width - 2).max(1) as f64 / text_width as f64).min(1.)
-                    } else {
-                        1.
-                    };
-                    if (self.readout_scale.replace(factor) - factor).abs() > 0.001 {
-                        let attrs = gtk::pango::AttrList::new();
-                        attrs.insert(gtk::pango::AttrFloat::new_scale(factor));
-                        label.set_attributes(Some(&attrs));
-                    }
-                }
                 for (child, b) in children.iter().zip(toolbar_slider_layout(
                     width as f32,
                     height as f32,
@@ -188,18 +160,25 @@ mod imp {
                 let sizes: Vec<_> = children[1..]
                     .iter()
                     .map(|w| {
-                        [
-                            w.measure(gtk::Orientation::Horizontal, -1).1 as f32,
-                            w.measure(gtk::Orientation::Vertical, -1).1 as f32,
-                        ]
+                        if w.has_css_class("option-action") || self.vertical.get() {
+                            self.style.get().size()
+                        } else {
+                            [
+                                w.measure(gtk::Orientation::Horizontal, -1).1 as f32,
+                                w.measure(gtk::Orientation::Vertical, -1).1 as f32,
+                            ]
+                        }
                     })
                     .collect();
-                let button = [
-                    children[0].measure(gtk::Orientation::Horizontal, -1).1 as f32,
-                    children[0].measure(gtk::Orientation::Vertical, -1).1 as f32,
-                ];
-                let layout =
-                    tool_options_layout(width as f32, height as f32, axis, &sizes, button, 6.);
+                let button = self.style.get().size();
+                let layout = tool_options_layout(
+                    width as f32,
+                    height as f32,
+                    axis,
+                    &sizes,
+                    button,
+                    if self.vertical.get() { 4. } else { 10. },
+                );
                 allocate(&children[0], layout.more);
                 for (child, b) in children[1..].iter().zip(layout.fields) {
                     if let Some(b) = b {
@@ -219,33 +198,6 @@ mod imp {
                         child.set_child_visible(false);
                     }
                 }
-            }
-            if let Some(popover) = self.popover.borrow().as_ref().filter(|p| p.is_visible()) {
-                let b = toolbar_slider_layout(
-                    width as f32,
-                    height as f32,
-                    axis,
-                    children[0]
-                        .measure(
-                            if axis == Axis::Vertical {
-                                gtk::Orientation::Vertical
-                            } else {
-                                gtk::Orientation::Horizontal
-                            },
-                            -1,
-                        )
-                        .1 as f32,
-                )[0];
-                let origin = popover.parent().and_then(|p| self.obj().compute_bounds(&p));
-                if let Some(origin) = origin {
-                    popover.set_pointing_to(Some(&gdk::Rectangle::new(
-                        (origin.x() + b.x) as i32,
-                        (origin.y() + b.y) as i32,
-                        b.width as i32,
-                        b.height as i32,
-                    )));
-                }
-                popover.present();
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -288,9 +240,11 @@ impl ComponentBody {
             .borrow_mut()
             .push(child.clone().upcast());
     }
-    pub(crate) fn set_axis(&self, axis: Axis) {
+    pub(crate) fn set_presentation(&self, axis: Axis, style: TileStyle) {
         let vertical = axis == Axis::Vertical;
-        if self.imp().vertical.replace(vertical) == vertical {
+        let old_axis = self.imp().vertical.replace(vertical);
+        let old_style = self.imp().style.replace(style);
+        if old_axis == vertical && old_style == style {
             return;
         }
         if vertical {
@@ -299,22 +253,6 @@ impl ComponentBody {
             self.remove_css_class("vertical-component");
         }
         if self.imp().slider.get() {
-            if let Some(row) = self
-                .imp()
-                .children
-                .borrow()
-                .get(0)
-                .and_then(|w| w.first_child())
-                .and_downcast::<gtk::Button>()
-                .and_then(|b| b.child())
-                .and_downcast::<gtk::Box>()
-            {
-                row.set_orientation(if vertical {
-                    gtk::Orientation::Vertical
-                } else {
-                    gtk::Orientation::Horizontal
-                });
-            }
             if let Some(scale) = self
                 .imp()
                 .children
@@ -335,35 +273,58 @@ impl ComponentBody {
     }
     fn update_option_axis(&self) {
         let vertical = self.imp().vertical.get();
-        if !self.imp().slider.get() {
-            for row in self.imp().children.borrow().iter().skip(1) {
-                let mut child = row.first_child();
-                while let Some(w) = child {
-                    if w.has_css_class("horizontal-option") {
-                        w.set_visible(!vertical);
-                    }
-                    if w.has_css_class("vertical-option") {
-                        w.set_visible(vertical);
-                    }
-                    if let Some(dropdown) = w.downcast_ref::<gtk::DropDown>() {
-                        // The popup always retains icon and full label. Only the
-                        // selected face becomes compact in a one-tile column.
-                        dropdown.set_show_arrow(!vertical);
-                        dropdown.set_factory(Some(&choice_factory(vertical)));
-                    }
-                    child = w.next_sibling();
+        let labeled = matches!(
+            self.imp().style.get(),
+            TileStyle::MediumLabeled | TileStyle::Labeled
+        );
+        let text = !vertical && self.imp().options.get().text;
+        if vertical && labeled {
+            self.add_css_class("labeled-component");
+        } else {
+            self.remove_css_class("labeled-component");
+        }
+        if self.imp().slider.get() {
+            return;
+        }
+        for row in self.imp().children.borrow().iter().skip(1) {
+            row.set_valign(if vertical || row.has_css_class("option-action") {
+                gtk::Align::Fill
+            } else {
+                gtk::Align::Center
+            });
+            let mut child = row.first_child();
+            while let Some(w) = child {
+                if w.has_css_class("option-label") {
+                    w.set_visible(text);
                 }
+                if let Some(number) = w.downcast_ref::<NumberControl>() {
+                    let title = row.tooltip_text().unwrap_or_default();
+                    number.set_slider_visible(!vertical && self.imp().options.get().sliders);
+                    number.set_face(
+                        !text,
+                        if vertical && labeled { &title } else { "" },
+                        vertical && !labeled,
+                    );
+                    number.set_vexpand(vertical);
+                    number.set_valign(if vertical {
+                        gtk::Align::Fill
+                    } else {
+                        gtk::Align::Center
+                    });
+                }
+                if let Some(dropdown) = w.downcast_ref::<gtk::DropDown>() {
+                    dropdown.set_show_arrow(!vertical);
+                    dropdown
+                        .set_factory(Some(&choice_factory(!text && !(vertical && labeled), true)));
+                }
+                child = w.next_sibling();
             }
         }
     }
 }
 
 enum Field {
-    Numeric {
-        inline: NumberControl,
-        popup: NumberControl,
-        button: gtk::MenuButton,
-    },
+    Numeric(NumberControl),
     Choice(gtk::DropDown),
     Action(gtk::Button),
 }
@@ -373,25 +334,11 @@ pub(super) struct Component {
     pub control: ToolbarControl,
     context: Cell<Option<ToolbarContext>>,
     contact_context: Cell<Option<ToolbarContext>>,
-    popup_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
     slider: Option<gtk::Scale>,
     editor: Option<NumberControl>,
-    value_label: gtk::Label,
     schema: RefCell<Vec<ToolOption>>,
     fields: RefCell<Vec<Field>>,
-}
-impl Drop for Component {
-    fn drop(&mut self) {
-        // GTK can retain an unparented tile for a drag/snapshot. Its surface-
-        // owned popup must retire when the editor does, not when GTK frees it.
-        if let Some(popover) = self.root.imp().popover.take() {
-            popover.popdown();
-            if popover.parent().is_some() {
-                popover.unparent();
-            }
-        }
-    }
 }
 impl Component {
     pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile) -> Rc<Self> {
@@ -402,14 +349,37 @@ impl Component {
         root.update_property(&[gtk::accessible::Property::Label(
             &tool_choice(tile.control).label,
         )]);
-        let button = gtk::Button::new();
+        let binding = tile.control.slider();
+        let editor = binding.as_ref().map(|binding| {
+            let spec = if *binding == ToolbarNumericBinding::BrushSize {
+                NumericControl::brush_size()
+            } else {
+                NumericControl::percent()
+            };
+            let editor = NumberControl::compact(spec, &tool_choice(tile.control).label);
+            editor.set_slider_visible(false);
+            editor.set_widget_name(&format!("component-value-{}", tile.id));
+            editor.add_css_class("slider-readout");
+            editor
+        });
+        let button = editor
+            .as_ref()
+            .map_or_else(gtk::Button::new, NumberControl::value_button);
         button.set_hexpand(true);
         button.set_vexpand(true);
         button.add_css_class("flat");
         button.set_widget_name(&format!("tile-{}", tile.id));
         button.set_tooltip_text(Some(&tool_choice(tile.control).label));
         let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cap.append(&button);
+        if let Some(editor) = &editor {
+            cap.append(editor);
+        } else {
+            cap.append(&button);
+        }
+        let target = ContextTarget::Tile {
+            panel,
+            tile: tile.id,
+        };
         w.install_panel_drag(
             &cap,
             DockItem::Tile {
@@ -417,60 +387,12 @@ impl Component {
                 tile: tile.id,
             },
         );
-        w.install_context(
-            &cap,
-            ContextTarget::Tile {
-                panel,
-                tile: tile.id,
-            },
-        );
-        // The value/More button is the tile body. Tracks and option fields are
-        // separate siblings and retain their native immediate interactions.
+        w.install_context(&cap, target);
         root.append(&cap);
-        let value_label = gtk::Label::new(Some("—"));
-        value_label.add_css_class("slider-readout");
-        value_label.set_hexpand(true);
-        let binding = tile.control.slider();
-        let (slider, editor) = if let Some(ref binding) = binding {
-            let label_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            label_row.append(&crate::icons::image(&format!(
-                "layer-{}-symbolic",
-                tool_choice(tile.control).icon
-            )));
-            label_row.append(&value_label);
-            // Reserve the widest value to avoid resizing as the thumb moves.
-            value_label.set_width_chars(if *binding == ToolbarNumericBinding::BrushSize {
-                4
-            } else {
-                3
-            });
-            button.set_child(Some(&label_row));
-            let spec = if *binding == ToolbarNumericBinding::BrushSize {
-                NumericControl::brush_size()
-            } else {
-                NumericControl::percent()
-            };
-            let editor = NumberControl::new(spec, &tool_choice(tile.control).label, "");
-            editor.set_widget_name(&format!("component-editor-{}", tile.id));
-            editor.set_width_request(240);
-            editor.set_margin_top(8);
-            editor.set_margin_bottom(8);
-            editor.set_margin_start(8);
-            editor.set_margin_end(8);
-            let popover = gtk::Popover::new();
-            popover.set_child(Some(&editor));
-            popover.set_parent(&w.surface);
-            w.watch_popover(&popover);
-            root.connect_unmap(glib::clone!(
-                #[weak]
-                popover,
-                move |_| popover.popdown()
-            ));
-            *root.imp().popover.borrow_mut() = Some(popover);
+        let slider = if let Some(ref binding) = binding {
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
             scale.set_draw_value(false);
             scale.set_hexpand(true);
-            scale.set_vexpand(true);
             scale.set_widget_name(&format!("component-slider-{}", tile.id));
             scale.update_property(&[gtk::accessible::Property::Label(
                 &tool_choice(tile.control).label,
@@ -482,12 +404,36 @@ impl Component {
                 .set(*binding == ToolbarNumericBinding::BrushOpacity);
             root.add_css_class("brush-slider");
             scale.add_css_class("brush-track");
-            (Some(scale), Some(editor))
+            Some(scale)
         } else {
+            root.imp()
+                .options
+                .set(tile.control.options_style().unwrap());
             button.set_child(Some(&crate::icons::image("layer-more-symbolic")));
             button.set_tooltip_text(Some("More tool options"));
             button.update_property(&[gtk::accessible::Property::Label("More tool options")]);
-            (None, None)
+            w.install_context(&root, target);
+            // Empty bar space is a presentation menu, not a reorderable tile.
+            let hold = gtk::GestureLongPress::new();
+            hold.set_touch_only(false);
+            hold.set_propagation_phase(gtk::PropagationPhase::Capture);
+            hold.connect_pressed(glib::clone!(
+                #[weak]
+                w,
+                #[weak]
+                root,
+                move |g, x, y| {
+                    if !crate::input::touch_or_pen(g)
+                        && root.pick(x, y, gtk::PickFlags::DEFAULT).as_ref()
+                            == Some(root.upcast_ref())
+                    {
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        w.show_context(root.upcast_ref(), target, x, y);
+                    }
+                }
+            ));
+            root.add_controller(hold);
+            None
         };
         let component = Rc::new(Self {
             root,
@@ -495,38 +441,22 @@ impl Component {
             control: tile.control,
             context: Cell::new(None),
             contact_context: Cell::new(None),
-            popup_context: Cell::new(None),
             updating: Cell::new(false),
             slider,
             editor,
-            value_label,
             schema: RefCell::default(),
             fields: RefCell::default(),
         });
         let id = tile.id;
-        component.button.connect_clicked(glib::clone!(
-            #[weak]
-            component,
-            #[weak]
-            w,
-            move |_| {
-                if let Some(popover) = component.root.imp().popover.borrow().as_ref() {
-                    component.popup_context.set(component.context.get());
-                    if let Some(b) = component.button.compute_bounds(&w.surface) {
-                        popover.set_pointing_to(Some(&gdk::Rectangle::new(
-                            b.x() as i32,
-                            b.y() as i32,
-                            b.width() as i32,
-                            b.height() as i32,
-                        )));
-                    }
-                    popover.popup();
-                    popover.present();
-                } else {
+        if component.editor.is_none() {
+            component.button.connect_clicked(glib::clone!(
+                #[weak]
+                w,
+                move |_| {
                     w.dispatch(UiAction::ActivateTile { panel, tile: id });
                 }
-            }
-        ));
+            ));
+        }
         if let Some(scale) = &component.slider {
             let events = gtk::EventControllerLegacy::new();
             events.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -606,6 +536,38 @@ impl Component {
                 .editor
                 .as_ref()
                 .unwrap()
+                .connect_interaction(glib::clone!(
+                    #[weak]
+                    component,
+                    move |_, phase| {
+                        match phase {
+                            ContactPhase::Down => {
+                                component.contact_context.set(component.context.get())
+                            }
+                            _ => component.contact_context.set(None),
+                        }
+                    }
+                ));
+            component
+                .editor
+                .as_ref()
+                .unwrap()
+                .connect_interaction(glib::clone!(
+                    #[weak]
+                    component,
+                    move |_, phase| {
+                        match phase {
+                            ContactPhase::Down => {
+                                component.contact_context.set(component.context.get())
+                            }
+                            _ => component.contact_context.set(None),
+                        }
+                    }
+                ));
+            component
+                .editor
+                .as_ref()
+                .unwrap()
                 .connect_value_changed(glib::clone!(
                     #[weak]
                     component,
@@ -613,7 +575,8 @@ impl Component {
                     w,
                     move |editor| {
                         if !component.updating.get()
-                            && let Some(context) = component.popup_context.get()
+                            && let Some(context) =
+                                component.contact_context.get().or(component.context.get())
                         {
                             w.dispatch(UiAction::ToolbarEdit {
                                 context,
@@ -642,9 +605,6 @@ impl Component {
             self.button.set_sensitive(enabled);
             if changed_context {
                 self.editor.as_ref().unwrap().cancel_edit();
-                if let Some(popover) = self.root.imp().popover.borrow().as_ref() {
-                    popover.popdown();
-                }
             }
             let Some(field) = &state.numeric else {
                 self.updating.set(false);
@@ -660,17 +620,6 @@ impl Component {
                 .as_ref()
                 .unwrap()
                 .update_property(&[gtk::accessible::Property::ValueText(&value.text)]);
-            // Unit stays in the tooltip/accessibility label; a short value also
-            // fits the narrow vertical presentation without rotated text.
-            self.value_label
-                .set_label(value.edit.strip_suffix(".0").unwrap_or(&value.edit));
-            self.button
-                .set_tooltip_text(Some(&format!("{}: {}", field.label, value.text)));
-            self.button
-                .update_property(&[gtk::accessible::Property::Label(&format!(
-                    "{}: {}",
-                    field.label, value.text
-                ))]);
         } else {
             let options = &state.options;
             let same = !changed_context
@@ -683,15 +632,8 @@ impl Component {
                     .all(|(a, b)| a.same_schema(b));
             if !same {
                 for field in self.fields.borrow().iter() {
-                    if let Field::Numeric {
-                        inline,
-                        popup,
-                        button,
-                    } = field
-                    {
-                        inline.cancel_edit();
-                        popup.cancel_edit();
-                        button.popdown();
+                    if let Field::Numeric(number) = field {
+                        number.cancel_edit();
                     }
                 }
                 self.fields.borrow_mut().clear();
@@ -706,21 +648,8 @@ impl Component {
             }
             for (field, option) in self.fields.borrow().iter().zip(options) {
                 match (field, option) {
-                    (
-                        Field::Numeric {
-                            inline,
-                            popup,
-                            button,
-                        },
-                        ToolOption::Numeric(f),
-                    ) => {
-                        inline.set_value(f.value as f64);
-                        popup.set_value(f.value as f64);
-                        let value = f
-                            .numeric
-                            .resolve(f.value as f64, NumericOperation::Format)
-                            .unwrap();
-                        button.set_label(value.edit.strip_suffix(".0").unwrap_or(&value.edit));
+                    (Field::Numeric(number), ToolOption::Numeric(f)) => {
+                        number.set_value(f.value as f64)
                     }
                     (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
                         items
@@ -748,58 +677,39 @@ impl Component {
         option: &ToolOption,
         context: ToolbarContext,
     ) {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
         let field = match option {
             ToolOption::Numeric(f) => {
                 let label = gtk::Label::new(Some(f.label));
-                label.add_css_class("horizontal-option");
+                label.add_css_class("option-label");
+                row.set_tooltip_text(Some(f.label));
                 row.append(&label);
-                let number = NumberControl::inline(f.numeric.clone(), f.label);
-                number.add_css_class("horizontal-option");
+                let number = NumberControl::compact(f.numeric.clone(), f.label);
+                number.set_icon(tool_setting_icon(f.id));
                 number.add_css_class("toolbar-number");
-                let popup = NumberControl::new(f.numeric.clone(), f.label, "");
-                popup.set_width_request(240);
-                let button = gtk::MenuButton::new();
-                button.set_hexpand(true);
-                button.set_widget_name(&format!("toolbar-value-{}", f.id));
-                button.set_direction(gtk::ArrowType::None);
-                button.set_tooltip_text(Some(f.label));
-                button.update_property(&[gtk::accessible::Property::Label(f.label)]);
-                button.add_css_class("vertical-option");
-                button.add_css_class("toolbar-number-menu");
-                let popover = gtk::Popover::new();
-                popover.set_child(Some(&popup));
-                button.set_popover(Some(&popover));
-                w.watch_popover(&popover);
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));
                 let id = f.id;
-                for number in [&number, &popup] {
-                    number.connect_value_changed(glib::clone!(
-                        #[weak(rename_to=component)]
-                        self,
-                        #[weak]
-                        w,
-                        move |number| {
-                            if !component.updating.get() {
-                                w.dispatch(UiAction::ToolbarEdit {
-                                    context,
-                                    action: Box::new(UiAction::SetToolSetting {
-                                        id: id.into(),
-                                        value: number.value() as f32,
-                                    }),
-                                });
-                            }
+                number.connect_value_changed(glib::clone!(
+                    #[weak(rename_to=component)]
+                    self,
+                    #[weak]
+                    w,
+                    move |number| {
+                        if !component.updating.get() {
+                            w.dispatch(UiAction::ToolbarEdit {
+                                context,
+                                action: Box::new(UiAction::SetToolSetting {
+                                    id: id.into(),
+                                    value: number.value() as f32,
+                                }),
+                            });
                         }
-                    ));
-                }
+                    }
+                ));
                 row.append(&number);
-                row.append(&button);
-                Field::Numeric {
-                    inline: number,
-                    popup,
-                    button,
-                }
+                Field::Numeric(number)
             }
             ToolOption::Choice { id, label, items } => {
                 // Store the core icon alongside each label in a native model.
@@ -812,8 +722,8 @@ impl Component {
                 }
                 let choice = gtk::DropDown::builder()
                     .model(&model)
-                    .factory(&choice_factory(false))
-                    .list_factory(&choice_factory(false))
+                    .factory(&choice_factory(false, true))
+                    .list_factory(&choice_factory(false, false))
                     .build();
                 choice.set_hexpand(true);
                 choice.set_tooltip_text(Some(label));
@@ -840,6 +750,7 @@ impl Component {
                 Field::Choice(choice)
             }
             ToolOption::Action { state, checkable } => {
+                row.add_css_class("option-action");
                 let button: gtk::Button = if *checkable {
                     gtk::ToggleButton::with_label(state.label).upcast()
                 } else {
@@ -852,6 +763,9 @@ impl Component {
                 }
                 button.update_property(&[gtk::accessible::Property::Label(state.label)]);
                 button.add_css_class("flat");
+                button.add_css_class("tile-button");
+                button.set_hexpand(true);
+                button.set_vexpand(true);
                 button.set_tooltip_text(Some(&state.tooltip));
                 button.set_widget_name(&format!("toolbar-action-{:?}", state.id));
                 let command = state.id;
@@ -879,13 +793,25 @@ impl Component {
 }
 
 /// Both dropdown faces and popup rows use the application's SVG icon provider.
-fn choice_factory(compact: bool) -> gtk::SignalListItemFactory {
+fn choice_factory(compact: bool, face: bool) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, item| {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.set_halign(if compact {
+            gtk::Align::Center
+        } else {
+            gtk::Align::Fill
+        });
+        row.set_hexpand(true);
         row.append(&crate::icons::image("layer-settings-symbolic"));
         if !compact {
-            row.append(&gtk::Label::new(None));
+            let label = gtk::Label::new(None);
+            label.set_xalign(0.0);
+            if face {
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_max_width_chars(16);
+            }
+            row.append(&label);
         }
         item.downcast_ref::<gtk::ListItem>()
             .unwrap()

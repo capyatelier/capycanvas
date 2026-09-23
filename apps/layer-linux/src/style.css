@@ -194,21 +194,24 @@ window, label, text { font-size: var(--ui-text-size); }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
 .toolbar-component { padding: 0; }
-.toolbar-component button { min-width: 0; min-height: 24px; padding: 2px 6px; font-feature-settings: "tnum"; }
-.toolbar-component > box > button { min-width: 24px; }
-.toolbar-component .slider-readout { font-size: 11px; }
-.toolbar-component.vertical-component > box > button { padding: 2px 0; }
-.toolbar-component dropdown > button { min-height: 24px; padding: 2px 5px; }
-.toolbar-component.vertical-component dropdown > button { padding: 2px 0; }
-.toolbar-component.vertical-component dropdown arrow { min-width: 8px; margin: 0; }
+.toolbar-component button { min-width: 0; min-height: 24px; padding: 2px 5px; font-feature-settings: "tnum"; }
+.toolbar-component .option-action button, .toolbar-component > box > button { padding: 0; min-width: 0; min-height: 0; border-radius: 6px; }
+.toolbar-component dropdown > button, .toolbar-component spinbutton { min-height: 24px; padding: 2px 6px; border-radius: 6px; background: alpha(currentColor, .07); color: inherit; }
+.toolbar-component dropdown { margin: 0; }
+.toolbar-component.vertical-component dropdown > button { padding: 2px; }
+.toolbar-component.vertical-component.labeled-component dropdown > button { padding-left: 8px; padding-right: 6px; }
 .toolbar-component .number-control { margin: 0; }
-.toolbar-component .toolbar-number scale { min-width: 64px; padding: 0 6px; }
-.toolbar-component .toolbar-number .number-value { padding: 2px 4px; }
-.toolbar-component .toolbar-number-menu > button { padding: 2px; font-size: 11px; }
-.brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 5px; }
-.vertical-component .brush-track { margin: 5px 0; }
+.toolbar-component .toolbar-number scale { min-width: 56px; padding: 0 2px; }
+.toolbar-component .toolbar-number .number-value, .toolbar-component .number-entry { padding: 2px 4px; min-height: 24px; border-radius: 6px; background: alpha(currentColor, .07); }
+.toolbar-component .number-compact label, .toolbar-component .number-entry { font-size: 11px; }
+.toolbar-component .number-compact .number-value { min-width: 28px; }
+.toolbar-component.vertical-component .number-compact .number-value { min-width: 0; min-height: 0; padding: 1px 2px; }
+.toolbar-component.vertical-component.labeled-component .number-compact .number-value { padding: 2px 6px; }
+.toolbar-component .slider-readout .number-value { background: transparent; padding: 2px; }
+.brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 2px; }
+.vertical-component .brush-track { margin: 2px 0; }
 .brush-track trough, .brush-track highlight { min-height: 16px; min-width: 16px; border: none; background: transparent; box-shadow: none; }
-.brush-track slider { min-width: 7px; min-height: 22px; margin: -3px 0; border-radius: 3px; background: var(--window-bg-color); border: 1px solid alpha(currentColor, .6); box-shadow: 0 1px 2px alpha(black, .2); }
+.brush-track slider { min-width: 7px; min-height: 22px; margin: -3px 0; border-radius: 3px; background: var(--window-bg-color); border: 1px solid alpha(currentColor, .6); box-shadow: none; }
 .vertical-component .brush-track slider { min-width: 22px; min-height: 7px; margin: 0 -3px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }

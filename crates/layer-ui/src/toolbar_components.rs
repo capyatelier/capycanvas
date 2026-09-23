@@ -3,11 +3,39 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolOptionsStyle {
+    pub text: bool,
+    pub sliders: bool,
+}
+impl Default for ToolOptionsStyle {
+    fn default() -> Self {
+        Self {
+            text: true,
+            sliders: true,
+        }
+    }
+}
+
 impl ToolbarControl {
+    pub const TOOL_OPTIONS: Self = Self::ToolOptions {
+        style: ToolOptionsStyle {
+            text: true,
+            sliders: true,
+        },
+    };
+    pub fn options_style(self) -> Option<ToolOptionsStyle> {
+        match self {
+            Self::ToolOptions { style } => Some(style),
+            _ => None,
+        }
+    }
+
     pub fn is_component(self) -> bool {
         matches!(
             self,
-            Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions
+            Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions { .. }
         )
     }
     pub fn slider(self) -> Option<ToolbarNumericBinding> {
@@ -120,7 +148,7 @@ impl UiState {
         control.is_component().then(|| ToolbarComponentView {
             context: self.toolbar_context(),
             numeric: control.slider().and_then(|binding| binding.field(self)),
-            options: if control == ToolbarControl::ToolOptions {
+            options: if control.options_style().is_some() {
                 self.tool_options()
             } else {
                 Vec::new()
@@ -358,5 +386,29 @@ pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [
                 ..Bounds::default()
             },
         ]
+    }
+}
+
+/// Icons belong to the shared field schema, including compact native hosts.
+pub fn tool_setting_icon(id: &str) -> &'static str {
+    match id {
+        "size" | "size_jitter" => "size",
+        "opacity" => "opacity",
+        "flow" | "wet_flow" | "dry_flow" => "airbrush",
+        "hardness" => "blur",
+        "spacing" | "distance" => "ruler",
+        "angle" | "rotation_jitter" => "rotate-right",
+        "grain_depth" => "grain",
+        "paint" => "brush",
+        "water_load" | "pull" | "dilution" | "wet_edge" => "watercolor",
+        "edge_width" | "transform_width" | "transform_height" => "size",
+        "transform_x" | "transform_y" => "move",
+        "transform_angle" => "rotate-right",
+        "smoothing" => "blur",
+        "gap_closing" => "auto-select",
+        "expansion" => "size",
+        "strength" => "liquify",
+        "tolerance" => "color-select",
+        _ => "settings",
     }
 }

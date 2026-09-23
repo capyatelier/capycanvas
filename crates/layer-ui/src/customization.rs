@@ -345,7 +345,7 @@ impl ToolbarControl {
                 value: pixels as f32,
             },
             Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider
-            | Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions => return None,
+            | Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions { .. } => return None,
         })
     }
     pub fn validate(self) -> Result<(), String> {
@@ -398,6 +398,7 @@ pub enum CustomizationAction {
         panel: Panel,
         group: Option<u32>,
     },
+    SetToolOptionsStyle { panel: Panel, tile: u32, style: crate::ToolOptionsStyle },
     SetTileStyle {
         panel: Panel,
         style: TileStyle,
@@ -630,22 +631,27 @@ impl DockLayout {
                     .iter()
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?;
-                (
-                    tool_choice(t.control).label,
-                    vec![vec![
-                        entry(
-                            "Remove Tool",
-                            CustomizationAction::RemoveTool { panel, tile },
-                        ),
-                        entry(
-                            "Insert Tools…",
-                            CustomizationAction::InsertTools {
-                                panel,
-                                before: Some(tile),
-                            },
-                        ),
-                    ]],
-                )
+                let mut sections = vec![vec![
+                    entry("Remove Tool", CustomizationAction::RemoveTool { panel, tile }),
+                    entry("Insert Tools…", CustomizationAction::InsertTools { panel, before: Some(tile) }),
+                ]];
+                if let Some(style) = t.control.options_style() {
+                    let mut choices = Vec::new();
+                    for (label, text) in [("Horizontal: Text", true), ("Horizontal: Icons", false)] {
+                        let mut item = entry(label, CustomizationAction::SetToolOptionsStyle {
+                            panel, tile, style: crate::ToolOptionsStyle { text, ..style },
+                        });
+                        item.selected = Some(style.text == text);
+                        choices.push(item);
+                    }
+                    let mut sliders = entry("Show Sliders", CustomizationAction::SetToolOptionsStyle {
+                        panel, tile, style: crate::ToolOptionsStyle { sliders: !style.sliders, ..style },
+                    });
+                    sliders.selected = Some(style.sliders);
+                    choices.push(sliders);
+                    sections.insert(0, choices);
+                }
+                (tool_choice(t.control).label, sections)
             }
             ContextTarget::Ribbon { panel } => {
                 let p = self.panel(panel)?;
@@ -1070,7 +1076,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::BrushOpacitySlider => (
             "Brush opacity slider".into(), "Adjust brush opacity directly in the toolbar".into(), "opacity",
         ),
-        ToolbarControl::ToolOptions => (
+        ToolbarControl::ToolOptions { .. } => (
             "Tool Options".into(), "Settings for the current tool; fills the remaining toolbar width".into(), "settings",
         ),
         ToolbarControl::Panel { panel } => (
@@ -1098,7 +1104,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
-        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::ToolOptions]
+        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
             .into_iter().filter(move |_| matches!(platform, Platform::Gtk | Platform::Generic)))
         .chain(
             matches!(
@@ -1716,6 +1722,13 @@ impl CustomizationState {
             }
             RestoreBuiltinToolbar { panel, group } => {
                 layout.restore_builtin_toolbar(panel, group)?;
+                changed |= regions::LAYOUT;
+            }
+            SetToolOptionsStyle { panel, tile, style } => {
+                let config = layout.panels.iter_mut().find(|p| p.id == panel).ok_or("Choose a toolbar")?;
+                let tile = config.tiles_mut()?.iter_mut()
+                    .find(|t| t.id == tile && t.control.options_style().is_some()).ok_or("Choose tool options")?;
+                tile.control = ToolbarControl::ToolOptions { style };
                 changed |= regions::LAYOUT;
             }
             SetTileStyle { panel, style } => {

@@ -195,7 +195,7 @@ fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
                     .last()
                     .unwrap()
                     .control,
-                ToolbarControl::ToolOptions
+                ToolbarControl::TOOL_OPTIONS
             );
         }
         for platform in [
@@ -218,7 +218,7 @@ fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
                 HeaderZone::Left,
                 None,
                 &[HeaderItem::Tool {
-                    control: ToolbarControl::ToolOptions
+                    control: ToolbarControl::TOOL_OPTIONS
                 }]
             )
             .is_err()
@@ -232,7 +232,7 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
         ToolbarControl::BrushSizeSlider,
         ToolbarControl::Divider,
         ToolbarControl::BrushOpacitySlider,
-        ToolbarControl::ToolOptions,
+        ToolbarControl::TOOL_OPTIONS,
     ]
     .into_iter()
     .enumerate()
@@ -284,11 +284,11 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
     let duplicates = vec![
         ToolbarTile {
             id: 1,
-            control: ToolbarControl::ToolOptions,
+            control: ToolbarControl::TOOL_OPTIONS,
         },
         ToolbarTile {
             id: 2,
-            control: ToolbarControl::ToolOptions,
+            control: ToolbarControl::TOOL_OPTIONS,
         },
     ];
     let layout = toolbar_tile_layout(
@@ -333,7 +333,7 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
     let controls = [
         ToolbarControl::BrushSizeSlider,
         ToolbarControl::BrushOpacitySlider,
-        ToolbarControl::ToolOptions,
+        ToolbarControl::TOOL_OPTIONS,
     ];
     s.dispatch(UiAction::Customize {
         action: CustomizationAction::InsertTools {
@@ -368,7 +368,7 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
         .unwrap()
         .tiles()
         .iter()
-        .find(|t| t.control == ToolbarControl::ToolOptions)
+        .find(|t| t.control == ToolbarControl::TOOL_OPTIONS)
         .unwrap()
         .id;
     s.dispatch(UiAction::Invoke {
@@ -460,7 +460,7 @@ fn toolbar_drawer_measurement_contains_all_components_across_styles_and_widths()
         ToolbarControl::BrushSizeSlider,
         ToolbarControl::BrushOpacitySlider,
         ToolbarControl::Divider,
-        ToolbarControl::ToolOptions,
+        ToolbarControl::TOOL_OPTIONS,
     ];
     for style in [
         TileStyle::Small,
@@ -500,5 +500,126 @@ fn toolbar_drawer_measurement_contains_all_components_across_styles_and_widths()
                 }
             }
         }
+    }
+}
+
+#[test]
+fn options_preferences_round_trip_and_undo_without_losing_controls() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let layout = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    let tile = layout
+        .panel(Panel::Commands)
+        .unwrap()
+        .tiles()
+        .iter()
+        .find(|t| t.control.options_style().is_some())
+        .unwrap()
+        .id;
+    s.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(WorkspaceState {
+            layout,
+            ..WorkspaceState::default()
+        }),
+    })
+    .unwrap();
+    let before = s.state().workspace.layout.clone();
+    let style = ToolOptionsStyle {
+        text: false,
+        sliders: false,
+    };
+    s.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetToolOptionsStyle {
+            panel: Panel::Commands,
+            tile,
+            style,
+        },
+    })
+    .unwrap();
+    let after = s.state().workspace.layout.clone();
+    assert_eq!(
+        after
+            .panel(Panel::Commands)
+            .unwrap()
+            .tiles()
+            .iter()
+            .find(|t| t.id == tile)
+            .unwrap()
+            .control
+            .options_style(),
+        Some(style)
+    );
+    let loaded: DockLayout = serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap();
+    assert_eq!(after, loaded);
+    assert_eq!(
+        serde_json::from_str::<ToolbarControl>(r#"{"kind":"tool_options"}"#).unwrap(),
+        ToolbarControl::TOOL_OPTIONS
+    );
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    })
+    .unwrap();
+    assert_eq!(s.state().workspace.layout, before);
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::RedoWorkspace,
+    })
+    .unwrap();
+    assert_eq!(s.state().workspace.layout, after);
+    s.dispatch(UiAction::ActivateTile {
+        panel: Panel::Commands,
+        tile,
+    })
+    .unwrap();
+    let drawer = s.state().customization.drawer.as_ref().unwrap();
+    assert_eq!(
+        drawer.columns,
+        vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]
+    );
+    let p = drawer
+        .placement(&after, [1600., 1000.], &[300., 200.])
+        .unwrap();
+    assert!(p.detached && p.connection().is_none());
+    assert_eq!(
+        p.anchor.width,
+        after.panel(Panel::Commands).unwrap().tile_style.size()[0]
+    );
+    assert!((p.bounds.x + p.bounds.width - p.anchor.x - p.anchor.width).abs() < 0.01);
+    assert!(p.bounds.y > p.anchor.y + p.anchor.height);
+}
+
+#[test]
+fn vertical_options_shrink_before_reflowing_and_keep_more_accessible() {
+    let tiles = vec![
+        ToolbarTile {
+            id: 1,
+            control: ToolbarControl::Color,
+        },
+        ToolbarTile {
+            id: 2,
+            control: ToolbarControl::TOOL_OPTIONS,
+        },
+    ];
+    for style in [
+        TileStyle::Small,
+        TileStyle::Medium,
+        TileStyle::Large,
+        TileStyle::MediumLabeled,
+        TileStyle::Labeled,
+    ] {
+        let [w, h] = style.size();
+        let height = 3. * (h + 2.) + 22.;
+        let layout = toolbar_tile_layout(w, height, Axis::Vertical, &tiles, true, style);
+        assert_eq!(layout.tiles[0].x, layout.tiles[1].x);
+        assert!(layout.tiles[1].height < 8. * h);
+        assert!(layout.tiles[1].y + layout.tiles[1].height <= height - 22.);
+        let fitting = tool_options_layout(
+            w,
+            layout.tiles[1].height,
+            Axis::Vertical,
+            &[[w, h]; 20],
+            [w, h],
+            4.,
+        );
+        assert!(fitting.more.height >= h);
     }
 }

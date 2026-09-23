@@ -17,6 +17,11 @@ mod imp {
         pub spin: OnceCell<gtk::SpinButton>,
         pub steps: OnceCell<[gtk::Button; 2]>,
         pub interacting: Cell<bool>,
+        pub compact: Cell<bool>,
+        pub value_label: OnceCell<gtk::Label>,
+        pub face: OnceCell<gtk::Box>,
+        pub icon: OnceCell<gtk::Image>,
+        pub title: OnceCell<gtk::Label>,
         pub interaction_end_pending: Cell<bool>,
     }
     #[glib::object_subclass]
@@ -29,11 +34,14 @@ mod imp {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: std::sync::OnceLock<Vec<glib::subclass::Signal>> =
                 std::sync::OnceLock::new();
-            SIGNALS.get_or_init(|| vec![
-                glib::subclass::Signal::builder("value-changed").build(),
-                glib::subclass::Signal::builder("interaction")
-                    .param_types([u32::static_type()]).build(),
-            ])
+            SIGNALS.get_or_init(|| {
+                vec![
+                    glib::subclass::Signal::builder("value-changed").build(),
+                    glib::subclass::Signal::builder("interaction")
+                        .param_types([u32::static_type()])
+                        .build(),
+                ]
+            })
         }
     }
     impl WidgetImpl for NumberControl {}
@@ -46,11 +54,11 @@ glib::wrapper! {
 }
 impl NumberControl {
     pub fn new(spec: NumericControl, title: &str, description: &str) -> Self {
-        Self::build(spec, title, description, false)
+        Self::build(spec, title, description, false, false)
     }
     /// One-line slider with only an editable value. Numeric policy is unchanged.
     pub fn inline(spec: NumericControl, title: &str) -> Self {
-        Self::build(spec, title, "", true)
+        Self::build(spec, title, "", true, false)
     }
     /// Compact editable value for grouped components (e.g. a color wheel).
     pub fn value_only(spec: NumericControl, title: &str) -> Self {
@@ -61,9 +69,60 @@ impl NumberControl {
         }
         control
     }
-    fn build(spec: NumericControl, title: &str, description: &str, inline: bool) -> Self {
+    /// Compact toolbar presentation; units remain in the tooltip and accessible value.
+    pub fn compact(spec: NumericControl, title: &str) -> Self {
+        Self::build(spec, title, "", true, true)
+    }
+    pub fn value_button(&self) -> gtk::Button {
+        self.imp().display.get().unwrap().clone()
+    }
+    pub fn set_slider_visible(&self, visible: bool) {
+        if let Some(slider) = self.imp().slider.get() {
+            slider.set_visible(visible);
+        }
+        if let Some(stack) = self.imp().stack.get() {
+            stack.set_hexpand(!visible);
+        }
+    }
+    pub fn set_icon(&self, icon: &str) {
+        if let Some(image) = self.imp().icon.get() {
+            crate::icons::set(image, Some(&format!("layer-{icon}-symbolic")));
+        }
+    }
+    pub fn set_face(&self, show_icon: bool, title: &str, stacked: bool) {
+        let imp = self.imp();
+        if let Some(image) = imp.icon.get() {
+            image.set_visible(show_icon);
+        }
+        if let Some(label) = imp.title.get() {
+            label.set_text(title);
+            label.set_visible(!title.is_empty());
+        }
+        if let Some(face) = imp.face.get() {
+            face.set_orientation(if stacked {
+                gtk::Orientation::Vertical
+            } else {
+                gtk::Orientation::Horizontal
+            });
+        }
+        if let Some(stack) = imp.stack.get() {
+            stack.set_halign(gtk::Align::Fill);
+            stack.set_valign(gtk::Align::Fill);
+        }
+    }
+    fn build(
+        spec: NumericControl,
+        title: &str,
+        description: &str,
+        inline: bool,
+        compact: bool,
+    ) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
+        control.imp().compact.set(compact);
+        if compact {
+            control.add_css_class("number-compact");
+        }
         control.set_orientation(gtk::Orientation::Vertical);
         control.set_hexpand(true);
         control.add_css_class("number-control");
@@ -71,7 +130,8 @@ impl NumberControl {
             control.add_css_class("number-inline");
             control.set_tooltip_text(Some(title));
         }
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, if compact { 2 } else { 6 });
+        header.set_vexpand(compact);
         let labels = gtk::Box::new(gtk::Orientation::Vertical, 0);
         labels.set_hexpand(true);
         labels.set_valign(gtk::Align::Center);
@@ -96,7 +156,7 @@ impl NumberControl {
             description.add_css_class("subtitle");
             labels.append(&description);
         }
-        if spec.kind == NumericKind::Number {
+        if spec.kind == NumericKind::Number && !compact {
             let spin = gtk::SpinButton::with_range(
                 spec.min * spec.scale,
                 spec.max * spec.scale,
@@ -137,8 +197,29 @@ impl NumberControl {
         } else {
             let display = gtk::Button::new();
             let value_label = gtk::Label::new(None);
-            value_label.set_xalign(1.0);
-            display.set_child(Some(&value_label));
+            value_label.set_xalign(if compact { 0.5 } else { 1.0 });
+            if compact {
+                let face = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                face.set_halign(gtk::Align::Center);
+                let icon = crate::icons::image("layer-settings-symbolic");
+                icon.set_visible(false);
+                icon.set_pixel_size(14);
+                let title_label = gtk::Label::new(None);
+                title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                title_label.set_visible(false);
+                face.append(&icon);
+                let caption = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                caption.append(&title_label);
+                caption.append(&value_label);
+                face.append(&caption);
+                display.set_child(Some(&face));
+                control.imp().face.set(face).unwrap();
+                control.imp().icon.set(icon).unwrap();
+                control.imp().title.set(title_label).unwrap();
+            } else {
+                display.set_child(Some(&value_label));
+            }
+            control.imp().value_label.set(value_label.clone()).unwrap();
             display.add_css_class("number-value");
             display.add_css_class("flat");
             display.set_tooltip_text(Some(&format!("Edit {title}")));
@@ -150,27 +231,37 @@ impl NumberControl {
             if inline {
                 // Reserve the full formatted range, not the current value's
                 // digit count. Expressions scroll inside this same footprint.
-                let chars = [spec.min, spec.max]
-                    .into_iter()
-                    .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
-                    .map(|v| v.text.chars().count())
-                    .max()
-                    .unwrap_or(1) as i32;
-                value_label.set_width_chars(chars);
-                value_label.set_max_width_chars(chars);
+                let chars = [
+                    spec.min,
+                    spec.max,
+                    (99.9 / spec.scale).clamp(spec.min, spec.max),
+                ]
+                .into_iter()
+                .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
+                .map(|v| {
+                    if compact {
+                        spec.compact_text(v.value).chars().count()
+                    } else {
+                        v.text.chars().count()
+                    }
+                })
+                .max()
+                .unwrap_or(1) as i32;
+                value_label.set_width_chars(if compact { 0 } else { chars });
+                value_label.set_max_width_chars(if compact { -1 } else { chars });
                 entry.set_width_chars(chars);
                 entry.set_max_width_chars(chars);
             }
             gtk::prelude::EditableExt::set_alignment(&entry, 1.0);
             entry.add_css_class("number-entry");
             let stack = gtk::Stack::new();
-            stack.set_hhomogeneous(inline);
+            stack.set_hhomogeneous(inline && !compact);
             stack.set_vhomogeneous(false);
             stack.set_halign(gtk::Align::End);
             stack.set_valign(gtk::Align::Center);
             stack.add_named(&display, Some("value"));
             stack.add_named(&entry, Some("entry"));
-            if inline {
+            if inline && !compact {
                 // GTK's width-chars uses average character width, which can be
                 // narrower than digits. Measure the widest formatted value too.
                 let reserve = gtk::Button::new();
@@ -243,6 +334,7 @@ impl NumberControl {
             ));
             entry.add_controller(keys);
             control.imp().entry.set(entry).unwrap();
+            control.install_value_gestures(&display);
             control.imp().display.set(display).unwrap();
             control.imp().stack.set(stack).unwrap();
             let track = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -293,33 +385,122 @@ impl NumberControl {
         // single undo step; the widget still owns native dragging/repetition.
         let events = gtk::EventControllerLegacy::new();
         events.set_propagation_phase(gtk::PropagationPhase::Capture);
-        events.connect_event(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |_, event| {
-            use gtk::gdk::EventType as E;
-            match event.event_type() {
-                E::ButtonPress if event.downcast_ref::<gtk::gdk::ButtonEvent>().is_some_and(|e| e.button() == 1) => control.begin_interaction(),
-                E::TouchBegin => control.begin_interaction(),
-                E::ButtonRelease if event.downcast_ref::<gtk::gdk::ButtonEvent>().is_some_and(|e|e.button()==1) => control.defer_interaction_end(),
-                E::TouchEnd => control.defer_interaction_end(),
-                E::TouchCancel => control.end_interaction(true),
-                E::KeyPress => {
-                    if let Some(e) = event.downcast_ref::<gtk::gdk::KeyEvent>() {
-                        match e.keyval() {
-                            gtk::gdk::Key::Escape => control.end_interaction(true),
-                            gtk::gdk::Key::Left | gtk::gdk::Key::Right | gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Page_Up | gtk::gdk::Key::Page_Down => control.begin_interaction(),
-                            _ => (),
+        events.connect_event(glib::clone!(
+            #[weak]
+            control,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, event| {
+                use gtk::gdk::EventType as E;
+                match event.event_type() {
+                    E::ButtonPress
+                        if event
+                            .downcast_ref::<gtk::gdk::ButtonEvent>()
+                            .is_some_and(|e| e.button() == 1) =>
+                    {
+                        control.begin_interaction()
+                    }
+                    E::TouchBegin => control.begin_interaction(),
+                    E::ButtonRelease
+                        if event
+                            .downcast_ref::<gtk::gdk::ButtonEvent>()
+                            .is_some_and(|e| e.button() == 1) =>
+                    {
+                        control.defer_interaction_end()
+                    }
+                    E::TouchEnd => control.defer_interaction_end(),
+                    E::TouchCancel => control.end_interaction(true),
+                    E::KeyPress => {
+                        if let Some(e) = event.downcast_ref::<gtk::gdk::KeyEvent>() {
+                            match e.keyval() {
+                                gtk::gdk::Key::Escape => control.end_interaction(true),
+                                gtk::gdk::Key::Left
+                                | gtk::gdk::Key::Right
+                                | gtk::gdk::Key::Up
+                                | gtk::gdk::Key::Down
+                                | gtk::gdk::Key::Page_Up
+                                | gtk::gdk::Key::Page_Down => control.begin_interaction(),
+                                _ => (),
+                            }
                         }
                     }
+                    E::KeyRelease => {
+                        if event.downcast_ref::<gtk::gdk::KeyEvent>().is_some_and(|e| {
+                            matches!(
+                                e.keyval(),
+                                gtk::gdk::Key::Left
+                                    | gtk::gdk::Key::Right
+                                    | gtk::gdk::Key::Up
+                                    | gtk::gdk::Key::Down
+                                    | gtk::gdk::Key::Page_Up
+                                    | gtk::gdk::Key::Page_Down
+                            )
+                        }) {
+                            control.defer_interaction_end();
+                        }
+                    }
+                    _ => (),
                 }
-                E::KeyRelease => {
-                    if event.downcast_ref::<gtk::gdk::KeyEvent>().is_some_and(|e|matches!(e.keyval(),gtk::gdk::Key::Left|gtk::gdk::Key::Right|gtk::gdk::Key::Up|gtk::gdk::Key::Down|gtk::gdk::Key::Page_Up|gtk::gdk::Key::Page_Down)){control.defer_interaction_end();}
-                }
-                _ => (),
+                glib::Propagation::Proceed
             }
-            glib::Propagation::Proceed
-        }));
+        ));
         control.add_controller(events);
         control.connect_unmap(|control| control.end_interaction(true));
         control
+    }
+    fn install_value_gestures(&self, display: &gtk::Button) {
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(1);
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let origin = std::rc::Rc::new(Cell::new(0.));
+        drag.connect_drag_begin(glib::clone!(
+            #[weak(rename_to=control)]
+            self,
+            #[strong]
+            origin,
+            move |g, _, _| {
+                if !crate::input::touch_or_pen(g) {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                origin.set(control.value());
+            }
+        ));
+        drag.connect_drag_update(glib::clone!(
+            #[weak(rename_to=control)]
+            self,
+            #[strong]
+            origin,
+            move |g, dx, dy| {
+                if !control.drag_check_threshold(0, 0, dx as i32, dy as i32) {
+                    return;
+                }
+                g.set_state(gtk::EventSequenceState::Claimed);
+                if let Ok(value) = control
+                    .spec()
+                    .resolve(origin.get(), NumericOperation::Step { steps: -dy / 4. })
+                {
+                    control.apply(NumericOperation::Value { value: value.value });
+                }
+            }
+        ));
+        display.add_controller(drag);
+        let scroll = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE,
+        );
+        scroll.connect_scroll(glib::clone!(
+            #[weak(rename_to=control)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, _, dy| {
+                control.begin_interaction();
+                control.apply(NumericOperation::Step { steps: -dy });
+                control.defer_interaction_end();
+                glib::Propagation::Stop
+            }
+        ));
+        display.add_controller(scroll);
     }
     fn spec(&self) -> &NumericControl {
         self.imp().spec.get().unwrap()
@@ -335,12 +516,16 @@ impl NumberControl {
         let imp = self.imp();
         imp.updating.set(true);
         imp.value.set(value);
-        if let Some(display) = imp.display.get() {
-            display
-                .child()
-                .and_downcast::<gtk::Label>()
+        if let Some(label) = imp.value_label.get() {
+            label.set_text(&if imp.compact.get() {
+                self.spec().compact_text(value)
+            } else {
+                result.text.clone()
+            });
+            imp.display
+                .get()
                 .unwrap()
-                .set_text(&result.text);
+                .update_property(&[gtk::accessible::Property::ValueText(&result.text)]);
         }
         if let Some(slider) = imp.slider.get() {
             slider.set_value(result.fill);
@@ -361,23 +546,48 @@ impl NumberControl {
             glib::closure_local!(move |s: Self| f(&s)),
         );
     }
-    pub fn is_interacting(&self) -> bool { self.imp().interacting.get() }
-    pub fn connect_interaction(&self, f: impl Fn(&Self, layer_ui::ContactPhase) + 'static) {
-        self.connect_closure("interaction", false, glib::closure_local!(move |s: Self, phase: u32| {
-            f(&s, match phase { 0 => layer_ui::ContactPhase::Down, 1 => layer_ui::ContactPhase::Up, _ => layer_ui::ContactPhase::Cancel });
-        }));
+    pub fn is_interacting(&self) -> bool {
+        self.imp().interacting.get()
     }
-    fn defer_interaction_end(&self){
+    pub fn connect_interaction(&self, f: impl Fn(&Self, layer_ui::ContactPhase) + 'static) {
+        self.connect_closure(
+            "interaction",
+            false,
+            glib::closure_local!(move |s: Self, phase: u32| {
+                f(
+                    &s,
+                    match phase {
+                        0 => layer_ui::ContactPhase::Down,
+                        1 => layer_ui::ContactPhase::Up,
+                        _ => layer_ui::ContactPhase::Cancel,
+                    },
+                );
+            }),
+        );
+    }
+    fn defer_interaction_end(&self) {
         self.imp().interaction_end_pending.set(true);
-        glib::idle_add_local_once(glib::clone!(#[weak(rename_to=control)] self,move ||if control.imp().interaction_end_pending.replace(false){control.end_interaction(false); }));
+        glib::idle_add_local_once(glib::clone!(
+            #[weak(rename_to=control)]
+            self,
+            move || if control.imp().interaction_end_pending.replace(false) {
+                control.end_interaction(false);
+            }
+        ));
     }
     fn begin_interaction(&self) {
-        if self.imp().interaction_end_pending.replace(false){self.end_interaction(false);}
-        if !self.imp().interacting.replace(true) { self.emit_by_name::<()>("interaction", &[&0u32]); }
+        if self.imp().interaction_end_pending.replace(false) {
+            self.end_interaction(false);
+        }
+        if !self.imp().interacting.replace(true) {
+            self.emit_by_name::<()>("interaction", &[&0u32]);
+        }
     }
     fn end_interaction(&self, cancel: bool) {
         self.imp().interaction_end_pending.set(false);
-        if self.imp().interacting.replace(false) { self.emit_by_name::<()>("interaction", &[&if cancel { 2u32 } else { 1u32 }]); }
+        if self.imp().interacting.replace(false) {
+            self.emit_by_name::<()>("interaction", &[&if cancel { 2u32 } else { 1u32 }]);
+        }
     }
     pub fn cancel_edit(&self) {
         self.finish(true);

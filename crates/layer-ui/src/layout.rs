@@ -51,13 +51,13 @@ fn toolbar_item_span(tile: &ToolbarTile, along: f32, axis: Axis, capacity: f32) 
         ToolbarControl::BrushSizeSlider | ToolbarControl::BrushOpacitySlider => {
             4.0 * (along + 2.0) - 2.0
         }
-        ToolbarControl::ToolOptions => {
+        ToolbarControl::ToolOptions { .. } => {
             (if axis == Axis::Vertical { 8.0 } else { 4.0 }) * (along + 2.0) - 2.0
         }
         _ => along,
     }
     .min(capacity);
-    let fill = tile.control == ToolbarControl::ToolOptions && axis == Axis::Horizontal;
+    let fill = tile.control.options_style().is_some();
     ItemSpan {
         min: if fill { along.min(capacity) } else { length },
         preferred: length,
@@ -152,7 +152,7 @@ pub fn toolbar_tile_layout(
         let mut position = pad;
         for (&i, size) in items.iter().zip(sizes) {
             let size = size
-                + if spans[i].fill {
+                + if spans[i].fill && horizontal {
                     spare / fills as f32
                 } else {
                     0.0

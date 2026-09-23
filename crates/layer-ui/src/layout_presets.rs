@@ -84,7 +84,7 @@ impl WorkspacePreset {
                         .insert_tools(
                             Panel::Commands,
                             None,
-                            &[ToolbarControl::Divider, ToolbarControl::ToolOptions],
+                            &[ToolbarControl::Divider, ToolbarControl::TOOL_OPTIONS],
                         )
                         .unwrap();
                 }

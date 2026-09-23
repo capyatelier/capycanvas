@@ -27,11 +27,12 @@ Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values; opacity tracks show transparency over
 a checkerboard. Values remain horizontal in both orientations.
 
-Click the value to open the full numeric editor, including expressions, stepping
-and the shared bounds/rounding policy. Size is logarithmic, 0.5–2048 px; opacity
-is a percentage. Short allocations reduce the track before the value editor.
-Tool, document and workspace changes dismiss the popup and cancel unfinished
-text. Numeric edits do not create workspace-layout history entries.
+Click the value to edit an expression inline. Drag a number up/down with touch
+or pen, or scroll over it with a mouse. Size is logarithmic, 0.5–2048 px, and
+snaps to whole pixels above 32. Compact readouts omit decimals at three digits
+and above; exact entry retains the shared numeric precision. Opacity is a
+percentage. Short allocations reduce the track before the value editor.
+Tool, document and workspace changes cancel unfinished text. Numeric edits do not create workspace-layout history entries.
 
 ## Contextual options
 
@@ -42,11 +43,14 @@ remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
 
 Horizontal numeric fields include inline sliders and editable values. Vertical
-options stack icon choices, compact value buttons with full numeric popovers,
-and action buttons. GTK supplies natural sizes and theme spacing; Rust fits
-complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete
-tool/variant and settings drawer, including actions that did not fit. Multiple
-horizontal Tool Options components share remaining space in their lane. Wrapped components stay
+options stack icon choices and editable icon/value boxes. Labeled tile styles
+put the icon beside the label and value; the other styles stack icon and value.
+Actions use the surrounding toolbar’s tile dimensions, centered beside the
+shorter form fields. GTK supplies natural sizes and theme spacing; Rust fits
+complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
+including actions that did not fit. The drawer aligns to its right edge with a
+small gap and rounded corners. Multiple
+horizontal Tool Options components share remaining space in their lane. Vertical components shrink before moving to another column. Components stay
 atomic; child fields are never independent drop destinations.
 
 ## Ownership and implementation
@@ -60,16 +64,19 @@ atomic; child fields are never independent drop destinations.
   document generation. Switching away and back cannot revive an obsolete edit.
   Existing action validation and document/workspace history remain authoritative.
 - GTK `toolbar_components.rs` owns retained native widgets, measurement, focus,
-  pointer capture and popovers. Both normal toolbars and nested drawer toolbars
+  pointer capture and native dropdowns. Both normal toolbars and nested drawer toolbars
   use the same typed `TileWidget` builder and refresh path. The existing numeric
   editor supplies parsing and keyboard behavior.
 - Numeric values, native measurements and overflow visibility are not saved in
-  toolbar configuration. Only typed component kinds and ordinary tile IDs persist.
+  toolbar configuration. Typed component kinds, horizontal text/icon mode, slider visibility, and ordinary
+  tile IDs persist. Preferences participate in workspace undo/redo.
 
 Slider tracks and option controls respond immediately to mouse, touch and pen.
-Press, hold, then drag the slider icon/value cap or the options More button to
+Press, hold, then drag the slider value cap or the options More button to
 reorder the component. A quick cap drag never reorders. Holding a track remains
-a numeric interaction. Disabled controls retain a draggable cap wrapper.
+a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
+empty Tool Options space opens its display menu; secondary click works too.
+This empty space is not a draggable tile body. Vertical options always use icons.
 
 ## Validation
 
@@ -88,7 +95,9 @@ GTK native-input regressions run through
 - `--native-test=native_toolbar_components_narrow_input` with
   `LAYER_MOTION_VIEWPORT=680x500`: overflow and full options at small widths.
 - `--native-test=native_toolbar_components_drawer_input`: retained toolbar
-  drawer sliders, exact-value popup, and cleanup on close.
+  drawer sliders, inline exact values, and cleanup on close.
+- `--native-test=native_toolbar_options_presentation_input`: display preferences,
+  tile action dimensions, dropdown alignment, and four-digit values in every style.
 
 Use the release test executable through `LAYER_NATIVE_TEST_EXECUTABLE` when
 iterating. The tablet proxy exercises GDK pen input, not physical tablet hardware;

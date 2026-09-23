@@ -89,7 +89,7 @@ mod imp {
             };
             for (child, bounds) in children.iter().zip(layout.tiles) {
                 if let Some(component) = child.downcast_ref::<crate::workspace::toolbar_components::ComponentBody>() {
-                    component.set_axis(axis);
+                    component.set_presentation(axis, self.style.get());
                 }
                 allocate(child, bounds);
             }

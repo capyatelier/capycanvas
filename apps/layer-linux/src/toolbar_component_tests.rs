@@ -96,6 +96,26 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
             );
             assert!(d.w.workspace_drag.borrow().is_none());
         }
+        d.w.dispatch(UiAction::SetBrushSize { value: 20. });
+        pump(80);
+        let value = d.named(&format!("tile-{size}"));
+        let a = d.point(&value);
+        drag(d, device, a, [a[0], a[1] - 40.], false);
+        assert_eq!(state(&d.w).workspace, initial);
+        if device == "mouse" {
+            assert_eq!(state(&d.w).brush.diameter, 20.);
+        } else {
+            assert!(
+                state(&d.w).brush.diameter > 20.,
+                "{device}: scrub the number upward"
+            );
+        }
+        assert!(
+            !find_css(&d.named(&format!("component-value-{size}")), "number-entry")
+                .unwrap()
+                .is_mapped(),
+            "drag is not a text-entry click"
+        );
         // The value cap requires a hold with all three devices.
         let before = state(&d.w).workspace;
         let handle = d.named(&format!("tile-{opacity}"));
@@ -141,32 +161,18 @@ fn native_toolbar_components_input() {
         let size = component_id(&d, ToolbarControl::BrushSizeSlider);
         slider_gestures(&mut d, &["mouse", "touch"]);
         // Exact entry uses the same expression/clamping policy as panel controls.
-        let value = d.named(&format!("tile-{size}"));
-        d.click(&value);
-        let root = value
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .downcast::<crate::workspace::toolbar_components::ComponentBody>()
-            .unwrap();
-        let p = root.imp().popover.borrow().as_ref().unwrap().clone();
-        let number = p.child().unwrap();
-        assert!(number.is_mapped(), "exact-value popup opens on click");
+        let number = d.named(&format!("component-value-{size}"));
         d.number(&number, "85/2");
-        assert_eq!(state(&d.w).brush.diameter, 42.5);
+        assert_eq!(state(&d.w).brush.diameter, 43.);
         d.number(&number, "0");
         assert_eq!(state(&d.w).brush.diameter, 0.5);
         d.number(&number, "24");
         d.number(&number, "1/0");
-        assert_eq!(state(&d.w).brush.diameter, 24.);
         assert!(number.has_css_class("error"));
-        d.key(0xff1b); // Cancel invalid text, then dismiss the popup.
         d.key(0xff1b);
         d.capture_canvas(&format!("sketch-{theme:?}.png"));
 
         // A tool change cancels an in-flight expression before focus leaves.
-        d.click(&value);
         d.click(&find_css(&number, "number-value").unwrap());
         find_css(&number, "number-entry")
             .unwrap()
@@ -177,7 +183,7 @@ fn native_toolbar_components_input() {
             command: CommandId::Eraser,
         });
         pump(150);
-        assert!(!p.is_visible());
+        assert!(!find_css(&number, "number-entry").unwrap().is_mapped());
         assert_ne!(state(&d.w).brush.diameter, 517.6);
         d.w.dispatch(UiAction::Invoke {
             command: CommandId::Brush,
@@ -215,7 +221,18 @@ fn native_toolbar_components_input() {
             d.w.dispatch(UiAction::SetBrushSize { value: 2047.9 });
             pump(80);
             let cap = d.named(&format!("tile-{size}"));
-            let readout = descendant::<gtk::Label>(&cap).unwrap();
+            let readout = cap
+                .clone()
+                .downcast::<gtk::Button>()
+                .unwrap()
+                .child()
+                .unwrap()
+                .last_child()
+                .unwrap()
+                .last_child()
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap();
             assert!(
                 readout.layout().pixel_size().0 <= readout.width(),
                 "full six-character slider value at {style:?}"
@@ -242,7 +259,7 @@ fn native_toolbar_components_input() {
         d.capture_canvas(&format!("floating-sliders-{theme:?}.png"));
 
         restore(&d, WorkspacePreset::Photographer);
-        let options = component_id(&d, ToolbarControl::ToolOptions);
+        let options = component_id(&d, ToolbarControl::TOOL_OPTIONS);
         let top = state(&d.w).workspace.layout.workspace(
             d.w.surface.width() as f32,
             d.w.surface.height() as f32,
@@ -420,17 +437,11 @@ fn native_toolbar_components_input() {
             viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32],
         });
         pump(200);
-        assert!(!d.named("toolbar-setting-size").is_mapped());
+        assert!(d.named("toolbar-setting-size").is_mapped());
         assert!(d.named("toolbar-choice-tool").is_mapped());
-        assert!(d.named("toolbar-value-size").is_mapped());
-        d.click_name("toolbar-value-size");
-        let menu = d
-            .named("toolbar-value-size")
-            .downcast::<gtk::MenuButton>()
-            .unwrap();
-        d.number(&menu.popover().unwrap().child().unwrap(), "51");
+        let number = d.named("toolbar-setting-size");
+        d.number(&number, "51");
         assert_eq!(state(&d.w).brush.diameter, 51.);
-        d.key(0xff1b);
         d.capture_canvas(&format!("vertical-options-{theme:?}.png"));
         d.click_name(&format!("tile-{options}"));
         assert!(state(&d.w).customization.drawer.is_some());
@@ -463,7 +474,7 @@ fn native_toolbar_components_narrow_input() {
         command: CommandId::Fill,
     });
     pump(200);
-    let options = component_id(&d, ToolbarControl::ToolOptions);
+    let options = component_id(&d, ToolbarControl::TOOL_OPTIONS);
     assert!(d.named(&format!("tile-{options}")).is_mapped());
     assert!(
         !d.named("toolbar-setting-tolerance").is_mapped(),
@@ -550,22 +561,11 @@ fn native_toolbar_components_drawer_input() {
         assert!(state(&d.w).brush.diameter > 4.);
         assert!(d.w.workspace_drag.borrow().is_none());
     }
-    let value = find_named(&body, &format!("tile-{size}")).unwrap();
-    d.click(&value);
-    let root = value
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .downcast::<crate::workspace::toolbar_components::ComponentBody>()
-        .unwrap();
-    let popup = root.imp().popover.borrow().as_ref().unwrap().clone();
-    d.number(&popup.child().unwrap(), "33");
+    let number = find_named(&body, &format!("component-value-{size}")).unwrap();
+    d.number(&number, "33");
     assert_eq!(state(&d.w).brush.diameter, 33.);
-    d.key(0xff1b);
     d.click_name(&format!("column-icon-{:?}", brush_panel(&d)));
     assert!(state(&d.w).customization.column_drawers.is_empty());
-    assert!(!popup.is_visible());
     d.finish();
 }
 
@@ -596,4 +596,137 @@ fn descendant<T: IsA<gtk::Widget> + glib::object::IsClass>(root: &gtk::Widget) -
         child = widget.next_sibling();
     }
     None
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_options_presentation_input"]
+fn native_toolbar_options_presentation_input() {
+    let mut d = Driver::new("art.capycanvas.OptionsPresentation");
+    restore(&d, WorkspacePreset::Photographer);
+    let options = component_id(&d, ToolbarControl::TOOL_OPTIONS);
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::Ruler,
+    });
+    pump(150);
+    for command in [CommandId::ShowRulers, CommandId::SnapRulers] {
+        let tile = d.named(&format!("toolbar-action-{command:?}"));
+        assert_eq!(
+            [tile.width(), tile.height()],
+            [36, 36],
+            "action uses toolbar tile dimensions"
+        );
+    }
+    d.capture_canvas("options-action-tiles.png");
+    let more = d.named(&format!("tile-{options}"));
+    let root = more.parent().unwrap().parent().unwrap();
+    let b = root.compute_bounds(&d.w.window).unwrap();
+    let a = [b.x() + b.width() - 100., b.y() + b.height() / 2.];
+    d.perform(serde_json::json!([{ "point": a, "down": true },{"wait_ms":800},{"down":false}]));
+    let menu =
+        d.w.popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .find(|p| p.has_css_class("panel-context-menu") && p.is_visible())
+            .expect("empty-space mouse hold opens display preferences");
+    menu.activate_action("context.item-0-1", None).unwrap();
+    pump(120);
+    let config = state(&d.w)
+        .workspace
+        .layout
+        .panel(Panel::Commands)
+        .unwrap()
+        .clone();
+    assert!(
+        !config
+            .tiles()
+            .iter()
+            .find(|t| t.id == options)
+            .unwrap()
+            .control
+            .options_style()
+            .unwrap()
+            .text
+    );
+    d.w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetToolOptionsStyle {
+            panel: Panel::Commands,
+            tile: options,
+            style: ToolOptionsStyle {
+                text: false,
+                sliders: false,
+            },
+        },
+    });
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::Brush,
+    });
+    pump(150);
+    assert!(
+        !descendant::<gtk::Scale>(&d.named("toolbar-setting-size"))
+            .unwrap()
+            .is_mapped()
+    );
+    d.capture_canvas("options-icon-values.png");
+    d.w.dispatch(UiAction::MovePanel {
+        panel: Panel::Commands,
+        target: DockTarget::Edge {
+            edge: Edge::Left,
+            outer: false,
+        },
+        viewport: [1600., 1000.],
+    });
+    for style in [
+        TileStyle::Small,
+        TileStyle::Medium,
+        TileStyle::Large,
+        TileStyle::MediumLabeled,
+        TileStyle::Labeled,
+    ] {
+        d.w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetTileStyle {
+                panel: Panel::Commands,
+                style,
+            },
+        });
+        d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
+        pump(150);
+        let number = d.named("toolbar-setting-size");
+        assert!(number.is_mapped(), "size visible at {style:?}");
+        let button = find_css(&number, "number-value").unwrap();
+        assert!(
+            (button.compute_bounds(&number).unwrap().width() - style.size()[0]).abs() < 1.,
+            "value box fills {style:?} column"
+        );
+        let image = descendant::<gtk::Image>(&button).unwrap();
+        assert!(image.is_mapped());
+        let label = button
+            .first_child()
+            .unwrap()
+            .last_child()
+            .unwrap()
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        assert_eq!(label.text(), "2048");
+        assert!(
+            label.layout().pixel_size().0 <= label.width(),
+            "four digits fit {style:?}"
+        );
+        let choice = d.named("toolbar-choice-tool");
+        let image = descendant::<gtk::Image>(&choice).unwrap();
+        let b = image.compute_bounds(&choice).unwrap();
+        if matches!(
+            style,
+            TileStyle::Small | TileStyle::Medium | TileStyle::Large
+        ) {
+            assert!(
+                (b.x() + b.width() / 2. - choice.width() as f32 / 2.).abs() < 2.,
+                "centered dropdown icon {style:?}"
+            );
+        }
+        d.capture_canvas(&format!("options-{style:?}.png"));
+    }
+    d.finish();
 }

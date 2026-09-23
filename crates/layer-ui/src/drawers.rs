@@ -86,6 +86,9 @@ pub struct DrawerPlacement {
     pub bounds: Bounds,
     pub anchor: Bounds,
     pub direction: Edge,
+    /// A separated options drawer keeps all corners rounded and has no bridge.
+    #[serde(default)]
+    pub detached: bool,
     /// Column bounds are local to the drawer; scroll overflow within each one.
     pub columns: Vec<Bounds>,
 }
@@ -109,6 +112,7 @@ impl DrawerPlacement {
     /// Ancestor clipping must not round off a tile's connected corners.
     /// Only flatten container corners actually reached by the originating tile.
     pub fn source_corners(&self, container: Bounds) -> [bool; 4] {
+        if self.detached { return [false; 4]; }
         let a = self.anchor;
         let b = container;
         let facing = match self.direction {
@@ -132,6 +136,7 @@ impl DrawerPlacement {
         })
     }
     pub fn connection(&self) -> Option<DrawerConnection> {
+        if self.detached { return None; }
         let a = self.anchor;
         let b = self.bounds;
         let vertical = matches!(self.direction, Edge::Top | Edge::Bottom);
@@ -314,7 +319,7 @@ impl ToolbarControl {
             Self::Color => Some(vec![vec![Panel::Color]]),
             Self::Opacity => Some(vec![vec![Panel::ToolSettings]]),
             Self::BrushSizeSlider | Self::BrushOpacitySlider => Some(vec![vec![Panel::ToolSettings]]),
-            Self::ToolOptions => Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]),
+            Self::ToolOptions { .. } => Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]),
             Self::Panel { panel: Panel::Adjustments } => Some(vec![vec![Panel::FilterTypes], vec![Panel::Adjustments], vec![Panel::Properties]]),
             Self::Panel { panel } => Some(vec![vec![panel]]),
             _ => None,
@@ -426,7 +431,7 @@ impl ContentDrawer {
             return None;
         }
         let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
-        let (anchor, edge, axis) = if let DrawerAnchor::Header { id } = self.anchor {
+        let (mut anchor, edge, axis) = if let DrawerAnchor::Header { id } = self.anchor {
             layout.header.entry(id).ok()?;
             let anchor = layout
                 .header_presentation
@@ -480,6 +485,22 @@ impl ContentDrawer {
             .intersection(group.bounds);
             (normal_anchor?, layout.group_edge(group.id), group.axis)
         };
+        let options = self.anchor.tile().and_then(|a| {
+            let panel = layout.panel(a.panel).ok()?;
+            panel.tiles().iter().find(|t| t.id == a.tile)?.control.options_style()?;
+            Some(panel.tile_style.size())
+        });
+        if let Some([w, h]) = options {
+            if axis == Axis::Horizontal {
+                let width = w.min(anchor.width);
+                anchor.x += anchor.width - width;
+                anchor.width = width;
+            } else {
+                let height = h.min(anchor.height);
+                anchor.y += anchor.height - height;
+                anchor.height = height;
+            }
+        }
         let top = layout.header_presentation.height.max(HEADER_HEIGHT);
         let available = Bounds {
             x: WORKSPACE_SPACING,
@@ -521,16 +542,17 @@ impl ContentDrawer {
         };
         width = width.min(room.max(1.0));
         let height = heights.iter().copied().fold(TILE_SIZE, f32::max);
+        let horizontal_x = if options.is_some() { anchor.x + anchor.width - width } else { anchor.x };
         let (x, y, height) = match direction {
             Edge::Bottom => {
                 let y = (anchor.y + anchor.height + WORKSPACE_SPACING)
                     .min(available.y + available.height - 1.0);
-                (anchor.x, y, height.min(available.y + available.height - y))
+                (horizontal_x, y, height.min(available.y + available.height - y))
             }
             Edge::Top => {
                 let bottom = (anchor.y - WORKSPACE_SPACING).max(available.y + 1.0);
                 let height = 800.0_f32.min(available.height).min(bottom - available.y);
-                (anchor.x, bottom - height, height)
+                (horizontal_x, bottom - height, height)
             }
             Edge::Left | Edge::Right => {
                 let y = (anchor.y - 500.0).max(available.y);
@@ -573,6 +595,7 @@ impl ContentDrawer {
             bounds,
             anchor,
             direction,
+            detached: options.is_some(),
             columns,
         })
     }
@@ -870,6 +893,7 @@ mod tests {
                     bounds,
                     anchor,
                     direction,
+                    detached: false,
                     columns: vec![],
                 };
                 let facing = match direction {
