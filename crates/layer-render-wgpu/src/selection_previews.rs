@@ -323,7 +323,8 @@ impl WgpuRasterizer {
         self.selection_previews = previews;
         result
     }
-    pub(super) fn prepare_selection_thumbnail(
+    /// Poll cold mask preview pipelines without blocking the host UI thread.
+    pub fn prepare_selection_thumbnail(
         &mut self,
         id: LayerId,
     ) -> Result<bool, GpuRasterError> {

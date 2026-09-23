@@ -13,6 +13,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         strip.dataset.axis, strip.dataset.standalone === "true"));
     }
   });
+  const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   let anchor = [320, 120], expanded = null, animation = 0, popupControl = null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
@@ -157,10 +158,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         range(() => state().layers.find((l) => l.selected).opacity,
           (opacity) => ({ type: "set_layer_opacity", opacity })); break;
       case "brush_color": {
-        const selectedSlot=()=>state().colors.slot==="background"?"background":"foreground";
+        const selectedSlot=()=>displayColors().slot==="background"?"background":"foreground";
         const picker=colorButton({app,label:"Edit Color…",element,button,current:selectedSlot,
           change:color=>dispatch({type:"color",action:{op:"set_slot",slot:selectedSlot(),color}})});
-        input=picker.node;sync=()=>picker.update(state().colors[selectedSlot()]);row.append(input);break;
+        input=picker.node;sync=()=>picker.update(displayColors()[selectedSlot()]);row.append(input);break;
       }
       case "brushes":
       case "layers": {

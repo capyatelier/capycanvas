@@ -58,6 +58,9 @@ mod painted_selection_checks {
         reply(&mut s, 0x80808080);
         s.frame(3, 3).unwrap();
         assert!(s.state.layer_tools.quick_mask);
+        assert!(s.state.layer_properties.controls.is_empty());
+        assert!(!s.state.layer_tools.controls.opacity);
+        assert!(s.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).is_err());
         let epoch = s.state.document_file.epoch;
         let revision = s.engine.document().revision;
         assert!(

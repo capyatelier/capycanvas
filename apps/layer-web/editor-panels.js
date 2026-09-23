@@ -1,9 +1,10 @@
 import { chooseColor } from './color-controls.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
+export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
+  const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind) => {
@@ -70,6 +71,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
           node.dataset.toolAction=spec.command;
           (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node]);
         }
+        if(s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton("Selection Actions…","selection"));
         contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
@@ -88,8 +90,8 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
   function colorWheel(root) {
     const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
     const edit=button("",async()=>{
-      const slot=state().colors.slot==="background"?"background":"foreground";
-      let intensity;const selected=await chooseColor({app,color:state().colors[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
+      const slot=displayColors().slot==="background"?"background":"foreground";
+      let intensity;const selected=await chooseColor({app,color:displayColors()[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
       if(selected)color(intensity==null?{op:"set_slot",slot,color:selected}:{op:"set_slot_intensity",slot,color:selected,stops:intensity});
     },"color-edit color-utility");
     edit.title="Edit Color…";edit.setAttribute("aria-label","Edit Color");edit.append(icon("pencil"));stage.append(edit);
@@ -112,7 +114,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     marker.setAttribute('fill','white');marker.setAttribute('stroke','white');marker.setAttribute('stroke-width','2');arc.append(track,markerShadow,marker,caption);stage.append(arc);
     let arcContact=null,originalIntensity=0;
     const arcPick=e=>{const r=stage.getBoundingClientRect();const hit=app.color_ui({type:'arc',size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});color({op:'hdr_intensity',stops:-2+8*hit.fraction});};
-    track.onpointerdown=e=>{if(e.button!==0||state().colors.slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
+    track.onpointerdown=e=>{if(e.button!==0||displayColors().slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
     for(const event of ['pointercancel','lostpointercapture'])track.addEventListener(event,e=>{if(e.pointerId===arcContact){arcContact=null;color({op:'hdr_intensity',stops:originalIntensity});}});
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
@@ -215,7 +217,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     root.navigatorDispose=()=>{resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       view=app.color_panel();
-      edit.disabled=state().colors.slot==="transparent";
+      edit.disabled=displayColors().slot==="transparent";
       choices.forEach(choice=>{
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}

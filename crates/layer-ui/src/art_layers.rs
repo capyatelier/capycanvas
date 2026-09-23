@@ -727,9 +727,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         opacity: f32,
     ) -> Result<(), String> {
         NumericControl::percent().validate(opacity, "Opacity")?;
+        if id.is_none() && self.selection_masks.quick() {
+            return Err("Return to artwork before changing layer opacity".into());
+        }
         let id = id
             .map(LayerId)
             .unwrap_or(self.engine.document().active_layer);
+        if self.engine.document().layer(id).is_some_and(|l| l.kind == LayerKind::Selection) {
+            return Err("Selection layers have coverage, not artwork opacity".into());
+        }
         if self.engine.document().is_locked(id) {
             return Err("This layer is locked".into());
         }

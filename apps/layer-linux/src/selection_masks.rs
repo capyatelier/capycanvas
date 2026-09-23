@@ -4,12 +4,7 @@ use gtk::{glib, prelude::*};
 use layer_ui::{CommandId, NumericControl, UiAction, UiState};
 use std::{cell::Cell, rc::Rc};
 
-#[derive(Clone, Copy)]
-pub enum Menu {
-    Selection,
-    QuickMask,
-    Overlay,
-}
+pub use layer_ui::SelectionMenu as Menu;
 pub fn menu_button(w: &Rc<Workspace>, label: &str, kind: Menu) -> gtk::MenuButton {
     let button = gtk::MenuButton::new();
     button.set_label(label);
@@ -21,13 +16,7 @@ pub fn menu_button(w: &Rc<Workspace>, label: &str, kind: Menu) -> gtk::MenuButto
         #[weak]
         w,
         move |popover| {
-            let model = w.gpu.borrow().as_ref().map(|g| match kind {
-                Menu::Selection => g
-                    .session
-                    .application_menu(layer_ui::ApplicationMenu::Select),
-                Menu::QuickMask => g.session.quick_mask_menu(),
-                Menu::Overlay => g.session.selection_overlay_menu(),
-            });
+            let model = w.gpu.borrow().as_ref().map(|g|g.session.selection_menu(kind));
             if let Some(model) = model {
                 w.populate_workspace_menu(popover, model);
             }
@@ -167,8 +156,11 @@ impl QuickMaskRow {
                 command: CommandId::MaskOverlay
             })
         ));
-        self.root
-            .append(&menu_button(w, "Actions", Menu::QuickMask));
+        let actions = menu_button(w, "Quick Mask actions", Menu::QuickMask);
+        actions.set_child(Some(&crate::icons::image("layer-more-symbolic")));
+        actions.set_size_request(44, 44);
+        actions.set_tooltip_text(Some("Quick Mask actions"));
+        self.root.append(&actions);
     }
     pub fn refresh(&self, state: &UiState) {
         self.root.set_visible(state.layer_tools.quick_mask);

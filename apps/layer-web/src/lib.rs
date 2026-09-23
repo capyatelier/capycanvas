@@ -337,6 +337,9 @@ impl WebApp {
             .settings
             .action_tooltip(label, &action, state.platform))
     }
+    pub fn selection_menu(&self, kind: JsValue) -> Result<JsValue, JsValue> {
+        serialize(&self.session.selection_menu(serde_wasm_bindgen::from_value(kind).map_err(js)?))
+    }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
@@ -345,6 +348,10 @@ impl WebApp {
             return Ok(false);
         }
         self.prepare_ui_previews()?;
+        if !self.session.renderer_mut().renderer().map_err(js)?
+            .prepare_selection_thumbnail(layer_core::LayerId(target)).map_err(js)? {
+            return Ok(false);
+        }
         self.session
             .renderer_mut()
             .request_thumbnail(request, layer_core::LayerId(target))

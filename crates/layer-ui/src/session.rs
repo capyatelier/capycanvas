@@ -25,7 +25,7 @@ mod painted_selections;
 pub use painted_selections::SelectionBrushOptions;
 #[path = "selection_masks.rs"]
 mod selection_masks;
-pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView};
+pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
 #[path = "region_tools.rs"]
 mod region_tools;
 #[path = "rulers.rs"]
@@ -4625,6 +4625,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .layer(doc.active_layer)
             .map(|l| art_layers::LayerControls::for_layer(doc, l))
             .unwrap_or_default();
+        if self.selection_masks.quick() {
+            self.state.layer_tools.controls = LayerControls::default();
+            self.state.layer_properties = LayerPropertiesView {
+                title: "Quick Mask".into(),
+                description: "Temporary selection coverage. Black protects; white selects.".into(),
+                ..Default::default()
+            };
+        }
         self.state.layers = doc
             .ordered_layers()
             .into_iter()

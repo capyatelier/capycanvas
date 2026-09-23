@@ -409,6 +409,8 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
             }
         }
         effect.program.label.to_string()
+    } else if layer.kind == LayerKind::Selection {
+        "Stored selection coverage. Load a copy to restrict artwork edits.".into()
     } else if layer.kind == LayerKind::Background {
         controls.push(PropertyControl {
             plot: Vec::new(), key: "paper_color".into(), label: "Paper color".into(),

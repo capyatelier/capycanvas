@@ -3,6 +3,7 @@
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
+  const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
   const title = documents.title;
@@ -155,7 +156,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function refresh() {
     view=app.header_view();
-    const nextKey=JSON.stringify([view,state().theme,state().commands,state().colors.foreground,state().colors.background,state().workspace.layout.canvas_info.visible]);
+    const nextKey=JSON.stringify([view,state().theme,state().commands,displayColors().foreground,displayColors().background,state().workspace.layout.canvas_info.visible]);
     if(nextKey===refreshKey)return;
     refreshKey=nextKey;
     size=view.sizes.find(s=>s.id===view.model.size);
@@ -181,7 +182,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     }
     root.dataset.size=size.id;
     const cssColor=rgba=>`rgb(${rgba.slice(0,3).map(v=>Math.round(v*255)).join(' ')} / ${rgba[3]})`;
-    const colors=[state().colors.foreground,state().colors.background], nextColors=JSON.stringify(colors);
+    const colors=[displayColors().foreground,displayColors().background], nextColors=JSON.stringify(colors);
     if(nextColors!==colorKey){colorKey=nextColors;const previews=app.color_ui({type:"preview",colors});
       root.style.setProperty('--header-foreground',cssColor(previews[0].rgba));
       root.style.setProperty('--header-background',cssColor(previews[1].rgba));

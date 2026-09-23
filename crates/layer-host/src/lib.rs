@@ -681,6 +681,7 @@ impl NativeHost {
                 label: String,
                 action: UiAction,
             },
+            SelectionMenu {kind:layer_ui::SelectionMenu},
             LayerMenu {
                 id: u64,
                 mask: bool,
@@ -800,6 +801,7 @@ impl NativeHost {
                 )
             }
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
+            Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerDrop {
                 epoch,

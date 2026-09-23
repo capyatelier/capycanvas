@@ -1,7 +1,7 @@
 # Selection command inventory
 
-Date: 2026-09-23. Status: shared actions and GTK Core integration implemented;
-Web/Android presentation and device validation in progress. Next/Later remain
+Date: 2026-09-23. Status: shared actions and GTK/Web Core integration implemented;
+Android presentation and device validation in progress. Next/Later remain
 separate work.
 Companion to the [paintable-selection specification](paintable-selection-proposal.md)
 and [Selection Layer design](saved-selections-assessment.md).

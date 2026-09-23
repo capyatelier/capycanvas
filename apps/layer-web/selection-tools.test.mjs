@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
+import {checkPaintableSelections} from './selection-masks.test.mjs';
 
 // Run on the dedicated test origin: canvas contacts exercise the real GPU queue.
 export async function checkSelectionTools({call, evaluate, settle}) {
@@ -14,6 +15,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await wait('!JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
     await settle();
   };
+  await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
+  await evaluate('navigator.wakeLock?.request("screen").then(lock=>{window.selectionTestWake=lock}).catch(()=>{})');
   const original = await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   const theme = await evaluate('layerApp.state().settings.theme ?? null');
   await workspace({type:'switch',id:'builtin:workspace:painter'});
@@ -38,12 +41,13 @@ export async function checkSelectionTools({call, evaluate, settle}) {
   const mode = id => `.content-drawer [data-tool-action="${id}"]`;
   const selected = id => evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(id)}).selected`);
   const modes = ['selection_new','selection_add','selection_subtract','selection_intersect'];
-  const tools = ['rectangle_select','ellipse_select','lasso','polygon_select','auto_select','color_select'];
+  const tools = ['rectangle_select','ellipse_select','lasso','polygon_select','auto_select','color_select','selection_brush'];
   try {
     await invoke('select'); await contact(header('select'));
+    if(!await evaluate('!!layerApp.state().customization.drawer'))await contact(header('select'));
     assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
     const choices = await evaluate('layerApp.state().tool_set.subtools');
-    assert.equal(choices.length,6);
+    assert.equal(choices.length,7);
     await evaluate('window.selectionDrawer=document.querySelector(".content-drawer")');
     for (const [i, choice] of choices.entries()) {
       const selector = `.content-drawer [data-tool-choice="${choice.label}"]`;
@@ -51,18 +55,18 @@ export async function checkSelectionTools({call, evaluate, settle}) {
       await contact(selector,['mouse','touch','pen'][i%3]);
       assert.ok(await evaluate('selectionDrawer===document.querySelector(".content-drawer")'));
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(header('select'))}).querySelector('svg').dataset.asset`),choice.icon);
-      for(const id of modes) {
+      const brush=choice.icon==='selection-brush';
+      for(const id of brush?['selection_add','selection_subtract']:modes) {
         await contact(mode(id),['mouse','touch','pen'][i%3]);
         assert.ok(await selected(id));
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(mode(id))}).textContent.trim()`),'');
       }
-      assert.ok(await evaluate('!!document.querySelector("[data-tool-setting=selection_feather]")'));
-      assert.ok(await evaluate('!!document.querySelector("[data-tool-action=selection_antialias]")'));
+      assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${brush?'selection_brush_size':'selection_feather'}]')`));
+      if(!brush)assert.ok(await evaluate('!!document.querySelector("[data-tool-action=selection_antialias]")'));
       const tops=await evaluate('[...document.querySelectorAll(".selection-modes button")].map(n=>n.getBoundingClientRect().top)');
       assert.ok(tops.every(y=>Math.abs(y-tops[0])<1),'Modes fit one row');
     }
-    await contact(mode('selection_new'));
-    await invoke('rectangle_select'); await contact(mode('selection_fixed_size'));
+    await invoke('rectangle_select'); await contact(mode('selection_new')); await contact(mode('selection_fixed_size'));
     for(const id of ['selection_width','selection_height']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
     await contact(mode('selection_fixed_size'));
     await invoke('color_select');
@@ -84,6 +88,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     for(const command of tools) {
       if(await evaluate('layerApp.state().layer_tools.has_selection')) await invoke('deselect');
       await invoke(command);
+      if(command==='selection_brush')await invoke('selection_add');
       await point(at(-60,-50));
       if(command==='polygon_select') {
         await point(at(-60,-50),'pen','mouseReleased');
@@ -100,12 +105,13 @@ export async function checkSelectionTools({call, evaluate, settle}) {
       await invoke('redo'); assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),true);
     }
     await invoke('deselect');
+    await checkPaintableSelections({call,evaluate,settle,send,invoke,point,at});
     await workspace({type:'switch',id:'builtin:workspace:photographer'});
     const commands=await evaluate('layerApp.state().commands');
     assert.ok(tools.every(id=>commands.some(c=>c.id===id)));
     const layout=await evaluate('JSON.stringify(layerApp.state().workspace.layout)');
-    for(const id of tools) assert.ok(layout.includes(`"${id}"`),`Photo toolbar ${id}`);
-    console.log('PASS selection drawers, six tools/options, mode icons, mouse/touch/pen, remembered icon, GPU gestures, undo/redo, Photo defaults');
+    for(const id of tools.filter(id=>id!=='selection_brush')) assert.ok(layout.includes(`"${id}"`),`Photo toolbar ${id}`);
+    console.log('PASS selection drawers, seven tools/options, mode icons, mouse/touch/pen, remembered icon, GPU gestures, undo/redo, Photo defaults');
   } catch(error) {
     await mkdir('artifacts/selection-web',{recursive:true});
     const shot=await call('Page.captureScreenshot',{format:'png'});
@@ -118,6 +124,6 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await workspace({type:'switch',id:original});
     await workspace({type:'form',kind:'delete',id:created});
     await workspace({type:'submit',name:''});
-    await evaluate('delete window.selectionDrawer');
+    await evaluate('delete window.selectionDrawer;window.selectionTestWake?.release();delete window.selectionTestWake');
   }
 }

@@ -4,6 +4,14 @@ use super::*;
 use layer_core::{Edit, Layer, Selection, SelectionTarget};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionMenu {
+    Selection,
+    QuickMask,
+    Overlay,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionDisplayOptions {
@@ -103,6 +111,8 @@ impl Default for SelectionMasks {
         let mut colors = ColorState::default();
         colors.foreground = layer_core::color::RgbColor::BLACK;
         colors.background = layer_core::color::RgbColor::WHITE;
+        colors.set_document_depth(layer_core::color::SampleDepth::U8)
+            .expect("scalar mask color depth");
         Self {
             editing: None,
             reselect: None,
@@ -157,6 +167,14 @@ impl SelectionMasks {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn selection_menu(&self, kind: SelectionMenu) -> ContextMenu {
+        match kind {
+            SelectionMenu::Selection => self.application_menu(ApplicationMenu::Select),
+            SelectionMenu::QuickMask => self.quick_mask_menu(),
+            SelectionMenu::Overlay => self.selection_overlay_menu(),
+        }
+    }
+
     fn selection_command_item(&self, command: CommandId) -> ContextMenuItem {
         let state = self.command(command);
         let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
