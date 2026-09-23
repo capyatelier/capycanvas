@@ -51,6 +51,16 @@ class HistoryMetricTests(unittest.TestCase):
         r,s=paired_oscillations(a,b,c)
         self.assertEqual(r[0],r[1])
 
+    def test_tail_disappearing_and_returning_is_counted_as_oscillation(self):
+        frames,contacts=self.fixture([(0,0)]*3,16000)
+        middle=frames[1]
+        middle['target_us']=middle['latest_us']
+        middle['curve']=middle['curve'][:1]
+        middle['source']='Real'
+        _,signals=paired_oscillations(frames,frames,contacts)
+        self.assertAlmostEqual(signals[0]['tip'][2],8.)
+        self.assertGreater(signals[0]['body'][2],0.)
+
     def test_contact_boundaries_and_long_gaps_never_form_oscillations(self):
         a,c=self.fixture([(0,2),(0,-2),(0,2)])
         a[-1]['contact']=2;c[2]=c[1]
@@ -72,6 +82,25 @@ class HistoryMetricTests(unittest.TestCase):
 
 
 class CorrectionSmoothnessTests(unittest.TestCase):
+    def test_short_preview_correction_remains_scored_after_becoming_real_ink(self):
+        from history_metrics import paired_correction_smoothness
+        frames,contacts=HistoryMetricTests().fixture([(0,3),(0,0),(0,0)],8000)
+        frames.append({**frames[-1], 'query':3, 'frame_us':64000})
+        result,signals=paired_correction_smoothness(frames,frames,contacts)
+        self.assertGreater(signals[0]['tip'][2],0.)
+        self.assertGreater(signals[0]['body'][2],0.)
+        self.assertGreater(result[0]['ordinary']['tip']['eligible_seconds'],0.)
+        self.assertEqual(result[0],result[1])
+
+    def test_accurate_short_preview_settlement_has_no_correction(self):
+        from history_metrics import paired_correction_smoothness
+        frames,contacts=HistoryMetricTests().fixture([(0,0)]*3,8000)
+        frames.append({**frames[-1], 'query':3, 'frame_us':64000})
+        result,signals=paired_correction_smoothness(frames,frames,contacts)
+        self.assertAlmostEqual(signals[0]['tip'][2],0.)
+        self.assertAlmostEqual(signals[0]['body'][2],0.)
+        self.assertGreater(result[0]['ordinary']['tip']['eligible_seconds'],0.)
+
     def test_uniform_correction_is_smooth_even_away_from_truth(self):
         from history_metrics import correction_shock
         a=np.array([[0.,0.],[4.,4.]])

@@ -6,27 +6,27 @@
   "platform": "gtk",
   "raw_input": true,
   "correction_stability": {
-    "version": 4,
+    "version": 5,
     "metrics": {
       "ordinary correction tip": {
-        "mean": 1.99001127759427,
-        "eligible_seconds": 27.726517,
-        "ge0.5_seconds": 22.597707,
-        "ge1_seconds": 16.468103,
-        "ge2_seconds": 9.103148000000001,
-        "ge4_seconds": 3.2203850000000003,
-        "ge8_seconds": 0.7590530000000002,
-        "ge16_seconds": 0.075092
+        "mean": 2.633029080892655,
+        "eligible_seconds": 60.89531000000001,
+        "ge0.5_seconds": 45.99016400000001,
+        "ge1_seconds": 35.473348,
+        "ge2_seconds": 23.092702000000003,
+        "ge4_seconds": 11.444085000000001,
+        "ge8_seconds": 3.729763,
+        "ge16_seconds": 0.8589190000000002
       },
       "oscillation tip": {
-        "mean": 0.05115388513149,
-        "eligible_seconds": 52.430178000000005,
-        "ge0.5_seconds": 2.2685,
-        "ge1_seconds": 1.209072,
-        "ge2_seconds": 0.6089620000000001,
-        "ge4_seconds": 0.133469,
-        "ge8_seconds": 0.0,
-        "ge16_seconds": 0.0
+        "mean": 0.13271921117955307,
+        "eligible_seconds": 79.34786199999999,
+        "ge0.5_seconds": 5.223458,
+        "ge1_seconds": 3.4871380000000003,
+        "ge2_seconds": 2.1941070000000003,
+        "ge4_seconds": 1.2096840000000002,
+        "ge8_seconds": 0.49991199999999997,
+        "ge16_seconds": 0.16682800000000003
       },
       "straight retreat tip": {
         "mean": 1.0638720425889903,
@@ -59,24 +59,24 @@
         "ge16_seconds": 0.47609799999999997
       },
       "ordinary correction body": {
-        "mean": 1.9518352227776679,
-        "eligible_seconds": 27.726517,
-        "ge0.5_seconds": 23.833422000000002,
-        "ge1_seconds": 17.963877,
-        "ge2_seconds": 9.261655000000001,
-        "ge4_seconds": 2.8367080000000002,
-        "ge8_seconds": 0.5254970000000001,
-        "ge16_seconds": 0.058413999999999994
+        "mean": 2.117035621198232,
+        "eligible_seconds": 60.89531000000001,
+        "ge0.5_seconds": 46.227649,
+        "ge1_seconds": 35.839583000000005,
+        "ge2_seconds": 21.54683,
+        "ge4_seconds": 8.578431,
+        "ge8_seconds": 1.8849660000000004,
+        "ge16_seconds": 0.200161
       },
       "oscillation body": {
-        "mean": 0.03700508532480505,
-        "eligible_seconds": 52.430178000000005,
-        "ge0.5_seconds": 1.8680440000000003,
-        "ge1_seconds": 0.692369,
-        "ge2_seconds": 0.20021100000000003,
-        "ge4_seconds": 0.0,
-        "ge8_seconds": 0.0,
-        "ge16_seconds": 0.0
+        "mean": 0.07083682776104919,
+        "eligible_seconds": 79.34786199999999,
+        "ge0.5_seconds": 3.5783270000000003,
+        "ge1_seconds": 1.9356370000000003,
+        "ge2_seconds": 1.109607,
+        "ge4_seconds": 0.533282,
+        "ge8_seconds": 0.1162,
+        "ge16_seconds": 0.066719
       },
       "straight retreat body": {
         "mean": 0.5517625590361599,
@@ -397,7 +397,7 @@
         "ge16_weighted_seconds": 0.45808873688727353
       },
       "speed weighted transient_cost": {
-        "mean_squared_cost": 6.142302517749051,
+        "mean_squared_cost": 5.218088472528224,
         "eligible_seconds": 78.415073,
         "weighted_eligible_seconds": 59.12772188289496,
         "ge2_weighted_seconds": 8.757320364365459,
@@ -449,27 +449,27 @@
         }
       },
       "correction_stability": {
-        "version": 4,
+        "version": 5,
         "metrics": {
           "ordinary correction tip": {
-            "mean": 1.99001127759427,
-            "eligible_seconds": 27.726517,
-            "ge0.5_seconds": 22.597707,
-            "ge1_seconds": 16.468103,
-            "ge2_seconds": 9.103148000000001,
-            "ge4_seconds": 3.2203850000000003,
-            "ge8_seconds": 0.7590530000000002,
-            "ge16_seconds": 0.075092
+            "mean": 2.633029080892655,
+            "eligible_seconds": 60.89531000000001,
+            "ge0.5_seconds": 45.99016400000001,
+            "ge1_seconds": 35.473348,
+            "ge2_seconds": 23.092702000000003,
+            "ge4_seconds": 11.444085000000001,
+            "ge8_seconds": 3.729763,
+            "ge16_seconds": 0.8589190000000002
           },
           "oscillation tip": {
-            "mean": 0.05115388513149,
-            "eligible_seconds": 52.430178000000005,
-            "ge0.5_seconds": 2.2685,
-            "ge1_seconds": 1.209072,
-            "ge2_seconds": 0.6089620000000001,
-            "ge4_seconds": 0.133469,
-            "ge8_seconds": 0.0,
-            "ge16_seconds": 0.0
+            "mean": 0.13271921117955307,
+            "eligible_seconds": 79.34786199999999,
+            "ge0.5_seconds": 5.223458,
+            "ge1_seconds": 3.4871380000000003,
+            "ge2_seconds": 2.1941070000000003,
+            "ge4_seconds": 1.2096840000000002,
+            "ge8_seconds": 0.49991199999999997,
+            "ge16_seconds": 0.16682800000000003
           },
           "straight retreat tip": {
             "mean": 1.0638720425889903,
@@ -502,24 +502,24 @@
             "ge16_seconds": 0.47609799999999997
           },
           "ordinary correction body": {
-            "mean": 1.9518352227776679,
-            "eligible_seconds": 27.726517,
-            "ge0.5_seconds": 23.833422000000002,
-            "ge1_seconds": 17.963877,
-            "ge2_seconds": 9.261655000000001,
-            "ge4_seconds": 2.8367080000000002,
-            "ge8_seconds": 0.5254970000000001,
-            "ge16_seconds": 0.058413999999999994
+            "mean": 2.117035621198232,
+            "eligible_seconds": 60.89531000000001,
+            "ge0.5_seconds": 46.227649,
+            "ge1_seconds": 35.839583000000005,
+            "ge2_seconds": 21.54683,
+            "ge4_seconds": 8.578431,
+            "ge8_seconds": 1.8849660000000004,
+            "ge16_seconds": 0.200161
           },
           "oscillation body": {
-            "mean": 0.03700508532480505,
-            "eligible_seconds": 52.430178000000005,
-            "ge0.5_seconds": 1.8680440000000003,
-            "ge1_seconds": 0.692369,
-            "ge2_seconds": 0.20021100000000003,
-            "ge4_seconds": 0.0,
-            "ge8_seconds": 0.0,
-            "ge16_seconds": 0.0
+            "mean": 0.07083682776104919,
+            "eligible_seconds": 79.34786199999999,
+            "ge0.5_seconds": 3.5783270000000003,
+            "ge1_seconds": 1.9356370000000003,
+            "ge2_seconds": 1.109607,
+            "ge4_seconds": 0.533282,
+            "ge8_seconds": 0.1162,
+            "ge16_seconds": 0.066719
           },
           "straight retreat body": {
             "mean": 0.5517625590361599,

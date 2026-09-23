@@ -170,7 +170,15 @@ Strong slowing and abrupt turns still revoke continuity immediately. A projected
 stop releases correction memory 8 ms beyond the requested target, or 24 ms when
 falling raw pressure corroborates an impending lift. Pressure remaining steady
 never prevents a stop; measured braking, distance and stale-input bounds still
-apply independently.
+apply independently. Falling pressure alone does not cut a steady forecast short.
+
+Optimized filters visible display lead separately from curve geometry. A brief
+fit-window confidence collapse may retain reach while recent drawing history
+still supports continuation, with a missing fit bridged for at most 24 ms.
+The newest observations always refit local geometry. The anchor join has its own
+length, so cropping visibility cannot reshape the remaining curve. Frames with
+no new input consume the previous forecast rather than advancing its endpoint;
+policy changes, view changes, native takeover and stale input clear that memory.
 
 See [recording and evaluation](../development/stroke-recording.md) for the
 whole-preview metrics and regression bank. The chosen continuity behavior can

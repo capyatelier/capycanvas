@@ -1,9 +1,10 @@
 """Per-capture regression snapshots for Smooth Motion.
 
-Version 4 adds speed-weighted error costs and flash exposure. Earlier geometric,
-tracking and temporal guards remain independent.
+Version 5 follows corrections through settlement into measured ink and scores
+withdrawn tails at the remaining endpoint. Short or disappearing previews must
+not hide visible revisions. Other guards remain independent.
 """
-VERSION = 4
+VERSION = 5
 
 
 def regression_snapshot(result):

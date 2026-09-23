@@ -135,12 +135,21 @@ tracking categories and the separate retreat categories.
 
 Reports include severity counts, duration, episodes and eligible time. Query
 counts are windows, not independent mistakes. Gaps and missing truth remain
-unscored rather than being filled with invented future input. Version 4 of the
-stability snapshot adds speed costs to the existing steady line/curve retreat
-and whole-preview correction guards;
-optional paired comparisons restrict both models to identical future support.
+unscored rather than being filled with invented future input. Version 5 of the
+stability snapshot follows each initial preview across later frames, including
+its settlement into measured ink. A withdrawn tail moves to the remaining
+endpoint; it is not discarded from scoring. This catches long → absent → long
+flashes and makes short-lookahead revisions visible. Optional paired comparisons
+use the common initial preview support. The version migration remeasures the
+frozen pre-change outputs, without changing the other reference values or budgets.
 The per-tablet regression gate guards stability, tracking, ghosts, braking and
 scoring eligibility together. It must not be passed by shortening the preview.
+The Rust summary preserves endpoint RMS and prediction coverage guards. Endpoint
+error-step bins and chosen-horizon means remain diagnostics: their targets change
+with the predictor, and shorter horizons can improve them while making tracking
+worse. The Python bank gates full-preview severity and common-clock tracking
+instead. More gradable boundary queries are allowed; lost scoring coverage is not.
+
 These captures do not contain GPU presentation timestamps, brush raster, opacity
 or texture; centerline metrics and display-delay sweeps do not establish actual
 pen-to-photon latency or replace physical pen assessment.
@@ -166,23 +175,12 @@ reported and guarded. Ghost geometry, correction oscillation/shock, and fixed-cl
 tracking remain separate to prevent a stable but inaccurate/lagging model from
 winning through this score alone.
 
-On `movink14`, Previous and Optimized have 44.17% and 44.13% transient exposure
-at the 2 px probe threshold, respectively (57.37 eligible seconds). Optimized's
-speed-weighted transient cost is 0.23% higher; its off-path tip cost is 1.56%
-higher. All 481 windows at or above 16 px are the same. This Android capture
-does not establish a useful flashing improvement from the continuity refinement.
-
-Smooth Motion uses 100 ms of history, selected after testing 100 and 200 ms.
-The continuity refinement separates length persistence from geometric smoothing,
-and qualifies early-stop alarms with consecutive deceleration and pressure
-release. On `wacom-pro-27`, steady cutbacks of at least 4 px fell from 388 to 356
-query windows (3.237 to 2.970 seconds). Endpoint RMS changed from 6.425 to 6.473 px,
-and mean braking off-path error from 4.217 to 4.306 px. The endpoint summary
-accepts this small accuracy tradeoff; all previous temporal reference values and
-budgets remain unchanged. New retreat references are measured from the same
-pre-change `9ccc9b22` output, rather than resetting the gate around the candidate.
-This is a minimum within the tested parameter grid and regression budgets on
-one current capture, not evidence of a universal optimum across tablets.
+Smooth Motion uses 100 ms of drawing history. Its continuity controller separates
+curve geometry from visible reach: a changing confidence window need not abruptly
+withdraw otherwise useful ink. Stop/turn evidence releases that memory promptly.
+Falling pressure qualifies a motion alarm; varying pressure alone does not shorten
+a steady stroke. Fit-window confidence and physical stopping evidence serve
+separate purposes. Native predictions keep their platform precedence.
 
 See the [tablet bank guide](../../crates/layer-engine/tests/data/README.md) for
 capture naming, hash-bound baselines and adding recordings from other tablets.

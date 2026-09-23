@@ -51,14 +51,17 @@ Never update an existing baseline merely to make a failing change pass.
 Run it again with `--algorithm previous` to add that selection's missing baseline.
 
 The expected JSON version 1 binds the recording hash to `summary` (counts,
-accuracy, coverage, useful horizon) and `correction_stability` (version 4 temporal
+accuracy, coverage, useful horizon) and `correction_stability` (version 5 temporal
 snapshot) for Optimized. `alternatives.previous` holds the same fields for
 Previous; the Rust bank test checks both. Historical fields such as
 `error_step_rms_px` are endpoint diagnostics, not flicker measurements.
-Version 4 adds speed-weighted squared-error costs and flash exposure. Existing
-Wacom Pro 27 temporal references remain the pre-refinement `9ccc9b22` output;
-their values and tolerances are unchanged. The new cost guards start at each
-selection's current behavior, and are not evidence of an improvement.
+Version 5 additionally follows the initial preview through measured-ink
+settlement and disappearance. These temporal references were recomputed from
+frozen pre-change outputs: `9ccc9b22` for Wacom Pro 27, and `ba9b91e0` for each
+Movink selection. Other temporal values and budgets retain their old references.
+After passing those frozen guards, Optimized's mean speed-weighted transient
+cost bound was tightened to preserve this fix's measured improvement. Other
+cost thresholds and Previous's values remain at their pre-change references.
 
 Full analysis writes `DEVICE/analysis/metrics.json`, `severity.csv`, compressed
 per-query signals and `regression-snapshot.json`. The gate protects ordinary

@@ -25,6 +25,20 @@ def correction_shock(a,b,c,dt1,dt2):
     return ((c-b)/dt2-(b-a)/dt1) / ((dt1+dt2)*.5) / 120.**2
 
 
+def visible_curve(frame):
+    """A forecast remains visible when later samples replace it with real ink."""
+    path=np.concatenate([frame['actual_recent'],frame['curve'][1:]])
+    _,rev=np.unique(path[::-1,0],return_index=True)
+    return path[np.sort(len(path)-1-rev)]
+
+
+def visible_points(frame,times,transform):
+    # A removed tail is a visible retreat to the remaining endpoint, not a
+    # missing observation. Otherwise long -> absent -> long scores no flicker.
+    path=visible_curve(frame)
+    return surface(interpolate(path,np.minimum(times,path[-1,0])),transform)
+
+
 def sudden_motion(points):
     """Independent truth classification using adjacent 16 ms travel chords."""
     from flicker_metrics import norm
@@ -56,13 +70,16 @@ def paired_correction_smoothness(before,after,contacts):
     signals=[{k:np.full(len(before),np.nan) for k in ['tip','body']} for _ in range(2)]
     for i in range(2,len(before)):
         if not dt[i] or not dt[i-1]:continue
-        low=before[i]['latest_us']
-        high=min(fs[j]['target_us'] for fs in [before,after] for j in [i-2,i-1,i])
+        # Follow the oldest preview through its corrections and settlement into
+        # measured ink. Requiring three still-future previews excludes most
+        # short-horizon frames and biases comparisons when reach changes.
+        low=before[i-2]['latest_us']
+        high=min(fs[i-2]['target_us'] for fs in [before,after])
         if high<=low:continue
         t=np.linspace(low,high,33);m=before[i]['transform']
         paths=[];valid=True
         for fs in [before,after]:
-            ps=[surface(interpolate(f['curve'],t),m) for f in fs[i-2:i+1]]
+            ps=[visible_points(f,t,m) for f in fs[i-2:i+1]]
             valid &= np.isfinite(ps).all()
             paths.append(ps)
         if not valid:continue
@@ -127,8 +144,8 @@ def paired_oscillations(before, after, contacts):
     signals=[{k:np.full(len(before),np.nan) for k in ['tip','body']} for _ in range(2)]
     for i in range(2,len(before)):
         if not dt[i] or not dt[i-1]:continue
-        low=before[i-1]['latest_us']
-        high=min(fs[j]['target_us'] for fs in [before,after] for j in [i-2,i-1,i])
+        low=before[i-2]['latest_us']
+        high=min(fs[i-2]['target_us'] for fs in [before,after])
         if high<=low:continue
         t=np.linspace(low,high,33);m=before[i]['transform']
         truth=surface(interpolate(contacts[ids[i]]['samples'],t),m)
@@ -137,9 +154,7 @@ def paired_oscillations(before, after, contacts):
         for fs in [before,after]:
             ps=[]
             for f in fs[i-2:i+1]:
-                path=np.concatenate([f['actual_recent'],f['curve'][1:]])
-                _,rev=np.unique(path[::-1,0],return_index=True);path=path[np.sort(len(path)-1-rev)]
-                ps.append(surface(interpolate(path,t),m))
+                ps.append(visible_points(f,t,m))
                 valid &= np.isfinite(ps[-1]).all(1)
             paths.append(ps)
         if not valid.all():continue

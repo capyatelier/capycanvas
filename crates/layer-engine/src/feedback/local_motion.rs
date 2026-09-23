@@ -428,6 +428,12 @@ impl LocalMotion {
         }
     }
 
+    /// Anchor joining describes geometry, not how much of the curve is visible.
+    /// Cropping the horizon must not reshape every remaining preview point.
+    pub fn join_horizon(&self) -> u32 {
+        self.lookahead_micros.max(8_000.).round() as u32
+    }
+
     pub fn output_at(&self, time: u32, horizon: u32) -> StrokePoint {
         // At short detail horizons, do not spend the entire fitted-anchor
         // innovation within a tiny tail. That offset represents a long-window

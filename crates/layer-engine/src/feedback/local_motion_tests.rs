@@ -4,6 +4,116 @@ use super::{
 };
 
 #[test]
+fn continuity_memory_resets_on_policy_view_native_handoff_and_stale_input() {
+    let cfg = config();
+    let mut real = Vec::new();
+    let mut warm = PredictionState::default();
+    for i in 0..80 {
+        let now = i * 4000;
+        real.push(point(i as f32 * 3.2, 0.2 * (i as f32 * 0.4).sin(), now));
+        warm.estimate_for(&real, &[], now + 16000, now, IDENTITY, cfg);
+    }
+    let now = real.last().unwrap().elapsed_micros;
+    assert!(warm.last_motion.is_some());
+    for (transform, policy) in [
+        ([2., 0., 0., 2., 0., 0.], cfg),
+        (
+            IDENTITY,
+            InstantFeedbackConfig {
+                prediction_horizon_micros: 8000,
+                ..cfg
+            },
+        ),
+        (
+            IDENTITY,
+            InstantFeedbackConfig {
+                prediction_horizon_micros: 0,
+                ..cfg
+            },
+        ),
+    ] {
+        let mut state = warm.clone();
+        let mut fresh = PredictionState::default();
+        let a = state.estimate_for(&real, &[], now + 16000, now, transform, policy);
+        let b = fresh.estimate_for(&real, &[], now + 16000, now, transform, policy);
+        assert_eq!(a, b);
+        assert_eq!(
+            state.engine_intermediates().collect::<Vec<_>>(),
+            fresh.engine_intermediates().collect::<Vec<_>>()
+        );
+        if policy.prediction_horizon_micros == 0 {
+            assert_eq!(a.unwrap().source, TipSource::Real);
+            assert!(state.output.is_none());
+        }
+    }
+    let mut native = warm.clone();
+    let tip = native
+        .estimate_for(
+            &real,
+            &[point(270., 0., now + 16000)],
+            now + 16000,
+            now,
+            IDENTITY,
+            InstantFeedbackConfig {
+                use_platform_prediction: true,
+                ..cfg
+            },
+        )
+        .unwrap();
+    assert_eq!(tip.source, TipSource::Platform);
+    assert!(native.last_motion.is_none() && native.output.is_none());
+    let tip = warm
+        .estimate_for(&real, &[], now + 116000, now + 100000, IDENTITY, cfg)
+        .unwrap();
+    assert_eq!(tip.source, TipSource::Real);
+    assert!(warm.last_motion.is_none() && warm.output.is_none());
+}
+
+#[test]
+fn a_missing_delivery_cannot_advance_the_retained_forecast() {
+    for horizon in [8000, 16000, 32000] {
+        for quantum in [1, 1000] {
+            for period in [4167, 8333] {
+                let cfg = InstantFeedbackConfig {
+                    timestamp_resolution_micros: quantum,
+                    prediction_horizon_micros: horizon,
+                    ..config()
+                };
+                let mut state = PredictionState::default();
+                let mut real = Vec::new();
+                for i in 0..60 {
+                    let time = i * period;
+                    real.push(point(time as f32 * 0.0012, 0., time / quantum * quantum));
+                    state.estimate_for(&real, &[], time + horizon, time, IDENTITY, cfg);
+                }
+                let latest = real.last().unwrap().elapsed_micros;
+                let mut target = state
+                    .output
+                    .as_ref()
+                    .unwrap()
+                    .point_at(state.output.as_ref().unwrap().horizon)
+                    .elapsed_micros;
+                for age in [2000, 4000, 8000, 12000] {
+                    let now = latest + age;
+                    let tip = state
+                        .estimate_for(&real, &[], now + horizon, now, IDENTITY, cfg)
+                        .unwrap();
+                    assert!(
+                        tip.point.elapsed_micros <= target,
+                        "missing reports must not earn reach: {period}/{quantum}/{horizon}"
+                    );
+                    target = tip.point.elapsed_micros;
+                    assert_eq!(
+                        state.estimate_for(&real, &[], now + horizon, now, IDENTITY, cfg),
+                        Some(tip)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn local_motion_keeps_honest_target_times_sensors_bounds_and_repeatability() {
     for zoom in [0.25, 1., 4.] {
         let transform = [0., zoom, -zoom, 0., 19., -7.];
