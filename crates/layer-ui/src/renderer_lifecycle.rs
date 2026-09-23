@@ -152,11 +152,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// has stopped new canvas input. Unsubmitted samples are discarded; only
     /// completed raster captures can supply recovery pixels.
     pub fn suspend_renderer(&mut self) -> Result<UiChange, String> {
+        let interrupted_selection = self.painted_selections.busy();
         let retired_regions = self.input(UiInput::Blur)?.change.regions;
         self.engine.discard_unsubmitted_input();
         self.input_pending = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
+        self.painted_selections.renderer_replaced();
         self.navigator_preview = Default::default();
         self.renderer_mut().cancel_filter_previews();
         self.filter_previews.renderer_replaced();
@@ -170,7 +172,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_document();
         self.poll_document_close();
         self.refresh_commands();
-        if recovered? > 0 {
+        if recovered? > 0 || interrupted_selection {
             self.state.host_error = Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into());
         }
         Ok(self.changed(
@@ -218,6 +220,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.rendering_suspended = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
+        self.painted_selections.renderer_replaced();
         self.navigator_preview = Default::default();
         self.filter_previews.renderer_replaced();
         if let Some(pending) = &mut self.pending_filters {

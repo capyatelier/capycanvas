@@ -20,6 +20,9 @@ pub(crate) mod operation;
 #[path = "selection_tools.rs"]
 pub(crate) mod selection_tools;
 pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+#[path = "painted_selections.rs"]
+mod painted_selections;
+pub use painted_selections::SelectionBrushOptions;
 #[path = "region_tools.rs"]
 mod region_tools;
 #[path = "rulers.rs"]
@@ -102,6 +105,7 @@ pub struct UiSession<R: CanvasRenderer> {
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     selection_tools: selection_tools::SelectionTools,
+    painted_selections: painted_selections::PaintedSelections,
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
@@ -173,6 +177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             eyedropper: Default::default(),
             region_tools: Default::default(),
             selection_tools: Default::default(),
+            painted_selections: Default::default(),
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
@@ -559,7 +564,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.state.colors.transparent()
             || event.tool == layer_engine::ToolKind::Eraser
             || event.flags.contains(layer_engine::SampleFlags::INVERTED);
-        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint;
+        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint || self.selection_brush_active();
         let blocked = self.layer_interaction.tool.draws()
             && if painting { self.engine.document().drawing_target().is_none() }
                 else { self.engine.document().drawing_content().is_none() };
@@ -600,7 +605,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.cancel(scale);
             return true;
         }
-        let dabs = if self.layer_interaction.tool == LayerCanvasTool::Paint {
+        let selection_brush = self.selection_brush_active();
+        let dabs = if selection_brush { self.selection_brush_cursor(event) }
+        else if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
                 .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
         } else {
@@ -608,7 +615,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.cursor.view(
             self.engine.backend(),
-            &self.engine.brush().tip,
+            if selection_brush { &layer_core::BrushTip::AnalyticEllipse } else { &self.engine.brush().tip },
             &dabs,
             &self.state.camera,
             scale,
@@ -1927,9 +1934,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => true,
         };
         let selection = self.layer_interaction.tool.selection_tool();
-        let selected = (id == CommandId::Select && selection.is_some())
+        let selection_mode = if self.selection_brush_active() {
+            if self.selection_tools.options.brush.subtract { SelectionMode::Subtract } else { SelectionMode::Add }
+        } else { self.selection_tools.options.mode };
+        let selected = (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
+            || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
-            || matches!((id, self.selection_tools.options.mode),
+            || matches!((id, selection_mode),
                 (CommandId::SelectionNew, SelectionMode::New) | (CommandId::SelectionAdd, SelectionMode::Add)
                 | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
             || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
@@ -1983,6 +1994,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.defer_selection_action(&action) {
+            return Ok(self.changed(0, true));
+        }
         if self.operation.placing() && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
             | UiAction::SetLayerOpacity { .. } | UiAction::MoveLayer { .. }
@@ -2568,6 +2582,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.select_brush(self.tools.group(group))?;
                 (BRUSH, false)
             }
+            UiAction::SetBrushSize { value } if self.selection_brush_active() => {
+                self.selection_tools.options.brush.edit("selection_brush_size",value)?;
+                self.refresh_tools();
+                (BRUSH,true)
+            }
+            UiAction::SetBrushOpacity { value } if self.selection_brush_active() => {
+                self.selection_tools.options.brush.edit("selection_brush_opacity",value)?;
+                self.refresh_tools();
+                (BRUSH,true)
+            }
             UiAction::SetBrushSize { value } => {
                 NumericControl::brush_size().validate(value, "Brush size")?;
                 self.state.brush.diameter = value;
@@ -2624,6 +2648,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.region_tools.edit(&id, value)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
+                }
+                if id.starts_with("selection_brush_") {
+                    self.selection_tools.options.brush.edit(&id, value)?;
+                    self.refresh_tools();
+                    return Ok(self.changed(BRUSH, true));
                 }
                 if id.starts_with("selection_") {
                     self.selection_tools.options.edit(&id, value)?;
@@ -3149,6 +3178,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
+        if self.selection_brush_active() {
+            if let Err(error) = self.selection_brush_pen(event) { self.state.host_error = Some(error); }
+            return Ok(());
+        }
         if self.layer_interaction.tool.region().is_some() {
             self.region_pen(event);
             return Ok(());
@@ -3207,7 +3240,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
-        if self.input_pending
+        if self.painted_selections.has_contact()
+            || self.input_pending
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
         {
@@ -3517,10 +3551,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.pending_filters.is_some()
             || self.eyedropper.busy()
             || self.region_tools.busy()
+            || self.painted_selections.busy()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
+        changed |= self.poll_selection_paint()?;
+        self.sync_selection_overlay();
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
@@ -3691,16 +3728,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
+            CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
                 let kind = match command {
                     CommandId::RectangleSelect => SelectionTool::Rectangle,
                     CommandId::EllipseSelect => SelectionTool::Ellipse,
                     CommandId::PolygonSelect => SelectionTool::Polygon,
                     CommandId::ColorSelect => SelectionTool::Color,
+                    CommandId::SelectionBrush => SelectionTool::Brush,
                     _ => self.selection_tools.options.tool,
                 };
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionBrushPressure => {
+                self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
+                Ok((BRUSH | COMMANDS, false))
             }
             CommandId::CompleteSelection => {
                 self.finish_polygon_selection()?;
@@ -3714,6 +3756,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
+                if self.selection_brush_active() {
+                    match command {
+                        CommandId::SelectionAdd => self.selection_tools.options.brush.subtract = false,
+                        CommandId::SelectionSubtract => self.selection_tools.options.brush.subtract = true,
+                        _ => return Err("Selection Brush supports Add and Subtract".into()),
+                    }
+                    self.refresh_tools();
+                    return Ok((BRUSH | COMMANDS, true));
+                }
                 let options = &mut self.selection_tools.options;
                 match command {
                     CommandId::SelectionNew => options.mode = SelectionMode::New,
@@ -4173,9 +4224,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             } else if matches!(tool, SelectionTool::Color | SelectionTool::Wand) {
                 &[CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
             } else { &[] };
-            self.state.tool_actions = [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
+            self.state.tool_actions = if tool == SelectionTool::Brush {
+                [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionBrushPressure].into_iter()
+                    .map(|command| ToolSettingAction { command, checkable: true }).collect()
+            } else { [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
                 CommandId::SelectionIntersect, CommandId::SelectionAntialias].into_iter().chain(commands.iter().copied())
-                .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
+                .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
         if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
@@ -4209,7 +4263,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
+            if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
+            else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
             if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
@@ -4233,13 +4288,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
-        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() {
+        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
             self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
         }
     }
 
     fn require_idle(&self) -> Result<(), String> {
-        if self.input_pending
+        if self.painted_selections.has_contact()
+            || self.input_pending
             || self.effect_gesture.is_some()
             || self.sdr_gesture.is_some()
             || self.engine.has_active_stroke()
@@ -4578,6 +4634,9 @@ mod tests {
         preview_reply: Option<layer_render::CanvasPreview>,
         sample_requests: Vec<layer_render::ColorSampleRequest>,
         sample_reply: Option<layer_render::ColorSample>,
+        selection_updates: Vec<layer_render::SelectionPaint>,
+        selection_reply: Option<layer_render::SelectionPaintResult>,
+        selection_wait: bool,
         region_requests: Vec<layer_render::RegionRequest>,
         region_reply: Option<layer_render::RegionResult>,
         transform: Option<layer_render::TransformPreview>,
@@ -4601,6 +4660,12 @@ mod tests {
         ) -> Result<(), Self::Error> {
             self.transform = preview.cloned();
             Ok(())
+        }
+        fn paint_selection(&mut self,update:&layer_render::SelectionPaint)->Result<bool,Self::Error> {
+            self.selection_updates.push(update.clone()); Ok(!self.selection_wait)
+        }
+        fn take_selection_paint(&mut self)->Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+            self.selection_reply.take().map(Ok)
         }
         fn request_region(
             &mut self,
@@ -4725,6 +4790,7 @@ mod tests {
     include!("session_color_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("painted_selection_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -6336,7 +6402,7 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 6);
+            assert_eq!(s.state.tool_set.subtools.len(), 7);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
             assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);

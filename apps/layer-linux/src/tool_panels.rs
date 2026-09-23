@@ -307,7 +307,15 @@ impl ToolSettings {
                     button.set_size_request(28, layer_ui::TILE_SIZE as i32);
                     let image = crate::icons::image(&format!("layer-{}-symbolic", command.icon.unwrap()));
                     image.set_pixel_size(20);
-                    button.set_child(Some(&image));
+                    if state.layer_tools.tool.selection_tool() == Some(layer_ui::SelectionTool::Brush) {
+                        let label = if action.command == layer_ui::CommandId::SelectionAdd { "Add" } else { "Subtract" };
+                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                        row.set_halign(gtk::Align::Center);
+                        row.append(&image);
+                        row.append(&gtk::Label::new(Some(label)));
+                        button.set_child(Some(&row));
+                        button.set_size_request(44,44);
+                    } else { button.set_child(Some(&image)); }
                     button.update_property(&[gtk::accessible::Property::Label(command.label)]);
                     if let Some(first) = &mode_group { button.set_group(Some(first)); }
                     else { mode_group = Some(button.clone()); }
@@ -325,6 +333,7 @@ impl ToolSettings {
                     button.upcast()
                 } else if action.checkable {
                     let check = gtk::CheckButton::new();
+                    if action.command == layer_ui::CommandId::SelectionBrushPressure { check.set_size_request(-1,44); }
                     let source_choice = matches!(action.command, layer_ui::CommandId::SelectionVisible | layer_ui::CommandId::SelectionEditing | layer_ui::CommandId::SelectionReference);
                     if source_choice {
                         if let Some(first) = &source_group { check.set_group(Some(first)); }

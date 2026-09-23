@@ -55,6 +55,67 @@ fn pixel(s: &layer_core::Selection, x: u32, y: u32) -> u32 {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --tablet --native-test=native_selection_brush_input"]
+fn native_selection_brush_input() {
+    let mut d=Driver::new("art.capycanvas.SelectionBrush");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.dir.to_string_lossy().into()));
+    std::fs::create_dir_all(&output).unwrap();
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);
+    if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
+    d.click_name("tool-choice-SelectionBrush");
+    let panel=d.named("drawer-panel-ToolSettings");
+    for id in ["selection_brush_size","selection_brush_hardness","selection_brush_opacity"] {
+        let control=d.named(&format!("tool-setting-{id}"));
+        let bounds=control.compute_bounds(&panel).unwrap();
+        assert!(bounds.width()>60. && bounds.height()>=24.,"{id}: {bounds:?}");
+    }
+    assert_eq!(state(&d.w).tool_actions.len(),3);
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme {theme:Some(theme)}); pump(250);
+        let _=crate::snapshot(&d.w); pump(100);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("selection-brush-{theme:?}.png"))).unwrap();
+    }
+    let tablet=std::env::var("WAYLAND_DISPLAY").is_ok_and(|s|s=="layer-bench-tablet");
+    if tablet {
+        // Text-field keymap delivery is covered by the plain Wayland journey.
+        d.w.dispatch(UiAction::SetToolSetting {id:"selection_brush_opacity".into(),value:0.5});
+    } else { d.number(&d.named("tool-setting-selection_brush_opacity"),"50"); }
+    d.click_name(&opener);
+    let wait_value=|d:&Driver,x:u32,y:u32,expected:u32| {
+        let deadline=Instant::now()+Duration::from_secs(20);
+        loop {
+            pump(20);
+            if let Some(s)=selection(d) && let layer_core::SelectionShape::Pixels(p)=&s.shape {
+                let value=(p.words()[(y*p.extent()[0].div_ceil(4)+x/4) as usize]>>((x%4)*8))&255;
+                if value==expected { return s; }
+            }
+            assert!(Instant::now()<deadline,"selection value timed out: {}",d.w.status.text());
+        }
+    };
+    canvas_drag(&mut d,[600.,600.],[850.,600.],false);
+    let first=wait_value(&d,700,600,128);
+    canvas_drag(&mut d,[600.,600.],[850.,600.],tablet);
+    wait_value(&d,700,600,192);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo}); pump(200);
+    assert_eq!(selection(&d),Some(first));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});
+    wait_value(&d,700,600,192);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect}); pump(150);
+    let points=[[600.,600.],[900.,600.],[900.,900.],[600.,900.],[601.,601.]];
+    let mut actions=Vec::new();
+    for (i,p) in points.into_iter().enumerate() {
+        let p=canvas_point(&d,p);
+        actions.push(if i==0 {serde_json::json!({"point":p,"down":true})} else {serde_json::json!({"point":p})});
+    }
+    actions.push(serde_json::json!({"down":false}));
+    d.perform(serde_json::Value::Array(actions));
+    wait_value(&d,750,750,128);
+    let _=crate::snapshot(&d.w); pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("selection-brush-canvas.png")).unwrap();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_selection_tools_input"]
 fn native_selection_tools_input() {
     let mut d = Driver::new("art.capycanvas.SelectionTools");
@@ -90,7 +151,7 @@ fn native_selection_tools_input() {
         );
         assert_eq!(d.named("drawer-panel-Tools"), tools);
         assert_eq!(d.named("drawer-panel-ToolSettings"), settings);
-        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 6);
+        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 7);
         assert_shared_icons(&d.named("tool-drawer"));
     }
     for theme in [Theme::Dark, Theme::Light] {

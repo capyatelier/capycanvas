@@ -19,7 +19,7 @@ pub(super) fn shader(device: &PipelineDevice, in_place: bool) -> Deferred<wgpu::
             label: Some("layer destination brush shader"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 &working_color::shader(&device), &shader_destination(in_place), include_str!("material_brush.wgsl"),
-                include_str!("brush_geometry.wgsl"), include_str!("brush_coverage.wgsl"),
+                include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
                 include_str!("contact.wgsl"), include_str!("selection_clip.wgsl"),
             ])),
         })

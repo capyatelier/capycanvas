@@ -957,7 +957,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Tool { tool } => {
                 if let LayerCanvasTool::Selection { kind } = tool
-                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon) {
+                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
                     return Err("Invalid geometric selection tool".into());
                 }
                 if tool == LayerCanvasTool::Transform {
@@ -1827,6 +1827,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        if self.cancel_selection_contact() { return Ok(true); }
         let effect = self.cancel_effect_gesture()?;
         let sdr = self.cancel_sdr_gesture()?;
         let transform = self.cancel_transform()?;
@@ -1967,7 +1968,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 distance += (to[0] - from[0]).hypot(to[1] - from[1]);
             }
         };
-        if let Some(selection) = self.engine.display_selection() {
+        if !self.selection_brush_active() && let Some(selection) = self.engine.display_selection() {
             for contour in selection.contours() {
                 path(contour, true, selection.affine);
             }

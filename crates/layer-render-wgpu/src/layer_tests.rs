@@ -7,6 +7,8 @@ use layer_core::{
 use layer_render::{DabStyle, ViewState};
 #[path = "selection_option_tests.rs"]
 mod selection_options;
+#[path = "selection_paint_tests.rs"]
+mod selection_painting;
 #[path = "figure_tests.rs"]
 mod figures;
 #[path = "overview_tests.rs"]

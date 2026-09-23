@@ -70,7 +70,7 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 28]>,
+    camera_data: Option<[f32; 32]>,
     quarter_turns: u32,
     retained: Option<crate::present_damage::Retained>,
     presented_area: u64,
@@ -593,7 +593,7 @@ impl ViewportPresenter {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport camera"),
-            size: 112,
+            size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -965,10 +965,14 @@ impl ViewportPresenter {
         }
         let inverse = selection
             .map_or(layer_core::Affine::IDENTITY, |(s, _)| {
-                s.affine.inverse().expect("selection placement validated")
+                if matches!(s.shape, layer_core::SelectionShape::Pixels(_)) {
+                    s.affine.inverse().expect("selection placement validated")
+                } else { layer_core::Affine::IDENTITY }
             })
             .0;
-        let data: [f32; 28] = [
+        let overlay = renderer.selection_overlay;
+        let overlay_color = overlay.map_or([0.;4],|o| o.color);
+        let data: [f32; 32] = [
             d / det,
             -b / det,
             -c / det,
@@ -993,7 +997,8 @@ impl ViewportPresenter {
             inverse[1],
             inverse[2],
             inverse[3],
-            self.quarter_turns as f32, 0., 0., 0.,
+            self.quarter_turns as f32, overlay.map_or(0.,|o| if o.protected { 2. } else { 1. }), 0., 0.,
+            overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
@@ -1048,6 +1053,8 @@ impl ViewportPresenter {
                 || camera_changed
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
+                || (previous.selection_revision != renderer.selection_paint_revision
+                    && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
             let cursor =
@@ -1061,6 +1068,10 @@ impl ViewportPresenter {
             };
             let mut regions = Vec::with_capacity(3 + 2 * self.overviews.len());
             crate::present_damage::add_region(&mut regions, repaint);
+            if !full && previous.selection_revision != renderer.selection_paint_revision {
+                crate::present_damage::add_region(&mut regions,
+                    crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
+            }
             crate::present_damage::add_region(&mut regions, previous.cursor);
             crate::present_damage::add_region(&mut regions, cursor);
             // A distant Navigator must not turn a short stroke into a nearly
@@ -1109,6 +1120,7 @@ impl ViewportPresenter {
             let previous = self.retained.as_mut().unwrap();
             previous.valid = true;
             previous.revision = renderer.composite_revision;
+            previous.selection_revision = renderer.selection_paint_revision;
             previous.hdr = self.hdr_options;
             previous.proof = self.proof_options;
             previous.cursor = cursor;

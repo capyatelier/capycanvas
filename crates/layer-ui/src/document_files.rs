@@ -508,6 +508,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
+        if self.painted_selections.busy() { return Err("Wait for selection capture to finish".into()); }
         if self.sdr_gesture.is_some()
             || self.operation.active()
             || self.region_tools.busy()
@@ -536,6 +537,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// or workspace values. Closing and immutable saves may proceed, including
     /// their unsaved-changes decisions. Replacing the document still waits.
     pub fn require_document_snapshot_idle(&self) -> Result<(), String> {
+        if self.painted_selections.busy() { return Err("Wait for selection capture to finish".into()); }
         self.require_document_interaction_idle()?;
         if self
             .pending_filters

@@ -15,6 +15,8 @@ use layer_core::{
 use std::fmt;
 mod outline;
 mod telemetry;
+mod selection;
+pub use selection::{SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
@@ -501,6 +503,12 @@ pub trait CanvasRenderer {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Incremental scalar coverage. False requests a retry while pipelines or
+    /// the prior completed capture are pending; no submitted update is dropped.
+    fn paint_selection(&mut self, _update: &SelectionPaint) -> Result<bool, Self::Error> { Ok(false) }
+    fn take_selection_paint(&mut self) -> Option<Result<SelectionPaintResult, Self::Error>> { None }
+    fn cancel_selection_paint(&mut self) {}
+    fn set_selection_overlay(&mut self, _overlay: Option<SelectionOverlay>) {}
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()

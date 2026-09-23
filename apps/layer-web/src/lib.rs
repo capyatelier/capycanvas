@@ -147,6 +147,18 @@ impl CanvasRenderer for WebRenderer {
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
         self.0.as_mut()?.renderer.take_region()
     }
+    fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
+        self.renderer()?.paint_selection(update)
+    }
+    fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+        (&mut self.0.as_mut()?.renderer).take_selection_paint()
+    }
+    fn cancel_selection_paint(&mut self) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.cancel_selection_paint(); }
+    }
+    fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_selection_overlay(overlay); }
+    }
     fn set_selection_outline(
         &mut self,
         selection: Option<&layer_core::Selection>,

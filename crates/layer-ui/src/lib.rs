@@ -111,7 +111,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform,
     PreferenceAction,
@@ -355,6 +355,7 @@ pub fn ui_catalog() -> UiCatalog {
             "ellipse-select",
             "polygon-select",
             "color-select",
+            "selection-brush",
             "selection-new",
             "selection-add",
             "selection-subtract",
@@ -502,6 +503,8 @@ pub enum CommandId {
     EllipseSelect,
     PolygonSelect,
     ColorSelect,
+    SelectionBrush,
+    SelectionBrushPressure,
     SelectionNew,
     SelectionAdd,
     SelectionSubtract,
@@ -572,7 +575,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
@@ -639,7 +642,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::ZenMode
@@ -683,6 +686,8 @@ impl CommandId {
             Self::EllipseSelect => "ellipse-select",
             Self::PolygonSelect => "polygon-select",
             Self::ColorSelect => "color-select",
+            Self::SelectionBrush => "selection-brush",
+            Self::SelectionBrushPressure => "pen",
             Self::SelectionNew => "selection-new",
             Self::SelectionAdd => "selection-add",
             Self::SelectionSubtract => "selection-subtract",
@@ -745,7 +750,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 100] = [
+    pub const ALL: [Self; 102] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -782,6 +787,8 @@ impl CommandId {
         Self::EllipseSelect,
         Self::PolygonSelect,
         Self::ColorSelect,
+        Self::SelectionBrush,
+        Self::SelectionBrushPressure,
         Self::SelectionNew,
         Self::SelectionAdd,
         Self::SelectionSubtract,
@@ -918,6 +925,8 @@ impl CommandId {
             Self::EllipseSelect => "Ellipse select",
             Self::PolygonSelect => "Polygonal lasso",
             Self::ColorSelect => "Select by color",
+            Self::SelectionBrush => "Selection Brush",
+            Self::SelectionBrushPressure => "Pressure controls size",
             Self::SelectionNew => "New selection",
             Self::SelectionAdd => "Add to selection",
             Self::SelectionSubtract => "Subtract from selection",

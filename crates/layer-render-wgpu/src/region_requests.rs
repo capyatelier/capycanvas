@@ -179,42 +179,9 @@ impl RegionRequests {
         if let Some(t) = &mut self.timing {
             t.submitted(&r.queue);
         }
-        let ready = readback.clone();
-        let tx = self.tx.clone();
         self.pending = Some(region);
-        readback
-            .slice(..size)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let result = result
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                    .and_then(|_| {
-                        let bytes = ready
-                            .slice(..size)
-                            .get_mapped_range()
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let read = |offset: usize| {
-                            u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-                        };
-                        let words: std::sync::Arc<[u32]> = (0..extent[0].div_ceil(if byte_coverage { 4 } else { 8 }) as usize
-                            * extent[1] as usize)
-                            .map(|i| read(32 + i * 4))
-                            .collect();
-                        let bounds = if read(coverage_size as usize + 16) == 0 {
-                            [0; 4]
-                        } else {
-                            std::array::from_fn(|i| read(coverage_size as usize + i * 4))
-                        };
-                        let pixels = if byte_coverage { layer_core::SelectionPixels::bytes(extent, bounds, words) }
-                            else { layer_core::SelectionPixels::new(extent, bounds, words) }
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        Ok(RegionResult {
-                            request_id: request.request_id,
-                            pixels: std::sync::Arc::new(pixels),
-                        })
-                    });
-                ready.unmap();
-                let _ = tx.send(result);
-            });
+        selection_readback::capture_selection(readback, size, coverage_size, extent,
+            byte_coverage, request.request_id, self.tx.clone(), |result,_| result);
         Ok(true)
     }
 }

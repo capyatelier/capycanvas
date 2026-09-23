@@ -166,7 +166,7 @@ mod selection_tools_checks {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         invoke(&mut s, CommandId::ColorSelect);
-        assert_eq!(s.state.tool_set.subtools.len(), 6);
+        assert_eq!(s.state.tool_set.subtools.len(), 7);
         assert!(!s.state.tool_settings.iter().any(|c| c.id == "gap_closing"));
         s.region_tools.refinement.gap_closing = 5;
         for command in [
@@ -257,7 +257,7 @@ mod selection_tools_checks {
     #[test]
     fn all_selection_tools_share_options_with_atomic_history_and_persistence() {
         use std::sync::Arc;
-        for tool in SelectionTool::ALL {
+        for tool in SelectionTool::ALL.into_iter().filter(|t| *t != SelectionTool::Brush) {
             let mut s = session();
             s.set_platform(Platform::Gtk);
             invoke(&mut s, tool.command());

@@ -61,7 +61,7 @@ impl PreparedWorkspace {
         state.tools.validate()?;
         state.selection.validate()?;
         if let LayerCanvasTool::Selection { kind } = state.canvas_tool
-            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon) {
+            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
             return Err("Invalid geometric selection tool".into());
         }
         state.colors.validate()?;

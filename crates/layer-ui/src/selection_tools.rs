@@ -14,15 +14,17 @@ pub enum SelectionTool {
     Polygon,
     Wand,
     Color,
+    Brush,
 }
 impl SelectionTool {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Rectangle,
         Self::Ellipse,
         Self::Lasso,
         Self::Polygon,
         Self::Wand,
         Self::Color,
+        Self::Brush,
     ];
     pub fn command(self) -> CommandId {
         match self {
@@ -32,6 +34,7 @@ impl SelectionTool {
             Self::Polygon => CommandId::PolygonSelect,
             Self::Wand => CommandId::AutoSelect,
             Self::Color => CommandId::ColorSelect,
+            Self::Brush => CommandId::SelectionBrush,
         }
     }
     pub fn canvas_tool(self, source: RegionSource) -> LayerCanvasTool {
@@ -62,6 +65,7 @@ pub enum SelectionConstraint {
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionOptions {
     pub tool: SelectionTool,
+    pub brush: super::painted_selections::SelectionBrushOptions,
     pub constraint: SelectionConstraint,
     pub from_center: bool,
     pub mode: SelectionMode,
@@ -75,6 +79,7 @@ impl Default for SelectionOptions {
     fn default() -> Self {
         Self {
             tool: SelectionTool::Lasso,
+            brush: Default::default(),
             constraint: SelectionConstraint::Free,
             from_center: false,
             mode: SelectionMode::New,
@@ -88,6 +93,7 @@ impl Default for SelectionOptions {
 }
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), String> {
+        self.brush.validate()?;
         NumericControl::number(
             0.,
             layer_render::SelectionRefinement::MAX_FEATHER as f64,

@@ -376,11 +376,16 @@ Implementation milestones, in delivery order:
    copies, placement, lock validation, project persistence, and bounded undo
    accounting. Implemented; core/engine/UI regression suites pass. Existing
    selection types were moved out of layer ownership code, not duplicated.
-2. Shared painted coverage and GTK: Selection Brush, Quick Mask, saved-mask
-   editing/actions, continuous overlay, and balanced native controls. Pending.
-3. Web: project the same controls and actions; validate on the attached tablet.
+2. Shared painted coverage and GTK Selection Brush: implemented. Shared real-pen
+   sampling, enclosed-area filling, ordered asynchronous captures, unchanged-edit
+   suppression, and coverage-scaled overlays have core/GPU regression coverage.
+   GTK mouse and injected Wayland pen journeys pass; light/dark controls reviewed.
+   Overlay preferences remain part of the shared mask interface below.
+3. GTK Quick Mask and Selection Layers: temporary row, grayscale editing,
+   saved-mask actions, display preferences, and editing indicator. Pending.
+4. Web: project the same controls and actions; validate on the attached tablet.
    Pending.
-4. Android: native projection and tablet validation, following the reviewed GTK
+5. Android: native projection and tablet validation, following the reviewed GTK
    control hierarchy and spacing. Pending.
 
 Build the selection editing target, ordered transactions, and overlay first.
