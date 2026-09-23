@@ -8,10 +8,8 @@ use std::collections::BTreeMap;
 mod color;
 pub use color::{MissingProfilePolicy, PhotoOpenPolicy};
 
-const PREDICTION_ALGORITHMS: [(StrokePrediction, &str); 2] = [
-    (StrokePrediction::Optimized, "Smooth Motion (Optimized)"),
-    (StrokePrediction::Previous, "Smooth Motion (Previous)"),
-];
+const PREDICTION_ALGORITHMS: [(StrokePrediction, &str); 1] =
+    [(StrokePrediction::Optimized, "Smooth Motion (Optimized)")];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,7 +149,7 @@ impl Settings {
         let mut value = serde_json::Value::deserialize(reader)?;
         if let Some(fields) = value.as_object_mut() {
             if fields.get("prediction_algorithm").is_some_and(|v| {
-                !matches!(v.as_str(), Some("optimized" | "previous"))
+                !matches!(v.as_str(), Some("optimized"))
             }) {
                 fields.remove("prediction_algorithm");
             }
@@ -732,7 +730,7 @@ impl Settings {
             row(
                 PredictionAlgorithm,
                 "Prediction algorithm",
-                "Compare steady-stroke prediction behavior.",
+                "",
                 PreferenceKind::Choice {
                     presentation: ChoicePresentation::Dropdown,
                     icons: Vec::new(),
@@ -1560,6 +1558,9 @@ mod copy_tests {
             let mut settings = Settings::default();
             let id = PreferenceId::PredictionAlgorithm;
             assert_eq!(settings.prediction_algorithm, StrokePrediction::Optimized);
+            let row = settings.field(id, platform).unwrap();
+            assert!(matches!(row.kind, PreferenceKind::Choice { presentation: ChoicePresentation::Dropdown, ref options, selected: 0, .. }
+                if options == &["Smooth Motion (Optimized)"]));
             for (index, &(algorithm, _)) in PREDICTION_ALGORITHMS.iter().enumerate() {
                 settings.edit(id, PreferenceValue::Choice(index as u32), platform).unwrap();
                 let restored = Settings::deserialize_saved(serde_json::to_value(&settings).unwrap()).unwrap();
@@ -1568,18 +1569,18 @@ mod copy_tests {
                     assert_eq!(restored.feedback_config_for(platform, native).prediction_algorithm, algorithm);
                 }
             }
-            assert!(settings.edit(id, PreferenceValue::Choice(2), platform).is_err());
+            assert!(settings.edit(id, PreferenceValue::Choice(1), platform).is_err());
             settings.edit(id, settings.default_value(id, platform).unwrap(), platform).unwrap();
             assert_eq!(settings.prediction_algorithm, StrokePrediction::Optimized);
             settings.feedback = false;
-            assert!(settings.edit(id, PreferenceValue::Choice(1), platform).is_err());
+            assert!(settings.edit(id, PreferenceValue::Choice(0), platform).is_err());
         }
     }
 
     #[test]
     fn retired_prediction_choices_do_not_change_any_platform_fallback() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows, Platform::Generic] {
-            for old in ["linear", "kalman", "trajectory", "trajectory_tapered", "trajectory_tapered_filtered", "local_acceleration", "local_acceleration_smooth"] {
+            for old in ["previous", "linear", "kalman", "trajectory", "trajectory_tapered", "trajectory_tapered_filtered", "local_acceleration", "local_acceleration_smooth"] {
                 let settings = Settings::deserialize_saved(serde_json::json!({
                     "prediction_algorithm": old, "prediction_ms": 23.0, "platform_prediction": true,
                 })).unwrap();

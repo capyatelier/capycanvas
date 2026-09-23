@@ -12,8 +12,6 @@ def main():
     p.add_argument('--data-dir',type=Path,default=Path('crates/layer-engine/tests/data'))
     p.add_argument('--bin-dir',type=Path,default=Path('target/release/examples'))
     p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--algorithm',choices=['optimized','previous'],default='optimized',
-                   help='Replay one selection consistently, overriding captured settings')
     p.add_argument('--frames',action='store_true',help='Export full preview geometry')
     p.add_argument('--analyze',action='store_true',help='Score temporal stability and tracking; requires NumPy')
     p.add_argument('--check',action='store_true',help='Check each device against its reviewed snapshot')
@@ -30,13 +28,8 @@ def main():
         if expected is None and not args.create_baselines:p.error(f'{expected_path}: missing baseline')
         if expected and (expected.get('version')!=1 or expected.get('recording_sha256')!=digest):
             p.error(f'{expected_path}: unsupported baseline or recording hash mismatch')
-        reference=expected if args.algorithm=='optimized' else (expected or {}).get('alternatives',{}).get(args.algorithm)
-        if reference is None and args.check and not args.create_baselines:
-            p.error(f'{expected_path}: missing {args.algorithm} baseline')
-        if expected is None and args.algorithm!='optimized':
-            p.error(f'{expected_path}: create the optimized baseline first')
         out=args.output/path.stem;out.mkdir(parents=True,exist_ok=True)
-        command=[str(args.bin_dir/'prediction-replay'),str(path),'--algorithm',args.algorithm]
+        command=[str(args.bin_dir/'prediction-replay'),str(path)]
         if args.frames or args.analyze:command+=['--frames',str(out/'frames.jsonl')]
         with (out/'replay.csv').open('w') as csv:
             run=subprocess.run(command,stdout=csv,stderr=subprocess.PIPE,text=True,check=True)
@@ -48,20 +41,15 @@ def main():
             with (out/'records.jsonl').open('w') as records:
                 subprocess.run([str(args.bin_dir/'stroke-recording'),'dump',str(path)],stdout=records,check=True)
             snapshot=analyze(out/'records.jsonl',out/'frames.jsonl',out/'analysis')
-            if reference and args.check:
-                failures=check_snapshot(reference.get('correction_stability',{}),snapshot)
-        if reference is None and args.create_baselines:
-            reference=dict(summary=summary,correction_stability=snapshot)
-            if expected is None:
-                expected=dict(version=1,recording_sha256=digest,device=path.stem,
-                              device_label_source='filename',**reference)
-                with expected_path.open('x') as f:json.dump(expected,f,indent=2);f.write('\n')
-            else:
-                expected.setdefault('alternatives',{})[args.algorithm]=reference
-                expected_path.write_text(json.dumps(expected,indent=2)+'\n')
+            if expected and args.check:
+                failures=check_snapshot(expected.get('correction_stability',{}),snapshot)
+        if expected is None and args.create_baselines:
+            expected=dict(version=1,recording_sha256=digest,device=path.stem,
+                          device_label_source='filename',summary=summary,correction_stability=snapshot)
+            with expected_path.open('x') as f:json.dump(expected,f,indent=2);f.write('\n')
         if args.check:
             # Match the Rust bank's deterministic accuracy/coverage guardrails.
-            old=reference['summary']
+            old=expected['summary']
             for k in ['contacts','samples','queries']:
                 if summary[k]!=old[k]:failures.append(f'{k} changed')
             for k in ['graded_queries','transitions']:
@@ -75,10 +63,10 @@ def main():
         (out/'checks.json').write_text(json.dumps(dict(failures=failures),indent=2)+'\n')
         sources=[Path('crates/layer-engine/src/feedback.rs'),*Path('crates/layer-engine/src/feedback').glob('*.rs')]
         (out/'source-manifest.json').write_text(json.dumps(dict(
-            algorithm=args.algorithm,
+            algorithm='optimized',
             replay_sha256=hashlib.sha256((args.bin_dir/'prediction-replay').read_bytes()).hexdigest(),
             sources_at_replay={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}),indent=2)+'\n')
-        index[path.stem]=dict(recording_sha256=digest,algorithm=args.algorithm,summary=summary,failures=failures)
+        index[path.stem]=dict(recording_sha256=digest,algorithm='optimized',summary=summary,failures=failures)
         print(f'{path.stem}: {summary["contacts"]} contacts; {out}',flush=True)
         if failures:raise SystemExit('\n'.join(failures))
     (args.output/'bank.json').write_text(json.dumps(index,indent=2)+'\n')

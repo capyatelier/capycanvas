@@ -16499,7 +16499,7 @@ mod tests {
             assert_eq!(algorithm.enabled, !supported);
             if supported {
                 for action in [
-                    PreferenceAction::Edit { id: algorithm.id, value: PreferenceValue::Choice(1) },
+                    PreferenceAction::Edit { id: algorithm.id, value: PreferenceValue::Choice(0) },
                     PreferenceAction::Reset { id: algorithm.id },
                 ] {
                     preference(&mut s, action);

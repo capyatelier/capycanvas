@@ -187,44 +187,37 @@ fn collected_recording_bank_preserves_accuracy_and_useful_prediction() {
             path.display()
         );
 
-        let mut references = vec![(PredictionAlgorithm::Optimized, &fixture)];
-        if let Some(previous) = fixture.get("alternatives").and_then(|v| v.get("previous")) {
-            references.push((PredictionAlgorithm::Previous, previous));
+        let label = path.display().to_string();
+        let baseline = &fixture["summary"];
+        assert!(baseline.is_object(), "{}: missing baseline", label);
+        let reader = io::BufReader::new(std::fs::File::open(&path).unwrap());
+        let actual = replay(reader, io::sink()).unwrap();
+        let measured = serde_json::to_value(&actual).unwrap();
+        for key in ["contacts", "samples", "queries"] {
+            assert_eq!(measured[key], baseline[key], "{} {key}", label);
         }
-        for (algorithm, reference) in references {
-            let label = format!("{} {algorithm:?}", path.display());
-            let baseline = &reference["summary"];
-            assert!(baseline.is_object(), "{}: missing baseline", label);
-            let reader = io::BufReader::new(std::fs::File::open(&path).unwrap());
-            let actual = replay_with_options(reader, io::sink(), None, Some(algorithm)).unwrap();
-            let measured = serde_json::to_value(&actual).unwrap();
-            for key in ["contacts", "samples", "queries"] {
-                assert_eq!(measured[key], baseline[key], "{} {key}", label);
-            }
-            // Different accepted horizons can make more boundary queries
-            // gradable. Protect coverage; do not require identical omissions.
-            for key in ["graded_queries", "transitions"] {
-                assert!(
-                    measured["accuracy"][key].as_u64().unwrap()
-                        >= baseline["accuracy"][key].as_u64().unwrap(),
-                    "{} lost {key}",
-                    label
-                );
-            }
-            // Endpoint-error steps and a model's chosen horizon are diagnostics,
-            // not comparable flicker/lag objectives when reach changes. The
-            // Python bank guards full-preview temporal errors, fixed-clock gaps,
-            // braking, severity and eligibility against the frozen references.
+        // Different accepted horizons can make more boundary queries
+        // gradable. Protect coverage; do not require identical omissions.
+        for key in ["graded_queries", "transitions"] {
             assert!(
-                actual.accuracy.position_rms_px
-                    <= baseline["accuracy"]["position_rms_px"].as_f64().unwrap() + 1e-6,
-                "{} position RMS regressed",
+                measured["accuracy"][key].as_u64().unwrap()
+                    >= baseline["accuracy"][key].as_u64().unwrap(),
+                "{} lost {key}",
                 label
             );
-            assert!(
-                actual.prediction_coverage
-                    >= baseline["prediction_coverage"].as_f64().unwrap() - 0.001
-            );
         }
+        // Endpoint-error steps and a model's chosen horizon are diagnostics,
+        // not comparable flicker/lag objectives when reach changes. The
+        // Python bank guards full-preview temporal errors, fixed-clock gaps,
+        // braking, severity and eligibility against the frozen references.
+        assert!(
+            actual.accuracy.position_rms_px
+                <= baseline["accuracy"]["position_rms_px"].as_f64().unwrap() + 1e-6,
+            "{} position RMS regressed",
+            label
+        );
+        assert!(
+            actual.prediction_coverage >= baseline["prediction_coverage"].as_f64().unwrap() - 0.001
+        );
     }
 }

@@ -18,13 +18,12 @@ pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 
-/// Smooth Motion revisions for comparing steady-stroke continuity.
+/// Supported engine predictors; retained as a setting for future alternatives.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PredictionAlgorithm {
     #[default]
     Optimized,
-    Previous,
 }
 
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
@@ -184,7 +183,6 @@ impl MotionState {
             )
         };
         let memory = history.map(|h| (config.prediction_horizon_micros, h.smooth));
-        let optimized = config.prediction_algorithm == PredictionAlgorithm::Optimized;
         let coherence = history.map_or(continuity, |h| h.continuity);
         if requested == 0 || (horizon == 0 && coherence == 0.) {
             self.lead_time = None;
@@ -210,41 +208,39 @@ impl MotionState {
             motion.display_distance_budget(age, config),
         )
         .with_local_motion(real, config, age, memory, self.local.as_ref(), continuity);
-        if optimized {
-            // Preserve display lead through fit-window confidence changes. Fresh
-            // local geometry still follows the pen; a confirmed stop/turn clears
-            // coherence and bypasses this length memory immediately.
-            let sample = real.last()?.elapsed_micros;
-            let desired = f64::from(output.horizon) - f64::from(age);
-            let lead = self.lead_time.map_or(desired, |(before, before_now, old)| {
-                if coherence > 0. && sample >= before && sample - before <= 32_000 {
-                    if sample == before {
-                        // No new evidence: consume the existing forecast instead
-                        // of advancing its endpoint on every repaint.
-                        return old - f64::from(now.saturating_sub(before_now));
-                    }
-                    desired
-                        + (old - desired)
-                            * (-f64::from(sample - before)
-                                / (if desired > old {
-                                    8_000.
-                                } else {
-                                    48_000. * coherence
-                                }))
-                            .exp()
-                } else {
-                    desired
+        // Preserve display lead through fit-window confidence changes. Fresh
+        // local geometry still follows the pen; a confirmed stop/turn clears
+        // coherence and bypasses this length memory immediately.
+        let sample = real.last()?.elapsed_micros;
+        let desired = f64::from(output.horizon) - f64::from(age);
+        let lead = self.lead_time.map_or(desired, |(before, before_now, old)| {
+            if coherence > 0. && sample >= before && sample - before <= 32_000 {
+                if sample == before {
+                    // No new evidence: consume the existing forecast instead
+                    // of advancing its endpoint on every repaint.
+                    return old - f64::from(now.saturating_sub(before_now));
                 }
-            });
-            self.lead_time = Some((sample, now, lead));
-            output.horizon = (f64::from(age) + lead).round().max(0.) as u32;
-            output.horizon = output
-                .horizon
-                .min(age.saturating_add(requested))
-                .min(MAX_PREDICTION_HORIZON_MICROS);
-        }
+                desired
+                    + (old - desired)
+                        * (-f64::from(sample - before)
+                            / (if desired > old {
+                                8_000.
+                            } else {
+                                48_000. * coherence
+                            }))
+                        .exp()
+            } else {
+                desired
+            }
+        });
+        self.lead_time = Some((sample, now, lead));
+        output.horizon = (f64::from(age) + lead).round().max(0.) as u32;
+        output.horizon = output
+            .horizon
+            .min(age.saturating_add(requested))
+            .min(MAX_PREDICTION_HORIZON_MICROS);
         self.local = output.local_motion();
-        (!optimized || output.horizon > 0).then_some(output)
+        (output.horizon > 0).then_some(output)
     }
 }
 
@@ -357,8 +353,7 @@ impl PredictionState {
         transform: [f32; 6],
         config: InstantFeedbackConfig,
     ) -> Option<TipEstimate> {
-        let optimized = config.prediction_algorithm == PredictionAlgorithm::Optimized;
-        if self.policy != Some(config) || (optimized && self.transform != Some(transform)) {
+        if self.policy != Some(config) || self.transform != Some(transform) {
             self.immediate = MotionState::default();
             self.sustained = MotionState::default();
             self.correction_field = None;
@@ -372,7 +367,7 @@ impl PredictionState {
         let previous_output = self.output.take();
         let horizon = self.lift_horizon();
         let mut drawing = if config.use_engine_prediction {
-            drawing_state::DrawingState::measure(real, transform, config.prediction_algorithm)
+            drawing_state::DrawingState::measure(real, transform)
         } else {
             Default::default()
         };
@@ -383,30 +378,24 @@ impl PredictionState {
                         .prediction_horizon_micros
                         // Pressure release confirms an earlier stop alarm.
                         // Otherwise use an 8 ms warning beyond the target.
-                        .saturating_add(
-                            if config.prediction_algorithm == PredictionAlgorithm::Previous
-                                || horizon.is_some_and(|h| h < 48_000)
-                            {
-                                24_000
-                            } else {
-                                8_000
-                            },
-                        )
+                        .saturating_add(if horizon.is_some_and(|h| h < 48_000) {
+                            24_000
+                        } else {
+                            8_000
+                        })
                         .saturating_add(now.saturating_sub(latest.elapsed_micros)),
                 );
-        if optimized {
-            if let Some(p) = previous_output.as_ref() {
-                if latest.elapsed_micros > p.sample_time() {
-                    self.continuing = true;
-                }
-            } else {
-                self.continuing = false;
+        if let Some(p) = previous_output.as_ref() {
+            if latest.elapsed_micros > p.sample_time() {
+                self.continuing = true;
             }
-            // A continuation requires an existing forecast and a fresh report.
-            // Repainting the first forecast must not manufacture this evidence.
-            if !self.continuing {
-                drawing.continuity = 0.;
-            }
+        } else {
+            self.continuing = false;
+        }
+        // A continuation requires an existing forecast and a fresh report.
+        // Repainting the first forecast must not manufacture this evidence.
+        if !self.continuing {
+            drawing.continuity = 0.;
         }
         if interrupted {
             drawing.continuity = 0.;
@@ -450,7 +439,6 @@ impl PredictionState {
         let limited = horizon.map_or(requested, |h| {
             requested.min(latest.elapsed_micros.saturating_add(h))
         });
-        self.output = None;
         let native = config.use_platform_prediction
             && platform
                 .iter()
@@ -466,8 +454,7 @@ impl PredictionState {
                 self.last_motion
                     .as_ref()
                     .filter(|old| {
-                        optimized
-                            && drawing.continuity > 0.25
+                        drawing.continuity > 0.25
                             && latest
                                 .elapsed_micros
                                 .checked_sub(old.point_at(0).elapsed_micros)
@@ -475,15 +462,11 @@ impl PredictionState {
                     })
                     .map(|old| old.advanced_to(latest, transform))
             });
-            if optimized && measured.is_some() {
+            if measured.is_some() {
                 self.last_motion = measured;
             }
             if let Some(motion) = motion {
-                let requested = if optimized && interrupted {
-                    limited
-                } else {
-                    requested
-                };
+                let requested = if interrupted { limited } else { requested };
                 // Two components of Smooth Motion: keep the immediate fit warm
                 // while sustained motion retains confidence and corrections.
                 // The expensive trajectory fit and drawing-state scan are shared.

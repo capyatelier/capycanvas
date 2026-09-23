@@ -1,5 +1,4 @@
 //! Causal evidence that smooth motion has persisted beyond the local fit.
-use super::PredictionAlgorithm;
 use layer_core::StrokePoint;
 
 // Compared with 200 ms on the Wacom recording; 100 ms retains more useful
@@ -42,21 +41,11 @@ fn ramp(x: f64) -> f64 {
 }
 
 impl DrawingState {
-    pub fn measure(
-        real: &[StrokePoint],
-        transform: [f32; 6],
-        algorithm: PredictionAlgorithm,
-    ) -> Self {
-        Self::with_history(real, transform, HISTORY_MICROS, algorithm)
+    pub fn measure(real: &[StrokePoint], transform: [f32; 6]) -> Self {
+        Self::with_history(real, transform, HISTORY_MICROS)
     }
 
-    fn with_history(
-        real: &[StrokePoint],
-        transform: [f32; 6],
-        history: u32,
-        algorithm: PredictionAlgorithm,
-    ) -> Self {
-        let optimized = algorithm == PredictionAlgorithm::Optimized;
+    fn with_history(real: &[StrokePoint], transform: [f32; 6], history: u32) -> Self {
         let Some(anchor) = real.last() else {
             return Self::default();
         };
@@ -126,7 +115,7 @@ impl DrawingState {
         // One moderate speed dip after steady/accelerating motion is weak
         // evidence of a stop. Consecutive dips retain their full weight;
         // a large drop or sharp turn still interrupts immediately.
-        let deceleration = if optimized && deceleration > 0.75 && older_ratio >= 0.95 {
+        let deceleration = if deceleration > 0.75 && older_ratio >= 0.95 {
             1.
         } else {
             deceleration
@@ -169,7 +158,7 @@ impl DrawingState {
             * ramp((speed - 300.) / 900.)
             * interrupt;
         Self {
-            continuity: if optimized { continuity } else { 0. },
+            continuity,
             speed,
             stop_in_micros,
             reach,
@@ -191,16 +180,7 @@ mod tests {
                 let straight: Vec<_> = (0..=400_000 / period)
                     .map(|i| point(i as f32 * period as f32 * 0.0024, 0., i * period))
                     .collect();
-                assert!(
-                    DrawingState::with_history(
-                        &straight,
-                        IDENTITY,
-                        history,
-                        PredictionAlgorithm::Optimized
-                    )
-                    .smooth
-                        > 0.99
-                );
+                assert!(DrawingState::with_history(&straight, IDENTITY, history).smooth > 0.99);
                 let mut erratic = straight.clone();
                 // Identical latest 48 ms, but oscillating earlier in the history.
                 for p in &mut erratic {
@@ -209,14 +189,7 @@ mod tests {
                     }
                 }
                 assert!(
-                    DrawingState::with_history(
-                        &erratic,
-                        IDENTITY,
-                        history,
-                        PredictionAlgorithm::Optimized
-                    )
-                    .smooth
-                        < 0.2,
+                    DrawingState::with_history(&erratic, IDENTITY, history).smooth < 0.2,
                     "{history} / {period}"
                 );
             }
@@ -230,16 +203,7 @@ mod tests {
                 let mut points: Vec<_> = (0..=100)
                     .map(|i| point(i as f32 * 9.6, 0., i * 4000))
                     .collect();
-                assert!(
-                    DrawingState::with_history(
-                        &points,
-                        IDENTITY,
-                        history,
-                        PredictionAlgorithm::Optimized
-                    )
-                    .smooth
-                        > 0.99
-                );
+                assert!(DrawingState::with_history(&points, IDENTITY, history).smooth > 0.99);
                 for i in 1..=3 {
                     points.push(point(
                         960.,
@@ -248,13 +212,7 @@ mod tests {
                     ));
                 }
                 assert_eq!(
-                    DrawingState::with_history(
-                        &points,
-                        IDENTITY,
-                        history,
-                        PredictionAlgorithm::Optimized
-                    )
-                    .smooth,
+                    DrawingState::with_history(&points, IDENTITY, history).smooth,
                     0.,
                     "history {history}, corner {corner}"
                 );
@@ -277,26 +235,16 @@ mod tests {
                         )
                     })
                     .collect();
-                let score = DrawingState::with_history(
-                    &points,
-                    [zoom, 0., 0., zoom, 300., -200.],
-                    history,
-                    PredictionAlgorithm::Optimized,
-                )
-                .smooth;
+                let score =
+                    DrawingState::with_history(&points, [zoom, 0., 0., zoom, 300., -200.], history)
+                        .smooth;
                 assert!(score > 0.95, "{history}: {score}");
                 if let Some(before) = reference {
                     assert!((score - before).abs() < 1e-6)
                 }
                 reference = Some(score);
                 assert_eq!(
-                    DrawingState::with_history(
-                        &points[..10],
-                        IDENTITY,
-                        history,
-                        PredictionAlgorithm::Optimized
-                    )
-                    .smooth,
+                    DrawingState::with_history(&points[..10], IDENTITY, history).smooth,
                     0.
                 );
             }
@@ -317,11 +265,7 @@ mod tests {
                         )
                     })
                     .collect();
-                let state = DrawingState::measure(
-                    &points,
-                    [zoom, 0., 0., zoom, 0., 0.],
-                    PredictionAlgorithm::Optimized,
-                );
+                let state = DrawingState::measure(&points, [zoom, 0., 0., zoom, 0., 0.]);
                 assert!(state.continuity > 0.85, "{period}/{zoom}: {state:?}");
                 assert_eq!(state.smooth, 0.);
             }
@@ -345,10 +289,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let single =
-            DrawingState::measure(&motion(false), IDENTITY, PredictionAlgorithm::Optimized);
-        let repeated =
-            DrawingState::measure(&motion(true), IDENTITY, PredictionAlgorithm::Optimized);
+        let single = DrawingState::measure(&motion(false), IDENTITY);
+        let repeated = DrawingState::measure(&motion(true), IDENTITY);
         assert!(single.continuity > 0.99);
         assert!(single.stop_in_micros.is_infinite());
         assert!(repeated.continuity < single.continuity);

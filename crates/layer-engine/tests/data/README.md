@@ -8,8 +8,8 @@ recognized characters or predictor inputs. Keep devices and sessions separate
 when splitting training and evaluation data.
 
 The Rust bank test and Python runner discover every recording automatically.
-The benchmark defaults to Optimized regardless of the setting captured on the
-device. `--algorithm previous` evaluates Previous on the same input and clocks.
+The benchmark runs Optimized, including for captures made with retired
+predictors. Other recorded policies and query clocks are preserved.
 Device names are provenance labels, not hardware IDs inferred from input events.
 
 ## Current recordings
@@ -40,7 +40,6 @@ cargo test -p layer-engine --offline --features prediction-bench collected_recor
 python3 tools/prediction/replay-bank.py --output artifacts/strokes/tablet-bank
 # Full geometry, temporal metrics and regression checks; requires NumPy:
 python3 tools/prediction/replay-bank.py --output artifacts/strokes/tablet-bank --analyze --check
-python3 tools/prediction/replay-bank.py --algorithm previous --output artifacts/strokes/tablet-bank-previous --analyze --check
 python3 tools/prediction/preview-player.py artifacts/strokes/tablet-bank/wacom-pro-27
 ```
 
@@ -48,25 +47,23 @@ For a new recording, run `replay-bank.py --output artifacts/strokes/tablet-bank
 --create-baselines --analyze`. This creates only missing baselines. Review the
 provenance, results and preview episodes before checking in data and sidecars.
 Never update an existing baseline merely to make a failing change pass.
-Run it again with `--algorithm previous` to add that selection's missing baseline.
 
 The expected JSON version 1 binds the recording hash to `summary` (counts,
 accuracy, coverage, useful horizon) and `correction_stability` (version 5 temporal
-snapshot) for Optimized. `alternatives.previous` holds the same fields for
-Previous; the Rust bank test checks both. Historical fields such as
+snapshot) for Optimized. Historical fields such as
 `error_step_rms_px` are endpoint diagnostics, not flicker measurements.
 Version 5 additionally follows the initial preview through measured-ink
 settlement and disappearance. These temporal references were recomputed from
-frozen pre-change outputs: `9ccc9b22` for Wacom Pro 27, and `ba9b91e0` for each
-Movink selection. Other temporal values and budgets retain their old references.
+frozen pre-change outputs: `9ccc9b22` for Wacom Pro 27, and `ba9b91e0` for
+Movink. Other temporal values and budgets retain their old references.
 After passing those frozen guards, Optimized's mean speed-weighted transient
 cost bound was tightened to preserve this fix's measured improvement. Other
-cost thresholds and Previous's values remain at their pre-change references.
+cost thresholds remain at their pre-change references.
 
 Full analysis writes `DEVICE/analysis/metrics.json`, `severity.csv`, compressed
 per-query signals and `regression-snapshot.json`. The gate protects ordinary
 correction shock, oscillation, straight retreat, common-clock pen tracking,
 geometric error, braking and scoring eligibility. An optional comparison takes
-saved frame exports from an earlier revision. The replay CLI also accepts
-`--algorithm previous|optimized` for comparing the two settings choices. See [recording and evaluation](../../../../docs/development/stroke-recording.md)
+saved frame exports from an earlier revision. See
+[recording and evaluation](../../../../docs/development/stroke-recording.md)
 for metric definitions, capture format, host tests and limitations.

@@ -180,22 +180,29 @@ class AndroidPredictionTest {
         compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("16 ms")
     }
 
-    @Test fun predictionAlgorithmCanBeSwitchedAndPersists() {
+    @Test fun optimizedPredictionIsTheOnlyChoiceAndPersists() {
         capability(false)
-        for ((index, value) in listOf(1 to "previous", 0 to "optimized")) {
-            compose.onNodeWithTag("setting-choice-prediction_algorithm").performScrollTo().performClick()
-            compose.onNodeWithTag("setting-choice-option-prediction_algorithm-$index").performClick()
-            waitFor { settings().getString("prediction_algorithm") == value &&
-                preferences.getString("settings", null)?.let { JSONObject(it).optString("prediction_algorithm") } == value }
-            shot("algorithm-$value")
-            scenario.recreate()
-            scenario.onActivity { host = it.host }
-            waitFor { host.snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optString("prediction_algorithm") == value }
-            compose.runOnIdle { host.dispatch(obj("type" to "open_settings", "page" to "input")) }
-            waitFor { host.snapshot?.objectOrNull("preferences") != null }
-            capability(false)
-            assertEquals(index, row("prediction_algorithm").getJSONObject("kind").getInt("selected"))
-        }
+        val options = row("prediction_algorithm").getJSONObject("kind").getJSONArray("options")
+        assertEquals(1, options.length())
+        assertEquals("Smooth Motion (Optimized)", options.getString(0))
+        compose.onNodeWithTag("setting-choice-prediction_algorithm").performScrollTo().performClick()
+        compose.onNodeWithTag("setting-choice-option-prediction_algorithm-1").assertDoesNotExist()
+        compose.onNodeWithTag("setting-choice-option-prediction_algorithm-0").performClick()
+        // Selecting the current choice is a no-op. Persist a real edit so this
+        // also exercises older settings files that have no algorithm field.
+        val horizon = if (settings().getDouble("prediction_ms") == 24.0) 16.0 else 24.0
+        compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to horizon)) }
+        waitFor { settings().getString("prediction_algorithm") == "optimized" &&
+            preferences.getString("settings", null)?.let { JSONObject(it).optString("prediction_algorithm") } == "optimized" }
+        shot("algorithm-optimized")
+        scenario.recreate()
+        scenario.onActivity { host = it.host }
+        waitFor { host.snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optString("prediction_algorithm") == "optimized" }
+        compose.runOnIdle { host.dispatch(obj("type" to "open_settings", "page" to "input")) }
+        waitFor { host.snapshot?.objectOrNull("preferences") != null }
+        capability(false)
+        assertEquals(0, row("prediction_algorithm").getJSONObject("kind").getInt("selected"))
+        assertEquals(horizon, settings().getDouble("prediction_ms"), 0.0)
     }
 
     @Test fun fallingPressureStrokeRendersAndSurvivesUndoRedo() {

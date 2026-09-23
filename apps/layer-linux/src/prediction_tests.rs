@@ -26,14 +26,15 @@ fn native_prediction_settings() {
     let choice = find_named(w.window.upcast_ref(), "setting-prediction-algorithm")
         .unwrap().downcast::<adw::ComboRow>().unwrap();
     assert_eq!(choice.selected(), 0);
-    choice.set_selected(1);
+    assert_eq!(choice.model().unwrap().n_items(), 1);
+    assert_eq!(state(&w).settings.prediction_algorithm, layer_engine::PredictionAlgorithm::Optimized);
+    w.dispatch(UiAction::CloseSettings);
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     pump(100);
-    assert_eq!(state(&w).settings.prediction_algorithm, layer_engine::PredictionAlgorithm::Previous);
     let choice = find_named(w.window.upcast_ref(), "setting-prediction-algorithm")
         .unwrap().downcast::<adw::ComboRow>().unwrap();
-    choice.set_selected(0);
-    pump(100);
-    assert_eq!(state(&w).settings.prediction_algorithm, layer_engine::PredictionAlgorithm::Optimized);
+    assert_eq!(choice.selected(), 0);
+    assert_eq!(choice.model().unwrap().n_items(), 1);
     assert!(find_named(w.window.upcast_ref(), "setting-prediction-horizon").is_some());
     w.window.destroy();
     pump(100);

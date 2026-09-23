@@ -150,11 +150,10 @@ The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
 existing saved values are preserved.
 
 **Smooth Motion** is shared across platforms. **Settings → Input → Prediction
-algorithm** offers **Smooth Motion (Optimized)** (default) and **Smooth Motion
-(Previous)** for comparison. Previous reproduces the `9ccc9b22` behavior; Optimized
-adds the reach-continuity changes described below. Retired experimental choices
-migrate to Optimized while other preferences remain intact. The standalone C
-feedback API retains its ABI and uses Optimized.
+algorithm** retains its dropdown for future alternatives, with **Smooth Motion
+(Optimized)** as its only supported choice and default. Saved Previous and other
+retired experimental choices migrate to Optimized while other preferences remain
+intact. The standalone C feedback API retains its ABI and uses Optimized.
 
 The predictor combines a recent acceleration fit with 100 ms of causal drawing
 history. Sustained smooth motion supports stable reach; slow/medium detail keeps

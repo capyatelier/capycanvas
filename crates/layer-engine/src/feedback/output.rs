@@ -84,27 +84,19 @@ mod tests {
             .collect();
         real.last_mut().unwrap().position.y += 0.5;
         let motion = MotionFit::fit(&real, IDENTITY, 1000).unwrap();
-        for algorithm in [
-            super::super::PredictionAlgorithm::Optimized,
-            super::super::PredictionAlgorithm::Previous,
-        ] {
-            let config = InstantFeedbackConfig {
-                prediction_algorithm: algorithm,
-                prediction_horizon_micros: 24_000,
-                ..Default::default()
-            };
-            let full = Output::new(motion.clone(), 24_000, IDENTITY, 96.)
-                .with_local_motion(&real, config, 0, None, None, 0.);
-            let mut cropped = full.clone();
-            cropped.horizon = 4000;
-            let a = full.point_at(4000);
-            let b = cropped.point_at(4000);
-            if algorithm == super::super::PredictionAlgorithm::Optimized {
-                assert_eq!(a, b, "visibility cannot change the curve's anchor join");
-            } else {
-                assert_ne!(a, b, "the A/B reference preserves its original geometry");
-            }
-        }
+        let config = InstantFeedbackConfig {
+            prediction_horizon_micros: 24_000,
+            ..Default::default()
+        };
+        let full = Output::new(motion, 24_000, IDENTITY, 96.)
+            .with_local_motion(&real, config, 0, None, None, 0.);
+        let mut cropped = full.clone();
+        cropped.horizon = 4000;
+        assert_eq!(
+            full.point_at(4000),
+            cropped.point_at(4000),
+            "visibility cannot change the curve's anchor join"
+        );
     }
 }
 
@@ -183,9 +175,7 @@ impl Output {
             continuity,
         );
         if let Some(local) = &self.local {
-            if config.prediction_algorithm == super::PredictionAlgorithm::Optimized {
-                self.join_horizon = Some(local.join_horizon());
-            }
+            self.join_horizon = Some(local.join_horizon());
             self.horizon = local.horizon(self.horizon, age, config.prediction_horizon_micros);
 
             // A stopping distance belongs to the model that estimated it.

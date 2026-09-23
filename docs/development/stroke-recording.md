@@ -76,18 +76,16 @@ other training pipelines. Split training and evaluation by recording, not by
 neighboring samples from the same stroke. Keep hover, predicted input and
 interrupted contacts distinguishable when preparing labels.
 
-Replay runs the recorded Smooth Motion selection, including its corrections and
-native-prediction precedence. Use `--algorithm previous` or `--algorithm optimized`
-to compare either version with identical inputs, policies and query timing. It writes per-query CSV to
-stdout and summary diagnostics to stderr; `--frames frames.jsonl` additionally
-exports the entire preview and causal actual-sample replacements. Both binary
+Replay runs the current Smooth Motion predictor, including its corrections and
+native-prediction precedence, on the recorded inputs, policies and query timing.
+It writes per-query CSV to stdout and summary diagnostics to stderr;
+`--frames frames.jsonl` additionally exports the entire preview and causal actual-sample replacements. Both binary
 v2 and legacy v1 JSONL (optionally gzip compressed) are readable. Conversion
 preserves legacy samples and queries without inventing raw inputs or missing
 clocks; metadata identifies these limitations. The v2 policy wire layout keeps
-the original integer slot: historical values 0–2 select the current default,
-3 selects Optimized, and 4 selects Previous. New captures preserve the selection
-at pen-down and each policy change; older captures remain readable. Readers
-from before these choices reject the new values rather than silently misread them.
+the original integer slot: historical values 0–4 read as Optimized, and new
+captures write 3. This includes captures made with the retired Previous choice.
+Unknown values are rejected; the rest of each recorded policy is preserved.
 
 ## Evaluating visible stability and tracking
 
