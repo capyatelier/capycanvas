@@ -170,7 +170,7 @@ fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
             assert!(matches!(panel, Panel::CustomToolbar(_)));
             assert_eq!(
                 layout.group_edge(layout.panel_group(panel).unwrap()),
-                Some(Edge::Bottom)
+                Some(Edge::Left)
             );
             assert_eq!(
                 layout
@@ -622,4 +622,56 @@ fn vertical_options_shrink_before_reflowing_and_keep_more_accessible() {
         );
         assert!(fitting.more.height >= h);
     }
+}
+
+#[test]
+fn compact_edge_moves_preserve_toolbar_identity_and_one_step_history() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    let panel = layout
+        .panels
+        .iter()
+        .find(|p| {
+            p.tiles()
+                .iter()
+                .any(|t| t.control == ToolbarControl::BrushSizeSlider)
+        })
+        .unwrap()
+        .id;
+    let tiles = layout.panel(panel).unwrap().tiles().to_vec();
+    assert!(
+        layout
+            .bands
+            .iter()
+            .any(|b| b.edge == Edge::Left && b.alignment == Some(EdgeAlignment::Center))
+    );
+    s.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(WorkspaceState {
+            layout: layout.clone(),
+            ..Default::default()
+        }),
+    })
+    .unwrap();
+    s.dispatch(UiAction::MovePanel {
+        panel,
+        target: DockTarget::CompactEdge {
+            edge: Edge::Right,
+            alignment: EdgeAlignment::Center,
+        },
+        viewport: [1200., 900.],
+    })
+    .unwrap();
+    let moved = s.state().workspace.layout.clone();
+    assert_eq!(moved.panel(panel).unwrap().tiles(), tiles);
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    })
+    .unwrap();
+    assert_eq!(s.state().workspace.layout, layout);
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::RedoWorkspace,
+    })
+    .unwrap();
+    assert_eq!(s.state().workspace.layout, moved);
 }

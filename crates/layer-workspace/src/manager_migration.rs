@@ -9,14 +9,12 @@ fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
     ] {
-        for old in [
-            preset.legacy_toolbar_components_layout(Platform::Gtk),
-            if index == 0 {
-                WorkspacePreset::legacy_brush_controls_layout(Platform::Gtk)
-            } else {
-                preset.legacy_toolbar_components_layout(Platform::Gtk)
-            },
-        ] {
+        let mut previous = vec![preset.legacy_toolbar_components_layout(Platform::Gtk)];
+        if preset == WorkspacePreset::Painter {
+            previous.push(preset.legacy_bottom_brush_controls_layout(Platform::Gtk));
+            previous.push(WorkspacePreset::legacy_brush_controls_layout(Platform::Gtk));
+        }
+        for old in previous {
             let working = preset.working_state();
             let mut entity = Entity::workspace(
                 preset.name(),
@@ -84,6 +82,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let previous_bottom_controls = layer_ui::WorkspacePreset::Painter.legacy_bottom_brush_controls_layout(platform);
     let previous_brush_controls = layer_ui::WorkspacePreset::legacy_brush_controls_layout(platform);
     let previous_components = layer_ui::WorkspacePreset::Painter.legacy_toolbar_components_layout(platform);
     let previous_selection = layer_ui::WorkspacePreset::Painter.legacy_selection_layout(platform);
@@ -114,6 +113,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
             && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
             && baseline.as_ref() != &previous_native_settings
             && baseline.as_ref() != &previous_paint_drawer
+            && baseline.as_ref() != &previous_bottom_controls
             && baseline.as_ref() != &previous_brush_controls
             && baseline.as_ref() != &previous_components
             && baseline.as_ref() != &previous_selection)

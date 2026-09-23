@@ -100,7 +100,7 @@ pub use interaction::{
 pub use layout::{
     Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
     ColumnIcon, ColumnStack, Divider, DockBand, DockItem,
-    DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
+    DockLayout, DockNode, DockTarget, Edge, EdgeAlignment, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
     PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
     WorkspacePreset,

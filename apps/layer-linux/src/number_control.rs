@@ -18,6 +18,7 @@ mod imp {
         pub steps: OnceCell<[gtk::Button; 2]>,
         pub interacting: Cell<bool>,
         pub compact: Cell<bool>,
+        pub readout_scale: Cell<f64>,
         pub value_label: OnceCell<gtk::Label>,
         pub face: OnceCell<gtk::Box>,
         pub icon: OnceCell<gtk::Image>,
@@ -44,7 +45,37 @@ mod imp {
             })
         }
     }
-    impl WidgetImpl for NumberControl {}
+    impl WidgetImpl for NumberControl {
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline);
+            if self.compact.get() && !self.slider.get().is_some_and(|s| s.is_visible()) {
+                if let (Some(label), Some(face), Some(icon)) =
+                    (self.value_label.get(), self.face.get(), self.icon.get())
+                {
+                    let available = self.display.get().unwrap().width();
+                    let icon_width = if icon.is_visible()
+                        && face.orientation() == gtk::Orientation::Horizontal
+                    {
+                        icon.pixel_size() + face.spacing()
+                    } else {
+                        0
+                    };
+                    let available = (available - icon_width).max(1);
+                    let text_width = label
+                        .create_pango_layout(Some(&label.text()))
+                        .pixel_size()
+                        .0
+                        .max(1);
+                    let scale = (available as f64 / text_width as f64).min(1.);
+                    if (self.readout_scale.replace(scale) - scale).abs() > 0.001 {
+                        let attrs = gtk::pango::AttrList::new();
+                        attrs.insert(gtk::pango::AttrFloat::new_scale(scale));
+                        label.set_attributes(Some(&attrs));
+                    }
+                }
+            }
+        }
+    }
     impl BoxImpl for NumberControl {}
 }
 glib::wrapper! {
@@ -82,6 +113,9 @@ impl NumberControl {
         }
         if let Some(stack) = self.imp().stack.get() {
             stack.set_hexpand(!visible);
+            if self.imp().compact.get() {
+                stack.set_halign(gtk::Align::Fill);
+            }
         }
     }
     pub fn set_icon(&self, icon: &str) {
@@ -89,10 +123,15 @@ impl NumberControl {
             crate::icons::set(image, Some(&format!("layer-{icon}-symbolic")));
         }
     }
-    pub fn set_face(&self, show_icon: bool, title: &str, stacked: bool) {
+    pub fn set_face(&self, show_icon: bool, title: &str, stacked: bool, icon_size: i32) {
         let imp = self.imp();
+        if let Some(label) = imp.value_label.get() {
+            label.set_attributes(None);
+            imp.readout_scale.set(1.);
+        }
         if let Some(image) = imp.icon.get() {
             image.set_visible(show_icon);
+            image.set_pixel_size(icon_size);
         }
         if let Some(label) = imp.title.get() {
             label.set_text(title);

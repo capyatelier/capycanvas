@@ -304,6 +304,11 @@ impl ComponentBody {
                         !text,
                         if vertical && labeled { &title } else { "" },
                         vertical && !labeled,
+                        if vertical {
+                            self.imp().style.get().icon_size() as i32
+                        } else {
+                            16
+                        },
                     );
                     number.set_vexpand(vertical);
                     number.set_valign(if vertical {
@@ -314,8 +319,26 @@ impl ComponentBody {
                 }
                 if let Some(dropdown) = w.downcast_ref::<gtk::DropDown>() {
                     dropdown.set_show_arrow(!vertical);
-                    dropdown
-                        .set_factory(Some(&choice_factory(!text && !(vertical && labeled), true)));
+                    dropdown.set_factory(Some(&choice_factory(
+                        !text && !(vertical && labeled),
+                        true,
+                        if vertical {
+                            self.imp().style.get().icon_size() as i32
+                        } else {
+                            16
+                        },
+                    )));
+                }
+                if row.has_css_class("option-action") {
+                    if let Some(image) = w
+                        .clone()
+                        .downcast::<gtk::Button>()
+                        .ok()
+                        .and_then(|b| b.child())
+                        .and_downcast::<gtk::Image>()
+                    {
+                        image.set_pixel_size(self.imp().style.get().icon_size() as i32);
+                    }
                 }
                 child = w.next_sibling();
             }
@@ -722,8 +745,8 @@ impl Component {
                 }
                 let choice = gtk::DropDown::builder()
                     .model(&model)
-                    .factory(&choice_factory(false, true))
-                    .list_factory(&choice_factory(false, false))
+                    .factory(&choice_factory(false, true, 16))
+                    .list_factory(&choice_factory(false, false, 16))
                     .build();
                 choice.set_hexpand(true);
                 choice.set_tooltip_text(Some(label));
@@ -793,7 +816,7 @@ impl Component {
 }
 
 /// Both dropdown faces and popup rows use the application's SVG icon provider.
-fn choice_factory(compact: bool, face: bool) -> gtk::SignalListItemFactory {
+fn choice_factory(compact: bool, face: bool, icon_size: i32) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, item| {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -803,7 +826,9 @@ fn choice_factory(compact: bool, face: bool) -> gtk::SignalListItemFactory {
             gtk::Align::Fill
         });
         row.set_hexpand(true);
-        row.append(&crate::icons::image("layer-settings-symbolic"));
+        let image = crate::icons::image("layer-settings-symbolic");
+        image.set_pixel_size(icon_size);
+        row.append(&image);
         if !compact {
             let label = gtk::Label::new(None);
             label.set_xalign(0.0);

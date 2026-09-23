@@ -7,11 +7,12 @@ GTK toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
+Toolbars can also use [compact edge regions](compact-toolbar-edges.md).
 They are not title-bar items. Other hosts do not yet offer these components.
 
 ## Included workspaces
 
-Sketch puts size and opacity in a bottom horizontal toolbar. Photo appends
+Sketch centers size and opacity in a compact toolbar on the left edge. Photo appends
 Tool Options to its top commands toolbar, retaining New/Open/Save, Undo/Redo,
 Scale/Rotate and Flip Horizontal, and removing Clear Layer and Fill Selection.
 Tool Options takes the remaining lane width. Other hosts and Paint retain their

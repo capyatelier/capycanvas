@@ -293,7 +293,8 @@ impl DockLayout {
             }
         }
         self.bands.iter().any(|b| {
-            matches!(b.edge, Edge::Left | Edge::Right) && contains(&b.root, column)
+            b.alignment.is_none()
+                && matches!(b.edge, Edge::Left | Edge::Right) && contains(&b.root, column)
         })
     }
 
@@ -350,7 +351,7 @@ impl DockLayout {
         }
         self.group_panels(group).ok()?;
         let band = self.bands.iter().find(|b| b.root.find(group).is_some())?;
-        if !matches!(band.edge, Edge::Left | Edge::Right) {
+        if band.alignment.is_some() || !matches!(band.edge, Edge::Left | Edge::Right) {
             return None;
         }
         let root = find(&band.root, group, band.root.id())?;
@@ -474,6 +475,7 @@ impl DockLayout {
                 next.bands.insert(
                     index,
                     DockBand {
+                        alignment: None,
                         id,
                         edge,
                         extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -1304,6 +1306,7 @@ mod tests {
         };
         let mut layout = DockLayout::editor_default();
         layout.bands = vec![DockBand {
+            alignment: None,
             id: 40,
             edge: Edge::Left,
             extent: 800.,

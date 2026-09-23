@@ -1708,7 +1708,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
-        let mut hint = if let Some(hint) = menubar {
+        let compact_edge = (!docks_hidden && matches!(self.state.platform, Platform::Gtk | Platform::Generic))
+            .then(|| self.state.workspace.layout.compact_edge_drop_hint(&resolved, item, position)).flatten();
+        let mut hint = if let Some(hint) = compact_edge.or(menubar) {
             hint
         } else if let DockItem::Column { column } = item {
             if docks_hidden {

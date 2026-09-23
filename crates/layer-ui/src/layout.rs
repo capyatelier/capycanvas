@@ -789,6 +789,9 @@ impl DockNode {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockBand {
+    /// Compact toolbar regions share a strip but align independently along it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<EdgeAlignment>,
     pub id: u32,
     pub edge: Edge,
     pub extent: f32,
@@ -893,6 +896,10 @@ pub struct DockLayout {
     next_id: u32,
 }
 
+#[path = "compact_edges.rs"]
+mod compact_edges;
+pub use compact_edges::EdgeAlignment;
+
 #[path = "layout_saved.rs"]
 mod saved;
 
@@ -930,6 +937,8 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DockTarget {
+    /// Content-sized toolbar stack aligned at the start, center or end of an edge.
+    CompactEdge { edge: Edge, alignment: EdgeAlignment },
     /// Insert a collapsed column, or a panel/tab group as a new column member.
     StackColumn { column: u32, before: bool },
     Float {
@@ -1332,12 +1341,14 @@ impl DockLayout {
         // the Commands ribbon occupies only the work area between them.
         layout.bands = vec![
             DockBand {
+                alignment: None,
                 id: 1,
                 edge: Edge::Left,
                 extent: TILE_SIZE + WORKSPACE_SPACING,
                 root: tabs(2, &[Panel::Toolbar]),
             },
             DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Left,
                 extent: Panel::Brushes.default_width() + WORKSPACE_SPACING,
@@ -1356,6 +1367,7 @@ impl DockLayout {
                 ),
             },
             DockBand {
+                alignment: None,
                 id: 11,
                 edge: Edge::Right,
                 extent: Panel::Layers.default_width() + WORKSPACE_SPACING,
@@ -1374,6 +1386,7 @@ impl DockLayout {
                 ),
             },
             DockBand {
+                alignment: None,
                 id: 17,
                 edge: Edge::Top,
                 extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -1561,6 +1574,7 @@ impl Default for DockLayout {
             next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
+                    alignment: None,
                     id: 3,
                     edge: Edge::Left,
                     extent: 232.0,
@@ -1573,6 +1587,7 @@ impl Default for DockLayout {
                     },
                 },
                 DockBand {
+                    alignment: None,
                     id: 7,
                     edge: Edge::Right,
                     extent: 232.0,
@@ -1584,6 +1599,7 @@ impl Default for DockLayout {
                     },
                 },
                 DockBand {
+                    alignment: None,
                     id: 1,
                     edge: Edge::Top,
                     extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -1645,6 +1661,9 @@ impl DockLayout {
         for band in &self.bands {
             if !ids.insert(band.id) || !band.extent.is_finite() || band.extent <= 0.0 {
                 return Err("Invalid workspace dock band".into());
+            }
+            if band.alignment.is_some() {
+                self.validate_compact_band(band)?;
             }
             node(&band.root, &mut ids, &mut panels, 0)?;
         }
@@ -1901,6 +1920,7 @@ impl DockLayout {
             _ => Edge::Top,
         };
         next.bands.push(DockBand {
+            alignment: None,
             id: band,
             edge,
             extent: if panel.kind() == PanelKind::Tiles {
@@ -2416,7 +2436,7 @@ impl DockLayout {
         next.detach(&moving);
         let tiles = moving.len() == 1 && selected.kind() == PanelKind::Tiles;
         let dock_edge = match &target {
-            DockTarget::Edge { edge, .. } => Some(*edge),
+            DockTarget::Edge { edge, .. } | DockTarget::CompactEdge { edge, .. } => Some(*edge),
             DockTarget::BesideBand { band } => {
                 next.bands.iter().find(|b| b.id == *band).map(|b| b.edge)
             }
@@ -2429,6 +2449,15 @@ impl DockLayout {
             && (!tiles || matches!(target, DockTarget::Tab { .. }))
         {
             return Err("Top and bottom docks only support standalone toolbars".into());
+        }
+        if matches!(target, DockTarget::CompactEdge { .. }) && !tiles {
+            return Err("Compact edges only support standalone toolbars".into());
+        }
+        if let DockTarget::Tab { group, .. } | DockTarget::Split { group, .. } = target
+            && let Some(band) = next.compact_band(group)
+            && (!tiles || !matches!(target, DockTarget::Split { edge, .. } if edge.axis() != band.edge.axis()))
+        {
+            return Err("Stack standalone toolbars at the ends of a compact edge region".into());
         }
         let source = before.groups.iter().find(|g| g.id == source_group);
         let tile_size = next.panel(selected)?.tile_style.size();
@@ -2448,6 +2477,9 @@ impl DockLayout {
             },
         };
         match target {
+            DockTarget::CompactEdge { edge, alignment } => {
+                next.dock_compact_toolbar(moving, edge, alignment)?;
+            }
             DockTarget::StackColumn {
                 before: insert_before,
                 ..
@@ -2516,6 +2548,7 @@ impl DockLayout {
                 };
                 let id = next.allocate()?;
                 let band = DockBand {
+                    alignment: None,
                     id,
                     edge,
                     extent: if edge.axis() == Axis::Horizontal {
@@ -2550,7 +2583,7 @@ impl DockLayout {
             }
             DockTarget::Split { group, edge } => {
                 let mut fraction = 0.5;
-                if edge.axis() == Axis::Horizontal {
+                if edge.axis() == Axis::Horizontal && next.compact_band(group).is_none() {
                     let target_width = before
                         .groups
                         .iter()
@@ -2656,6 +2689,7 @@ impl DockLayout {
             group,
             edge: Edge::Left | Edge::Right,
         } = target
+            && next.compact_band(group).is_none()
         {
             let after = next.workspace(
                 viewport[0],
@@ -2694,7 +2728,7 @@ impl DockLayout {
     pub(crate) fn same_placement(&self, other: &Self) -> bool {
         #[derive(PartialEq)]
         enum Part<'a> {
-            Band(Edge),
+            Band(Edge, Option<EdgeAlignment>),
             Split(Axis),
             Tabs(u32, &'a [Panel]),
             Stack(bool, bool),
@@ -2751,7 +2785,7 @@ impl DockLayout {
         fn order(layout: &DockLayout) -> Vec<Part<'_>> {
             let mut out = Vec::new();
             for band in &layout.bands {
-                out.push(Part::Band(band.edge));
+                out.push(Part::Band(band.edge, band.alignment));
                 append(layout, &band.root, None, &mut out);
                 out.push(Part::End);
             }
@@ -3053,6 +3087,15 @@ impl DockLayout {
             dividers: Vec::new(),
         };
         for (band_index, band) in bands.iter().enumerate() {
+            if band.alignment.is_some() {
+                if !bands[..band_index]
+                    .iter()
+                    .any(|b| b.edge == band.edge && b.alignment.is_some())
+                {
+                    self.resolve_compact_edge(bands, band.edge, &mut remaining, &mut result);
+                }
+                continue;
+            }
             let parent = remaining;
             let axis = if matches!(band.edge, Edge::Left | Edge::Right) {
                 Axis::Vertical
@@ -3582,6 +3625,11 @@ impl DockLayout {
             .iter_mut()
             .find(|b| b.root.group_for(group.active).is_some())
             .unwrap();
+        // Compact regions derive both dimensions from their contents. They
+        // have no resize divider and already refit after tile-style changes.
+        if band.alignment.is_some() {
+            return;
+        }
         let divider = before
             .dividers
             .iter()
@@ -4970,6 +5018,7 @@ mod tests {
             )
         };
         layout.bands = vec![DockBand {
+            alignment: None,
             id: 99,
             edge: Edge::Left,
             extent: 612.0,
@@ -6309,6 +6358,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             layout.bands = vec![DockBand {
+                alignment: None,
                 id: 3,
                 edge,
                 extent: 232.0,
@@ -6397,6 +6447,7 @@ mod tests {
     fn tab_size_changes_interpolate_from_the_presented_bounds() {
         let layout = DockLayout {
             bands: vec![DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Bottom,
                 extent: 160.0,

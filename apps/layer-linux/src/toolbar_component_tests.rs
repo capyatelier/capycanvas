@@ -64,8 +64,23 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
             pump(50);
             let scale = d.named(&format!("component-slider-{id}"));
             let b = scale.compute_bounds(&d.w.window).unwrap();
-            let a = [b.x() + b.width() * 0.25, b.y() + b.height() / 2.];
-            let z = [b.x() + b.width() * 0.8, a[1]];
+            let vertical = scale
+                .clone()
+                .downcast::<gtk::Scale>()
+                .unwrap()
+                .orientation()
+                == gtk::Orientation::Vertical;
+            let (a, z) = if vertical {
+                (
+                    [b.x() + b.width() / 2., b.y() + b.height() * 0.75],
+                    [b.x() + b.width() / 2., b.y() + b.height() * 0.2],
+                )
+            } else {
+                (
+                    [b.x() + b.width() * 0.25, b.y() + b.height() / 2.],
+                    [b.x() + b.width() * 0.8, b.y() + b.height() / 2.],
+                )
+            };
             drag(d, device, a, z, false);
             let current = state(&d.w);
             assert_eq!(
@@ -116,6 +131,13 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
                 .is_mapped(),
             "drag is not a text-entry click"
         );
+        if device == "mouse" {
+            d.perform(serde_json::json!([{"point":a},{"wheel":[0,-1]}]));
+            assert!(
+                state(&d.w).brush.diameter > 20.,
+                "mouse wheel edits the number"
+            );
+        }
         // The value cap requires a hold with all three devices.
         let before = state(&d.w).workspace;
         let handle = d.named(&format!("tile-{opacity}"));
@@ -728,5 +750,191 @@ fn native_toolbar_options_presentation_input() {
         }
         d.capture_canvas(&format!("options-{style:?}.png"));
     }
+    d.finish();
+}
+
+fn toolbar_grip(d: &Driver, panel: Panel) -> [f32; 2] {
+    let r = d.w.resolved();
+    let g = r.groups.iter().find(|g| g.active == panel).unwrap();
+    let grip = g.tiles.as_ref().unwrap().grip.unwrap();
+    let point =
+        d.w.surface
+            .compute_point(
+                &d.w.window,
+                &gtk::graphene::Point::new(
+                    g.bounds.x + grip.x + grip.width / 2.,
+                    g.bounds.y + grip.y + grip.height / 2.,
+                ),
+            )
+            .unwrap();
+    [point.x(), point.y()]
+}
+fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
+    for &device in devices {
+        restore(d, WorkspacePreset::Painter);
+        let panel = brush_panel(d);
+        let initial = state(&d.w).workspace;
+        let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
+        let center = (state(&d.w).workspace.layout.header_presentation.height + viewport[1]
+            - WORKSPACE_SPACING)
+            / 2.;
+        for (alignment, y) in [
+            (EdgeAlignment::Center, center),
+            (EdgeAlignment::Start, 80.),
+            (EdgeAlignment::End, viewport[1] - 20.),
+        ] {
+            let a = toolbar_grip(d, panel);
+            drag(d, device, a, [viewport[0] - 8., y], false);
+            let view = state(&d.w);
+            let band = view
+                .workspace
+                .layout
+                .bands
+                .iter()
+                .find(|b| b.root.id() == view.workspace.layout.panel_group(panel).unwrap())
+                .unwrap();
+            assert_eq!(
+                (band.edge, band.alignment),
+                (Edge::Right, Some(alignment)),
+                "{device}: near-edge {alignment:?}"
+            );
+            let resolved = d.w.resolved();
+            let group = resolved.groups.iter().find(|g| g.active == panel).unwrap();
+            assert!(
+                group.bounds.height < viewport[1] * 0.7,
+                "content-sized toolbar"
+            );
+            if alignment == EdgeAlignment::Center {
+                assert!((group.bounds.y + group.bounds.height / 2. - center).abs() < 1.);
+            }
+            d.capture_canvas(&format!("compact-{device}-{alignment:?}.png"));
+        }
+        let a = toolbar_grip(d, panel);
+        drag(d, device, a, [viewport[0] - 28., center], false);
+        let view = state(&d.w);
+        assert!(
+            view.workspace
+                .layout
+                .bands
+                .iter()
+                .any(|b| b.edge == Edge::Right && b.alignment.is_none())
+        );
+        let full =
+            d.w.resolved()
+                .groups
+                .into_iter()
+                .find(|g| g.active == panel)
+                .unwrap();
+        assert!(
+            full.bounds.height > viewport[1] * 0.8,
+            "farther from edge keeps full-height target"
+        );
+        let before = view.workspace;
+        let a = toolbar_grip(d, panel);
+        drag(d, device, a, [8., center], false);
+        let moved = state(&d.w).workspace;
+        assert_eq!(
+            moved
+                .layout
+                .bands
+                .iter()
+                .find(|b| b.root.id() == moved.layout.panel_group(panel).unwrap())
+                .unwrap()
+                .alignment,
+            Some(EdgeAlignment::Center)
+        );
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(180);
+        assert_eq!(state(&d.w).workspace, before);
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::RedoWorkspace,
+        });
+        pump(180);
+        assert_eq!(state(&d.w).workspace, moved);
+        assert_eq!(
+            moved.layout.panel(panel).unwrap().tiles(),
+            initial.layout.panel(panel).unwrap().tiles()
+        );
+        // Dock an independently draggable toolbar at the compact bar's end.
+        let mut layout = moved.layout;
+        let companion = layout
+            .add_toolbar(
+                None,
+                "Companion",
+                &[ToolbarControl::Color, ToolbarControl::Opacity],
+            )
+            .unwrap();
+        layout
+            .move_panel(
+                viewport,
+                companion,
+                DockTarget::Float {
+                    position: [450., 300.],
+                },
+            )
+            .unwrap();
+        d.w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(WorkspaceState {
+                layout,
+                ..Default::default()
+            }),
+        });
+        pump(250);
+        let r = d.w.resolved();
+        let b = r.groups.iter().find(|g| g.active == panel).unwrap().bounds;
+        let a = toolbar_grip(d, companion);
+        drag(
+            d,
+            device,
+            a,
+            [b.x + b.width / 2., b.y + b.height + 2.],
+            false,
+        );
+        let r = d.w.resolved();
+        let a = r.groups.iter().find(|g| g.active == panel).unwrap().bounds;
+        let b = r
+            .groups
+            .iter()
+            .find(|g| g.active == companion)
+            .unwrap()
+            .bounds;
+        assert!(
+            (b.y - a.y - a.height - WORKSPACE_SPACING).abs() < 1.,
+            "small gap between stacked bars"
+        );
+        assert!(
+            (a.y + b.y + b.height - center * 2.).abs() < 1.,
+            "whole stack centers together"
+        );
+        if device == "mouse" {
+            let before = state(&d.w).workspace;
+            let grip = toolbar_grip(d, panel);
+            d.perform(serde_json::json!([
+                {"point":grip,"down":true},{"down":false},
+                {"down":true},{"down":false}
+            ]));
+            assert_eq!(
+                state(&d.w).workspace,
+                before,
+                "double-click keeps compact stack"
+            );
+        }
+        d.capture_canvas(&format!("compact-stack-{device}.png"));
+    }
+}
+#[test]
+#[ignore = "private Mutter: --native-test=native_compact_toolbar_edges_input"]
+fn native_compact_toolbar_edges_input() {
+    let mut d = Driver::new("art.capycanvas.CompactEdges");
+    compact_edge_gestures(&mut d, &["mouse", "touch"]);
+    d.finish();
+}
+#[test]
+#[ignore = "private Mutter: --native-test=native_compact_toolbar_edges_pen_input --tablet"]
+fn native_compact_toolbar_edges_pen_input() {
+    let mut d = Driver::new("art.capycanvas.CompactEdgesPen");
+    compact_edge_gestures(&mut d, &["pen"]);
     d.finish();
 }

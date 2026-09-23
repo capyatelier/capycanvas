@@ -34,6 +34,22 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_bottom_brush_controls_layout(platform);
+        if self == Self::Painter && platform == crate::Platform::Gtk {
+            let panel = layout.panels.iter().find(|p| {
+                p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)
+            }).unwrap().id;
+            layout.move_panel(
+                [1600., 1000.],
+                panel,
+                DockTarget::CompactEdge { edge: Edge::Left, alignment: EdgeAlignment::Center },
+            ).expect("centered brush toolbar");
+        }
+        layout
+    }
+
+    /// Previous component default; only untouched included layouts migrate.
+    pub fn legacy_bottom_brush_controls_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_toolbar_components_layout(platform);
         if platform == crate::Platform::Gtk {
             match self {
@@ -141,6 +157,7 @@ impl WorkspacePreset {
             let id = layout.next_id;
             layout.next_id += 2;
             layout.bands.push(DockBand {
+                alignment: None,
                 id,
                 edge: Edge::Bottom,
                 extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
@@ -366,6 +383,7 @@ impl WorkspacePreset {
             second: Box::new(second),
         };
         layout.bands = vec![DockBand {
+            alignment: None,
             id: 1,
             edge: Edge::Left,
             extent: tile_style.size()[0] + WORKSPACE_SPACING,
@@ -378,6 +396,7 @@ impl WorkspacePreset {
                 return layout;
             }
             layout.bands.push(DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Top,
                 extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
@@ -390,6 +409,7 @@ impl WorkspacePreset {
             let width = Panel::Layers.default_width() + WORKSPACE_SPACING;
             layout.bands.extend([
                 DockBand {
+                    alignment: None,
                     id: 3,
                     edge: Edge::Right,
                     extent: width,
@@ -401,6 +421,7 @@ impl WorkspacePreset {
                     ),
                 },
                 DockBand {
+                    alignment: None,
                     id: 7,
                     edge: Edge::Right,
                     extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -686,7 +707,8 @@ mod tests {
             assert!(layout.floating.is_empty());
             if platform == crate::Platform::Gtk {
                 assert_eq!(layout.bands.len(), 1);
-                assert_eq!(layout.bands[0].edge, Edge::Bottom);
+                assert_eq!(layout.bands[0].edge, Edge::Left);
+                assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
             } else { assert!(layout.bands.is_empty()); }
             assert_eq!(
                 layout.header,
