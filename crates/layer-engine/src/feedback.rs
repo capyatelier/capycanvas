@@ -18,6 +18,15 @@ pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 
+/// Smooth Motion revisions for comparing steady-stroke continuity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PredictionAlgorithm {
+    #[default]
+    Optimized,
+    Previous,
+}
+
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
 /// of a brush preset or persisted stroke.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -25,6 +34,8 @@ pub struct InstantFeedbackConfig {
     pub enabled: bool,
     pub use_platform_prediction: bool,
     pub use_engine_prediction: bool,
+    #[serde(default)]
+    pub prediction_algorithm: PredictionAlgorithm,
     /// Input clock quantum, supplied by the host (GTK/GDK: 1 ms). This is
     /// measurement uncertainty, not prediction time or a user preference.
     pub timestamp_resolution_micros: u32,
@@ -54,6 +65,7 @@ impl Default for InstantFeedbackConfig {
             enabled: true,
             use_platform_prediction: true,
             use_engine_prediction: true,
+            prediction_algorithm: PredictionAlgorithm::default(),
             timestamp_resolution_micros: 1,
             finalization_lag_micros: 8_000,
             prediction_horizon_micros: 8_000,
@@ -149,6 +161,7 @@ impl MotionState {
         transform: [f32; 6],
         config: InstantFeedbackConfig,
         history: Option<drawing_state::DrawingState>,
+        continuity: f64,
     ) -> Option<output::Output> {
         let age = now.saturating_sub(real.last()?.elapsed_micros);
         let requested = requested
@@ -178,6 +191,7 @@ impl MotionState {
                     config.prediction_horizon_micros,
                     Some(memory),
                     self.local.as_ref(),
+                    continuity,
                 )
             });
             return None;
@@ -188,7 +202,7 @@ impl MotionState {
             transform,
             motion.display_distance_budget(age, config),
         )
-        .with_local_motion(real, config, age, memory, self.local.as_ref());
+        .with_local_motion(real, config, age, memory, self.local.as_ref(), continuity);
         self.local = output.local_motion();
         Some(output)
     }
@@ -310,8 +324,9 @@ impl PredictionState {
             self.policy = Some(config);
         }
         let latest = *real.last()?;
+        let horizon = self.lift_horizon();
         let drawing = if config.use_engine_prediction {
-            drawing_state::DrawingState::measure(real, transform)
+            drawing_state::DrawingState::measure(real, transform, config.prediction_algorithm)
         } else {
             Default::default()
         };
@@ -320,7 +335,17 @@ impl PredictionState {
                 <= f64::from(
                     config
                         .prediction_horizon_micros
-                        .saturating_add(24_000)
+                        // Pressure release confirms an earlier stop alarm.
+                        // Otherwise use an 8 ms warning beyond the target.
+                        .saturating_add(
+                            if config.prediction_algorithm == PredictionAlgorithm::Previous
+                                || horizon.is_some_and(|h| h < 48_000)
+                            {
+                                24_000
+                            } else {
+                                8_000
+                            },
+                        )
                         .saturating_add(now.saturating_sub(latest.elapsed_micros)),
                 );
         if interrupted {
@@ -358,7 +383,6 @@ impl PredictionState {
             });
         }
         let requested = requested.max(latest.elapsed_micros);
-        let horizon = self.lift_horizon();
         let limited = horizon.map_or(requested, |h| {
             requested.min(latest.elapsed_micros.saturating_add(h))
         });
@@ -376,7 +400,15 @@ impl PredictionState {
                 // while sustained motion retains confidence and corrections.
                 // The expensive trajectory fit and drawing-state scan are shared.
                 let immediate = self.immediate.forecast(
-                    real, &motion, requested, now, lifetime, transform, config, None,
+                    real,
+                    &motion,
+                    requested,
+                    now,
+                    lifetime,
+                    transform,
+                    config,
+                    None,
+                    if interrupted { 0. } else { drawing.continuity },
                 );
                 let sustained = self.sustained.forecast(
                     real,
@@ -387,6 +419,7 @@ impl PredictionState {
                     transform,
                     config,
                     Some(drawing),
+                    0.,
                 );
                 let output = if drawing.speed < 1400. || interrupted || drawing.reach == 0. {
                     immediate

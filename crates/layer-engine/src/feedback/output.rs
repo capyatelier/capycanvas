@@ -139,6 +139,7 @@ impl Output {
         age: u32,
         memory: Option<(u32, f64)>,
         previous: Option<&LocalMotion>,
+        continuity: f64,
     ) -> Self {
         self.local = LocalMotion::fit(
             real,
@@ -147,6 +148,7 @@ impl Output {
             self.horizon,
             memory,
             previous,
+            continuity,
         );
         if let Some(local) = &self.local {
             self.horizon = local.horizon(self.horizon, age, config.prediction_horizon_micros);

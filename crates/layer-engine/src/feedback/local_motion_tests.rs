@@ -88,6 +88,7 @@ fn lookahead_distinguishes_straight_motion_from_turns_at_every_speed_and_zoom() 
                 24000,
                 None,
                 None,
+                0.,
             )
             .unwrap();
             let horizon = model.horizon(24_000, 0, 24_000);
@@ -126,7 +127,7 @@ fn detail_lookahead_does_not_pulse_with_queries_or_report_rate() {
         };
         real.push(point(x, 0., time));
         if let Some(model) =
-            local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, previous.as_ref())
+            local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, previous.as_ref(), 0.)
         {
             let horizon = model.horizon(24000, 0, 24000);
             if previous.is_some() {
@@ -136,7 +137,7 @@ fn detail_lookahead_does_not_pulse_with_queries_or_report_rate() {
                 );
             }
             let repeat =
-                local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&model))
+                local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&model), 0.)
                     .unwrap();
             assert_eq!(horizon, repeat.horizon(24000, 0, 24000));
             previous = Some(model);
@@ -165,6 +166,7 @@ fn quantized_tablet_clock_does_not_misclassify_fast_strokes_as_missing_history()
                 24000,
                 None,
                 previous.as_ref(),
+                0.,
             ) {
                 if i > 40 {
                     assert!(
@@ -183,18 +185,18 @@ fn correcting_turn_history_invalidates_the_detail_allowance_without_a_new_tip() 
     let mut real: Vec<_> = (0..100)
         .map(|i| point(i as f32 * 8.8, 0., i * 4000))
         .collect();
-    let before = local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, None).unwrap();
+    let before = local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, None, 0.).unwrap();
     assert_eq!(before.horizon(24000, 0, 24000), 24000);
     // This sample informs the turn detector but lies outside the 40 ms fit.
     // The anchor and fitted polynomial are unchanged by the late correction.
     real[87].position.y += 60.;
     let after =
-        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&before)).unwrap();
+        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&before), 0.).unwrap();
     // The recent heading is still steady, but the corrected older turn must
     // invalidate the cached fast/detail allowance even without a new tip.
     assert!(after.horizon(24000, 0, 24000) < before.horizon(24000, 0, 24000));
     let repeat =
-        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&after)).unwrap();
+        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&after), 0.).unwrap();
     assert_eq!(
         after.horizon(24000, 0, 24000),
         repeat.horizon(24000, 0, 24000)
@@ -218,6 +220,7 @@ fn slow_and_medium_corners_drop_reach_then_recover_on_the_settled_line() {
                     24000,
                     stable.then_some((24_000, 0.)),
                     previous.as_ref(),
+                    0.,
                 ) {
                     let horizon = model.horizon(24000, 0, 24000);
                     if time == 396000 || time == 464000 {

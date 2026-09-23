@@ -1,4 +1,5 @@
 //! Causal evidence that smooth motion has persisted beyond the local fit.
+use super::PredictionAlgorithm;
 use layer_core::StrokePoint;
 
 // Compared with 200 ms on the Wacom recording; 100 ms retains more useful
@@ -8,6 +9,8 @@ pub(super) const HISTORY_MICROS: u32 = 100_000;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DrawingState {
     pub smooth: f64,
+    /// Confidence in continued reach, separate from geometric smoothing.
+    pub continuity: f64,
     pub reach: f64,
     pub interrupted: bool,
     pub stop_in_micros: f64,
@@ -18,6 +21,7 @@ impl Default for DrawingState {
     fn default() -> Self {
         Self {
             smooth: 0.,
+            continuity: 0.,
             reach: 0.,
             interrupted: true,
             stop_in_micros: 0.,
@@ -38,11 +42,21 @@ fn ramp(x: f64) -> f64 {
 }
 
 impl DrawingState {
-    pub fn measure(real: &[StrokePoint], transform: [f32; 6]) -> Self {
-        Self::with_history(real, transform, HISTORY_MICROS)
+    pub fn measure(
+        real: &[StrokePoint],
+        transform: [f32; 6],
+        algorithm: PredictionAlgorithm,
+    ) -> Self {
+        Self::with_history(real, transform, HISTORY_MICROS, algorithm)
     }
 
-    fn with_history(real: &[StrokePoint], transform: [f32; 6], history: u32) -> Self {
+    fn with_history(
+        real: &[StrokePoint],
+        transform: [f32; 6],
+        history: u32,
+        algorithm: PredictionAlgorithm,
+    ) -> Self {
+        let optimized = algorithm == PredictionAlgorithm::Optimized;
         let Some(anchor) = real.last() else {
             return Self::default();
         };
@@ -87,6 +101,7 @@ impl DrawingState {
         let chords = &chords[..n - 2];
         let mut risk: f64 = 0.;
         let mut turning = 0.;
+        let mut innovation = 0.;
         let mut previous = 0.;
         for i in 1..chords.len() {
             if length(chords[i]).min(length(chords[i - 1])) < 1. {
@@ -97,6 +112,7 @@ impl DrawingState {
             turning += turn * turn;
             if i > 1 {
                 risk += 4. * (turn - previous).powi(2);
+                innovation += 4. * (turn - previous).powi(2);
             }
             previous = turn;
         }
@@ -107,6 +123,14 @@ impl DrawingState {
         let deceleration = length(recent) / length(before).max(1e-6);
         let older = [0, 1].map(|a| points[n - 3][a] - points[n - 4][a]);
         let older_ratio = length(before) / length(older).max(1e-6);
+        // One moderate speed dip after steady/accelerating motion is weak
+        // evidence of a stop. Consecutive dips retain their full weight;
+        // a large drop or sharp turn still interrupts immediately.
+        let deceleration = if optimized && deceleration > 0.75 && older_ratio >= 0.95 {
+            1.
+        } else {
+            deceleration
+        };
         let interrupt = (1. - ramp((angle(before, recent).abs() - 0.10) / 0.12))
             * ramp((deceleration - 0.65) / 0.25);
         let mut stop_in_micros = if deceleration < 0.95 && older_ratio < 0.95 {
@@ -137,7 +161,15 @@ impl DrawingState {
         let smooth = (1. - ramp((risk - 0.04) / 0.10)) * ramp((speed - 1100.) / 900.) * interrupt;
         let curvature = (turning / (chords.len() - 1) as f64).sqrt();
         let reach = smooth * (1. - ramp((curvature - 0.04) / 0.04));
+        // Consistent curvature supports reach even when it does not justify
+        // extra smoothing of the fitted geometry. Keep this evidence causal,
+        // over the same 100 ms window, and weaken it near micro motion.
+        let continuity = (1.
+            - ramp(((innovation / (chords.len() - 1) as f64).sqrt() - 0.04) / 0.10))
+            * ramp((speed - 300.) / 900.)
+            * interrupt;
         Self {
+            continuity: if optimized { continuity } else { 0. },
             speed,
             stop_in_micros,
             reach,
@@ -159,7 +191,16 @@ mod tests {
                 let straight: Vec<_> = (0..=400_000 / period)
                     .map(|i| point(i as f32 * period as f32 * 0.0024, 0., i * period))
                     .collect();
-                assert!(DrawingState::with_history(&straight, IDENTITY, history).smooth > 0.99);
+                assert!(
+                    DrawingState::with_history(
+                        &straight,
+                        IDENTITY,
+                        history,
+                        PredictionAlgorithm::Optimized
+                    )
+                    .smooth
+                        > 0.99
+                );
                 let mut erratic = straight.clone();
                 // Identical latest 48 ms, but oscillating earlier in the history.
                 for p in &mut erratic {
@@ -168,7 +209,14 @@ mod tests {
                     }
                 }
                 assert!(
-                    DrawingState::with_history(&erratic, IDENTITY, history).smooth < 0.2,
+                    DrawingState::with_history(
+                        &erratic,
+                        IDENTITY,
+                        history,
+                        PredictionAlgorithm::Optimized
+                    )
+                    .smooth
+                        < 0.2,
                     "{history} / {period}"
                 );
             }
@@ -182,7 +230,16 @@ mod tests {
                 let mut points: Vec<_> = (0..=100)
                     .map(|i| point(i as f32 * 9.6, 0., i * 4000))
                     .collect();
-                assert!(DrawingState::with_history(&points, IDENTITY, history).smooth > 0.99);
+                assert!(
+                    DrawingState::with_history(
+                        &points,
+                        IDENTITY,
+                        history,
+                        PredictionAlgorithm::Optimized
+                    )
+                    .smooth
+                        > 0.99
+                );
                 for i in 1..=3 {
                     points.push(point(
                         960.,
@@ -191,7 +248,13 @@ mod tests {
                     ));
                 }
                 assert_eq!(
-                    DrawingState::with_history(&points, IDENTITY, history).smooth,
+                    DrawingState::with_history(
+                        &points,
+                        IDENTITY,
+                        history,
+                        PredictionAlgorithm::Optimized
+                    )
+                    .smooth,
                     0.,
                     "history {history}, corner {corner}"
                 );
@@ -214,19 +277,81 @@ mod tests {
                         )
                     })
                     .collect();
-                let score =
-                    DrawingState::with_history(&points, [zoom, 0., 0., zoom, 300., -200.], history)
-                        .smooth;
+                let score = DrawingState::with_history(
+                    &points,
+                    [zoom, 0., 0., zoom, 300., -200.],
+                    history,
+                    PredictionAlgorithm::Optimized,
+                )
+                .smooth;
                 assert!(score > 0.95, "{history}: {score}");
                 if let Some(before) = reference {
                     assert!((score - before).abs() < 1e-6)
                 }
                 reference = Some(score);
                 assert_eq!(
-                    DrawingState::with_history(&points[..10], IDENTITY, history).smooth,
+                    DrawingState::with_history(
+                        &points[..10],
+                        IDENTITY,
+                        history,
+                        PredictionAlgorithm::Optimized
+                    )
+                    .smooth,
                     0.
                 );
             }
         }
+    }
+
+    #[test]
+    fn medium_curves_support_reach_without_extra_geometry_smoothing() {
+        for period in [1_000, 4_000, 8_000] {
+            for zoom in [0.25, 1., 4.] {
+                let points: Vec<_> = (0..=400_000 / period)
+                    .map(|i| {
+                        let a = i as f32 * period as f32 / 180_000.;
+                        point(
+                            180. * a.sin() / zoom,
+                            180. * (1. - a.cos()) / zoom,
+                            i * period,
+                        )
+                    })
+                    .collect();
+                let state = DrawingState::measure(
+                    &points,
+                    [zoom, 0., 0., zoom, 0., 0.],
+                    PredictionAlgorithm::Optimized,
+                );
+                assert!(state.continuity > 0.85, "{period}/{zoom}: {state:?}");
+                assert_eq!(state.smooth, 0.);
+            }
+        }
+    }
+
+    #[test]
+    fn isolated_moderate_dip_is_not_sustained_braking() {
+        let motion = |repeated: bool| {
+            (0..=400)
+                .map(|i| {
+                    let t = i as f32 * 1000.;
+                    let x = 0.002 * t
+                        - 0.0003 * (t - 383_334.).max(0.)
+                        - if repeated {
+                            0.0003 * (t - 391_667.).max(0.)
+                        } else {
+                            0.
+                        };
+                    point(x, 0., i * 1000)
+                })
+                .collect::<Vec<_>>()
+        };
+        let single =
+            DrawingState::measure(&motion(false), IDENTITY, PredictionAlgorithm::Optimized);
+        let repeated =
+            DrawingState::measure(&motion(true), IDENTITY, PredictionAlgorithm::Optimized);
+        assert!(single.continuity > 0.99);
+        assert!(single.stop_in_micros.is_infinite());
+        assert!(repeated.continuity < single.continuity);
+        assert!(repeated.stop_in_micros.is_finite());
     }
 }

@@ -53,6 +53,9 @@ class AndroidPredictionTest {
         val control = compose.onNodeWithTag("setting-slider-$id").performScrollTo()
         if (enabled) control.assertIsEnabled() else control.assertIsNotEnabled()
         if (!enabled) assertFalse(row(id).getJSONObject("reset").getBoolean("enabled"))
+        assertEquals(enabled, row("prediction_algorithm").getBoolean("enabled"))
+        val choice = compose.onNodeWithTag("setting-choice-prediction_algorithm").performScrollTo()
+        if (enabled) choice.assertIsEnabled() else choice.assertIsNotEnabled()
         compose.onNodeWithTag(tag).performScrollTo()
     }
     private fun waitFor(condition: () -> Boolean) {
@@ -122,8 +125,7 @@ class AndroidPredictionTest {
     }
     @Test fun nativePredictionCanBeComparedAndUnavailableControlIsDisabled() {
         val ids = rows().map { it.getString("id") }
-        assertFalse(ids.contains("prediction_algorithm"))
-        compose.onNodeWithTag("preference-prediction_algorithm").assertDoesNotExist()
+        assertTrue(ids.contains("prediction_algorithm"))
         assertEquals("platform_prediction", ids[ids.indexOf("feedback") + 1])
         assertEquals("Use Android stroke prediction", row().getString("title"))
         manualControls(!actualSupport || !settings().getBoolean("platform_prediction"))
@@ -176,6 +178,24 @@ class AndroidPredictionTest {
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         waitFor { settings().getDouble("prediction_ms") == 16.0 }
         compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("16 ms")
+    }
+
+    @Test fun predictionAlgorithmCanBeSwitchedAndPersists() {
+        capability(false)
+        for ((index, value) in listOf(1 to "previous", 0 to "optimized")) {
+            compose.onNodeWithTag("setting-choice-prediction_algorithm").performScrollTo().performClick()
+            compose.onNodeWithTag("setting-choice-option-prediction_algorithm-$index").performClick()
+            waitFor { settings().getString("prediction_algorithm") == value &&
+                preferences.getString("settings", null)?.let { JSONObject(it).optString("prediction_algorithm") } == value }
+            shot("algorithm-$value")
+            scenario.recreate()
+            scenario.onActivity { host = it.host }
+            waitFor { host.snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optString("prediction_algorithm") == value }
+            compose.runOnIdle { host.dispatch(obj("type" to "open_settings", "page" to "input")) }
+            waitFor { host.snapshot?.objectOrNull("preferences") != null }
+            capability(false)
+            assertEquals(index, row("prediction_algorithm").getJSONObject("kind").getInt("selected"))
+        }
     }
 
     @Test fun fallingPressureStrokeRendersAndSurvivesUndoRedo() {

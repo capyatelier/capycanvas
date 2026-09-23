@@ -24,7 +24,7 @@ export async function checkPrediction({call, evaluate, settle}) {
       await action({type:'open_settings', page:'input'});
       assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').disabled"), !available);
       assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
-      assert.equal(await evaluate("document.querySelector('#setting-prediction-algorithm')"), null);
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-algorithm').disabled"), available);
       assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), available);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 23);
       assert.ok(Math.abs(await evaluate("layerApp.state().settings.tip_lock") - .3) < .000001);
@@ -68,6 +68,17 @@ export async function checkPrediction({call, evaluate, settle}) {
       await action({type:'preferences', action:{type:'edit', id:'platform_prediction', value:enabled}});
       assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), enabled);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 12, 'native mode preserves manual time');
+    }
+    for (const [index, value] of [[1, 'previous'], [0, 'optimized']]) {
+      await evaluate(`(() => {
+        const choice=document.querySelector('#setting-prediction-algorithm');
+        choice.value='${index}'; choice.dispatchEvent(new Event('input', {bubbles:true}));
+      })()`);
+      await settle();
+      assert.equal(await evaluate("layerApp.state().settings.prediction_algorithm"), value);
+      await action({type:'close_settings'});
+      await action({type:'open_settings', page:'input'});
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-algorithm').value"), String(index));
     }
     await action({type:'preferences', action:{type:'reset', id:'prediction_horizon'}});
     assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 16, 'reset uses the new default');

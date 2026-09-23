@@ -187,50 +187,57 @@ fn collected_recording_bank_preserves_accuracy_and_useful_prediction() {
             path.display()
         );
 
-        let baseline = &fixture["summary"];
-        assert!(baseline.is_object(), "{}: missing baseline", path.display());
-        let reader = io::BufReader::new(std::fs::File::open(&path).unwrap());
-        let actual = replay(reader, io::sink()).unwrap();
-        let measured = serde_json::to_value(&actual).unwrap();
-        for key in ["contacts", "samples", "queries"] {
-            assert_eq!(measured[key], baseline[key], "{} {key}", path.display());
+        let mut references = vec![(PredictionAlgorithm::Optimized, &fixture)];
+        if let Some(previous) = fixture.get("alternatives").and_then(|v| v.get("previous")) {
+            references.push((PredictionAlgorithm::Previous, previous));
         }
-        for key in ["graded_queries", "transitions"] {
-            assert_eq!(
-                measured["accuracy"][key],
-                baseline["accuracy"][key],
-                "{} {key}",
-                path.display()
-            );
-        }
-        for key in [
-            "tiny_4_to_8",
-            "small_8_to_16",
-            "medium_16_to_32",
-            "severe_ge32",
-            "position_rms_px",
-            "error_step_rms_px",
-            "worst_step_px",
-        ] {
+        for (algorithm, reference) in references {
+            let label = format!("{} {algorithm:?}", path.display());
+            let baseline = &reference["summary"];
+            assert!(baseline.is_object(), "{}: missing baseline", label);
+            let reader = io::BufReader::new(std::fs::File::open(&path).unwrap());
+            let actual = replay_with_options(reader, io::sink(), None, Some(algorithm)).unwrap();
+            let measured = serde_json::to_value(&actual).unwrap();
+            for key in ["contacts", "samples", "queries"] {
+                assert_eq!(measured[key], baseline[key], "{} {key}", label);
+            }
+            for key in ["graded_queries", "transitions"] {
+                assert_eq!(
+                    measured["accuracy"][key],
+                    baseline["accuracy"][key],
+                    "{} {key}",
+                    label
+                );
+            }
+            for key in [
+                "tiny_4_to_8",
+                "small_8_to_16",
+                "medium_16_to_32",
+                "severe_ge32",
+                "position_rms_px",
+                "error_step_rms_px",
+                "worst_step_px",
+            ] {
+                assert!(
+                    measured["accuracy"][key].as_f64().unwrap()
+                        <= baseline["accuracy"][key].as_f64().unwrap() + 1e-6,
+                    "{} {key}: {} > {}",
+                    label,
+                    measured["accuracy"][key],
+                    baseline["accuracy"][key]
+                );
+            }
             assert!(
-                measured["accuracy"][key].as_f64().unwrap()
-                    <= baseline["accuracy"][key].as_f64().unwrap() + 1e-6,
-                "{} {key}: {} > {}",
-                path.display(),
-                measured["accuracy"][key],
-                baseline["accuracy"][key]
+                actual.mean_sample_horizon_ms
+                    >= baseline["mean_sample_horizon_ms"].as_f64().unwrap() * 0.99
+            );
+            assert!(
+                actual.mean_display_lead_ms
+                    >= baseline["mean_display_lead_ms"].as_f64().unwrap() * 0.99
+            );
+            assert!(
+                actual.prediction_coverage >= baseline["prediction_coverage"].as_f64().unwrap() - 0.001
             );
         }
-        assert!(
-            actual.mean_sample_horizon_ms
-                >= baseline["mean_sample_horizon_ms"].as_f64().unwrap() * 0.99
-        );
-        assert!(
-            actual.mean_display_lead_ms
-                >= baseline["mean_display_lead_ms"].as_f64().unwrap() * 0.99
-        );
-        assert!(
-            actual.prediction_coverage >= baseline["prediction_coverage"].as_f64().unwrap() - 0.001
-        );
     }
 }

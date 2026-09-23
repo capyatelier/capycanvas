@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from retraction_metrics import retraction_metrics, straightish
+from retraction_metrics import retraction_metrics, straightish, continuing_motion
 
 
 class RetractionTests(unittest.TestCase):
@@ -56,6 +56,23 @@ class RetractionTests(unittest.TestCase):
         self.assertFalse(straightish(np.column_stack([np.abs(t),t*.01])))
         self.assertFalse(straightish(np.zeros((7,2))))
         self.assertFalse(straightish(np.full((7,2),np.nan)))
+
+    def test_continuation_includes_curves_but_excludes_braking_and_missing_truth(self):
+        t=np.arange(-24,25,8.)
+        self.assertEqual(continuing_motion(np.column_stack([t,t*.01])), 'steady line')
+        self.assertEqual(continuing_motion(np.column_stack([100*np.sin(t/100),100*np.cos(t/100)])), 'steady curve')
+        # This remains geometrically straight, but loses most of its speed.
+        self.assertEqual(continuing_motion(np.column_stack([t-.013*t*t,t*0])), 'other')
+        self.assertEqual(continuing_motion(np.column_stack([np.abs(t),t*.01])), 'other')
+        self.assertEqual(continuing_motion(np.zeros((7,2))), 'other')
+        self.assertEqual(continuing_motion(np.full((7,2),np.nan)), 'other')
+
+    def test_curved_cutback_has_body_and_tip_exposure(self):
+        path=lambda t:np.column_stack([100*np.sin(t/100000),100*(1-np.cos(t/100000))])
+        result,_=self.measure((24000,16000,16000),path)
+        curve=result['steady curve']
+        self.assertGreater(curve['retreat_tip']['thresholds']['4.0']['seconds'],0.)
+        self.assertGreater(curve['retreat_body']['thresholds']['1.0']['seconds'],0.)
 
 
 if __name__=='__main__':unittest.main()

@@ -262,6 +262,7 @@ pub(super) struct LocalMotion {
     reach_micros: f64,
     nominal_horizon: Option<u32>,
     sustained: f64,
+    reach_stability: f64,
 }
 
 impl LocalMotion {
@@ -272,6 +273,7 @@ impl LocalMotion {
         horizon: u32,
         memory: Option<(u32, f64)>,
         previous: Option<&Self>,
+        continuity: f64,
     ) -> Option<Self> {
         let nominal = memory.map(|(horizon, _)| horizon);
         let stable = memory.is_some();
@@ -289,6 +291,7 @@ impl LocalMotion {
         reconstruct_times(&mut samples[..n], quantum);
         let observed = Quadratic::fit(&samples[..n], anchor.elapsed_micros)?;
         let sustained = memory.map_or(0., |(_, strength)| strength);
+        let reach_stability = sustained.powi(4).max(continuity);
         let previous =
             previous.filter(|p| p.transform == transform && p.nominal_horizon == nominal);
         if let Some(old) = previous
@@ -296,6 +299,7 @@ impl LocalMotion {
             && old.observed == observed
             && old.observed_allowance == desired
             && old.sustained == sustained
+            && old.reach_stability == reach_stability
         {
             // Repeated queries (including frames with no new reports) do not
             // compound smoothing. Corrections that change the fit invalidate it.
@@ -324,7 +328,10 @@ impl LocalMotion {
             .map_or(desired.reach, |old| {
                 let elapsed = f64::from(anchor.elapsed_micros - old.anchor.elapsed_micros);
                 let tau = if desired.reach < old.reach_micros {
-                    3_000. + 24_000. * sustained.powi(4)
+                    // Retain reach through a brief heading/speed fluctuation
+                    // without lengthening the geometric fit's memory. Stops
+                    // and changing direction revoke continuity in the caller.
+                    3_000. + 24_000. * reach_stability
                 } else {
                     8_000.
                 };
@@ -392,6 +399,7 @@ impl LocalMotion {
             reach_micros,
             nominal_horizon: nominal,
             sustained,
+            reach_stability,
         })
     }
 

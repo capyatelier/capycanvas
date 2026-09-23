@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 mod metrics;
 mod replay;
 pub use metrics::Accuracy;
-pub use replay::{ReplaySummary, replay, replay_with_frames};
+pub use replay::{ReplaySummary, replay, replay_with_frames, replay_with_options};
 
 /// First JSON line of each recording. Counts detect incomplete datasets.
 #[derive(Debug, Serialize, Deserialize)]

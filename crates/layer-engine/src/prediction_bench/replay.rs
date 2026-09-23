@@ -1,6 +1,6 @@
 use super::{Accuracy, Contact, DatasetHeader, Event, Policy, Sample};
 use crate::{
-    PenEvent, PenPhase,
+    PenEvent, PenPhase, PredictionAlgorithm,
     feedback::{PredictionState, TipSource},
 };
 use layer_core::{Point, StrokePoint};
@@ -89,7 +89,7 @@ fn reference(points: &[StrokePoint], time: u32, transform: [f32; 6]) -> Option<[
 /// CSV positions and truth are physical surface pixels. Unavailable truth is
 /// blank, never treated as zero error. Query IDs allow exact pair matching.
 pub fn replay(reader: impl BufRead, csv: impl Write) -> io::Result<ReplaySummary> {
-    replay_internal(reader, csv, None)
+    replay_with_options(reader, csv, None, None)
 }
 
 /// Export the full causal preview path as well as endpoint accuracy. Actual
@@ -102,27 +102,30 @@ pub fn replay_with_frames(
     csv: impl Write,
     mut frames: impl Write,
 ) -> io::Result<ReplaySummary> {
-    writeln!(
-        frames,
-        "{}",
-        serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
-    )?;
-    let summary = replay_internal(reader, csv, Some(&mut frames))?;
-    frames.flush()?;
-    Ok(summary)
+    replay_with_options(reader, csv, Some(&mut frames), None)
 }
 
-fn replay_internal(
+/// Optionally override the recorded algorithm for an otherwise identical replay.
+/// `None` preserves the selection recorded in each policy event.
+pub fn replay_with_options(
     mut reader: impl BufRead,
     csv: impl Write,
-    frames: Option<&mut dyn Write>,
+    mut frames: Option<&mut dyn Write>,
+    algorithm: Option<PredictionAlgorithm>,
 ) -> io::Result<ReplaySummary> {
+    if let Some(writer) = &mut frames {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
+        )?;
+    }
     let mut prefix = [0; 8];
     reader.read_exact(&mut prefix)?;
     let binary = &prefix == crate::recording::MAGIC;
     let reader = io::BufReader::new(io::Cursor::new(prefix).chain(reader));
     if binary {
-        return replay_binary(reader, csv, frames);
+        return replay_binary(reader, csv, frames, algorithm);
     }
     let mut lines = reader.lines();
     let header: DatasetHeader = serde_json::from_str(
@@ -141,6 +144,7 @@ fn replay_internal(
         lines.map(|line| Ok(serde_json::from_str::<Contact>(&line?)?)),
         csv,
         frames,
+        algorithm,
     )
 }
 
@@ -149,6 +153,7 @@ fn replay_contacts(
     contacts: impl IntoIterator<Item = io::Result<Contact>>,
     mut csv: impl Write,
     mut frames: Option<&mut dyn Write>,
+    algorithm: Option<PredictionAlgorithm>,
 ) -> io::Result<ReplaySummary> {
     let mut summary = ReplaySummary::default();
     let mut ids = HashSet::new();
@@ -226,7 +231,10 @@ fn replay_contacts(
                         .last()
                         .ok_or_else(|| invalid("query without input"))?
                         .elapsed_micros;
-                    let config = policy.config;
+                    let mut config = policy.config;
+                    if let Some(algorithm) = algorithm {
+                        config.prediction_algorithm = algorithm;
+                    }
                     let forecast = state
                         .estimate_for(&real, &platform, requested, now, policy.transform, config)
                         .ok_or_else(|| invalid("missing forecast for nonempty input"))?;
@@ -347,6 +355,9 @@ fn replay_contacts(
     }
     summary.accuracy.finish();
     csv.flush()?;
+    if let Some(writer) = &mut frames {
+        writer.flush()?;
+    }
     Ok(summary)
 }
 
@@ -358,6 +369,7 @@ fn replay_binary(
     reader: impl io::Read,
     csv: impl Write,
     frames: Option<&mut dyn Write>,
+    algorithm: Option<PredictionAlgorithm>,
 ) -> io::Result<ReplaySummary> {
     use crate::recording::Record;
     let records = crate::recording::read(reader)?;
@@ -404,5 +416,5 @@ fn replay_binary(
         events: contacts.iter().map(|c| c.events.len()).sum(),
         metadata: Default::default(),
     };
-    replay_contacts(header, contacts.into_iter().map(Ok), csv, frames)
+    replay_contacts(header, contacts.into_iter().map(Ok), csv, frames, algorithm)
 }
