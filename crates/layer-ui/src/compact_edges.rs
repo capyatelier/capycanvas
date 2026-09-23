@@ -262,13 +262,15 @@ impl DockLayout {
         }
     }
 
-    /// Native pointer coordinates only; shared policy selects compact vs full
-    /// docking. A narrow near-edge zone leaves the existing broad edge targets.
+    /// Match the near-edge target to the visible toolbar's leading edge. Its
+    /// grip can be well inside the window when a medium/large preview touches
+    /// the edge. Without a live drag, use the ordinary pointer hit area.
     pub fn compact_edge_drop_hint(
         &self,
         resolved: &ResolvedLayout,
         item: DockItem,
         point: [f32; 2],
+        preview: Option<Bounds>,
     ) -> Option<DropHint> {
         let toolbar = match item {
             DockItem::Panel { panel } => panel.kind() == PanelKind::Tiles,
@@ -355,16 +357,55 @@ impl DockLayout {
         // Native footer/status insets must not create a dead strip between a
         // bottom target and the window edge. Keep title-bar targets separate.
         let point = [point[0], point[1].min(bounds.y + bounds.height)];
-        let (distance, edge) = nearest_edge(bounds, point[0], point[1]);
-        let compact_reach = WORKSPACE_SPACING * 4.;
+        let distance_to = |edge, b: Bounds| match edge {
+            Edge::Left => b.x - bounds.x,
+            Edge::Right => bounds.x + bounds.width - b.x - b.width,
+            Edge::Top => b.y - bounds.y,
+            Edge::Bottom => bounds.y + bounds.height - b.y - b.height,
+        };
+        let contact = Bounds {
+            x: point[0],
+            y: point[1],
+            ..Bounds::default()
+        };
+        let (pointer_distance, pointer_edge) = nearest_edge(bounds, point[0], point[1]);
+        let edge = preview
+            .filter(|_| pointer_distance > WORKSPACE_SPACING * 4.)
+            .map_or_else(
+                || pointer_edge,
+                |b| {
+                    [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom]
+                        .into_iter()
+                        .min_by(|a, c| {
+                            distance_to(*a, b)
+                                .abs()
+                                .total_cmp(&distance_to(*c, b).abs())
+                                .then_with(|| {
+                                    distance_to(*a, contact).total_cmp(&distance_to(*c, contact))
+                                })
+                        })
+                        .unwrap()
+                },
+            );
+        let distance = distance_to(edge, contact);
+        let grab_inset = preview
+            .map_or(0., |b| match edge {
+                Edge::Left => point[0] - b.x,
+                Edge::Right => b.x + b.width - point[0],
+                Edge::Top => point[1] - b.y,
+                Edge::Bottom => b.y + b.height - point[1],
+            })
+            .max(0.);
+        let compact_reach = (grab_inset + WORKSPACE_SPACING).max(WORKSPACE_SPACING * 4.);
         if distance > compact_reach {
             // A compact bar's body must not mask the broader full-edge target.
             // End stacking was already considered above.
-            return (distance <= PANEL_SNAP_DISTANCE
-                && self
-                    .bands
-                    .iter()
-                    .any(|b| b.edge == edge && b.alignment.is_some()))
+            return (distance <= compact_reach + PANEL_SNAP_DISTANCE
+                && (preview.is_some()
+                    || self
+                        .bands
+                        .iter()
+                        .any(|b| b.edge == edge && b.alignment.is_some())))
             .then(|| DropHint {
                 target: DockTarget::Edge { edge, outer: true },
                 bounds: edge_line(bounds, edge),
@@ -388,7 +429,7 @@ impl DockLayout {
             return None;
         };
         let mut hint = slice(bounds, axis, offset, reach * 2.);
-        hint = hint.strip(edge, compact_reach);
+        hint = hint.strip(edge, WORKSPACE_SPACING * 4.);
         Some(DropHint {
             target: DockTarget::CompactEdge { edge, alignment },
             bounds: hint,
@@ -543,6 +584,135 @@ mod tests {
         }
     }
     #[test]
+    fn compact_targets_follow_the_visible_preview_in_every_orientation() {
+        let mut l = layout();
+        let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
+        let r = resolved(&l, VIEWPORT);
+        let item = DockItem::Panel { panel: source };
+        for (edge, point, preview) in [
+            (
+                Edge::Right,
+                [1146., 450.],
+                Bounds {
+                    x: 1092.,
+                    y: 180.,
+                    width: 108.,
+                    height: 280.,
+                },
+            ),
+            (
+                Edge::Left,
+                [54., 450.],
+                Bounds {
+                    x: 0.,
+                    y: 180.,
+                    width: 108.,
+                    height: 280.,
+                },
+            ),
+            (
+                Edge::Top,
+                [600., 318.],
+                Bounds {
+                    x: 546.,
+                    y: 48.,
+                    width: 108.,
+                    height: 280.,
+                },
+            ),
+            (
+                Edge::Bottom,
+                [600., 890.],
+                Bounds {
+                    x: 546.,
+                    y: 620.,
+                    width: 108.,
+                    height: 280.,
+                },
+            ),
+        ] {
+            assert_eq!(
+                l.compact_edge_drop_hint(&r, item, point, Some(preview))
+                    .unwrap()
+                    .target,
+                DockTarget::CompactEdge {
+                    edge,
+                    alignment: EdgeAlignment::Center
+                }
+            );
+            let mut farther = preview;
+            let mut p = point;
+            match edge {
+                Edge::Left => {
+                    farther.x += 32.;
+                    p[0] += 32.;
+                }
+                Edge::Right => {
+                    farther.x -= 32.;
+                    p[0] -= 32.;
+                }
+                Edge::Top => {
+                    farther.y += 32.;
+                    p[1] += 32.;
+                }
+                Edge::Bottom => {
+                    farther.y -= 32.;
+                    p[1] -= 32.;
+                }
+            }
+            assert!(
+                matches!(l.compact_edge_drop_hint(&r, item, p, Some(farther)).unwrap().target,
+                DockTarget::Edge { edge: actual, .. } if actual == edge)
+            );
+        }
+    }
+
+    #[test]
+    fn top_corner_uses_the_visible_edge_even_with_a_bottom_grip() {
+        let mut l = layout();
+        let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
+        let r = resolved(&l, VIEWPORT);
+        let item = DockItem::Panel { panel: source };
+        assert_eq!(
+            l.compact_edge_drop_hint(
+                &r,
+                item,
+                [80., 318.],
+                Some(Bounds {
+                    x: 26.,
+                    y: 48.,
+                    width: 108.,
+                    height: 280.,
+                })
+            )
+            .unwrap()
+            .target,
+            DockTarget::CompactEdge {
+                edge: Edge::Top,
+                alignment: EdgeAlignment::Start
+            }
+        );
+        assert_eq!(
+            l.compact_edge_drop_hint(
+                &r,
+                item,
+                [1091., 128.],
+                Some(Bounds {
+                    x: 982.,
+                    y: -302.,
+                    width: 218.,
+                    height: 440.,
+                })
+            )
+            .unwrap()
+            .target,
+            DockTarget::CompactEdge {
+                edge: Edge::Right,
+                alignment: EdgeAlignment::Start
+            }
+        );
+    }
+    #[test]
     fn compact_targets_are_nearer_and_shorter_than_full_edge_targets() {
         let mut l = layout();
         let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
@@ -555,10 +725,13 @@ mod tests {
             ([600., 50.], Edge::Top, EdgeAlignment::Center),
             ([600., 896.], Edge::Bottom, EdgeAlignment::Center),
         ] {
-            let hint = l.compact_edge_drop_hint(&r, item, point).unwrap();
+            let hint = l.compact_edge_drop_hint(&r, item, point, None).unwrap();
             assert_eq!(hint.target, DockTarget::CompactEdge { edge, alignment });
         }
-        assert!(l.compact_edge_drop_hint(&r, item, [1170., 450.]).is_none());
+        assert!(
+            l.compact_edge_drop_hint(&r, item, [1170., 450.], None)
+                .is_none()
+        );
         assert!(matches!(
             r.drop_hint(1170., 450., &[], true).unwrap().target,
             DockTarget::Edge {
@@ -566,19 +739,24 @@ mod tests {
                 ..
             }
         ));
-        assert!(l.compact_edge_drop_hint(&r, item, [1196., 250.]).is_none());
+        assert!(
+            l.compact_edge_drop_hint(&r, item, [1196., 250.], None)
+                .is_none()
+        );
         assert!(
             l.compact_edge_drop_hint(
                 &r,
                 DockItem::Panel {
                     panel: Panel::Layers
                 },
-                [1196., 450.]
+                [1196., 450.],
+                None,
             )
             .is_none()
         );
         assert!(
-            l.compact_edge_drop_hint(&r, item, [600., 10.]).is_none(),
+            l.compact_edge_drop_hint(&r, item, [600., 10.], None)
+                .is_none(),
             "native title bar is not a toolbar dock"
         );
     }
@@ -639,6 +817,7 @@ mod tests {
                 &r,
                 DockItem::Panel { panel: source },
                 [VIEWPORT[0] - 28., 470.],
+                None,
             )
             .unwrap();
         assert!(matches!(
@@ -664,7 +843,7 @@ mod tests {
             ([1198., 828.], Edge::Right, EdgeAlignment::End),
             ([600., 898.], Edge::Bottom, EdgeAlignment::Center),
         ] {
-            let hint = l.compact_edge_drop_hint(&r, item, point).unwrap();
+            let hint = l.compact_edge_drop_hint(&r, item, point, None).unwrap();
             assert_eq!(hint.target, DockTarget::CompactEdge { edge, alignment });
         }
     }

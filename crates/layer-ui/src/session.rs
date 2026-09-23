@@ -1709,7 +1709,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
         let compact_edge = (!docks_hidden && matches!(self.state.platform, Platform::Gtk | Platform::Generic))
-            .then(|| self.state.workspace.layout.compact_edge_drop_hint(&resolved, item, position)).flatten();
+            .then(|| self.state.workspace.layout.compact_edge_drop_hint(
+                &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
+            )).flatten();
         let mut hint = if let Some(hint) = compact_edge.or(menubar) {
             hint
         } else if let DockItem::Column { column } = item {
@@ -2626,6 +2628,33 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.eyedropper.area = area;
                 self.refresh_tools();
                 (BRUSH, false)
+            }
+            UiAction::ResetToolSetting { id } => {
+                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                    return Err("This setting is not used by the selected tool".into());
+                }
+                let defaults = if id.starts_with("transform_") {
+                    let value = match id.as_str() {
+                        "transform_width" | "transform_height" => 1.,
+                        _ => 0.,
+                    };
+                    return self.dispatch(UiAction::SetToolSetting { id, value });
+                } else if id.starts_with("selection_") {
+                    let options = SelectionOptions {
+                        constraint: self.selection_tools.options.constraint,
+                        ..Default::default()
+                    };
+                    let mut fields = options.controls();
+                    fields.extend(options.edge_controls());
+                    fields
+                } else if self.layer_interaction.tool.region().is_some() && id != "opacity" {
+                    region_tools::RegionTools::default().controls()
+                } else {
+                    tool_settings::controls(&layer_core::default_brush(tools::preset(self.state.brush.preset)?))
+                };
+                let value = defaults.iter().find(|f| f.id == id)
+                    .ok_or("This setting has no default")?.value;
+                return self.dispatch(UiAction::SetToolSetting { id, value });
             }
             UiAction::SetToolSetting { id, value } => {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {

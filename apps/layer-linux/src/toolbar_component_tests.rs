@@ -137,6 +137,18 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
                 state(&d.w).brush.diameter > 20.,
                 "mouse wheel edits the number"
             );
+        } else {
+            let spec = NumericControl::brush_size();
+            let position = spec.resolve(20., NumericOperation::Format).unwrap().fill + 0.2;
+            let expected = spec
+                .resolve(20., NumericOperation::Position { position })
+                .unwrap()
+                .value;
+            assert_eq!(
+                state(&d.w).brush.diameter,
+                expected as f32,
+                "{device}: number drag uses the logarithmic slider mapping"
+            );
         }
         // The value cap requires a hold with all three devices.
         let before = state(&d.w).workspace;
@@ -454,7 +466,10 @@ fn native_toolbar_components_input() {
         assert!(d.named("toolbar-setting-size").is_mapped());
         assert!(d.named("toolbar-choice-tool").is_mapped());
         let number = d.named("toolbar-setting-size");
-        d.number(&number, "51");
+        d.click(&find_css(&number, "number-value").unwrap());
+        let popup = descendant::<gtk::Popover>(&number).unwrap();
+        d.number(&popup.child().unwrap(), "51");
+        d.key(0xff1b);
         assert_eq!(state(&d.w).brush.diameter, 51.);
         d.capture_canvas(&format!("vertical-options-{theme:?}.png"));
         d.click_name(&format!("tile-{options}"));
@@ -636,13 +651,24 @@ fn native_toolbar_options_presentation_input() {
     let b = root.compute_bounds(&d.w.window).unwrap();
     let a = [b.x() + b.width() - 100., b.y() + b.height() / 2.];
     d.perform(serde_json::json!([{ "point": a, "down": true },{"wait_ms":800},{"down":false}]));
+    assert!(
+        !d.w.popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .any(|p| p.has_css_class("panel-context-menu") && p.is_visible()),
+        "mouse holds never open a menu"
+    );
+    d.perform(serde_json::json!([
+        {"touch":"down","point":a},{"wait_ms":800},{"touch":"up"}
+    ]));
     let menu =
         d.w.popovers
             .borrow()
             .iter()
             .filter_map(|p| p.upgrade())
             .find(|p| p.has_css_class("panel-context-menu") && p.is_visible())
-            .expect("empty-space mouse hold opens display preferences");
+            .expect("empty-space touch hold opens display preferences");
     menu.activate_action("context.item-0-1", None).unwrap();
     pump(120);
     let config = state(&d.w)
@@ -961,6 +987,218 @@ fn native_compact_toolbar_edges_pen_input() {
 }
 
 #[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_value_controls_input"]
+fn native_toolbar_value_controls_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarValues");
+    restore(&d, WorkspacePreset::Painter);
+    for device in ["touch"] {
+        for (control, value, action) in [
+            (
+                ToolbarControl::BrushSizeSlider,
+                8.,
+                UiAction::SetBrushSize { value: 8. },
+            ),
+            (
+                ToolbarControl::BrushOpacitySlider,
+                0.3,
+                UiAction::SetBrushOpacity { value: 0.3 },
+            ),
+        ] {
+            d.w.dispatch(action);
+            pump(80);
+            let id = component_id(&d, control);
+            let button = d.named(&format!("tile-{id}"));
+            let p = d.point(&button);
+            // Downward motion leaves enough room above the centered toolbar.
+            drag(&mut d, device, p, [p[0], p[1] + 20.], false);
+            let spec = control.slider().unwrap().numeric();
+            let origin = spec.resolve(value, NumericOperation::Format).unwrap().fill;
+            let expected = spec
+                .resolve(
+                    value,
+                    NumericOperation::Position {
+                        position: origin - 0.1,
+                    },
+                )
+                .unwrap()
+                .value;
+            let current = state(&d.w)
+                .toolbar_component(control)
+                .unwrap()
+                .numeric
+                .unwrap()
+                .value;
+            assert!(
+                (current as f64 - expected).abs() < 0.001,
+                "{device}: mapped number drag {control:?}: {current} != {expected}"
+            );
+        }
+    }
+    restore(&d, WorkspacePreset::Photographer);
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::Brush,
+    });
+    d.w.dispatch(UiAction::ResetToolSetting { id: "size".into() });
+    let default = state(&d.w).brush.diameter;
+    d.w.dispatch(UiAction::SetToolSetting {
+        id: "size".into(),
+        value: 517.,
+    });
+    pump(100);
+    let number = d.named("toolbar-setting-size");
+    let label = find_css(&number.parent().unwrap(), "option-label").unwrap();
+    let p = d.point(&label);
+    d.perform(
+        serde_json::json!([{"point":p,"down":true},{"down":false},{"down":true},{"down":false}]),
+    );
+    assert_eq!(
+        state(&d.w).brush.diameter,
+        default,
+        "label double click resets only this field"
+    );
+    d.w.dispatch(UiAction::MovePanel {
+        panel: Panel::Commands,
+        target: DockTarget::Edge {
+            edge: Edge::Left,
+            outer: true,
+        },
+        viewport: [1600., 1000.],
+    });
+    d.w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetTileStyle {
+            panel: Panel::Commands,
+            style: TileStyle::Medium,
+        },
+    });
+    pump(150);
+    let number = d.named("toolbar-setting-size");
+    let p = d.point(&find_css(&number, "number-value").unwrap());
+    drag(&mut d, "touch", p, [p[0], p[1] + 20.], false);
+    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+    let popup = descendant::<gtk::Popover>(&number).expect("vertical value opens slider popover");
+    assert!(popup.is_visible());
+    assert_eq!(
+        find_css(popup.upcast_ref(), "number-title")
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap()
+            .text(),
+        "Brush size",
+        "popup keeps its title after a number drag"
+    );
+    let scale = descendant::<gtk::Scale>(popup.upcast_ref()).unwrap();
+    assert!(
+        scale.is_mapped(),
+        "popover {:?}: mapped {}, size {}x{}, scale visible {}, child visible {}, size {}x{}",
+        popup.widget_name(),
+        popup.is_mapped(),
+        popup.width(),
+        popup.height(),
+        scale.is_visible(),
+        scale.is_child_visible(),
+        scale.width(),
+        scale.height()
+    );
+    capture_popover(
+        &popup,
+        d.dir
+            .join("vertical-options-slider-popover.png")
+            .to_str()
+            .unwrap(),
+    );
+    let before = state(&d.w).brush.diameter;
+    let center = d.point(scale.upcast_ref());
+    let width = scale.width() as f32;
+    drag(
+        &mut d,
+        "touch",
+        [center[0] - width * 0.1, center[1]],
+        [center[0] + width * 0.15, center[1]],
+        false,
+    );
+    assert_ne!(state(&d.w).brush.diameter, before);
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::Eraser,
+    });
+    pump(120);
+    assert!(
+        !popup.is_visible(),
+        "tool changes close stale slider popovers"
+    );
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_visible_edges_input"]
+fn native_toolbar_visible_edges_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarVisibleEdges");
+    restore(&d, WorkspacePreset::Painter);
+    // Medium floats are wider than the old fixed 24px pointer target. Bring
+    // the visible toolbar edge to the screen while its grip remains inside.
+    let panel = brush_panel(&d);
+    d.w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetTileStyle {
+            panel,
+            style: TileStyle::Medium,
+        },
+    });
+    for edge in [Edge::Right, Edge::Top, Edge::Bottom, Edge::Left] {
+        for alignment in [
+            EdgeAlignment::Center,
+            EdgeAlignment::Start,
+            EdgeAlignment::End,
+        ] {
+            let a = toolbar_grip(&d, panel);
+            d.perform(serde_json::json!([{"point":a,"down":true},{"point":[800.,500.]}]));
+            let update =
+                d.w.gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .workspace_update();
+            let preview = update.drag.unwrap().group.unwrap().bounds;
+            let grab = [800. - preview.x, 500. - preview.y];
+            let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
+            let top = state(&d.w).workspace.layout.header_presentation.height;
+            let coordinate = |length: f32| match alignment {
+                EdgeAlignment::Start => 80.,
+                EdgeAlignment::Center => length / 2.,
+                EdgeAlignment::End => length - 80.,
+            };
+            let p = match edge {
+                Edge::Right => [
+                    viewport[0] - (preview.width - grab[0]),
+                    top + coordinate(viewport[1] - top),
+                ],
+                Edge::Left => [grab[0], top + coordinate(viewport[1] - top)],
+                Edge::Top => [coordinate(viewport[0]), top + grab[1]],
+                Edge::Bottom => [
+                    coordinate(viewport[0]),
+                    viewport[1] - (preview.height - grab[1]),
+                ],
+            };
+            d.perform(serde_json::json!([{"point":p}]));
+            assert!(
+                matches!(d.w.drop_hint.borrow().as_ref().map(|h| &h.target), Some(DockTarget::CompactEdge { edge: e, alignment: a }) if *e == edge && *a == alignment),
+                "visible toolbar touches {edge:?} {alignment:?}: {:?}",
+                d.w.drop_hint.borrow()
+            );
+            d.perform(serde_json::json!([{"down":false}]));
+            assert!(
+                state(&d.w)
+                    .workspace
+                    .layout
+                    .bands
+                    .iter()
+                    .any(|b| b.edge == edge && b.alignment == Some(alignment))
+            );
+        }
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "private Mutter: --native-test=native_toolbar_visual_audit_input"]
 fn native_toolbar_visual_audit_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarVisualAudit");
@@ -1010,10 +1248,7 @@ fn native_toolbar_visual_audit_input() {
                 } else {
                     assert!(number.width() as f32 <= style.size()[0]);
                     assert!(b.y() >= number.compute_bounds(&d.w.window).unwrap().y() + 5.);
-                    assert_eq!(
-                        find_css(&number, "number-unit").unwrap().is_mapped(),
-                        style != TileStyle::Small
-                    );
+                    assert_eq!(find_css(&number, "number-unit").unwrap().is_mapped(), false);
                 }
             }
         }
@@ -1046,6 +1281,11 @@ fn native_toolbar_visual_audit_input() {
                 let button = find_css(&number, "number-value").unwrap();
                 if number.is_mapped() {
                     if edge == Edge::Left {
+                        assert_eq!(
+                            descendant::<gtk::Image>(&number).unwrap().pixel_size(),
+                            16,
+                            "form icons leave room for values and labels at {style:?}"
+                        );
                         assert!(
                             number.width() as f32 <= style.size()[0],
                             "native number must not grow outside its tile: {style:?}, {}, value {:?}, entry {:?}, label {:?}",
@@ -1077,8 +1317,8 @@ fn native_toolbar_visual_audit_input() {
                     if edge == Edge::Left && style.label_lines() == 0 {
                         let height = label.layout().pixel_size().1;
                         assert!(
-                            height > prior_font_height,
-                            "vertical readout grows with tile size"
+                            height >= prior_font_height,
+                            "vertical readout retains app typography, except fitting small tiles"
                         );
                         prior_font_height = height;
                     }

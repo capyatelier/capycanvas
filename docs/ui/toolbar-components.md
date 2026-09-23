@@ -29,12 +29,12 @@ Size tracks widen toward larger values; opacity tracks show transparency over
 a checkerboard. Values remain horizontal in both orientations.
 
 Click the value to edit an expression inline. Drag a number up/down with touch
-or pen, or scroll over it with a mouse. Size is logarithmic, 0.5–2048 px, and
+or pen along its slider's mapping, or scroll over it with a mouse. Size is
+logarithmic, 0.5–2048 px, and
 snaps to whole pixels above 32. Compact readouts omit decimals at three digits
 and above; exact entry retains the shared numeric precision. Horizontal
-readouts show units. Small vertical controls omit units; larger vertical
-controls show them separately where needed to keep the value legible. Opacity is a
-percentage. Short allocations reduce the track before the value editor.
+readouts show units. Standalone vertical sliders omit units at every size.
+Opacity sliders use whole percentages. Short allocations reduce the track before the value editor.
 Tool, document and workspace changes cancel unfinished text. Numeric edits do not create workspace-layout history entries.
 
 ## Contextual options
@@ -48,10 +48,15 @@ not the toolbar allocation or canvas size. Value changes retain native editors.
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;
 a tap outside accepts valid text and ends editing. Inputs and dropdowns use the
-panel controls' typography and colors. Vertical
-options stack icon choices and editable icon/value boxes. Labeled tile styles
+panel controls' typography and colors. Double-click a numeric label (or its
+horizontal icon) to reset that setting to its tool/preset default. Icon mode
+keeps horizontal dropdown labels readable. Vertical
+options use flat icon choices and icon/value buttons; tapping a value opens
+the standard numeric slider in a popover. Labeled tile styles
 put the icon beside the label and value; the other styles stack icon and value.
-Values grow with medium/large tiles, and only oversized numbers shrink to fit.
+Text follows the shared 11 pt typography; form icons stay 16px. Units sit
+beside values on the same baseline and hide when space is tight. Only oversized
+numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
 shorter form fields. GTK supplies natural sizes and theme spacing; Rust fits
 complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
@@ -82,8 +87,8 @@ Slider tracks and option controls respond immediately to mouse, touch and pen.
 Press, hold, then drag the slider value cap or the options More button to
 reorder the component. A quick cap drag never reorders. Holding a track remains
 a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
-empty Tool Options space opens its display menu; secondary click works too.
-This empty space is not a draggable tile body. Vertical options always use icons.
+empty Tool Options space with touch or pen opens its display menu; mouse uses
+secondary click. Vertical options always use icons.
 
 ## Validation
 
@@ -108,6 +113,10 @@ GTK native-input regressions run through
 - `--native-test=native_toolbar_visual_audit_input`: both themes, all tile sizes,
   both orientations, label/value alignment and clipping, separate horizontal
   icons, inline editing and outside-tap dismissal, and drawer appearance.
+- `--native-test=native_toolbar_value_controls_input`: mapped touch number
+  drags, label resets, and vertical slider popovers.
+- `--native-test=native_toolbar_visible_edges_input`: compact docking at all
+  twelve anchors when the visible toolbar reaches an edge before its handle.
 
 Use the release test executable through `LAYER_NATIVE_TEST_EXECUTABLE` when
 iterating. The tablet proxy exercises GDK pen input, not physical tablet hardware;

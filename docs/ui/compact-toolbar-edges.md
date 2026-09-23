@@ -4,12 +4,15 @@
 [Drag convention](drag-and-reorder.md)
 
 Drag a toolbar's handle close to the start, center, or end of an edge to dock
-it at its natural length. The target occupies the nearest 24 logical pixels
-and a short section around each anchor. The top edge begins below the title
+it at its natural length. The visible toolbar reaching an edge activates a
+compact target; the grip need not reach the screen edge. The target has a
+minimum pointer reach of 24 logical pixels and a short section around each
+anchor. Its preview remains a 24px strip. The top edge begins below the title
 bar. Farther from the edge, the existing full-width/full-height targets remain
-available. The short target is shaded while dragging. Native footer insets do
-not block the bottom target. Existing sidebar/tab insertion surfaces retain
-priority; content panels and tab groups keep their existing docking rules.
+available farther inward from the visible toolbar. The short target is shaded
+while dragging. Native footer insets do not block the bottom target. Existing
+sidebar/tab insertion surfaces retain priority; content panels and tab groups
+keep their existing docking rules.
 
 Dropping at a compact toolbar's leading or trailing end adds an independent
 toolbar to that region. Each toolbar keeps its own handle and identity. The

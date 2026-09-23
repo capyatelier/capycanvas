@@ -1233,6 +1233,9 @@ pub enum UiAction {
         id: String,
         value: f32,
     },
+    ResetToolSetting {
+        id: String,
+    },
     /// A retained toolbar editor must never apply to a different tool/target.
     ToolbarEdit {
         context: ToolbarContext,

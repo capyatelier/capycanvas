@@ -1,4 +1,35 @@
 #[test]
+fn toolbar_resets_use_tool_defaults_and_reject_stale_context() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let original = s.state().brush.diameter;
+    let context = s.state().toolbar_context();
+    s.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 517. }).unwrap();
+    s.dispatch(UiAction::SetToolSetting { id: "opacity".into(), value: 0.42 }).unwrap();
+    s.dispatch(UiAction::ToolbarEdit {
+        context,
+        action: Box::new(UiAction::ResetToolSetting { id: "size".into() }),
+    }).unwrap();
+    assert_eq!(s.state().brush.diameter, original);
+    assert_eq!(s.state().brush.opacity, 0.42);
+    assert!(!s.tools.overrides.get(&context.brush).unwrap().contains_key("size"));
+    s.dispatch(UiAction::Invoke { command: CommandId::Fill }).unwrap();
+    assert!(s.dispatch(UiAction::ToolbarEdit {
+        context,
+        action: Box::new(UiAction::ResetToolSetting { id: "opacity".into() }),
+    }).is_err());
+    let default = s.state().tool_settings.iter().find(|f| f.id == "tolerance").unwrap().value;
+    s.dispatch(UiAction::SetToolSetting { id: "tolerance".into(), value: 0.72 }).unwrap();
+    s.dispatch(UiAction::ResetToolSetting { id: "tolerance".into() }).unwrap();
+    assert_eq!(s.state().tool_settings.iter().find(|f| f.id == "tolerance").unwrap().value, default);
+    assert!(s.dispatch(UiAction::ResetToolSetting { id: "size".into() }).is_err());
+    let opacity = ToolbarNumericBinding::BrushOpacity.numeric();
+    let value = opacity.resolve(0., NumericOperation::Position { position: 0.427 }).unwrap();
+    assert!((value.value - 0.43).abs() < 1e-6);
+    assert_eq!(value.text, "43 %");
+}
+
+#[test]
 fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
     let mut s = session();
     let context = s.state().toolbar_context();

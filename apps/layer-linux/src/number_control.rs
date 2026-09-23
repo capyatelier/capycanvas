@@ -25,8 +25,13 @@ mod imp {
         pub title: OnceCell<gtk::Label>,
         pub unit: OnceCell<gtk::Label>,
         pub icon_row: OnceCell<gtk::Box>,
-        pub caption: OnceCell<gtk::Box>,
+        pub value_row: OnceCell<gtk::Box>,
         pub separate_unit: Cell<bool>,
+        pub show_units: Cell<bool>,
+        pub popover_enabled: Cell<bool>,
+        pub editor_title: OnceCell<String>,
+        pub popover: OnceCell<gtk::Popover>,
+        pub popover_control: OnceCell<super::NumberControl>,
         pub interaction_end_pending: Cell<bool>,
     }
     #[glib::object_subclass]
@@ -36,6 +41,11 @@ mod imp {
         type ParentType = gtk::Box;
     }
     impl ObjectImpl for NumberControl {
+        fn dispose(&self) {
+            if let Some(popover) = self.popover.get().filter(|p| p.parent().is_some()) {
+                popover.unparent();
+            }
+        }
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: std::sync::OnceLock<Vec<glib::subclass::Signal>> =
                 std::sync::OnceLock::new();
@@ -97,7 +107,20 @@ impl NumberControl {
         } else {
             0
         };
-        let available = (width - inset - icon_width).max(1);
+        let mut available = (width - inset - icon_width).max(1);
+        let unit = imp.unit.get().unwrap();
+        let unit_width = unit.layout().pixel_size().0 + imp.value_row.get().unwrap().spacing();
+        let unscaled = label
+            .create_pango_layout(Some(&label.text()))
+            .pixel_size()
+            .0;
+        // Keep normal app typography before spending scarce width on units.
+        let show_unit =
+            imp.separate_unit.get() && imp.show_units.get() && unscaled + unit_width <= available;
+        unit.set_visible(show_unit);
+        if show_unit {
+            available -= unit_width;
+        }
         // Use the label's shaped text (including tabular digits), and verify
         // the scaled glyphs: font hinting rounds individual glyph advances.
         let layout = label.layout().copy();
@@ -178,19 +201,9 @@ impl NumberControl {
             });
         }
         imp.separate_unit.set(stacked);
+        imp.show_units
+            .set(show_units && !self.spec().unit.is_empty());
         if let Some(unit) = imp.unit.get() {
-            let parent = if show_icon && stacked {
-                imp.icon_row.get().unwrap()
-            } else {
-                imp.caption.get().unwrap()
-            };
-            if unit.parent().as_ref() != Some(parent.upcast_ref()) {
-                unit.parent()
-                    .and_downcast::<gtk::Box>()
-                    .unwrap()
-                    .remove(unit);
-                parent.append(unit);
-            }
             unit.set_visible(stacked && show_units && !self.spec().unit.is_empty());
         }
         self.set_value(self.value());
@@ -208,6 +221,7 @@ impl NumberControl {
     ) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
+        control.imp().editor_title.set(title.to_string()).unwrap();
         control.imp().compact.set(compact);
         if compact {
             control.add_css_class("number-compact");
@@ -307,16 +321,18 @@ impl NumberControl {
                 let caption = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 caption.set_valign(gtk::Align::Center);
                 caption.append(&title_label);
-                caption.append(&value_label);
+                let value_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+                value_row.set_halign(gtk::Align::Center);
+                value_row.append(&value_label);
                 let unit = gtk::Label::new(Some(&spec.unit));
                 unit.add_css_class("number-unit");
-                unit.add_css_class("dim-label");
                 unit.set_visible(false);
-                caption.append(&unit);
+                value_row.append(&unit);
+                caption.append(&value_row);
                 face.append(&caption);
                 display.set_child(Some(&face));
                 control.imp().unit.set(unit).unwrap();
-                control.imp().caption.set(caption).unwrap();
+                control.imp().value_row.set(value_row).unwrap();
                 control.imp().icon_row.set(icon_row).unwrap();
                 control.imp().face.set(face).unwrap();
                 control.imp().icon.set(icon).unwrap();
@@ -391,6 +407,10 @@ impl NumberControl {
                 #[weak]
                 control,
                 move |_| {
+                    if control.imp().popover_enabled.get() {
+                        control.open_popover();
+                        return;
+                    }
                     let imp = control.imp();
                     let value = control
                         .spec()
@@ -550,8 +570,58 @@ impl NumberControl {
             }
         ));
         control.add_controller(events);
-        control.connect_unmap(|control| control.end_interaction(true));
+        control.connect_unmap(|control| {
+            control.cancel_edit();
+            control.end_interaction(true);
+        });
         control
+    }
+    pub fn set_popover_editor(&self, enabled: bool) {
+        if self.imp().popover_enabled.replace(enabled) != enabled {
+            self.cancel_edit();
+        }
+    }
+    pub fn present_popover(&self) {
+        if let Some(popover) = self.imp().popover.get().filter(|p| p.is_visible()) {
+            popover.present();
+        }
+    }
+    fn open_popover(&self) {
+        let imp = self.imp();
+        let popover = imp.popover.get_or_init(|| {
+            let editor =
+                NumberControl::new(self.spec().clone(), imp.editor_title.get().unwrap(), "");
+            editor.set_size_request(240, -1);
+            editor.set_margin_start(12);
+            editor.set_margin_end(12);
+            editor.set_margin_top(8);
+            editor.set_margin_bottom(8);
+            editor.connect_value_changed(glib::clone!(
+                #[weak(rename_to=control)]
+                self,
+                move |editor| {
+                    control.apply(NumericOperation::Value {
+                        value: editor.value(),
+                    });
+                }
+            ));
+            let popover = gtk::Popover::new();
+            popover.set_widget_name("toolbar-number-popover");
+            popover.set_child(Some(&editor));
+            // GtkBox would lay the popover out as another numeric row. Attach
+            // it to the value button, outside the control's box layout.
+            popover.set_parent(imp.display.get().unwrap());
+            popover.connect_closed(glib::clone!(
+                #[weak]
+                editor,
+                move |_| editor.cancel_edit()
+            ));
+            imp.popover_control.set(editor).unwrap();
+            popover
+        });
+        imp.popover_control.get().unwrap().set_value(self.value());
+        popover.popup();
+        popover.present();
     }
     fn install_value_gestures(&self, display: &gtk::Button) {
         let drag = gtk::GestureDrag::new();
@@ -568,7 +638,12 @@ impl NumberControl {
                     g.set_state(gtk::EventSequenceState::Denied);
                     return;
                 }
-                origin.set(control.value());
+                if let Ok(value) = control
+                    .spec()
+                    .resolve(control.value(), NumericOperation::Format)
+                {
+                    origin.set(value.fill);
+                }
             }
         ));
         drag.connect_drag_update(glib::clone!(
@@ -581,12 +656,11 @@ impl NumberControl {
                     return;
                 }
                 g.set_state(gtk::EventSequenceState::Claimed);
-                if let Ok(value) = control
-                    .spec()
-                    .resolve(origin.get(), NumericOperation::Step { steps: -dy / 4. })
-                {
-                    control.apply(NumericOperation::Value { value: value.value });
-                }
+                // Native distance becomes normalized slider travel. The core
+                // applies the same log/power/linear mapping as the track.
+                control.apply(NumericOperation::Position {
+                    position: origin.get() - dy / 200.,
+                });
             }
         ));
         display.add_controller(drag);
@@ -621,6 +695,9 @@ impl NumberControl {
         let imp = self.imp();
         imp.updating.set(true);
         imp.value.set(value);
+        if let Some(editor) = imp.popover_control.get() {
+            editor.set_value(value);
+        }
         if let Some(label) = imp.value_label.get() {
             label.set_text(&if imp.compact.get() {
                 if imp.separate_unit.get() {
@@ -699,6 +776,9 @@ impl NumberControl {
         }
     }
     pub fn cancel_edit(&self) {
+        if let Some(popover) = self.imp().popover.get() {
+            popover.popdown();
+        }
         self.finish(true);
     }
     /// A click away accepts valid text and retires invalid unfinished input.

@@ -127,10 +127,12 @@ mod imp {
                 let visible = b.width >= 1.0 && b.height >= 1.0;
                 child.set_child_visible(visible);
                 if visible {
+                    let mut editor = None;
                     let mut content = child.first_child();
                     while let Some(w) = content {
                         if let Some(number) = w.downcast_ref::<NumberControl>() {
                             number.fit_width(b.width.floor() as i32);
+                            editor = Some(number.clone());
                         }
                         content = w.next_sibling();
                     }
@@ -143,6 +145,9 @@ mod imp {
                                 .translate(&gtk::graphene::Point::new(b.x, b.y)),
                         ),
                     );
+                    if let Some(editor) = editor {
+                        editor.present_popover();
+                    }
                 }
             };
             if self.slider.get() {
@@ -276,7 +281,7 @@ impl ComponentBody {
                 .and_then(|cap| cap.first_child())
                 .and_downcast::<NumberControl>()
             {
-                number.set_face(false, "", vertical, 0, style != TileStyle::Small);
+                number.set_face(false, "", vertical, 0, false);
             }
             if let Some(scale) = self
                 .imp()
@@ -328,15 +333,12 @@ impl ComponentBody {
                 if let Some(number) = w.downcast_ref::<NumberControl>() {
                     let title = row.tooltip_text().unwrap_or_default();
                     number.set_slider_visible(!vertical && self.imp().options.get().sliders);
+                    number.set_popover_editor(vertical);
                     number.set_face(
                         vertical,
                         if vertical && labeled { &title } else { "" },
                         vertical && !labeled,
-                        if vertical {
-                            self.imp().style.get().icon_size() as i32
-                        } else {
-                            16
-                        },
+                        16,
                         self.imp().style.get() != TileStyle::Small,
                     );
                     number.set_vexpand(vertical);
@@ -348,15 +350,7 @@ impl ComponentBody {
                 }
                 if let Some(dropdown) = w.downcast_ref::<gtk::DropDown>() {
                     dropdown.set_show_arrow(!vertical);
-                    dropdown.set_factory(Some(&choice_factory(
-                        !text && !(vertical && labeled),
-                        true,
-                        if vertical {
-                            self.imp().style.get().icon_size() as i32
-                        } else {
-                            16
-                        },
-                    )));
+                    dropdown.set_factory(Some(&choice_factory(vertical && !labeled, true, 16)));
                 }
                 if row.has_css_class("option-action") {
                     if let Some(image) = w
@@ -404,11 +398,7 @@ impl Component {
         )]);
         let binding = tile.control.slider();
         let editor = binding.as_ref().map(|binding| {
-            let spec = if *binding == ToolbarNumericBinding::BrushSize {
-                NumericControl::brush_size()
-            } else {
-                NumericControl::percent()
-            };
+            let spec = binding.numeric();
             let editor = NumberControl::compact(spec, &tool_choice(tile.control).label);
             editor.set_slider_visible(false);
             editor.set_widget_name(&format!("component-value-{}", tile.id));
@@ -466,26 +456,6 @@ impl Component {
             button.set_tooltip_text(Some("More tool options"));
             button.update_property(&[gtk::accessible::Property::Label("More tool options")]);
             w.install_context(&root, target);
-            // Empty bar space is a presentation menu, not a reorderable tile.
-            let hold = gtk::GestureLongPress::new();
-            hold.set_touch_only(false);
-            hold.set_propagation_phase(gtk::PropagationPhase::Capture);
-            hold.connect_pressed(glib::clone!(
-                #[weak]
-                w,
-                #[weak]
-                root,
-                move |g, x, y| {
-                    if !crate::input::touch_or_pen(g)
-                        && root.pick(x, y, gtk::PickFlags::DEFAULT).as_ref()
-                            == Some(root.upcast_ref())
-                    {
-                        g.set_state(gtk::EventSequenceState::Claimed);
-                        w.show_context(root.upcast_ref(), target, x, y);
-                    }
-                }
-            ));
-            root.add_controller(hold);
             None
         };
         let component = Rc::new(Self {
@@ -750,6 +720,25 @@ impl Component {
                 number.add_css_class("toolbar-number");
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));
                 let id = f.id;
+                for target in [label.upcast_ref::<gtk::Widget>(), icon.upcast_ref()] {
+                    target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.label)));
+                    let reset = gtk::GestureClick::new();
+                    reset.set_button(1);
+                    reset.connect_pressed(glib::clone!(
+                        #[weak]
+                        w,
+                        move |gesture, count, _, _| {
+                            if count == 2 {
+                                gesture.set_state(gtk::EventSequenceState::Claimed);
+                                w.dispatch(UiAction::ToolbarEdit {
+                                    context,
+                                    action: Box::new(UiAction::ResetToolSetting { id: id.into() }),
+                                });
+                            }
+                        }
+                    ));
+                    target.add_controller(reset);
+                }
                 number.connect_value_changed(glib::clone!(
                     #[weak(rename_to=component)]
                     self,

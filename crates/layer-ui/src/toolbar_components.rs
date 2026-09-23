@@ -73,6 +73,16 @@ pub enum ToolbarNumericBinding {
     BrushOpacity,
 }
 impl ToolbarNumericBinding {
+    pub fn numeric(&self) -> NumericControl {
+        match self {
+            Self::BrushSize => NumericControl::brush_size(),
+            Self::BrushOpacity => NumericControl {
+                digits: 0,
+                resolution: 0.01,
+                ..NumericControl::percent()
+            },
+        }
+    }
     pub fn action(&self, value: f32) -> UiAction {
         match self {
             Self::BrushSize => UiAction::SetToolSetting {
@@ -90,7 +100,15 @@ impl ToolbarNumericBinding {
             Self::BrushSize => "size",
             Self::BrushOpacity => "opacity",
         };
-        state.tool_settings.iter().find(|f| f.id == id).cloned()
+        state
+            .tool_settings
+            .iter()
+            .find(|f| f.id == id)
+            .cloned()
+            .map(|mut field| {
+                field.numeric = self.numeric();
+                field
+            })
     }
 }
 
@@ -181,7 +199,9 @@ impl UiState {
             UiAction::SetBrushOpacity { .. } => {
                 self.layer_tools.tool == LayerCanvasTool::Paint && !self.toolbar_context().operation
             }
-            UiAction::SetToolSetting { id, .. } => self.tool_settings.iter().any(|f| f.id == id),
+            UiAction::SetToolSetting { id, .. } | UiAction::ResetToolSetting { id } => {
+                self.tool_settings.iter().any(|f| f.id == id)
+            }
             UiAction::Invoke { command }
                 if self.tool_actions.iter().any(|a| a.command == *command) =>
             {
