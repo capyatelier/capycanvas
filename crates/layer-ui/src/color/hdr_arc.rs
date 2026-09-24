@@ -72,9 +72,9 @@ mod tests {
                     - b[2] * 0.5
                     - outer
             };
-            for (old, new) in [sdr.foreground, sdr.background, sdr.transparent]
+            for (old, new) in [sdr.foreground, sdr.background]
                 .into_iter()
-                .zip([layout.foreground, layout.background, layout.transparent])
+                .zip([layout.foreground, layout.background])
             {
                 assert!(
                     (clearance(old, wheel.outer) - clearance(new, arc.radius + arc.width * 0.5))
@@ -83,6 +83,7 @@ mod tests {
                 );
                 assert!(new[1] + new[3] <= layout.height());
             }
+            assert_eq!(layout.transparent[1], layout.foreground[1]);
             assert!(!arc.contains(arc.center));
             for i in 0..=100 {
                 let t = i as f32 / 100.;

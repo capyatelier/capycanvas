@@ -180,7 +180,7 @@ class AndroidColorPanelTest {
                 val foreground = bounds("color-swatch-foreground")
                 val background = bounds("color-swatch-background")
                 assertTrue(foreground.width > background.width && foreground.overlaps(background))
-                assertEquals(foreground.width, bounds("color-swatch-transparent").width, 1f)
+                assertEquals(background.width, bounds("color-swatch-transparent").width, 1f)
                 for (model in listOf("shape", "rgb")) {
                     if (colors().getString("readout") != model) color(obj("op" to "toggle_readout"))
                     assertEquals(if (model == "rgb") "RGB" else mapOf("circle" to "OKLCH", "square" to "HSB", "triangle" to "HLS")[shape], view().getString("readout_label"))

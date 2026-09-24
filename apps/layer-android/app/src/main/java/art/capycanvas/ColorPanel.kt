@@ -237,7 +237,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             }), onClick = { select() }) { _, hovered ->
         Canvas(Modifier.fillMaxSize()) {
             val radius = size.minDimension / 2
-            val padding = (if (slot == "background") 1.dp else 3.dp).toPx()
+            val padding = (if (slot == "foreground") 3.dp else 1.dp).toPx()
             drawCircle(colors.panel)
             val field = Path().apply { addOval(Rect(center - Offset(radius - padding, radius - padding), Size((radius - padding) * 2, (radius - padding) * 2))) }
             clipPath(field) {

@@ -232,7 +232,7 @@ isolated workspaces. Compact hosts fit the full footer and leave the HDR
 readout clear of both shortcuts. Web caches the fitted geometry across color
 changes.
 
-The transparency circle mirrors the primary color circle. Black mirrors the
-secondary circle; white overlaps black with their bottom edges aligned, keeping
-the three circles curved around the wheel without extending the footer. HDR
+The transparency circle matches the secondary color's diameter, with its top
+aligned to the primary color at the opposite edge. Smaller black and white
+circles overlap along the wheel's curve, with their bottom edges aligned. HDR
 places its exposure readout below the circles so the compact overlap stays clear.

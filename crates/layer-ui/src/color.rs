@@ -1182,23 +1182,24 @@ pub struct ColorPanelLayout {
     pub intensity_caption: [f32; 3],
 }
 impl ColorPanelLayout {
-    /// Keep the remembered swatches clear of the HDR arc and mirror the shortcuts.
+    /// Keep the remembered swatches clear of the HDR arc and align the shortcuts.
     pub fn with_hdr(size: f32) -> Option<Self> {
         let mut layout = Self::new(size)?;
         let wheel = ColorWheelGeometry::new(layout.wheel[2])?;
         let arc = HdrIntensityArc::new(size)?;
         let expansion = arc.radius + arc.width * 0.5 - wheel.outer;
         let old_background_y = layout.background[1];
-        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent] {
+        for b in [&mut layout.foreground, &mut layout.background] {
             let dx = b[0] + b[2] * 0.5 - arc.center[0];
             let dy = b[1] + b[3] * 0.5 - arc.center[1];
             let distance = dx.hypot(dy) + expansion;
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
+        layout.transparent[1] = layout.foreground[1];
         layout.black[1] = layout.background[1];
-        layout.white[1] = layout.background[1] + layout.background[3] - layout.white[3];
-        // Keep both swatch groups level; the caption has its own compact row.
+        layout.white[1] = layout.black[1] + layout.black[3] - layout.white[3];
+        // The caption has its own compact row below both swatch groups.
         let font = (size * 0.044).clamp(9., 12.);
         layout.intensity_caption = [size * 0.5, layout.height() + font + 2., font];
         Some(layout)
@@ -1221,10 +1222,11 @@ impl ColorPanelLayout {
         let background = [(fg * 0.54).round(), size - bg, bg, bg];
         let c = size * 0.5;
         let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
-        let transparent = [size - fg, foreground[1], fg, fg];
-        let black = [size - background[0] - bg, background[1], bg, bg];
-        let white_size = (bg * 0.88).round();
-        let white = [black[0] - bg * 0.48, size - white_size, white_size, white_size];
+        let transparent = [size - bg, foreground[1], bg, bg];
+        let black_size = (bg * 0.90).round();
+        let black = [transparent[0] - black_size * 0.48, background[1], black_size, black_size];
+        let white_size = (bg * 0.80).round().max(20.);
+        let white = [black[0] - black_size * 0.48, black[1] + black_size - white_size, white_size, white_size];
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
@@ -1705,10 +1707,10 @@ mod tests {
             }
             let [a, b] = l.shapes;
             assert!((a[0] - b[0]).hypot(a[1] - b[1]) >= a[2] - 0.5);
-            assert_eq!(l.foreground[2], l.transparent[2]);
+            assert_eq!(l.background[2], l.transparent[2]);
             assert_eq!(l.foreground[1], l.transparent[1]);
-            assert_eq!(l.transparent[0], size as f32 - l.foreground[2]);
-            assert_eq!(l.background[2], l.black[2]);
+            assert_eq!(l.transparent[0], size as f32 - l.transparent[2]);
+            assert!(l.black[2] < l.background[2]);
             assert!(l.white[2] < l.black[2]);
             assert!(l.foreground[2] > l.background[2]);
         }

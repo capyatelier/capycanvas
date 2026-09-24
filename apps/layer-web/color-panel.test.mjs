@@ -28,7 +28,10 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
       await performNative(events);
     } else if(device==='touch') {
       await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...from,id:1}]});
+      // Avoid zero-duration contacts in Android Chrome's gesture recognizer.
+      await new Promise(resolve=>setTimeout(resolve,40));
       if(from.x!==to.x||from.y!==to.y)await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...to,id:1}]});
+      await new Promise(resolve=>setTimeout(resolve,40));
       await call('Input.dispatchTouchEvent',{type:cancel?'touchCancel':'touchEnd',touchPoints:[]});
     } else {
       for(const [type,p,buttons] of [['mousePressed',from,1],['mouseMoved',to,1],['mouseReleased',to,0]])
@@ -71,7 +74,7 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
       for(const c of frames.controls){assert.ok(c.hit,`Unobscured ${c.label}`);assert.ok(c.width>=20&&c.height>=20);assert.ok(c.x>=frames.root.x-1&&c.right<=frames.root.right+1&&c.y>=frames.root.y-1&&c.bottom<=frames.root.bottom+1,`${c.label} fits`);}
       const fg=frames.controls.find(c=>c.slot==='foreground'),bg=frames.controls.find(c=>c.slot==='background'),transparent=frames.controls.find(c=>c.slot==='transparent');
       assert.ok(fg.width>bg.width&&fg.x<bg.x&&fg.y<bg.y&&fg.right>bg.x&&fg.bottom>bg.y,'Overlapping foreground sits above and left of background');
-      assert.equal(fg.width,transparent.width);
+      assert.equal(bg.width,transparent.width);
       for(const model of ['shape','rgb']) {
         while((await read()).readout!==model)await send({type:'color',action:{op:'toggle_readout'}});
         assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='rgb'?'RGB':{circle:'OKLCH',square:'HSB',triangle:'HLS'}[shape]);

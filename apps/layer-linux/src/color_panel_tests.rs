@@ -227,7 +227,7 @@ fn native_color_panel_input() {
                     fg.x() + fg.width() > bg.x() && fg.y() + fg.height() > bg.y(),
                     "intentional paint overlap"
                 );
-                assert_eq!(fg.width(), transparent.width());
+                assert_eq!(bg.width(), transparent.width());
                 let wheel = wheel.downcast::<crate::tool_panels::ColorWheel>().unwrap();
                 let (size, origin) = wheel.drawing_bounds();
                 let g = layer_ui::ColorWheelGeometry::new(size).unwrap();
