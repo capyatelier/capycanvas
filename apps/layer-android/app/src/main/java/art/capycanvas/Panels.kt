@@ -55,6 +55,9 @@ import kotlin.math.roundToInt
                     ?.objectOrNull("drawer")?.getJSONObject("anchor")
                 val opensDrawer = drawerAnchor?.optString("panel") == panel.getString("id") && drawerAnchor.optInt("tile") == tile.getInt("id")
                 val shape = drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null)
+                val activate=pickerClick(host,control,obj("kind" to "tile","panel" to panel.getString("id"),"tile" to tile.getInt("id"))) {
+                    host.dispatch(obj("type" to "activate_tile","panel" to panel.getString("id"),"tile" to tile.getInt("id")))
+                }
                 HoverTip(tile.getString("tooltip"), modifier) {
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(when {
@@ -64,7 +67,7 @@ import kotlin.math.roundToInt
                     })
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
                         onLongClick = { dock.holdContext(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
-                        onClick = { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }),
+                        onClick = activate),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
                         SharedIcon(icon, tile.getString("label"), Modifier.size(panel.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}"), fill = fill)

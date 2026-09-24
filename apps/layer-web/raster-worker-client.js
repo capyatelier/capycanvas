@@ -66,6 +66,6 @@ export function createRasterWorker() {
       }
     }
     if(op==='tone'){const state=owner(`analysis:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Analysis finished','AbortError'));}}
-    return send(owner(op==='encode'?'codec':'files'),request,cancelled);
+    return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':'files'),request,cancelled);
   };
 }

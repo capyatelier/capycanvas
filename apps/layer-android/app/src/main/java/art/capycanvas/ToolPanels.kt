@@ -79,6 +79,18 @@ import org.json.JSONObject
 }
 
 @Composable internal fun ToolSettingsControls(host: CanvasHost, state: JSONObject) {
+    if (state.getJSONObject("layer_tools").optString("tool") in listOf("pick_visible", "pick_layer")) {
+        val picker=state.getJSONObject("color_picker")
+        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            ColorChoice("Source",if(picker.optBoolean("can_sample_layer"))listOf("false" to "Visible color","true" to "Selected layer") else listOf("false" to "Visible color"),picker.getBoolean("layer").toString()) {
+                host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "source","layer" to (it=="true"))))
+            }
+            ColorChoice("Sample size",picker.array("sample_sizes").values().map { val n=(it as Number).toInt();n.toString() to if(n==1)"Single pixel" else "$n px circle" },picker.getInt("sample_width").toString()) {
+                host.dispatch(obj("type" to "set_color_sample_size","width" to it.toInt()))
+            }
+        }
+        return
+    }
     val modes = setOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").objects().associateBy { it.getString("id") }
@@ -125,5 +137,20 @@ import org.json.JSONObject
                 }
             }
         }
+    }
+}
+
+/** Native double-press timing; shared Rust owns activation and drawer state. */
+@Composable internal fun pickerClick(host: CanvasHost, control: JSONObject?, anchor: JSONObject, activate: () -> Unit): () -> Unit {
+    val current by rememberUpdatedState(activate)
+    val picker=control?.optString("kind")=="color_picker" || control?.optString("kind")=="command" && control.optString("command")=="eyedropper"
+    val timeout=androidx.compose.ui.platform.LocalViewConfiguration.current.doubleTapTimeoutMillis
+    var last by remember(anchor.toString()) { mutableLongStateOf(0L) }
+    return {
+        val now=android.os.SystemClock.uptimeMillis()
+        if(picker && last!=0L && now-last<=timeout) {
+            last=0L
+            host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "settings","anchor" to anchor)))
+        } else { last=now;current() }
     }
 }

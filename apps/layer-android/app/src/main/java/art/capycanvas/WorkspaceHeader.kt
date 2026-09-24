@@ -217,6 +217,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val id = entry.getInt("id")
     val item = entry.getJSONObject("item")
     val kind = item.getString("kind")
+    val activate=pickerClick(host,item.objectOrNull("control"),obj("kind" to "header","id" to id)) { activateHeader(host,entry) }
     val colors = LocalPalette.current
     val label = spec.getString("label")
     val focus = remember { FocusRequester() }
@@ -278,7 +279,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         when (kind) {
                             "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
                             "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
-                            else -> activateHeader(host, entry)
+                            else -> activate()
                         }
                     }) {
                     val fill = if (item.objectOrNull("control")?.optString("kind") == "color") snapshot.getJSONObject("state").getJSONObject("brush").array("color").let { Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat()) } else null

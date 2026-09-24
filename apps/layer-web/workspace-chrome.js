@@ -133,7 +133,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         const switching=record&&JSON.stringify(record.drawer.anchor)!==JSON.stringify(drawer.anchor);
         const from=record?.placement;if(record)dispose(record);
         const shadow=element("div","drawer-shadow");shadow.setAttribute("aria-hidden","true");workspace.append(shadow);
-        const root=element("section","content-drawer");root.dataset.drawer=String(id);root.setAttribute("aria-label","Panel drawer");workspace.append(root);
+        const root=element("section","content-drawer");root.dataset.drawer=String(id);root.classList.toggle("picker-drawer",!!drawer.compact);root.setAttribute("aria-label","Panel drawer");workspace.append(root);
         const bodies=drawer.columns.map(ids=>{
           const body=element("div","drawer-column");
           for(const panel of ids) {

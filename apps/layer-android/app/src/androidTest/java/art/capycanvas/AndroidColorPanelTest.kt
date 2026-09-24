@@ -148,6 +148,100 @@ class AndroidColorPanelTest {
         shot.recycle()
         return crop
     }
+    private fun picker() = host.colorPreview?.objectOrNull("picker") ?: state().getJSONObject("color_picker")
+    private fun canvasPoint(): Offset {
+        val area=state().getJSONObject("camera").array("work_area")
+        return Offset((area.getDouble(0)+area.getDouble(2)*.72).toFloat(),(area.getDouble(1)+area.getDouble(3)*.70).toFloat())
+    }
+    private fun fullCapture(name:String) {
+        val image=instrumentation.uiAutomation.takeScreenshot()
+        File(output,"$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG,100,it) };image.recycle()
+    }
+    @Test fun glassPickerInputAndSettings() {
+        action(obj("type" to "invoke","command" to "fit_canvas"))
+        val p=canvasPoint()
+        tool=MotionEvent.TOOL_TYPE_STYLUS
+        action(obj("type" to "select_brush","id" to 1))
+        action(obj("type" to "set_brush_size","value" to 80))
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(1,0,0,1))))
+        tap(p)
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(0,1,0,1))))
+        val original=colors().toString()
+        action(obj("type" to "invoke","command" to "eyedropper"))
+        event(MotionEvent.ACTION_HOVER_ENTER,p)
+        event(MotionEvent.ACTION_HOVER_MOVE,p)
+        waitFor("hover sample") {picker().objectOrNull("preview")!=null}
+        assertEquals(original,colors().toString())
+        assertTrue(picker().getJSONObject("preview").array("rgba").getDouble(0)>.8)
+        fullCapture("picker-pen-hover")
+        event(MotionEvent.ACTION_DOWN,p);settle()
+        assertEquals("Pen down remains a preview",original,colors().toString())
+        event(MotionEvent.ACTION_UP,p)
+        waitFor("pen lift accepts") {state().getJSONObject("layer_tools").getString("tool")=="paint"}
+        assertTrue(colors().getJSONObject("foreground").array("rgba").getDouble(0)>.8)
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(0,1,0,1))))
+        val metrics=activity.resources.displayMetrics
+        val offset=(metrics.ydpi*10f/25.4f).coerceIn(36f*density,64f*density)
+        tool=MotionEvent.TOOL_TYPE_FINGER
+        event(MotionEvent.ACTION_DOWN,p+Offset(0f,offset))
+        waitFor("finger hold samples above contact") {picker().objectOrNull("preview")!=null}
+        assertTrue(picker().getJSONObject("preview").array("rgba").getDouble(0)>.8)
+        fullCapture("picker-touch-offset")
+        event(MotionEvent.ACTION_UP)
+        waitFor("finger lift accepts") {state().getJSONObject("layer_tools").getString("tool")=="paint"}
+        action(obj("type" to "invoke","command" to "eyedropper"));tap(p)
+        assertEquals("Finger tap cancels", "paint",state().getJSONObject("layer_tools").getString("tool"))
+        instrumentation.runOnMainSync {host.workspaceInput(obj("type" to "switch","id" to "builtin:workspace:painter"))}
+        waitFor("Sketch workspace",30000) {host.workspaceManager?.optString("id")=="builtin:workspace:painter" && host.workspaceManager?.optBoolean("busy")==false}
+        settle()
+        val panel=state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first {p->p.getJSONObject("content").optJSONArray("tiles")?.objects()?.any{it.getJSONObject("control").optString("kind")=="color_picker"}==true}
+        val tile=panel.getJSONObject("content").array("tiles").objects().first {it.getJSONObject("control").optString("kind")=="color_picker"}
+        val b=bounds("tile-${panel.getString("id")}-${tile.getInt("id")}")
+        tap(b.center);tap(b.center)
+        waitFor("settings drawer") {state().getJSONObject("customization").objectOrNull("drawer")!=null}
+        assertEquals("[[\"tool_settings\"]]",state().getJSONObject("customization").getJSONObject("drawer").array("columns").toString())
+        assertEquals("explicit",state().getJSONObject("customization").getJSONObject("drawer").getString("dismissal"))
+        tap(bounds("color-choice-Sample size").center)
+        // Dropdown opens as a native popup; choose its real semantic row.
+        instrumentation.uiAutomation.rootInActiveWindow.findAccessibilityNodeInfosByText("101 px circle").first().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+        waitFor("101 pixel setting") {picker().getInt("sample_width")==101}
+        fullCapture("picker-sketch-settings")
+        action(obj("type" to "invoke","command" to "eyedropper"))
+    }
+    @Test fun pickerWheelPreviewPerformance() {
+        action(obj("type" to "invoke","command" to "fit_canvas"))
+        val p=canvasPoint()
+        tool=MotionEvent.TOOL_TYPE_STYLUS
+        action(obj("type" to "select_brush","id" to 1));action(obj("type" to "set_brush_size","value" to 220))
+        for((i,rgba) in listOf(listOf(1,0,0,1),listOf(0,0,1,1),listOf(0,1,0,1)).withIndex()) {
+            action(obj("type" to "set_color","rgba" to JSONArray(rgba)));tap(p+Offset((i-1)*85f,0f))
+        }
+        fun measurements(reset:Boolean):JSONObject {
+            val done=CountDownLatch(1);var result:JSONObject?=null
+            instrumentation.runOnMainSync {host.measurements(reset){result=it;done.countDown()}}
+            assertTrue(done.await(10,TimeUnit.SECONDS));return result!!
+        }
+        val reports=JSONArray()
+        for(visible in listOf(false,true,false,true)) {
+            action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "color","visible" to visible)))
+            action(obj("type" to "invoke","command" to "eyedropper"))
+            event(MotionEvent.ACTION_HOVER_ENTER,p);event(MotionEvent.ACTION_HOVER_MOVE,p)
+            waitFor("preview ready"){picker().objectOrNull("preview")!=null};SystemClock.sleep(300)
+            measurements(true)
+            val start=SystemClock.uptimeMillis()
+            repeat(600) { i->
+                val delay=start+i*5-SystemClock.uptimeMillis();if(delay>0)SystemClock.sleep(delay)
+                event(MotionEvent.ACTION_HOVER_MOVE,p+Offset(100f*cos(i*.03f),20f*sin(i*.03f)))
+            }
+            val elapsed=SystemClock.uptimeMillis()-start
+            val report=measurements(false).put("wheel",visible).put("duration_ms",elapsed)
+            reports.put(report)
+            assertEquals("Hover retains panel models",0,report.getInt("panel_content_changes"))
+            event(MotionEvent.ACTION_HOVER_EXIT,p)
+            action(obj("type" to "invoke","command" to "eyedropper"))
+        }
+        File(output,"picker-performance.json").writeText(reports.toString())
+    }
     @Test fun compactGeometryAndRastersInBothThemes() {
         val report = JSONArray()
         for (theme in listOf("light", "dark")) for (width in listOf(144, 160, 200, 280, 360)) {

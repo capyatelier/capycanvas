@@ -111,10 +111,13 @@ impl NativeHost {
             struct Motion<'a> {
                 workspace_update: &'a layer_ui::WorkspaceUpdate,
                 #[serde(skip_serializing_if = "Option::is_none")]
+                color_preview: Option<layer_ui::PickerPreview<'a>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
                 camera: Option<&'a layer_ui::Camera>,
             }
             let snapshot = Motion {
                 workspace_update: update,
+                color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.session.color_preview()),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
             .serialize(serializer)?;

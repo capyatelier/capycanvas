@@ -956,7 +956,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
-                if self.state.platform == Platform::Gtk && tool.picks_color() {
+                if self.state.platform.color_picker() && tool.picks_color() {
                     self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
                     if self.eyedropper.picking.previous.is_none() { self.start_picker()?; }
                     else { self.configure_picker(ColorPickerAction::Source { layer: self.eyedropper.layer })?; }

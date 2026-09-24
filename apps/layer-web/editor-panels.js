@@ -1,9 +1,11 @@
+import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
+  const fieldWorker = createRasterWorker();
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind) => {
@@ -54,6 +56,23 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     let key = "", numbers = [], actions = [];
     return () => {
       const s = state();
+      const picking = ['pick_visible','pick_layer'].includes(s.layer_tools.tool);
+      if (picking) {
+        const picker=s.color_picker;
+        const next=JSON.stringify([picker.layer,picker.can_sample_layer,picker.sample_width,picker.sample_sizes]);
+        if(key===next)return;key=next;root.replaceChildren();
+        const choice=(label,values,selected,select)=>{
+          const row=element('label','picker-setting'),input=element('select');row.append(element('span','',label),input);
+          input.setAttribute('aria-label',label);input.dataset.pickerSetting=label;
+          for(const [value,title] of values){const option=element('option','',title);option.value=value;input.append(option);}
+          input.value=String(selected);input.onchange=()=>select(input.value);root.append(row);
+        };
+        choice('Source',picker.can_sample_layer?[[false,'Visible color'],[true,'Selected layer']]:[[false,'Visible color']],picker.layer,
+          value=>dispatch({type:'color_picker',action:{kind:'source',layer:value==='true'}}));
+        choice('Sample size',picker.sample_sizes.map(n=>[n,n===1?'Single pixel':`${n} px circle`]),picker.sample_width,
+          value=>dispatch({type:'set_color_sample_size',width:Number(value)}));
+        contentChanged('tool_settings');return;
+      }
       const next = JSON.stringify([s.tool_settings.map(({value,...field})=>field),s.tool_actions]);
       if (next !== key) {
         key = next; root.replaceChildren(); numbers=[]; actions=[]; let group="";
@@ -119,6 +138,21 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
     let view,layout,layoutWidth=0,paintKey="",fieldKey="",ringKey="";
     const field=document.createElement("canvas"),ring=document.createElement("canvas");
+    let fieldBusy=false,fieldPending=null,fieldEpoch=0,disposed=false,previewing=false;
+    function installField(bytes,side,key){
+      if(field.width!==side)field.width=field.height=side;
+      fieldContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),side,side),0,0);
+      fieldKey=key;
+    }
+    async function renderField(){
+      if(fieldBusy||!fieldPending||disposed)return;
+      const job=fieldPending;fieldPending=null;fieldBusy=true;
+      try {
+        const bytes=await fieldWorker({operation:'color-field',metadata:job.metadata,buffers:[]});
+        if(!disposed&&job.epoch===fieldEpoch){installField(bytes,job.side,job.key);paintKey='';queuePaint();}
+      } catch(error) { if(!disposed)console.error('Color field preview',error); }
+      finally {fieldBusy=false;renderField();}
+    }
     const ctx=wheel.getContext("2d",{willReadFrequently:true});
     const fieldContext=field.getContext("2d",{willReadFrequently:true}),ringContext=ring.getContext("2d",{willReadFrequently:true});
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
@@ -133,7 +167,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       }
       arc.hidden=!view.hdr;arc.style.display=view.hdr?'':'none';
       if(view.hdr){const g=app.color_ui({type:'arc',size:width,fraction:(view.intensity+2)/8});const a=g.geometry,start=app.color_ui({type:'arc',size:width,fraction:0}).point,end=app.color_ui({type:'arc',size:width,fraction:1}).point;arc.setAttribute('width',width);arc.setAttribute('height',layout.height);arc.style.width=`${width}px`;arc.style.height=`${layout.height}px`;track.setAttribute('d',`M${start} A${a.radius} ${a.radius} 0 0 0 ${end}`);track.setAttribute('stroke-width',a.width);for(const node of [markerShadow,marker]){node.setAttribute('cx',g.point[0]);node.setAttribute('cy',g.point[1]);node.setAttribute('r',a.marker_radius);}track.setAttribute('aria-valuenow',view.intensity);track.setAttribute('aria-valuetext',`${view.intensity.toFixed(1)} EV`);track.setAttribute('aria-valuemin','-2');track.setAttribute('aria-valuemax','6');
-        ramp.replaceChildren(...g.path.slice(1).map((p,i)=>{const segment=document.createElementNS(arc.namespaceURI,'path');segment.setAttribute('d',`M${g.path[i]} L${p}`);segment.setAttribute('stroke',rgba(view.intensity_ramp[i]));segment.setAttribute('stroke-width',a.width);segment.setAttribute('stroke-linecap','round');return segment;}));marker.setAttribute('fill',rgba(view.marker_color));
+        g.path.slice(1).forEach((p,i)=>{let segment=ramp.children[i];if(!segment){segment=document.createElementNS(arc.namespaceURI,'path');segment.setAttribute('stroke-linecap','round');ramp.append(segment);}segment.setAttribute('d',`M${g.path[i]} L${p}`);segment.setAttribute('stroke',rgba(view.intensity_ramp[i]));segment.setAttribute('stroke-width',a.width);});marker.setAttribute('fill',rgba(view.marker_color));
         const font=Math.min(12,Math.max(9,width*.044)),radius=a.radius+a.width/2+font+3,x=a.center[0]+radius*Math.cos(76*Math.PI/180),y=a.center[1]+radius*Math.sin(76*Math.PI/180);caption.setAttribute('x',x);caption.setAttribute('y',y);caption.setAttribute('text-anchor','middle');caption.setAttribute('font-size',font);caption.setAttribute('transform',`rotate(-14 ${x} ${y})`);caption.textContent=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`;
       }
       shapes.forEach((node,i)=>{node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
@@ -149,14 +183,16 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
       const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],view.intensity,view.rendition,fieldPixels]);
       if(key!==fieldKey) {
-        fieldKey=key;if(field.width!==fieldPixels){field.width=field.height=fieldPixels;}
-        const bytes=app.color_field_pixels(fieldPixels);
-        fieldContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),fieldPixels,fieldPixels),0,0);
+        if(previewing){
+          fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
+        } else {
+          fieldPending=null;fieldEpoch++;installField(app.color_field_pixels(fieldPixels),fieldPixels,key);
+        }
       }
       ctx.save();
       if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
       else if(view.shape==="square"){const [x,y,w]=g.square.map(v=>v*side);ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();}
-      ctx.drawImage(field,0,0,side,side);ctx.restore();
+      if(field.width)ctx.drawImage(field,0,0,side,side);ctx.restore();
       // The ring depends on the color model and size, never the selected hue.
       // Retain its raster so a drag only repaints the changing field and markers.
       const nextRing=JSON.stringify([view.rgb_space,view.shape,pixels,side,g,view.wheel_hue_start_degrees]);
@@ -212,9 +248,12 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
     function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
     const resize=new ResizeObserver(queuePaint);resize.observe(stage);
-    root.navigatorDispose=()=>{resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
+    root.navigatorDispose=()=>{disposed=true;fieldPending=null;fieldEpoch++;resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
-      view=app.color_panel();
+      const preview=app.color_preview();
+      const active=preview.picker.preview!=null;
+      if(previewing!==active){fieldEpoch++;fieldPending=null;}
+      previewing=active;view=preview.view;
       edit.disabled=state().colors.slot==="transparent";
       choices.forEach(choice=>{
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
@@ -288,5 +327,6 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     // Paint UI rasters after controls, geometry and theme writes have settled.
     // This avoids rasterizing the old color-wheel size before arrange() resizes it.
     flushPaint(){for(const paint of [...pendingPaints])paint();},
+    refreshColorPreview(){for(const [root,fn] of updates)if(root.isConnected&&root.dataset.control==="color_wheel")fn();},
     refresh(){for(const fn of updates.values())fn();}};
 }

@@ -34,17 +34,16 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
-        let mut layout = self.legacy_picker_category_layout(platform);
-        if self == Self::Painter && platform == crate::Platform::Gtk {
-            for panel in &mut layout.panels {
-                if panel.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider) {
-                    for tile in panel.tiles_mut().expect("Sketch toolbar") {
-                        if tile.control == (ToolbarControl::Command { command: crate::CommandId::Eyedropper }) {
-                            tile.control = ToolbarControl::ColorPicker;
-                        }
-                    }
-                }
-            }
+        let mut layout = self.legacy_without_picker_layout(platform);
+        if self == Self::Painter && platform.color_picker() {
+            let panel = layout.panels.iter().find(|p| p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)).unwrap();
+            let id = panel.id;
+            let before = panel.tiles().iter().find(|t| t.control == ToolbarControl::BrushOpacitySlider).unwrap().id;
+            layout.insert_tools(id, Some(before), &[ToolbarControl::ColorPicker]).expect("Sketch color picker");
+            layout.insert_tools(id, None, &[
+                ToolbarControl::Command { command: crate::CommandId::Undo },
+                ToolbarControl::Command { command: crate::CommandId::Redo },
+            ]).expect("Sketch history buttons");
         }
         layout
     }

@@ -1,5 +1,5 @@
 import { createToolbarComponent } from "./toolbar-components.js";
-import { colorButton } from './color-controls.js';
+import { colorButton, pickerButtonAction } from './color-controls.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, workspace, panels, groups,
@@ -222,10 +222,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (tile.control.kind === "divider") {
       root.classList.add("tile-divider"); root.setAttribute("role", "separator");
     } else {
-      const node = button("", () => {
+      const node = button("", pickerButtonAction(tile.control,{kind:'tile',panel,tile:tile.id},dispatch,() => {
         const r = root.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
         dispatch({ type: "activate_tile", panel, tile: tile.id });
-      });
+      }));
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
       node.append(icon(tile.icon));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));

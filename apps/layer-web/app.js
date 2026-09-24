@@ -239,6 +239,8 @@ function dispatch(action) {
   }
 }
 function applyChange(change) {
+  if(change.regions & 256) editor?.refreshColorPreview();
+  if(change.regions===256){if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 128)) workspaceManager?.observe();
   if (change.regions) {
     const presentation = app.workspace_update();
@@ -293,6 +295,7 @@ function cursorInput(e) {
   // Clear once on exit; ordinary UI hover must not redraw the GPU viewport.
   if (!onCanvas && !canvasCursorActive) return;
   canvasCursorActive = !!onCanvas;
+  if(!onCanvas){applyChange(app.input({type:"cursor_leave"}).change);return;}
   app.cursor_input(
     onCanvas
       ? new Float64Array([
@@ -1332,7 +1335,26 @@ function queuePen(e, stage, predictionsOnly = false) {
 // actual raw delivery, so browsers/devices without it still paint via moves.
 let rawPenPointer = null;
 const canvasPenContacts = new Set();
+const canvasFingers=new Set();
+let pickerHold=null;
+function cancelPickerHold(){if(pickerHold)clearTimeout(pickerHold.timer);pickerHold=null;}
+window.addEventListener('blur',()=>{cancelPickerHold();canvasFingers.clear();});
+function pickerTouch(e,stage){
+  if(e.pointerType!=='touch')return;
+  if(stage===1){
+    canvasFingers.add(e.pointerId);cancelPickerHold();
+    if(canvasFingers.size===1){
+      pickerHold={id:e.pointerId,x:e.clientX,y:e.clientY,timer:setTimeout(()=>{
+        pickerHold=null;
+        applyChange(app.input({type:'color_picker_hold',id:e.pointerId,position:position(e),offset:44*(devicePixelRatio||1)}).change);
+      },500)};
+    }
+  } else if(stage===2&&pickerHold?.id===e.pointerId&&Math.hypot(e.clientX-pickerHold.x,e.clientY-pickerHold.y)>8)cancelPickerHold();
+  else if(stage===3||stage===4){canvasFingers.delete(e.pointerId);cancelPickerHold();}
+}
+
 function canvasPointer(e, stage) {
+  pickerTouch(e,stage);
   if (e.cancelable) e.preventDefault();
   if (e.pointerType === "pen") {
     const active = canvasPenContacts.has(e.pointerId), touching = !!(e.buttons & 33);
