@@ -112,8 +112,8 @@ mod selection_tools_checks {
                 send(&mut s, PenPhase::Up, [230., 240.]);
                 let b = bounds(&s);
                 assert!(((b[2] - b[0]) / (b[3] - b[1]) - 2.).abs() < 0.02);
-                s.interaction.modifiers.shift = true;
                 send(&mut s, PenPhase::Down, [200., 200.]);
+                s.interaction.modifiers.shift = true;
                 send(&mut s, PenPhase::Up, [230., 240.]);
                 let b = bounds(&s);
                 assert!(((b[2] - b[0]) / (b[3] - b[1]) - 1.).abs() < 0.02);
@@ -391,4 +391,30 @@ mod selection_tools_checks {
         s.frame(1, 1).unwrap();
         assert!(s.engine.document().selection.is_none());
     }
+    #[test]
+    fn held_selection_modifiers_latch_per_contact_and_preserve_configured_mode() {
+        for (shift, alt, expected) in [(true,false,SelectionMode::Add),(false,true,SelectionMode::Subtract),(true,true,SelectionMode::Intersect)] {
+            for tool in [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso] {
+                let mut s = session(); s.set_platform(Platform::Gtk);
+                invoke(&mut s, tool);
+                s.interaction.modifiers.shift = shift; s.interaction.modifiers.alt = alt;
+                assert_eq!(s.effective_selection_mode(), expected);
+                send(&mut s, PenPhase::Down, [20.,20.]);
+                s.interaction.modifiers = Default::default();
+                send(&mut s, PenPhase::Move, [80.,20.]);
+                send(&mut s, PenPhase::Up, [80.,60.]);
+                let request = s.renderer_mut().region_requests.last().unwrap();
+                assert_eq!(request.selection.as_ref().unwrap().mode, expected);
+                assert_eq!(s.selection_tools.options.mode, SelectionMode::New);
+                assert_eq!(s.effective_selection_mode(), SelectionMode::New);
+            }
+        }
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::SelectionBrush);
+        s.interaction.modifiers.alt = true;
+        assert_eq!(s.effective_selection_mode(), SelectionMode::Subtract);
+        s.interaction.modifiers = Default::default();
+        assert_eq!(s.effective_selection_mode(), SelectionMode::Add);
+    }
+
 }

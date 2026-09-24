@@ -844,7 +844,7 @@ pub struct Workspace {
     pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
     placement_actions: crate::tool_panels::PlacementActions,
-    mask_actions: crate::selection_masks::MaskActions,
+    selection_resize: crate::selection_masks::ResizeDialog,
     color_panel: crate::tool_panels::ColorPanel,
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
@@ -1033,8 +1033,6 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         let placement_actions = crate::tool_panels::PlacementActions::new();
         content.add_overlay(&placement_actions.root);
-        let mask_actions = crate::selection_masks::MaskActions::new();
-        content.add_overlay(&mask_actions.root);
         window.set_content(Some(&content));
         let this = Rc::new(Self {
             window,
@@ -1093,7 +1091,7 @@ impl Workspace {
             color_editors: RefCell::default(),
             tool_settings,
             placement_actions,
-            mask_actions,
+            selection_resize: crate::selection_masks::ResizeDialog::new(),
             color_panel,
             proof_panel,
             navigator,
@@ -1131,7 +1129,7 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.placement_actions.bind(&this);
-        this.mask_actions.bind(&this);
+        this.selection_resize.bind(&this);
         this.color_panel.bind(&this);
         this.navigator.bind(&this);
         this.navigator_overviews.bind(&this);
@@ -2293,7 +2291,7 @@ impl Workspace {
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
             self.placement_actions.refresh(&state);
-            self.mask_actions.refresh(&state);
+            self.selection_resize.refresh(self, &state);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
             self.color_panel.refresh(state.display_colors(), self.view_color(), self.picker_headroom());

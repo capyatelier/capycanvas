@@ -1,6 +1,47 @@
 //! Selection coverage, validation, and saved selection targets.
 use super::*;
 
+/// Painting changes coverage independently of artwork colors and compositing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionPaintBehavior {
+    #[default]
+    ColorTransparency,
+    BlackWhite,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SelectionMaskProperties {
+    pub painting: SelectionPaintBehavior,
+    pub color: color::RgbColor,
+    pub opacity: f32,
+    pub protected: bool,
+}
+impl Default for SelectionMaskProperties {
+    fn default() -> Self {
+        Self {
+            painting: SelectionPaintBehavior::default(),
+            color: color::RgbColor::new(color::RgbSpace::Srgb, [1., 0., 0., 1.]).unwrap(),
+            opacity: 0.5,
+            protected: false,
+        }
+    }
+}
+impl SelectionMaskProperties {
+    pub fn validate(&self) -> Result<(), DocumentError> {
+        if self.color.validate_working_spaces().is_err()
+            || !self.opacity.is_finite()
+            || !(0. ..=1.).contains(&self.opacity)
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Invalid selection mask properties",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// A paintable selection destination. Artwork and visibility masks have their
 /// own targets; a saved mask is never clipped by the current selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -26,8 +67,12 @@ impl Document {
     pub fn layer_is_visible(&self, id: LayerId) -> bool {
         let mut current = Some(id);
         while let Some(id) = current {
-            let Some(layer) = self.layer(id) else { return false; };
-            if !layer.visible { return false; }
+            let Some(layer) = self.layer(id) else {
+                return false;
+            };
+            if !layer.visible {
+                return false;
+            }
             current = layer.properties.parent;
         }
         true
@@ -309,11 +354,16 @@ mod selection_tests {
         let mut editor = Editor::new(Document::new("saved coverage", 64, 64));
         let id = editor.allocate_layer_id();
         let original = soft_mask();
+        let mut layer = Layer::selection(id, "Hair", original.clone());
+        let properties = SelectionMaskProperties {
+            painting: SelectionPaintBehavior::BlackWhite,
+            opacity: 0.35,
+            protected: true,
+            ..Default::default()
+        };
+        layer.properties.selection_mask = Some(properties.clone());
         editor
-            .perform(Edit::InsertLayer {
-                index: 0,
-                layer: Layer::selection(id, "Hair", original.clone()),
-            })
+            .perform(Edit::InsertLayer { index: 0, layer })
             .unwrap();
         let saved_checkpoint = editor.checkpoint();
         let loaded = editor.document().saved_selection(id).unwrap();
@@ -351,6 +401,10 @@ mod selection_tests {
             Some(Selection::full())
         );
         assert_eq!(restored.layer(id).unwrap().name.as_ref(), "Hair");
+        assert_eq!(
+            restored.layer(id).unwrap().properties.selection_mask,
+            Some(properties)
+        );
         assert_eq!(restored.selection, Some(original.clone()));
         editor.perform(Edit::RemoveLayer { id }).unwrap();
         assert_eq!(editor.document().selection, Some(original));

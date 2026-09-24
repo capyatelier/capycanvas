@@ -164,7 +164,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             target,
             mode: SelectionPaintMode::Gray,
             opacity: self.state.brush.opacity,
-            gray: self.selection_masks.gray(),
+            gray: self.mask_paint_value(self.state.brush.tool == Tool::Eraser),
             gradient: None,
             region: None,
             stroke: SelectionStroke::new(
@@ -237,6 +237,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn sync_selection_overlay(&mut self) {
         let display = &self.selection_tools.options.display;
+        let properties = self.mask_properties();
         let target = self.selection_masks.target();
         let visible = match target {
             Some(SelectionTarget::Saved(id)) => self
@@ -244,6 +245,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .document()
                 .layer(id)
                 .is_some_and(|l| self.engine.document().layer_is_visible(l.id)),
+            Some(SelectionTarget::Current) => self.selection_masks.quick_visible,
             _ => true,
         };
         let active = visible && (target.is_some() || self.selection_brush_active());
@@ -253,8 +255,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(SelectionTarget::Saved(id)) => Some(id),
                 _ => None,
             },
-            color: display.color,
-            protected: target.is_some() && display.protected,
+            color: if target.is_some() {
+                let mut color = properties.color.encoded_in(layer_core::color::RgbSpace::Srgb).unwrap_or(properties.color.rgba);
+                color[3] *= properties.opacity; color
+            } else { display.color },
+            protected: target.is_some() && properties.protected,
         });
         let selection = if let Some(target) = target {
             Some(if display.overlay && active {
@@ -267,6 +272,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             None
         };
+        let quick = self.selection_masks.quick().then(|| self.current_selection().unwrap_or_else(Selection::empty));
+        self.engine.backend_mut().set_quick_mask_thumbnail(quick.as_ref());
         self.engine.set_selection_display(selection);
         self.engine.backend_mut().set_selection_overlay(overlay);
     }
@@ -335,7 +342,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let physical_eraser =
                 event.tool == ToolKind::Eraser || event.flags.contains(SampleFlags::INVERTED);
             let subtract = physical_eraser
-                || (self.selection_tools.options.brush.subtract ^ self.interaction.modifiers.alt);
+                || (self.effective_selection_mode() == SelectionMode::Subtract);
             let target = self
                 .selection_masks
                 .target()
@@ -381,14 +388,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 gradient: None,
                 region: None,
-                gray: if physical_eraser
-                    || self.state.brush.tool == Tool::Eraser
-                    || self.selection_masks.erases()
-                {
-                    1.
-                } else {
-                    self.selection_masks.gray()
-                },
+                gray: self.mask_paint_value(physical_eraser || self.state.brush.tool == Tool::Eraser),
                 stroke,
                 before: None,
                 chunks: VecDeque::new(),

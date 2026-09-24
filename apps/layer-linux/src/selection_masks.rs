@@ -1,7 +1,7 @@
 //! Native presentation of shared selection destinations and menus.
-use crate::{number_control::NumberControl, workspace::Workspace};
+use crate::number_control::NumberControl;
+use crate::workspace::Workspace;
 use gtk::{glib, prelude::*};
-use layer_ui::{CommandId, NumericControl, UiAction, UiState};
 use std::{cell::Cell, rc::Rc};
 
 pub use layer_ui::SelectionMenu as Menu;
@@ -16,7 +16,11 @@ pub fn menu_button(w: &Rc<Workspace>, label: &str, kind: Menu) -> gtk::MenuButto
         #[weak]
         w,
         move |popover| {
-            let model = w.gpu.borrow().as_ref().map(|g|g.session.selection_menu(kind));
+            let model = w
+                .gpu
+                .borrow()
+                .as_ref()
+                .map(|g| g.session.selection_menu(kind));
             if let Some(model) = model {
                 w.populate_workspace_menu(popover, model);
             }
@@ -25,157 +29,91 @@ pub fn menu_button(w: &Rc<Workspace>, label: &str, kind: Menu) -> gtk::MenuButto
     button
 }
 
-fn command_button(w: &Rc<Workspace>, label: &str, command: CommandId) -> gtk::Button {
-    let button = gtk::Button::with_label(label);
-    button.set_size_request(-1, 44);
-    w.bind_action_tooltip(&button, UiAction::Invoke { command });
-    button.connect_clicked(glib::clone!(
-        #[weak]
-        w,
-        move |_| w.dispatch(UiAction::Invoke { command })
-    ));
-    button
-}
-
-/// Remains visible with Layers and Tool Settings closed, or with overlay hidden.
-pub struct MaskActions {
-    pub root: gtk::Box,
-    label: gtk::Label,
-    reason: gtk::Label,
-    controls: gtk::Box,
-    gray: NumberControl,
+/// A numeric operation dialog, separate from the mask's persistent properties.
+pub struct ResizeDialog {
+    dialog: adw::AlertDialog,
+    shown: Rc<Cell<bool>>,
     updating: Rc<Cell<bool>>,
+    number: NumberControl,
 }
-impl MaskActions {
+impl ResizeDialog {
     pub fn new() -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        root.set_widget_name("selection-mask-actions");
-        root.add_css_class("selection-mask-actions");
-        root.set_halign(gtk::Align::Center);
-        root.set_valign(gtk::Align::End);
-        root.set_margin_bottom(40);
-        root.set_visible(false);
-        let label = gtk::Label::new(None);
-        label.add_css_class("heading");
-        label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        label.set_max_width_chars(44);
-        root.append(&label);
-        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let gray = NumberControl::inline(NumericControl::percent(), "Foreground mask gray");
-        gray.set_widget_name("selection-mask-gray");
-        gray.set_size_request(150, 44);
-        controls.append(&gray);
-        root.append(&controls);
-        let reason = gtk::Label::new(None);
-        reason.set_wrap(true);
-        reason.set_max_width_chars(52);
-        reason.add_css_class("dim-label");
-        root.append(&reason);
+        use adw::prelude::*;
+        let dialog = adw::AlertDialog::new(None, None);
+        dialog.set_widget_name("selection-resize-dialog");
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("apply", "Apply");
+        dialog.set_close_response("cancel");
+        dialog.set_default_response(Some("apply"));
+        let number = NumberControl::new(
+            layer_ui::NumericControl::number(
+                1.,
+                layer_render::SelectionRefinement::MAX_RESIZE as f64,
+                1.,
+                0,
+            )
+            .unit("px"),
+            "Distance",
+            "",
+        );
+        number.set_widget_name("selection-resize-distance");
+        dialog.set_extra_child(Some(&number));
         Self {
-            root,
-            label,
-            reason,
-            controls,
-            gray,
+            dialog,
+            shown: Rc::new(Cell::new(false)),
             updating: Rc::new(Cell::new(false)),
+            number,
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        use adw::prelude::*;
         let updating = self.updating.clone();
-        self.gray.connect_value_changed(glib::clone!(
+        self.number.connect_value_changed(glib::clone!(
             #[weak]
             w,
-            move |value| {
+            move |number| {
                 if !updating.get() {
-                    w.dispatch(UiAction::SetToolSetting {
-                        id: "mask_gray".into(),
-                        value: value.value() as f32,
+                    w.dispatch(layer_ui::UiAction::Selection {
+                        action: layer_ui::SelectionAction::ResizeRadius {
+                            radius: number.value() as f32,
+                        },
                     });
                 }
             }
         ));
-        self.controls
-            .append(&command_button(w, "Swap", CommandId::SwapMaskColors));
-        self.controls
-            .append(&menu_button(w, "Overlay", Menu::Overlay));
-        let done = command_button(w, "Done", CommandId::ReturnToArtwork);
-        done.set_widget_name("selection-mask-done");
-        self.controls.append(&done);
-    }
-    pub fn refresh(&self, state: &UiState) {
-        self.root
-            .set_visible(state.layer_tools.mask_editing.is_some());
-        let Some(view) = &state.layer_tools.mask_editing else {
-            return;
-        };
-        self.label.set_text(&view.label);
-        self.reason
-            .set_text(view.reason.unwrap_or("Black protects · White selects"));
-        self.updating.set(true);
-        self.gray.set_value(view.gray as f64);
-        self.updating.set(false);
-    }
-}
-
-pub struct QuickMaskRow {
-    pub root: gtk::Box,
-    eye: gtk::Button,
-}
-impl QuickMaskRow {
-    pub fn new() -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        root.set_widget_name("quick-mask-layer");
-        root.add_css_class("selection-mask-row");
-        root.set_visible(false);
-        root.set_margin_start(6);
-        root.set_margin_end(6);
-        root.set_margin_top(6);
-        root.set_margin_bottom(6);
-        let eye = crate::icons::button("layer-eye-symbolic");
-        eye.set_size_request(44, 44);
-        eye.set_tooltip_text(Some("Show or hide Quick Mask overlay"));
-        root.append(&eye);
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        text.set_hexpand(true);
-        let label = gtk::Label::new(Some("Quick Mask"));
-        label.set_xalign(0.);
-        label.add_css_class("heading");
-        let caption = gtk::Label::new(Some("Temporary"));
-        caption.set_xalign(0.);
-        caption.add_css_class("dim-label");
-        text.append(&label);
-        text.append(&caption);
-        root.append(&text);
-        Self { root, eye }
-    }
-    pub fn bind(&self, w: &Rc<Workspace>) {
-        self.eye.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.dispatch(UiAction::Invoke {
-                command: CommandId::MaskOverlay
-            })
-        ));
-        let actions = menu_button(w, "Quick Mask actions", Menu::QuickMask);
-        actions.set_child(Some(&crate::icons::image("layer-more-symbolic")));
-        actions.set_size_request(44, 44);
-        actions.set_tooltip_text(Some("Quick Mask actions"));
-        self.root.append(&actions);
-    }
-    pub fn refresh(&self, state: &UiState) {
-        self.root.set_visible(state.layer_tools.quick_mask);
-        let visible = state
-            .layer_tools
-            .mask_editing
-            .as_ref()
-            .is_some_and(|m| m.overlay);
-        crate::icons::set_button(
-            &self.eye,
-            if visible {
-                "layer-eye-symbolic"
-            } else {
-                "layer-eye-hidden-symbolic"
-            },
+        let shown = self.shown.clone();
+        self.dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak]
+                w,
+                move |_, response| {
+                    if !shown.replace(false) {
+                        return;
+                    }
+                    w.dispatch(layer_ui::UiAction::Selection {
+                        action: if response == "apply" {
+                            layer_ui::SelectionAction::ApplyResize
+                        } else {
+                            layer_ui::SelectionAction::CancelResize
+                        },
+                    });
+                }
+            ),
         );
+    }
+    pub fn refresh(&self, w: &Workspace, state: &layer_ui::UiState) {
+        use adw::prelude::*;
+        if let Some(view) = &state.layer_tools.selection_resize {
+            self.dialog.set_heading(Some(view.title));
+            self.updating.set(true);
+            self.number.set_value(view.radius as f64);
+            self.updating.set(false);
+            if !self.shown.replace(true) {
+                self.dialog.present(Some(&w.window));
+            }
+        } else if self.shown.replace(false) {
+            self.dialog.close();
+        }
     }
 }

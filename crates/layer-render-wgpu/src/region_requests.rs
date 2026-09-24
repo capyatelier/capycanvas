@@ -70,7 +70,7 @@ impl RegionRequests {
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_)) { ready &= self.flood.prepare(&startup.compiler, request.refinement); }
                 ready &= self.raw.prepare(&startup.compiler);
             }
-            if request.selection.is_some() { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler); }
+            if let Some(options) = &request.selection { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler, options); }
             if request.limit.is_some() || request.selection.is_some() {
                 for pipeline in [
                     &r.selection_clip.crossings,

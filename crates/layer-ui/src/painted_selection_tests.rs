@@ -58,7 +58,7 @@ mod painted_selection_checks {
         reply(&mut s, 0x80808080);
         s.frame(3, 3).unwrap();
         assert!(s.state.layer_tools.quick_mask);
-        assert!(s.state.layer_properties.controls.is_empty());
+        assert_eq!(s.state.layer_properties.controls.len(), 4);
         assert!(!s.state.layer_tools.controls.opacity);
         assert!(s.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).is_err());
         let epoch = s.state.document_file.epoch;
@@ -103,6 +103,7 @@ mod painted_selection_checks {
         s.set_platform(Platform::Gtk);
         let artwork = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
+        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: 0, key: "mask_painting".into(), value: layer_core::EffectValue::Choice(1) } }).unwrap();
         s.mask_color_action(ColorAction::SetSlot {
             slot: ColorSlot::Foreground,
             color: layer_core::color::RgbColor::new(
@@ -159,7 +160,7 @@ mod painted_selection_checks {
         invoke(&mut s, CommandId::QuickMask);
         assert!(s.state.layer_tools.quick_mask);
         assert!(s.engine.document().selection.is_none());
-        assert_eq!(s.current_selection(), Some(layer_core::Selection::full()));
+        assert_eq!(s.current_selection(), Some(layer_core::Selection::empty()));
         assert!(!s.engine.can_undo());
         invoke(&mut s, CommandId::QuickMask);
         assert!(!s.state.layer_tools.quick_mask);
@@ -189,8 +190,8 @@ mod painted_selection_checks {
         s.frame(1, 1).unwrap();
         let update = s.engine.backend().selection_updates.last().unwrap();
         assert_eq!(update.mode, layer_render::SelectionPaintMode::Gray);
-        assert_eq!(*update.before, layer_core::Selection::full());
-        assert_eq!(update.gray, 0.);
+        assert_eq!(*update.before, layer_core::Selection::empty());
+        assert_eq!(update.gray, 1.);
         invoke(&mut s, CommandId::ReturnToArtwork);
         assert!(
             s.state.layer_tools.quick_mask,
@@ -385,4 +386,74 @@ mod painted_selection_checks {
             CommandId::SelectionNew | CommandId::SelectionIntersect
         )));
     }
+    #[test]
+    fn mask_properties_share_paint_semantics_and_saved_history() {
+        use layer_core::{EffectValue, SelectionPaintBehavior};
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::QuickMask);
+        let row = &s.state.layers[0];
+        assert!(row.quick_mask && row.selection_layer && row.drawing && row.selected);
+        assert_eq!(row.selection_icon, "layer-brush-symbolic");
+        assert!(!row.can_rename);
+        assert_eq!(s.state.layer_properties.layer, Some(0));
+        let revision = row.paint_revision;
+        s.refresh_document();
+        assert_eq!(s.state.layers[0].paint_revision, revision, "temporary thumbnails stay cached across UI refreshes");
+        assert_eq!(s.mask_paint_value(false), 1.);
+        assert_eq!(s.mask_paint_value(true), 0.);
+        for (phase, value) in [(ContactPhase::Down, 0.2), (ContactPhase::Cancel, 0.2), (ContactPhase::Up, 0.2)] {
+            s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set { layer: 0, key: "mask_opacity".into(), value: EffectValue::Number(value) }) } }).unwrap();
+        }
+        assert_eq!(s.mask_properties().opacity, 0.5);
+        assert!(s.require_idle().is_ok());
+        let set = |layer, key: &str, value| UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } };
+        s.dispatch(set(0, "mask_painting", EffectValue::Choice(1))).unwrap();
+        assert_eq!(s.mask_properties().painting, SelectionPaintBehavior::BlackWhite);
+        assert_eq!(s.mask_paint_value(false), s.selection_masks.gray());
+        s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();
+        assert!(!s.engine.can_undo(), "temporary properties are not artwork history");
+        invoke(&mut s, CommandId::SaveSelectionLayer);
+        let id = s.engine.document().layers.iter().find(|l| l.kind == LayerKind::Selection).unwrap().id;
+        assert_eq!(s.engine.document().layer(id).unwrap().properties.selection_mask.as_ref().unwrap().opacity, 0.3);
+        invoke(&mut s, CommandId::ReturnToArtwork);
+        s.dispatch(UiAction::Selection { action: SelectionAction::EditLayer { id: id.0 } }).unwrap();
+        s.dispatch(set(id.0, "mask_opacity", EffectValue::Number(0.7))).unwrap();
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.mask_properties().opacity, 0.3);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.mask_properties().opacity, 0.7);
+        assert!(s.dispatch(set(id.0, "mask_opacity", EffectValue::Number(2.))).is_err());
+        let original = s.mask_properties();
+        for (phase, value) in [(ContactPhase::Down, 0.5), (ContactPhase::Move, 0.1), (ContactPhase::Cancel, 0.1)] {
+            s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set { layer: id.0, key: "mask_opacity".into(), value: EffectValue::Number(value) }) } }).unwrap();
+        }
+        assert_eq!(s.mask_properties(), original);
+    }
+
+    #[test]
+    fn selection_resize_is_async_cancelable_and_one_undo_step() {
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::SelectAll);
+        let before = s.engine.document().selection.clone();
+        let resize = |action| UiAction::Selection { action };
+        s.dispatch(resize(SelectionAction::BeginResize { grow: false, layer: None })).unwrap();
+        s.dispatch(resize(SelectionAction::ResizeRadius { radius: 7. })).unwrap();
+        s.dispatch(resize(SelectionAction::CancelResize)).unwrap();
+        assert_eq!(s.engine.document().selection, before);
+        assert!(s.renderer_mut().region_requests.is_empty());
+        s.dispatch(resize(SelectionAction::BeginResize { grow: false, layer: None })).unwrap();
+        s.dispatch(resize(SelectionAction::ResizeRadius { radius: 7. })).unwrap();
+        s.dispatch(resize(SelectionAction::ApplyResize)).unwrap();
+        s.frame(1, 1).unwrap();
+        let request = s.renderer_mut().region_requests.last().unwrap().clone();
+        assert_eq!(request.selection.unwrap().resize, -7);
+        assert_eq!(s.engine.document().selection, before);
+        s.renderer_mut().region_reply = Some(layer_render::RegionResult { request_id: request.request_id, pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes([4,1], [1,0,2,1], vec![0x00808000]).unwrap()) });
+        s.frame(2,2).unwrap();
+        let result = s.engine.document().selection.clone();
+        assert_ne!(result, before);
+        invoke(&mut s, CommandId::Undo); assert_eq!(s.engine.document().selection, before);
+        invoke(&mut s, CommandId::Redo); assert_eq!(s.engine.document().selection, result);
+    }
+
 }

@@ -94,9 +94,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso, CommandId::PolygonSelect, CommandId::AutoSelect, CommandId::ColorSelect, CommandId::SelectionBrush].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
+                vec![ContextMenuItem::submenu("Modify", vec![self.selection_resize_items(None)])],
                 self.selection_source_menu_items(),
                 vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
-                vec![command(CommandId::SelectionOutline), ContextMenuItem::submenu("Mask Overlay", self.selection_overlay_menu().sections)],
+                vec![command(CommandId::SelectionOutline)],
             ] },
             M::Layer => self
                 .layer_menu(
@@ -177,7 +178,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         };
-        if menu==M::View && CommandId::SelectionOutline.available_on(self.state.platform) {model.sections.push(vec![command(CommandId::SelectionOutline),ContextMenuItem::submenu("Mask Overlay",self.selection_overlay_menu().sections)]);}
+        if menu==M::View && CommandId::SelectionOutline.available_on(self.state.platform) {model.sections.push(vec![command(CommandId::SelectionOutline)]);}
         model.title = menu.label().into();
         model.with_shortcuts(&self.state.settings, self.state.platform)
     }

@@ -219,8 +219,8 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     var tint = 0.;
     if camera.rotation.z > .5 {
         let q=vec2<u32>(p);
-        let word=textureLoad(saved_selection,vec2<i32>(i32(q.x/4u),i32(q.y)),0).r;
-        tint=f32((word>>((q.x%4u)*8u))&255u)/255.;
+        let saved=unpack4x8unorm(textureLoad(saved_selection,vec2<i32>(q),0).r);
+        if saved.a > 0. { rgb=mix(rgb,view_ui_rgb(saved.rgb/saved.a),saved.a); }
     }
     if camera.selection.z > .5 && camera.rotation.y > .5 {
         let coverage = selection_coverage(p);

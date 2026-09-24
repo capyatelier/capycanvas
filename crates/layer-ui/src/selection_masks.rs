@@ -1,7 +1,9 @@
 //! Selection destinations and lifecycle. Temporary editing never creates a
 //! document layer; stored masks use ordinary tree identity and shared history.
 use super::*;
-use layer_core::{Edit, Layer, Selection, SelectionTarget};
+use layer_core::{
+    Edit, Layer, Selection, SelectionMaskProperties, SelectionPaintBehavior, SelectionTarget,
+};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -9,7 +11,6 @@ use std::sync::Arc;
 pub enum SelectionMenu {
     Selection,
     QuickMask,
-    Overlay,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,6 +43,15 @@ impl SelectionDisplayOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum SelectionAction {
+    BeginResize {
+        grow: bool,
+        layer: Option<u64>,
+    },
+    ResizeRadius {
+        radius: f32,
+    },
+    ApplyResize,
+    CancelResize,
     NewLayer {
         parent: Option<u64>,
         save_current: bool,
@@ -78,9 +88,21 @@ pub enum SelectionAction {
     FillLayer {
         id: u64,
     },
-    OverlayColor {
-        color: [f32; 4],
-    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SelectionResizeView {
+    pub title: &'static str,
+    pub radius: f32,
+    pub numeric: NumericControl,
+}
+struct ResizeDraft {
+    view: SelectionResizeView,
+    grow: bool,
+    target: SelectionTarget,
+    coverage: Selection,
+    revision: u64,
+    active: LayerId,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -101,8 +123,12 @@ struct Editing {
 }
 pub(super) struct SelectionMasks {
     editing: Option<Editing>,
+    resize: Option<ResizeDraft>,
     pub reselect: Option<Selection>,
-    colors: ColorState,
+    pub(super) colors: ColorState,
+    pub quick_properties: SelectionMaskProperties,
+    pub quick_visible: bool,
+    pub quick_property_gesture: Option<(String, SelectionMaskProperties)>,
     previews: std::collections::BTreeMap<LayerId, (Selection, u64)>,
     preview_revision: u64,
 }
@@ -111,12 +137,17 @@ impl Default for SelectionMasks {
         let mut colors = ColorState::default();
         colors.foreground = layer_core::color::RgbColor::BLACK;
         colors.background = layer_core::color::RgbColor::WHITE;
-        colors.set_document_depth(layer_core::color::SampleDepth::U8)
+        colors
+            .set_document_depth(layer_core::color::SampleDepth::U8)
             .expect("scalar mask color depth");
         Self {
             editing: None,
+            resize: None,
             reselect: None,
             colors,
+            quick_properties: Default::default(),
+            quick_visible: true,
+            quick_property_gesture: None,
             previews: Default::default(),
             preview_revision: 0,
         }
@@ -128,9 +159,25 @@ impl SelectionMasks {
     }
     fn update_previews(&mut self, doc: &layer_core::Document) {
         self.previews.retain(|id, _| {
-            doc.layer(*id)
-                .is_some_and(|l| l.kind == LayerKind::Selection)
+            id.0 == 0
+                || doc
+                    .layer(*id)
+                    .is_some_and(|l| l.kind == LayerKind::Selection)
         });
+        if self.quick() {
+            let mask = doc.selection.clone().unwrap_or_else(Selection::empty);
+            if self
+                .previews
+                .get(&LayerId(0))
+                .is_none_or(|(old, _)| *old != mask)
+            {
+                self.preview_revision = self.preview_revision.wrapping_add(1);
+                self.previews
+                    .insert(LayerId(0), (mask, self.preview_revision));
+            }
+        } else {
+            self.previews.remove(&LayerId(0));
+        }
         for layer in doc.layers.iter().filter(|l| l.kind == LayerKind::Selection) {
             let Ok(mask) = doc.saved_selection(layer.id) else {
                 continue;
@@ -145,6 +192,9 @@ impl SelectionMasks {
                     .insert(layer.id, (mask, self.preview_revision));
             }
         }
+    }
+    pub fn resize_view(&self) -> Option<SelectionResizeView> {
+        self.resize.as_ref().map(|d| d.view.clone())
     }
     pub fn target(&self) -> Option<SelectionTarget> {
         self.editing.as_ref().map(|e| e.target)
@@ -171,10 +221,32 @@ impl<R: CanvasRenderer> UiSession<R> {
         match kind {
             SelectionMenu::Selection => self.application_menu(ApplicationMenu::Select),
             SelectionMenu::QuickMask => self.quick_mask_menu(),
-            SelectionMenu::Overlay => self.selection_overlay_menu(),
         }
     }
 
+    pub(super) fn selection_resize_items(&self, layer: Option<u64>) -> Vec<ContextMenuItem> {
+        [("Grow…", true), ("Shrink…", false)]
+            .into_iter()
+            .map(|(label, grow)| {
+                let mut item = ContextMenuItem::command(
+                    label,
+                    UiAction::Selection {
+                        action: SelectionAction::BeginResize { grow, layer },
+                    },
+                );
+                item.enabled = self.require_document_idle().is_ok()
+                    && match layer {
+                        Some(0) => self.selection_masks.quick(),
+                        Some(id) => self.engine.document().layer(LayerId(id)).is_some_and(|l| {
+                            l.kind == LayerKind::Selection
+                                && !self.engine.document().is_locked(l.id)
+                        }),
+                        None => self.current_selection().is_some(),
+                    };
+                item
+            })
+            .collect()
+    }
     fn selection_command_item(&self, command: CommandId) -> ContextMenuItem {
         let state = self.command(command);
         let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
@@ -184,60 +256,26 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn quick_mask_menu(&self) -> ContextMenu {
         ContextMenu {
-            title: "Quick Mask · Temporary".into(),
+            title: "Quick Mask".into(),
             sections: vec![
-                [CommandId::ReturnToArtwork, CommandId::SaveSelectionLayer]
-                    .map(|c| self.selection_command_item(c))
-                    .into(),
-                [
-                    CommandId::InvertSelection,
-                    CommandId::SelectAll,
-                    CommandId::ClearSelectionMask,
-                    CommandId::FillSelectionMask,
-                ]
-                .map(|c| self.selection_command_item(c))
-                .into(),
+                vec![
+                    self.selection_command_item(CommandId::ReturnToArtwork),
+                    self.selection_command_item(CommandId::SaveSelectionLayer),
+                ],
                 vec![ContextMenuItem::submenu(
-                    "Overlay",
-                    self.selection_overlay_menu().sections,
+                    "Modify",
+                    vec![
+                        [
+                            CommandId::InvertSelection,
+                            CommandId::SelectAll,
+                            CommandId::ClearSelectionMask,
+                            CommandId::FillSelectionMask,
+                        ]
+                        .map(|c| self.selection_command_item(c))
+                        .into(),
+                        self.selection_resize_items(Some(0)),
+                    ],
                 )],
-            ],
-        }
-    }
-    pub fn selection_overlay_menu(&self) -> ContextMenu {
-        let palette = [
-            ("Red", [1., 0., 0.]),
-            ("Blue", [0., 0.4, 1.]),
-            ("Green", [0., 0.8, 0.3]),
-            ("Magenta", [1., 0., 1.]),
-        ];
-        ContextMenu {
-            title: "Mask Overlay".into(),
-            sections: vec![
-                [CommandId::MaskOverlay, CommandId::MaskOverlayProtected]
-                    .map(|c| self.selection_command_item(c))
-                    .into(),
-                palette
-                    .into_iter()
-                    .map(|(label, rgb)| {
-                        let mut item = ContextMenuItem::command(
-                            label,
-                            UiAction::Selection {
-                                action: SelectionAction::OverlayColor {
-                                    color: [
-                                        rgb[0],
-                                        rgb[1],
-                                        rgb[2],
-                                        self.selection_tools.options.display.color[3],
-                                    ],
-                                },
-                            },
-                        );
-                        item.selected =
-                            Some(self.selection_tools.options.display.color[..3] == rgb);
-                        item
-                    })
-                    .collect(),
             ],
         }
     }
@@ -391,72 +429,53 @@ impl<R: CanvasRenderer> UiSession<R> {
             .collect();
         organize_items.push(ContextMenuItem::submenu("Move into Group", vec![groups]));
         Ok(ContextMenu {
-            title: format!("{} · Selection Layer", layer.name),
+            title: layer.name.to_string(),
             sections: vec![
-                vec![
-                    action(
-                        "Edit Selection Layer",
-                        SelectionAction::EditLayer { id: id.0 },
-                        true,
-                    ),
-                    self.selection_command_item(CommandId::ReturnToArtwork),
-                ],
-                uses,
-                vec![action(
-                    "Replace from Current Selection",
-                    SelectionAction::ReplaceLayer { id: id.0 },
-                    unlocked && self.current_selection().is_some(),
+                vec![ContextMenuItem::submenu("Load Selection", vec![uses])],
+                vec![ContextMenuItem::submenu(
+                    "Modify",
+                    vec![
+                        vec![
+                            action(
+                                "Replace from Current Selection",
+                                SelectionAction::ReplaceLayer { id: id.0 },
+                                unlocked && self.current_selection().is_some(),
+                            ),
+                            action(
+                                "Invert",
+                                SelectionAction::InvertLayer { id: id.0 },
+                                unlocked,
+                            ),
+                            action(
+                                "Select All",
+                                SelectionAction::ClearLayer {
+                                    id: id.0,
+                                    full: true,
+                                },
+                                unlocked,
+                            ),
+                            action(
+                                "Clear",
+                                SelectionAction::ClearLayer {
+                                    id: id.0,
+                                    full: false,
+                                },
+                                unlocked,
+                            ),
+                            action("Fill", SelectionAction::FillLayer { id: id.0 }, unlocked),
+                        ],
+                        self.selection_resize_items(Some(id.0)),
+                    ],
                 )],
-                vec![
-                    action(
-                        "Invert Stored Mask",
-                        SelectionAction::InvertLayer { id: id.0 },
-                        unlocked,
-                    ),
-                    action(
-                        "Select Entire Canvas in Mask",
-                        SelectionAction::ClearLayer {
-                            id: id.0,
-                            full: true,
-                        },
-                        unlocked,
-                    ),
-                    action(
-                        "Clear Stored Mask",
-                        SelectionAction::ClearLayer {
-                            id: id.0,
-                            full: false,
-                        },
-                        unlocked,
-                    ),
-                    action(
-                        "Fill Mask",
-                        SelectionAction::FillLayer { id: id.0 },
-                        unlocked,
-                    ),
-                ],
-                vec![
-                    organize(
-                        if layer.visible {
-                            "Hide Overlay"
-                        } else {
-                            "Show Overlay"
-                        },
-                        LayerAction::Visibility {
-                            id: id.0,
-                            value: !layer.visible,
-                        },
-                        true,
-                    ),
-                    ContextMenuItem::submenu(
-                        "Overlay Settings",
-                        self.selection_overlay_menu().sections,
-                    ),
-                ],
+                vec![ContextMenuItem::submenu(
+                    "Organize",
+                    vec![organize_items.split_off(4)],
+                )],
                 organize_items,
             ],
         })
     }
+
     fn saved_selection_label(&self, layer: &Layer) -> String {
         let mut names = vec![layer.name.to_string()];
         let mut parent = layer.properties.parent;
@@ -585,7 +604,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .document()
             .selection
             .clone()
-            .or_else(|| self.selection_masks.quick().then(Selection::full))
+            .or_else(|| self.selection_masks.quick().then(Selection::empty))
     }
     pub(super) fn mask_coverage(&self, target: SelectionTarget) -> Result<Selection, String> {
         match target {
@@ -616,6 +635,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.document().saved_selection(id).map_err(error)?;
         }
         self.cancel_layer_gesture()?;
+        if self.selection_masks.target().is_none() {
+            self.selection_masks.colors = self.state.colors.clone();
+            self.selection_masks
+                .colors
+                .set_document_depth(layer_core::color::SampleDepth::U8)?;
+        }
         let previous = self.selection_masks.editing.take();
         let artwork = previous
             .as_ref()
@@ -626,6 +651,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             artwork,
             tool,
         });
+        if self.mask_properties().painting == SelectionPaintBehavior::BlackWhite {
+            self.selection_masks.colors.constrain_grayscale()?;
+        }
         if let SelectionTarget::Saved(id) = target {
             self.engine.set_layer_visibility(id, true).map_err(error)?;
             self.engine.set_active_layer(id).map_err(error)?;
@@ -724,8 +752,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                     !self.selection_tools.options.display.overlay
             }
             CommandId::MaskOverlayProtected => {
-                self.selection_tools.options.display.protected =
-                    !self.selection_tools.options.display.protected
+                let layer = match self.selection_masks.target().ok_or("Select a mask first")? {
+                    SelectionTarget::Current => 0,
+                    SelectionTarget::Saved(id) => id.0,
+                };
+                self.effect_action(EffectAction::Set {
+                    layer,
+                    key: "mask_side".into(),
+                    value: layer_core::EffectValue::Choice(u32::from(
+                        !self.mask_properties().protected,
+                    )),
+                })?;
             }
             CommandId::ResetMaskColors => {
                 self.selection_masks.colors.apply(ColorAction::SetSlot {
@@ -770,7 +807,107 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_edit(edit)
     }
     pub(super) fn selection_action(&mut self, action: SelectionAction) -> Result<(), String> {
+        if self.selection_masks.quick() {
+            match &action {
+                SelectionAction::EditLayer { id: 0 } => return Ok(()),
+                SelectionAction::LoadLayer { id: 0, .. }
+                | SelectionAction::LoadThumbnail { id: 0, .. } => return self.return_to_artwork(),
+                _ => (),
+            }
+        }
         match action {
+            SelectionAction::BeginResize { grow, layer } => {
+                self.require_document_idle()?;
+                if layer.is_none()
+                    && matches!(
+                        self.selection_masks.target(),
+                        Some(SelectionTarget::Saved(_))
+                    )
+                {
+                    self.return_to_artwork()?;
+                }
+                let target = match layer {
+                    Some(0) if self.selection_masks.quick() => SelectionTarget::Current,
+                    Some(id) => SelectionTarget::Saved(LayerId(id)),
+                    None => SelectionTarget::Current,
+                };
+                if target == SelectionTarget::Current && self.current_selection().is_none() {
+                    return Err("Make a selection first".into());
+                }
+                let coverage = self.mask_coverage(target)?;
+                self.engine
+                    .document()
+                    .selection_edit(target, coverage.clone())
+                    .map_err(error)?;
+                self.selection_masks.resize = Some(ResizeDraft {
+                    view: SelectionResizeView {
+                        title: if grow {
+                            "Grow Selection"
+                        } else {
+                            "Shrink Selection"
+                        },
+                        radius: 5.,
+                        numeric: NumericControl::number(
+                            1.,
+                            layer_render::SelectionRefinement::MAX_RESIZE as f64,
+                            1.,
+                            0,
+                        )
+                        .unit("px"),
+                    },
+                    grow,
+                    target,
+                    coverage,
+                    revision: self.engine.document().revision,
+                    active: self.engine.document().active_layer,
+                });
+            }
+            SelectionAction::ResizeRadius { radius } => {
+                let draft = self
+                    .selection_masks
+                    .resize
+                    .as_mut()
+                    .ok_or("No selection adjustment is open")?;
+                draft.view.numeric.validate(radius, "Distance")?;
+                if radius.fract() != 0. {
+                    return Err("Use whole pixels".into());
+                }
+                draft.view.radius = radius;
+            }
+            SelectionAction::CancelResize => self.selection_masks.resize = None,
+            SelectionAction::ApplyResize => {
+                let draft = self
+                    .selection_masks
+                    .resize
+                    .take()
+                    .ok_or("No selection adjustment is open")?;
+                let doc = self.engine.document();
+                if draft.revision != doc.revision || draft.active != doc.active_layer {
+                    return Err("The selection changed; open the adjustment again".into());
+                }
+                self.queue_mask_region(
+                    draft.target,
+                    layer_render::RegionRequest {
+                        request_id: 0,
+                        contiguous: false,
+                        source: layer_render::RegionSource::Selection(Arc::new(draft.coverage)),
+                        position: [0, 0],
+                        tolerance: 0.,
+                        refinement: Default::default(),
+                        limit: None,
+                        selection: Some(layer_render::SelectionRefinement {
+                            resize: draft.view.radius as i32 * if draft.grow { 1 } else { -1 },
+                            mode: SelectionMode::New,
+                            antialias: true,
+                            feather: 0.,
+                            previous: None,
+                            source_to_document: layer_core::Affine::IDENTITY,
+                        }),
+                    },
+                    layer_core::Affine::IDENTITY,
+                    false,
+                )?;
+            }
             SelectionAction::NewLayer {
                 parent,
                 save_current,
@@ -798,6 +935,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = self.engine.allocate_layer_id();
                 let mut layer = Layer::selection(id, format!("Selection {}", id.0), selection);
                 layer.properties.parent = parent;
+                if save_current && self.selection_masks.target().is_some() {
+                    layer.properties.selection_mask = Some(self.mask_properties());
+                }
                 layer.visible = !save_current;
                 self.layer_edit(Edit::InsertLayer { index: 0, layer })?;
                 if !save_current {
@@ -849,6 +989,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let basis = doc.layer_transform(target);
                 self.return_to_artwork()?;
                 let options = layer_render::SelectionRefinement {
+                    resize: 0,
                     mode,
                     previous: self.engine.document().selection.clone().map(Arc::new),
                     antialias: true,
@@ -883,6 +1024,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_edit(Edit::SetSelection(Some(selection)))?;
                 } else {
                     let options = layer_render::SelectionRefinement {
+                        resize: 0,
                         mode,
                         previous: self.engine.document().selection.clone().map(Arc::new),
                         antialias: true,
@@ -927,12 +1069,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             SelectionAction::FillLayer { id } => {
                 self.queue_mask_fill(SelectionTarget::Saved(LayerId(id)), Selection::full())?
             }
-            SelectionAction::OverlayColor { color } => {
-                let mut display = self.selection_tools.options.display.clone();
-                display.color = color;
-                display.validate()?;
-                self.selection_tools.options.display = display;
-            }
         }
         self.refresh_document();
         Ok(())
@@ -947,10 +1083,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             layer: layer.map(|id| id.0),
             label: layer
                 .and_then(|id| self.engine.document().layer(id))
-                .map_or_else(
-                    || "Editing selection · Quick Mask".into(),
-                    |l| format!("Editing selection layer: {}", l.name),
-                ),
+                .map_or_else(|| "Quick Mask".into(), |l| l.name.to_string()),
             gray: self.selection_masks.colors.foreground.rgba[0],
             background: self.selection_masks.colors.background.rgba[0],
             colors: self.selection_masks.colors.clone(),
@@ -958,32 +1091,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             reason: self.mask_brush_reason(),
         })
     }
-    pub(super) fn edit_mask_control(&mut self, id: &str, value: f32) -> Result<(), String> {
-        NumericControl::percent().validate(value, "Mask value")?;
-        match id {
-            "mask_gray" | "mask_background" => {
-                self.selection_masks.colors.apply(ColorAction::SetSlot {
-                    slot: if id == "mask_gray" {
-                        ColorSlot::Foreground
-                    } else {
-                        ColorSlot::Background
-                    },
-                    color: layer_core::color::RgbColor::new(
-                        layer_core::color::RgbSpace::Srgb,
-                        [value, value, value, 1.],
-                    )?,
-                })?
-            }
-            "mask_overlay_opacity" => self.selection_tools.options.display.color[3] = value,
-            _ => return Err("Unknown mask control".into()),
-        }
-        self.refresh_tools();
-        Ok(())
-    }
 }
 
 impl UiState {
-    /// Mask colors are a separate scalar pair; artwork definitions remain intact.
+    /// Mask painting keeps independent colors; artwork definitions remain intact.
     pub fn display_colors(&self) -> &ColorState {
         self.layer_tools
             .mask_editing
@@ -994,7 +1105,9 @@ impl UiState {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn mask_color_action(&mut self, action: ColorAction) -> Result<(), String> {
         self.selection_masks.colors.apply(action)?;
-        self.selection_masks.colors.constrain_grayscale()?;
+        if self.mask_properties().painting == SelectionPaintBehavior::BlackWhite {
+            self.selection_masks.colors.constrain_grayscale()?;
+        }
         self.refresh_tools();
         Ok(())
     }

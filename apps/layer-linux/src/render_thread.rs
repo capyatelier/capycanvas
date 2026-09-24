@@ -86,6 +86,7 @@ enum Command {
     SelectionPaint(u64, layer_render::SelectionPaint),
     CancelSelectionPaint(u64),
     SelectionOverlay(Option<layer_render::SelectionOverlay>),
+    QuickMaskThumbnail(Option<layer_core::Selection>),
     Region(layer_render::RegionRequest),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
@@ -157,6 +158,7 @@ pub struct RenderWorker {
     selection_ack: Option<Result<bool, String>>,
     selection_paint: Option<Result<layer_render::SelectionPaintResult, String>>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
+    quick_thumbnail: Option<layer_core::Selection>,
     pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
     telemetry_enabled: bool,
@@ -319,6 +321,7 @@ impl RenderWorker {
             selection_ack: None,
             selection_paint: None,
             selection_overlay: None,
+            quick_thumbnail: None,
             clock,
             stroke_target: None,
             telemetry,
@@ -551,6 +554,12 @@ impl CanvasRenderer for RenderWorker {
         self.selection_update_pending = false; self.selection_ack = None; self.selection_paint = None;
         self.selection = None;
         let _ = self.send(Command::CancelSelectionPaint(self.selection_generation));
+    }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if self.quick_thumbnail.as_ref() != selection {
+            self.quick_thumbnail = selection.cloned();
+            let _ = self.send(Command::QuickMaskThumbnail(self.quick_thumbnail.clone()));
+        }
     }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
         if self.selection_overlay != overlay {
@@ -1069,6 +1078,7 @@ impl Worker {
                 Command::CancelSelectionPaint(generation) => {
                     selection_generation = generation; self.renderer.cancel_selection_paint();
                 }
+                Command::QuickMaskThumbnail(selection) => self.renderer.set_quick_mask_thumbnail(selection.as_ref()),
                 Command::SelectionOverlay(overlay) => self.renderer.set_selection_overlay(overlay),
                 Command::Region(request) => {
                     let result = self.renderer.request_region(request);

@@ -15,7 +15,6 @@ pub struct LayerPanel {
     pub footer: gtk::Box,
     pub list: gtk::ScrolledWindow,
     pub opacity: NumberControl,
-    quick_mask: crate::selection_masks::QuickMaskRow,
     model: gio::ListStore,
     blend: gtk::DropDown,
     alpha: gtk::ToggleButton,
@@ -369,8 +368,6 @@ impl LayerPanel {
         let header = gtk::Box::new(gtk::Orientation::Vertical, 2);
         header.add_css_class("layer-header");
         root.append(&header);
-        let quick_mask = crate::selection_masks::QuickMaskRow::new();
-        root.append(&quick_mask.root);
         let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         options.set_homogeneous(true);
         let labels: Vec<_> = layer_core::LayerBlend::ALL
@@ -489,10 +486,11 @@ impl LayerPanel {
                 meta.set_width_chars(1);
                 text.append(&meta);
                 root.append(&text);
-                let load_selection = gtk::Button::with_label("Load");
-                load_selection.set_size_request(-1,44);
+                let load_selection = button("layer-selection-load-symbolic", "Load selection");
+                load_selection.add_css_class("layer-thumbnail");
+                load_selection.set_valign(gtk::Align::Center);
                 load_selection.set_tooltip_text(Some("Load a copy as the current selection"));
-                root.append(&load_selection);
+                thumbnails.insert_child_after(&load_selection, Some(&content));
                 let lock = gtk::Image::new();
                 lock.set_pixel_size(12);
                 lock.set_size_request(12, -1);
@@ -569,11 +567,9 @@ impl LayerPanel {
                     item,
                     #[weak]
                     root,
-                    #[weak]
-                    name,
                     #[strong]
                     owner,
-                    move |_, n, x, y| {
+                    move |_, _, x, y| {
                         // Only empty space/text selects. Buttons and the rename
                         // entry keep their own actions, including touch checks.
                         let picked = root.pick(x, y, gtk::PickFlags::DEFAULT);
@@ -591,9 +587,7 @@ impl LayerPanel {
                         let Some(w) = owner.borrow().upgrade() else {
                             return;
                         };
-                        if n == 2 && picked.as_ref() == Some(name.upcast_ref()) {
-                            action(&w, A::BeginRename { id: row.id });
-                        } else if !row.editing || !row.selected {
+                        if !row.editing || !row.selected {
                             action(
                                 &w,
                                 A::Select {
@@ -605,6 +599,21 @@ impl LayerPanel {
                     }
                 ));
                 root.add_controller(click);
+                // The name owns double-click/tap recognition. A ListView's row
+                // gesture can lose its click count when selection refreshes it.
+                name.set_can_target(true);
+                let rename = gtk::GestureClick::new();
+                rename.set_button(1);
+                rename.set_propagation_phase(gtk::PropagationPhase::Capture);
+                rename.connect_pressed(glib::clone!(#[weak] item, #[strong] owner, move |gesture,n,_,_| {
+                    if n != 2 { return; }
+                    let Some(row) = row_state(&item).filter(|r| r.can_rename) else { return; };
+                    let Some(w) = owner.borrow().upgrade() else { return; };
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    action(&w, A::BeginRename { id: row.id });
+                }));
+                name.add_controller(rename);
+
                 name_entry.connect_activate(glib::clone!(
                     #[weak]
                     item,
@@ -908,7 +917,6 @@ impl LayerPanel {
             footer,
             list,
             opacity,
-            quick_mask,
             model,
             blend,
             alpha,
@@ -958,7 +966,6 @@ impl LayerPanel {
 
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.owner.borrow_mut() = Rc::downgrade(w);
-        self.quick_mask.bind(w);
         w.watch_popover(self.context.upcast_ref());
         if self.root == w.layer_panel.root {
             let click = gtk::GestureClick::new();
@@ -1207,7 +1214,6 @@ impl LayerPanel {
         }
     }
     pub fn refresh(&self, state: &UiState) {
-        self.quick_mask.refresh(state);
         self.header.set_visible(!state.layer_tools.quick_mask && !state.layer_tools.editing_layer.as_ref().is_some_and(|l| l.selection_layer));
         self.updating.set(true);
         // Update only changed rows; list virtualization bounds GTK widget count.
@@ -1293,8 +1299,7 @@ impl LayerPanel {
                     .borrow()
                     .values()
                     .filter(|r| {
-                        r.id.get() != 0
-                            && r.root.compute_bounds(&view.list).is_some_and(|b| {
+                        r.root.compute_bounds(&view.list).is_some_and(|b| {
                                 b.y() + b.height() > 0. && b.y() < view.list.height() as f32
                             })
                     })
@@ -1430,6 +1435,7 @@ impl Row {
         self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
         crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
         self.load_selection.set_visible(s.selection_layer);
+        self.load_selection.set_widget_name(&format!("selection-load-{}", s.id));
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));
         self.thumbnails

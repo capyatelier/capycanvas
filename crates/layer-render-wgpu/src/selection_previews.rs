@@ -1,4 +1,4 @@
-//! Display-only saved-mask previews. Their GPU union never becomes a working
+//! Display-only saved-mask previews. Their GPU overlay never becomes a working
 //! selection and never enters artwork compositing, sampling, or export.
 use super::*;
 use layer_core::Selection;
@@ -7,7 +7,10 @@ use wgpu::util::DeviceExt;
 #[derive(Default)]
 pub(super) struct SelectionPreviews {
     pub definitions: std::collections::BTreeMap<LayerId, Selection>,
-    key: Option<(Vec<Selection>, [u32; 2], bool)>,
+    key: Option<(
+        Vec<(Selection, layer_core::SelectionMaskProperties)>,
+        [u32; 2],
+    )>,
     pub buffer: Option<wgpu::Buffer>,
     pub texture: Option<wgpu::TextureView>,
     pipeline: Option<PreviewPipeline>,
@@ -64,7 +67,7 @@ impl PreviewPipeline {
                 mode.compute(
                     &device,
                     &wgpu::ComputePipelineDescriptor {
-                        label: Some("saved overlay union"),
+                        label: Some("saved mask overlays"),
                         layout: Some(&layout),
                         module: &compute,
                         entry_point: Some("merge"),
@@ -118,6 +121,7 @@ impl PreviewPipeline {
         r: &WgpuRasterizer,
         extent: [u32; 2],
         protected: bool,
+        color: [f32; 4],
         input: &wgpu::Buffer,
         output: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -127,6 +131,7 @@ impl PreviewPipeline {
                 label: Some("saved mask display parameters"),
                 contents: &[extent[0], extent[1], u32::from(protected), 0]
                     .into_iter()
+                    .chain(color.map(f32::to_bits))
                     .flat_map(u32::to_ne_bytes)
                     .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -174,9 +179,10 @@ impl WgpuRasterizer {
         let mut previews = mem::take(&mut self.selection_previews);
         let result = (|| {
             previews.definitions.retain(|id, _| {
-                layers
-                    .iter()
-                    .any(|l| l.id == *id && l.kind == LayerKind::Selection)
+                id.0 == 0
+                    || layers
+                        .iter()
+                        .any(|l| l.id == *id && l.kind == LayerKind::Selection)
             });
             for layer in layers.iter().filter(|l| l.kind == LayerKind::Selection) {
                 let coverage = layer
@@ -195,6 +201,7 @@ impl WgpuRasterizer {
             };
             let masks: Vec<_> = layers
                 .iter()
+                .rev()
                 .filter(|l| {
                     l.kind == LayerKind::Selection && Some(l.id) != options.editing && {
                         let mut current = Some(l.id);
@@ -209,7 +216,14 @@ impl WgpuRasterizer {
                         visible
                     }
                 })
-                .filter_map(|l| previews.definitions.get(&l.id).cloned())
+                .filter_map(|l| {
+                    previews.definitions.get(&l.id).cloned().map(|mask| {
+                        (
+                            mask,
+                            l.properties.selection_mask.clone().unwrap_or_default(),
+                        )
+                    })
+                })
                 .collect();
             if masks.is_empty() {
                 previews.key = None;
@@ -217,7 +231,7 @@ impl WgpuRasterizer {
                 previews.texture = None;
                 return Ok(());
             }
-            let key = (masks, self.document_extent, false);
+            let key = (masks, self.document_extent);
             if previews.key.as_ref() == Some(&key) {
                 return Ok(());
             }
@@ -228,7 +242,7 @@ impl WgpuRasterizer {
                 return Ok(());
             }
             let [w, h] = self.document_extent;
-            let row = w.div_ceil(256) * 256;
+            let row = (w * 4).div_ceil(256) * 256;
             let size = 32 + u64::from(row) * u64::from(h);
             if size > self.device.limits().max_storage_buffer_binding_size
                 || h > self.device.limits().max_compute_workgroups_per_dimension
@@ -260,7 +274,7 @@ impl WgpuRasterizer {
                 },
             );
             encoder.copy_buffer_to_buffer(&header, 0, &output, 0, 32);
-            for mask in &key.0 {
+            for (mask, properties) in &key.0 {
                 self.selection_clip.prepare(
                     &self.device,
                     &mut encoder,
@@ -270,22 +284,30 @@ impl WgpuRasterizer {
                 let bind = gpu.bind(
                     self,
                     self.document_extent,
-                    key.2,
+                    properties.protected,
+                    {
+                        let mut color = properties
+                            .color
+                            .encoded_in(layer_core::color::RgbSpace::Srgb)
+                            .map_err(|_| GpuRasterError::InvalidImage)?;
+                        color[3] *= properties.opacity;
+                        color
+                    },
                     self.selection_clip.buffer.as_ref().unwrap(),
                     &output,
                 );
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("saved overlay union"),
+                    label: Some("saved mask overlays"),
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&gpu.merge);
                 pass.set_bind_group(0, &bind, &[]);
-                pass.dispatch_workgroups(w.div_ceil(4).div_ceil(64), h, 1);
+                pass.dispatch_workgroups(w.div_ceil(64), h, 1);
             }
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("saved overlay texture"),
                 size: wgpu::Extent3d {
-                    width: w.div_ceil(4),
+                    width: w,
                     height: h,
                     depth_or_array_layers: 1,
                 },
@@ -324,10 +346,7 @@ impl WgpuRasterizer {
         result
     }
     /// Poll cold mask preview pipelines without blocking the host UI thread.
-    pub fn prepare_selection_thumbnail(
-        &mut self,
-        id: LayerId,
-    ) -> Result<bool, GpuRasterError> {
+    pub fn prepare_selection_thumbnail(&mut self, id: LayerId) -> Result<bool, GpuRasterError> {
         if !self.selection_previews.definitions.contains_key(&id) {
             return Ok(true);
         }
@@ -367,6 +386,7 @@ impl WgpuRasterizer {
             self,
             self.document_extent,
             false,
+            [0.; 4],
             self.selection_clip.buffer.as_ref().unwrap(),
             &scratch,
         );

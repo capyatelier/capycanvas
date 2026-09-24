@@ -57,17 +57,28 @@ fn native_quick_mask_input() {
     d.key(b'q' as u32);
     assert!(state(&d.w).layer_tools.quick_mask);
     assert!(selection(&d).is_none(), "entering is display state only");
-    assert!(d.named("selection-mask-actions").is_visible());
+    assert_eq!(state(&d.w).layer_properties.controls.len(),4);
     d.w.dispatch(UiAction::SetBrushSize { value: 80. });
     let _=crate::snapshot(&d.w); pump(100);
     crate::snapshot(&d.w).save_to_png(output.join("quick-mask-before.png")).unwrap();
     canvas_drag(&mut d, [600.,600.], [900.,600.], false);
     let first = wait_selection(&d);
-    assert!(byte_pixel(&first,750,600) < 32);
-    assert_eq!(byte_pixel(&first,100,100),255);
+    assert!(byte_pixel(&first,750,600) > 200);
+    assert_eq!(byte_pixel(&first,100,100),0);
     let layers = d.header_tool(ToolbarControl::Panel { panel:Panel::Layers });
     d.click_name(&layers); pump(150);
-    assert!(d.named("quick-mask-layer").is_visible());
+    assert!(d.named("art-layer-0").is_visible());
+    pump(500);
+    let row = d.named("art-layer-0");
+    let thumbnail = find_css(&row, "layer-thumbnail").unwrap();
+    fn picture(widget: &gtk::Widget) -> Option<gtk::Picture> {
+        if let Ok(p) = widget.clone().downcast::<gtk::Picture>() { return Some(p); }
+        let mut child = widget.first_child();
+        while let Some(w) = child { if let Some(p) = picture(&w) { return Some(p); } child = w.next_sibling(); }
+        None
+    }
+    assert!(picture(&thumbnail).unwrap().paintable().is_some(), "Quick Mask uses the normal GPU thumbnail");
+
     for theme in [Theme::Light,Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);
         let _ = crate::snapshot(&d.w); pump(100);
@@ -77,7 +88,15 @@ fn native_quick_mask_input() {
         assert!(tinted>100,"{theme:?} mask overlay disappeared: {tinted} pixels");
     }
     d.click_name(&layers); pump(100);
-    d.click_name("selection-mask-done"); pump(100);
+    let properties = d.header_tool(ToolbarControl::Panel { panel:Panel::Adjustments });
+    d.click_name(&properties); pump(150);
+    d.number(&d.named("property-mask_opacity"), "40");
+    assert_eq!(state(&d.w).layer_properties.controls.iter().find(|c| c.key=="mask_opacity").unwrap().value,layer_core::EffectValue::Number(0.4));
+    let _ = crate::snapshot(&d.w); pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("quick-mask-properties.png")).unwrap();
+    d.click_name(&properties); d.click_name(&layers); pump(100);
+    d.click_name("selection-load-0"); pump(100);
+    d.click_name(&layers); pump(100);
     assert!(!state(&d.w).layer_tools.quick_mask);
     assert_eq!(selection(&d),Some(first.clone()));
     d.w.dispatch(UiAction::Invoke {command:CommandId::SaveSelectionLayer}); pump(150);
@@ -85,6 +104,26 @@ fn native_quick_mask_input() {
     d.w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::CancelRename});
     d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::EditLayer {id}}); pump(100);
     assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
+    d.click_name(&layers); pump(100);
+    let name = find_css(&d.named(&format!("art-layer-{id}")), "layer-name").unwrap();
+    let point = d.point(&name);
+    d.perform(serde_json::json!([{"point":point},{"down":true},{"down":false},{"down":true},{"down":false}]));
+    assert_eq!(state(&d.w).layer_tools.rename_layer,Some(id), "double-clicking the name edits it");
+    d.key(0xff1b);
+    d.click_name(&layers); pump(100);
+    let saved = || d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let before = saved();
+    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::BeginResize {grow:true,layer:Some(id)}}); pump(100);
+    d.number(&d.named("selection-resize-distance"), "8");
+    d.click_label("Apply");
+    let deadline = Instant::now()+Duration::from_secs(30);
+    while d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap()==before {
+        assert!(Instant::now()<deadline,"Grow completed");pump(20);
+    }
+    assert!(state(&d.w).layer_tools.selection_resize.is_none());
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
+    assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap(),before);
+
     d.w.dispatch(UiAction::Invoke {command:CommandId::ClearSelectionMask}); pump(100);
     assert_eq!(selection(&d),Some(first));
     d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::LoadLayer {id,mode:layer_ui::SelectionMode::New,inverted:false}}); pump(100);

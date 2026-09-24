@@ -73,6 +73,7 @@ pub struct LayersView {
     pub has_selection: bool,
     pub quick_mask: bool,
     pub mask_editing: Option<MaskEditingView>,
+    pub selection_resize: Option<super::selection_masks::SelectionResizeView>,
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,
@@ -762,6 +763,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(layer.clone())
     }
     pub(super) fn layer_action(&mut self, action: LayerAction) -> Result<(), String> {
+        if self.selection_masks.quick() {
+            match action {
+                LayerAction::Visibility { id: 0, value } => { self.selection_masks.quick_visible = value; return Ok(()); }
+                LayerAction::Select { id: 0, .. } | LayerAction::Context { id: 0, .. } | LayerAction::ToggleSelection { id: 0 } => return Ok(()),
+                LayerAction::Delete { id: 0 } | LayerAction::DeleteSelected => return self.return_to_artwork(),
+                _ => (),
+            }
+        }
         if self.selection_masks.target().is_some() && matches!(action,
             LayerAction::Clear {..}|LayerAction::FillSelection|LayerAction::ApplyMask {..}|LayerAction::AddMask {..}|LayerAction::PasteMask {..}|LayerAction::MaskSelection {..}|LayerAction::ClearMask {..}|LayerAction::InvertMask {..}|LayerAction::RasterizeSource {..}|LayerAction::RepairSourceProfile {..}) {
             return Err("Return to artwork before changing artwork pixels or layer masks".into());
@@ -1360,6 +1369,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
         use LayerAction as A;
+        if id == 0 && self.selection_masks.quick() { return Ok(self.quick_mask_menu()); }
         let doc = self.engine.document();
         let l = doc.layer(LayerId(id)).ok_or("Unknown layer")?;
         if l.kind == LayerKind::Selection { return self.selection_layer_menu(l.id); }
@@ -1660,7 +1670,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
             ));
             vec![
-                vec![
+                vec![ContextMenuItem::submenu("New", vec![vec![
                     item(
                         "New layer",
                         A::New {
@@ -1682,9 +1692,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                             clipped: false,
                         },
                     ),
-                ],
-                organization,
-                protection,
+                ]])],
+                vec![ContextMenuItem::submenu("Organize", vec![organization]), ContextMenuItem::submenu("Layer Settings", vec![protection])],
                 vec![
                     ContextMenuItem::submenu("Mask", mask_menu),
                     ContextMenuItem::submenu("Pixel Selection", selection),
@@ -1891,7 +1900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         if let Some(target) = self.selection_masks.target() {
             return self.queue_mask_gradient(target, layer_render::SelectionGradient {
-                start, end, radial, transparent, background: self.selection_masks.background(),
+                start, end, radial, transparent, background: if self.mask_properties().painting == layer_core::SelectionPaintBehavior::ColorTransparency { 1. } else { self.selection_masks.background() },
             });
         }
         let doc = self.engine.document();

@@ -409,6 +409,9 @@ pub struct LayerProperties {
     /// Absent in older documents: use the canvas's default paper color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paper_color: Option<color::RgbColor>,
+    /// Only Selection Layers store these display and painting settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_mask: Option<SelectionMaskProperties>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1031,6 +1034,10 @@ impl Document {
             if layer.kind != LayerKind::Background || color.validate_working_spaces().is_err() {
                 return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
             }
+        }
+        if let Some(mask) = &layer.properties.selection_mask {
+            if layer.kind != LayerKind::Selection { return Err(DocumentError::InvalidLayerOperation("Mask properties require a Selection Layer")); }
+            mask.validate()?;
         }
         if layer.asset.is_some() && layer.source.is_some()
             || (!matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion)

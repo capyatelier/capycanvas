@@ -1076,6 +1076,8 @@ pub struct BrushState {
 pub struct LayerState {
     pub id: u64,
     pub selection_layer: bool,
+    pub quick_mask: bool,
+    pub can_rename: bool,
     pub content_icon: Option<String>,
     pub content_icon_color: Option<HexColor>,
     pub label: String,

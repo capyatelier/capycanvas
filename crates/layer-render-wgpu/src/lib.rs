@@ -3439,6 +3439,10 @@ impl CanvasRenderer for WgpuRasterizer {
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> { self.update_selection_paint(update) }
     fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> { self.poll_selection_paint() }
     fn cancel_selection_paint(&mut self) { self.selection_painter = None; self.display_selection = None; }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if let Some(selection) = selection { self.selection_previews.definitions.insert(LayerId(0), selection.clone()); }
+        else { self.selection_previews.definitions.remove(&LayerId(0)); }
+    }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) { self.selection_overlay = overlay; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;

@@ -198,6 +198,7 @@ fn selection_paint_loads_raw_alpha_and_disabled_mask_with_independent_placement(
                 refinement: Default::default(),
                 limit: None,
                 selection: Some(SelectionRefinement {
+                        resize: 0,
                     mode: layer_core::SelectionMode::New,
                     previous: None,
                     antialias: true,
@@ -483,7 +484,7 @@ fn selection_paint_retained_preview_repaints_strokes_without_artwork_or_cursor_d
 }
 
 #[test]
-fn selection_paint_saved_previews_union_visibility_thumbnails_and_export_isolation() {
+fn selection_paint_saved_previews_color_visibility_thumbnails_and_export_isolation() {
     let mut r = renderer();
     let artwork = r.readback_srgb_rgba8().unwrap();
     let rect = |x| {
@@ -512,7 +513,7 @@ fn selection_paint_saved_previews_union_visibility_thumbnails_and_export_isolati
     assert_eq!(
         r.selection_previews.buffer.as_ref(),
         Some(&first),
-        "unchanged preview must reuse GPU union"
+        "unchanged previews must reuse their GPU overlay"
     );
     let target = r.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("saved mask display test"),
@@ -553,15 +554,21 @@ fn selection_paint_saved_previews_union_visibility_thumbnails_and_export_isolati
         let p = &pixels[(50 * 128 + x) * 4..][..4];
         assert!(p[0] > p[1] + 40, "{p:?}");
     }
+    layers[2].properties.selection_mask = Some(layer_core::SelectionMaskProperties { color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap(), ..Default::default() });
+    submit(&mut r, &layers, &[], &[], false);
+    let pixels = render(&r, &mut presenter);
+    let blue = &pixels[(50 * 128 + 90) * 4..][..4];
+    assert!(blue[2] > blue[0]+40 && blue[2] > blue[1]+40, "per-layer overlay color: {blue:?}");
     layers[1].visible = false;
     submit(&mut r, &layers, &[], &[], false);
     let pixels = render(&r, &mut presenter);
     let p = &pixels[(50 * 128 + 25) * 4..][..4];
     assert_eq!(p[0], p[1]);
     let p = &pixels[(50 * 128 + 90) * 4..][..4];
-    assert!(p[0] > p[1] + 40);
+    assert!(p[2] > p[1] + 40);
     assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
-    r.request_thumbnail(42, LayerId(2)).unwrap();
+    r.set_quick_mask_thumbnail(Some(&rect(15.)));
+    r.request_thumbnail(42, LayerId(0)).unwrap();
     let until = std::time::Instant::now() + READBACK_TIMEOUT;
     let image = loop {
         let _ = r.device.poll(wgpu::PollType::Poll);
