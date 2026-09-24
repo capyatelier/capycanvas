@@ -44,7 +44,8 @@ uses the existing GPU selection refinement in image pixels.
 Mouse/pen hover reports a 5×5 linear average without changing the selection.
 A click samples that footprint into the active band, initially one stop wide;
 later clicks preserve a custom finite width. A dragged rectangle samples the
-central 90% of its luminance distribution with 1/16-stop bins. Matching tones
+central 90% of its luminance distribution with 1/16-stop bins. Rotated and sheared
+layers use the exact inverse-transformed sampling footprint. Matching tones
 are selected throughout the source. To restrict the result spatially, make a
 lasso selection first and choose Intersect. GTK retains its existing finger
 navigation; touch controls use normal native widgets.
@@ -52,7 +53,9 @@ navigation; touch controls use normal native widgets.
 Previews retain an immutable starting selection. Every recomputation combines
 against that baseline, rather than repeatedly intersecting an already-softened
 result. Apply commits one history edit. Cancel, Escape, and tool changes discard
-the draft. Sampling and parameter changes coalesce through the existing
+the draft. Shift/Alt combination modifiers latch for a sampling gesture and its
+subsequent preview adjustments; they do not replace the configured mode after
+Apply. Sampling and parameter changes coalesce through the existing
 single-flight GPU region queue; hover uses the bounded color-sampling queue.
 The GPU classifies source tiles and returns packed coverage and small probe
 summaries. It never downloads a full color image for CPU classification.
@@ -68,6 +71,11 @@ summaries. It never downloads a full color image for CPU classification.
 - `tools/performance/workspace-motion.sh gtk --native-test=native_tonal_selection_input`
   exercises mouse sampling, touch presets, text/numeric entry, actual tinted
   preview pixels, global mask coverage, cancellation, and undo/redo.
+- `native_tonal_toolbar_input` checks horizontal and narrow vertical Tool Options,
+  retained lists, text entry, pinned source choice, and the complete overflow form.
+- `cargo test --locked --release -p layer-render-wgpu tonal_preview_latency -- --ignored --test-threads=1 --nocapture`
+  measures complete 24MP HDR preview/readback and full-image sampling on an
+  opaque uniform composite (seven bands, no spatial feather). Run serially.
 - Run `native_tonal_selection_pen_input` through the same harness with `--tablet`
   for injected Wayland pen input. This is not a physical-device test.
 

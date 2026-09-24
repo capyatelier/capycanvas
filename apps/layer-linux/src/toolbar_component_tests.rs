@@ -1719,3 +1719,74 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
         );
     }
 }
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_toolbar_input"]
+fn native_tonal_toolbar_input() {
+    let mut d=Driver::new("art.capycanvas.TonalToolbar");
+    restore(&d,WorkspacePreset::Photographer);
+    let options=component_id(&d,ToolbarControl::TOOL_OPTIONS);
+    // Give this component the full lane so both axes exercise its fields;
+    // normal mixed toolbars still retain the complete form through overflow.
+    let mut workspace=state(&d.w).workspace;
+    let removed:Vec<_>=workspace.layout.panel(Panel::Commands).unwrap().tiles().iter()
+        .filter(|t|t.control.options_style().is_none()).map(|t|t.id).collect();
+    for id in removed {
+        if workspace.layout.panel(Panel::Commands).unwrap().tiles().iter().any(|t|t.id==id) {
+            workspace.layout.remove_tool(Panel::Commands,id).unwrap();
+        }
+    }
+    d.w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});pump(200);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
+    let ready=|d:&Driver| {
+        let deadline=Instant::now()+Duration::from_secs(25);
+        loop {pump(20);if state(&d.w).commands.iter().any(|c|c.id==CommandId::ApplyTonalSelection && c.enabled) {break;}
+            assert!(Instant::now()<deadline,"tonal preview: {:?}",state(&d.w).host_error);}
+    };
+    ready(&d);
+    assert!(d.named("toolbar-action-ApplyTonalSelection").is_mapped());
+    // Both horizontal and narrow vertical bars expose the same native fields.
+    for edge in [Edge::Top,Edge::Left] {
+        d.w.dispatch(UiAction::MovePanel {panel:Panel::Commands,target:DockTarget::Edge {edge,outer:true},viewport:[1600.,1000.]});pump(180);
+        let _=crate::snapshot(&d.w);pump(120);
+        crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-layout-{edge:?}.png"))).unwrap();
+        let source=d.named("tool-list-tonal-source");
+        assert!(source.is_mapped(),"source visible at {edge:?}");
+        d.click(&source);d.click_name("tool-list-tonal-source-1");ready(&d);
+        assert!(state(&d.w).tool_extra.iter().any(|o| matches!(o,layer_ui::ToolOption::List {id:"tonal-source",items,..} if items[1].selected)));
+        d.click_name("tool-list-tonal-source");d.click_name("tool-list-tonal-source-0");ready(&d);
+        let bands=d.named("tool-list-tonal-bands");assert!(bands.is_mapped());
+        d.click(&bands);d.click_name("tool-list-tonal-bands-1");
+        assert_eq!(d.named("tool-list-tonal-bands"),bands);
+        assert!(bands.downcast_ref::<gtk::MenuButton>().unwrap().popover().unwrap().is_mapped(),"band changes retain the open list");
+        d.key(0xff1b);ready(&d);
+        let name=d.named("tool-text-open-tonal-name");
+        if name.is_mapped() {
+            d.click(&name);
+            let entry=d.named("tool-text-tonal-name");d.click(&entry);
+            d.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":0x61,"down":true},{"key":0x61,"down":false},{"key":0xffe3,"down":false}]));
+            for c in "Photo detail".chars() {d.key(c as u32);}d.key(0xff0d);d.key(0xff1b);
+            assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Text {value,..} if value=="Photo detail")));
+        }
+        let _=crate::snapshot(&d.w);pump(120);
+        crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-full-{edge:?}.png"))).unwrap();
+    }
+    d.click_name(&format!("tile-{options}"));pump(150);
+    let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());
+    let control=find_named(&drawer,"tool-setting-tonal_falloff_low").unwrap();
+    d.number(&control,"0.8");ready(&d);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSaveBand});pump(120);
+    let list=find_named(&drawer,"tool-list-tonal-saved").unwrap();
+    // The complete form is available in the bar's overflow, including fields
+    // which cannot fit in its visible prefix.
+    assert!(list.is_mapped());
+    d.click(&list);
+    let saved=find_named(&drawer,"tool-list-tonal-saved-0").unwrap();d.click(&saved);ready(&d);
+    assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::List {id:"tonal-bands",items,..} if items.len()>=9)));
+    let _=crate::snapshot(&d.w);pump(120);
+    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-overflow.png")).unwrap();
+    d.click_name(&format!("tile-{options}"));
+    d.click_name("toolbar-action-ApplyTonalSelection");pump(120);
+    assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
+    d.finish();
+}

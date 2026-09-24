@@ -13,9 +13,17 @@ pub struct ExtraField {
     kind: Kind,
     updating: Rc<Cell<bool>>,
 }
+impl Drop for ExtraField {
+    fn drop(&mut self) {
+        // Unparenting an entry emits focus-leave. A discarded tool context
+        // must not submit its unfinished text through an obsolete binding.
+        self.updating.set(true);
+    }
+}
 enum Kind {
     List {
         button: gtk::MenuButton,
+        summary: gtk::Label,
         body: gtk::Box,
         items: Rc<RefCell<Vec<ToolListItem>>>,
         buttons: RefCell<Vec<gtk::CheckButton>>,
@@ -23,6 +31,7 @@ enum Kind {
     },
     Text {
         entry: gtk::Entry,
+        summary: Option<gtk::Label>,
         value: Rc<RefCell<String>>,
         focus: gtk::EventControllerFocus,
     },
@@ -50,6 +59,9 @@ impl ExtraField {
             4,
         );
         root.set_hexpand(true);
+        if compact {
+            root.add_css_class("tool-extra");
+        }
         let updating = Rc::new(Cell::new(false));
         let label = |text: &str| {
             let l = gtk::Label::new(Some(text));
@@ -62,13 +74,14 @@ impl ExtraField {
             ToolOption::List {
                 id,
                 label: title,
+                icon,
                 multiple,
                 ..
             } => {
                 label(title);
                 let button = gtk::MenuButton::new();
                 button.set_hexpand(true);
-                button.set_label(title);
+                let summary = menu_face(&button, title, icon);
                 button.set_widget_name(&format!("tool-list-{id}"));
                 button.update_property(&[gtk::accessible::Property::Label(title)]);
                 let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -97,6 +110,7 @@ impl ExtraField {
                 root.append(&button);
                 Kind::List {
                     button,
+                    summary,
                     body,
                     items: Rc::new(RefCell::new(Vec::new())),
                     buttons: RefCell::new(Vec::new()),
@@ -108,7 +122,9 @@ impl ExtraField {
                 label: title,
                 value: initial,
             } => {
-                label(title);
+                if !compact {
+                    label(title);
+                }
                 let entry = gtk::Entry::new();
                 entry.set_hexpand(true);
                 entry.set_width_chars(if compact { 12 } else { 16 });
@@ -150,9 +166,32 @@ impl ExtraField {
                     move |_| commit(&entry)
                 ));
                 entry.add_controller(focus.clone());
-                root.append(&entry);
+                let summary = if compact {
+                    let button = gtk::MenuButton::new();
+                    button.set_widget_name(&format!("tool-text-open-{id}"));
+                    let summary = menu_face(&button, title, "pencil");
+                    let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
+                    for set in [
+                        gtk::prelude::WidgetExt::set_margin_top,
+                        gtk::prelude::WidgetExt::set_margin_bottom,
+                        gtk::prelude::WidgetExt::set_margin_start,
+                        gtk::prelude::WidgetExt::set_margin_end,
+                    ] {
+                        set(&body, 12);
+                    }
+                    body.append(&entry);
+                    let popover = crate::squircle::Popover::new();
+                    popover.set_child(Some(&body));
+                    button.set_popover(Some(&popover));
+                    root.append(&button);
+                    Some(summary)
+                } else {
+                    root.append(&entry);
+                    None
+                };
                 Kind::Text {
                     entry,
+                    summary,
                     value,
                     focus,
                 }
@@ -163,14 +202,29 @@ impl ExtraField {
                 info.add_css_class("dim-label");
                 info.set_widget_name(&format!("tool-info-{id}"));
                 if compact {
-                    info.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    info.set_max_width_chars(24);
+                    info.set_wrap(true);
+                    info.set_max_width_chars(36);
                 } else {
                     info.set_wrap(true);
                     info.set_wrap_mode(gtk::pango::WrapMode::WordChar);
                     info.set_max_width_chars(32);
                 }
-                root.append(&info);
+                if compact {
+                    let button = gtk::MenuButton::new();
+                    button.set_widget_name(&format!("tool-info-open-{id}"));
+                    menu_face(&button, "Tool information", "info");
+                    button.add_css_class("tool-extra-info");
+                    let popover = crate::squircle::Popover::new();
+                    info.set_margin_start(12);
+                    info.set_margin_end(12);
+                    info.set_margin_top(12);
+                    info.set_margin_bottom(12);
+                    popover.set_child(Some(&info));
+                    button.set_popover(Some(&popover));
+                    root.append(&button);
+                } else {
+                    root.append(&info);
+                }
                 Kind::Info(info)
             }
             _ => unreachable!("additional tool field"),
@@ -189,11 +243,15 @@ impl ExtraField {
             (
                 Kind::Text {
                     entry,
+                    summary,
                     value,
                     focus,
                 },
                 ToolOption::Text { value: next, .. },
             ) => {
+                if let Some(summary) = summary {
+                    summary.set_text(next);
+                }
                 if *value.borrow() != *next {
                     value.replace(next.clone());
                 }
@@ -208,6 +266,7 @@ impl ExtraField {
             (
                 Kind::List {
                     button,
+                    summary,
                     body,
                     items,
                     buttons,
@@ -274,7 +333,7 @@ impl ExtraField {
                     .filter(|i| i.selected)
                     .map(|i| i.label.as_str())
                     .collect();
-                let summary = if selected.is_empty() {
+                let text = if selected.is_empty() {
                     if *multiple {
                         "None".into()
                     } else {
@@ -285,11 +344,47 @@ impl ExtraField {
                 } else {
                     format!("{} + {}", selected[0], selected.len() - 1)
                 };
-                button.set_label(&summary);
-                button.set_tooltip_text(Some(&selected.join(", ")));
+                summary.set_text(&text);
+                button.set_tooltip_text(Some(&format!("{label}: {}", selected.join(", "))));
             }
             _ => (),
         }
         self.updating.set(false);
+    }
+}
+
+// Toolbar hosts can collapse the same fields to touchable menu faces. The
+// contents remain native widgets; long names never force a narrow bar wider.
+fn menu_face(button: &gtk::MenuButton, label: &str, icon: &str) -> gtk::Label {
+    let face = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
+    image.set_pixel_size(16);
+    let text = gtk::Label::new(Some(label));
+    text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    text.set_max_width_chars(18);
+    face.append(&image);
+    face.append(&text);
+    button.set_child(Some(&face));
+    button.set_tooltip_text(Some(label));
+    text
+}
+pub fn present(root: &gtk::Widget, vertical: bool, text: bool) {
+    let mut child = root.first_child();
+    while let Some(w) = child {
+        if w.has_css_class("option-label") {
+            w.set_visible(text && !vertical);
+        }
+        if let Some(button) = w.downcast_ref::<gtk::MenuButton>() {
+            button.set_always_show_arrow(!vertical && !button.has_css_class("tool-extra-info"));
+            if let Some(face) = button.child() {
+                if let Some(image) = face.first_child() {
+                    image.set_visible(true);
+                }
+                if let Some(label) = face.last_child() {
+                    label.set_visible(!vertical && !button.has_css_class("tool-extra-info"));
+                }
+            }
+        }
+        child = w.next_sibling();
     }
 }

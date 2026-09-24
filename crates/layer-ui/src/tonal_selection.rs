@@ -151,7 +151,9 @@ impl TonalOptions {
     }
     pub fn rename(&mut self, name: String) -> Result<(), String> {
         let mut next = self.clone();
+        let enabled = self.enabled[self.active];
         next.editable()?.name = name.trim().into();
+        next.enabled[next.active] = enabled;
         next.validate()?;
         *self = next;
         Ok(())
@@ -189,6 +191,7 @@ pub(super) struct TonalTools {
 pub(super) struct TonalDraft {
     pub revision: u64,
     pub baseline: Option<Selection>,
+    pub mode: SelectionMode,
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn tonal_active(&self) -> bool {
@@ -252,11 +255,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             self.cancel_tonal();
         }
+        let mode = self.effective_selection_mode();
         let doc = self.engine.document();
         let draft = self.tonal_tools.draft.get_or_insert_with(|| TonalDraft {
             revision: doc.revision,
             baseline: doc.selection.clone(),
+            mode,
         });
+        if probe.is_some() {
+            draft.mode = mode;
+        }
         let options = &self.selection_tools.options;
         let request = RegionRequest {
             request_id: 0,
@@ -280,7 +288,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             limit: None,
             selection: Some(SelectionRefinement {
                 resize: 0,
-                mode: options.mode,
+                mode: draft.mode,
                 antialias: true,
                 feather: options.feather,
                 previous: draft.baseline.clone().map(Arc::new),
@@ -496,7 +504,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let p = inverse.map(point);
         if p.x < 0. || p.y < 0. || p.x >= extent[0] as f32 || p.y >= extent[1] as f32 {
             self.eyedropper.cancel();
-            self.tonal_tools.hover = None;
+            self.tonal_tools.changed |= self.tonal_tools.hover.take().is_some();
             return;
         }
         self.tonal_tools
@@ -541,6 +549,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let (_, basis, extent) = self.tonal_source()?;
                 let inverse = basis.inverse().ok_or("Invalid sampled layer placement")?;
                 let point = (p.x - start.x).hypot(p.y - start.y) * self.state.camera.zoom < 4.;
+                let mut quad = None;
                 let bounds = if point {
                     let q = inverse.map(p);
                     if q.x < 0. || q.y < 0. || q.x >= extent[0] as f32 || q.y >= extent[1] as f32 {
@@ -556,10 +565,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     let q = [
                         inverse.map(*start),
+                        inverse.map(Point { x: p.x, y: start.y }),
                         inverse.map(p),
                         inverse.map(Point { x: start.x, y: p.y }),
-                        inverse.map(Point { x: p.x, y: start.y }),
                     ];
+                    quad = Some(q);
                     let x = q
                         .iter()
                         .map(|p| p.x)
@@ -589,7 +599,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     [x, y, r, b]
                 };
                 if bounds[0] < bounds[2] && bounds[1] < bounds[3] {
-                    self.queue_tonal(Some(TonalProbe { bounds, point }))?;
+                    self.queue_tonal(Some(TonalProbe {
+                        bounds,
+                        point,
+                        quad,
+                    }))?;
                 }
             }
         }
@@ -601,9 +615,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Vec::new();
         }
         let options = &self.selection_tools.options.tonal;
-        let list = |id, label, multiple, items| ToolOption::List {
+        let list = |id, label, icon, multiple, items| ToolOption::List {
             id,
             label,
+            icon,
             multiple,
             items,
         };
@@ -637,17 +652,55 @@ impl<R: CanvasRenderer> UiSession<R> {
                     selected: self.tonal_tools.source == Some(l.id),
                 }),
         );
-        let mut result=vec![
-            ToolOption::Info {id:"tonal-help",text:"Click to sample a tone; drag to sample a range. Sampling selects matching tones across the image. 0 stops = reference white (203 nits); HDR values remain unclipped.".into()},
-            list("tonal-source","Sample from",false,sources),
-            list("tonal-bands","Include tones",true,options.bands.iter().enumerate().map(|(index,b)|ToolListItem {label:b.name.clone(),selected:options.enabled[index],action:UiAction::Tonal {action:TonalAction::ToggleBand {index}}}).collect()),
-            list("tonal-active","Edit band",false,options.bands.iter().enumerate().map(|(index,b)|ToolListItem {label:b.name.clone(),selected:options.active==index,action:UiAction::Tonal {action:TonalAction::ActiveBand {index}}}).collect()),
-            ToolOption::Text {id:"tonal-name",label:"Band name",value:options.bands[options.active].name.clone()},
+        let mut result = vec![
+            list("tonal-source", "Sample from", "layers", false, sources),
+            list(
+                "tonal-bands",
+                "Include tones",
+                "color-select",
+                true,
+                options
+                    .bands
+                    .iter()
+                    .enumerate()
+                    .map(|(index, b)| ToolListItem {
+                        label: b.name.clone(),
+                        selected: options.enabled[index],
+                        action: UiAction::Tonal {
+                            action: TonalAction::ToggleBand { index },
+                        },
+                    })
+                    .collect(),
+            ),
+            list(
+                "tonal-active",
+                "Edit band",
+                "settings",
+                false,
+                options
+                    .bands
+                    .iter()
+                    .enumerate()
+                    .map(|(index, b)| ToolListItem {
+                        label: b.name.clone(),
+                        selected: options.active == index,
+                        action: UiAction::Tonal {
+                            action: TonalAction::ActiveBand { index },
+                        },
+                    })
+                    .collect(),
+            ),
+            ToolOption::Text {
+                id: "tonal-name",
+                label: "Band name",
+                value: options.bands[options.active].name.clone(),
+            },
         ];
         if !self.state.settings.tonal_bands.is_empty() {
             result.push(list(
                 "tonal-saved",
                 "Add saved band",
+                "plus",
                 false,
                 self.state
                     .settings
@@ -664,6 +717,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .collect(),
             ));
         }
+        result.push(ToolOption::Info {id:"tonal-help",text:"Click to sample a tone; drag to sample a range. Sampling selects matching tones across the image. 0 stops = reference white (203 nits); HDR values remain unclipped.".into()});
         let status = if self.tonal_tools.draft.is_some() && !self.tonal_tools.ready {
             "Updating preview…"
         } else if self.tonal_tools.ready {

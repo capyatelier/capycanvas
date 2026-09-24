@@ -164,6 +164,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
         Some(TonalProbe {
             bounds: [160, 3, 165, 8],
             point: true,
+            quad: None,
         }),
         None,
     )
@@ -180,6 +181,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
         Some(TonalProbe {
             bounds: [16, 3, 240, 8],
             point: false,
+            quad: None,
         }),
         None,
     )
@@ -195,13 +197,63 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
             false,
             Some(TonalProbe {
                 bounds: [10, 0, 15, 1],
-                point: true
+                point: true,
+                quad: None,
             }),
             None
         )
         .tonal_sample
         .is_none()
     );
+    // A document rectangle becomes a quad in a rotated raw layer. Pixels
+    // inside its bounding box but outside the actual footprint must not sample.
+    let quad = [
+        Point { x: 128., y: 3. },
+        Point { x: 140., y: 7. },
+        Point { x: 128., y: 11. },
+        Point { x: 116., y: 7. },
+    ];
+    let mut values = Vec::new();
+    for y in 3..11 {
+        for x in 116..140 {
+            let p = Point {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+            };
+            if (0..4).all(|i| {
+                let a = quad[i];
+                let b = quad[(i + 1) % 4];
+                (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) >= 0.
+            }) {
+                values.push((x as f32 / 16. - 10.) as f64);
+            }
+        }
+    }
+    values.sort_by(f64::total_cmp);
+    for q in [quad, [quad[3], quad[2], quad[1], quad[0]]] {
+        let sample = receive(
+            &mut r,
+            RegionSource::Layer(LayerId(1)),
+            bands.clone(),
+            false,
+            Some(TonalProbe {
+                bounds: [116, 3, 140, 11],
+                point: false,
+                quad: Some(q),
+            }),
+            None,
+        )
+        .tonal_sample
+        .unwrap();
+        assert_eq!(sample.count as usize, values.len());
+        for (i, fraction) in [0.05, 0.95].into_iter().enumerate() {
+            let rank = (fraction * (values.len() - 1) as f64).round() as usize;
+            assert!(
+                (f64::from(sample.stops[i]) - values[rank]).abs() < 0.1,
+                "{sample:?}"
+            );
+        }
+    }
     let previous = Selection::polygon(vec![
         Point { x: 128., y: 0. },
         Point { x: 259., y: 0. },
@@ -266,6 +318,7 @@ fn tonal_sdr_native_painted_source_and_composite() {
             Some(TonalProbe {
                 bounds: [298, 298, 303, 303],
                 point: true,
+                quad: None,
             }),
             None,
         );
@@ -274,6 +327,63 @@ fn tonal_sdr_native_painted_source_and_composite() {
             "{source:?}: sample {:?} coverage {}",
             result.tonal_sample,
             byte(&result.pixels, 300, 300)
+        );
+    }
+}
+
+#[test]
+#[ignore = "24MP hardware tonal preview benchmark; release, serial"]
+fn tonal_preview_latency() {
+    let extent = [6000, 4000];
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: SampleDepth::F32,
+    })
+    .unwrap();
+    let mut paper = Layer::paint(LayerId(1), "Uniform photo benchmark");
+    paper.kind = layer_core::LayerKind::Background;
+    r.submit(FramePacket {
+        view: ViewState {
+            background_rgba_linear: [1.; 4],
+            ..view()
+        },
+        document_extent: extent,
+        layers: &[paper],
+        dabs: &[],
+        dab_batches: &[],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    for probe in [false, true] {
+        let mut ms = Vec::new();
+        for _ in 0..6 {
+            let start = std::time::Instant::now();
+            let result = receive(
+                &mut r,
+                RegionSource::Composite,
+                TonalBand::defaults(),
+                false,
+                probe.then_some(TonalProbe {
+                    bounds: [0, 0, 6000, 4000],
+                    point: false,
+                    quad: None,
+                }),
+                None,
+            );
+            ms.push(start.elapsed().as_secs_f64() * 1000.);
+            assert_eq!(byte(&result.pixels, 3000, 2000), 255);
+            if probe {
+                assert_eq!(result.tonal_sample.unwrap().count, 24_000_000);
+            }
+        }
+        let first = ms.remove(0);
+        ms.sort_by(f64::total_cmp);
+        eprintln!(
+            "tonal 24MP seven bands probe={probe}: first={first:.2}ms warm_median={:.2}ms warm_max={:.2}ms",
+            ms[2], ms[4]
         );
     }
 }

@@ -213,4 +213,63 @@ mod tonal_checks {
                 .is_err()
         );
     }
+    #[test]
+    fn tonal_sampling_latches_modifiers_across_async_preview() {
+        let mut s = start();
+        invoke(&mut s, CommandId::SelectAll);
+        invoke(&mut s, CommandId::TonalSelect);
+        reply(&mut s, None);
+        s.interaction.modifiers.shift = true;
+        let p = Point { x: 80., y: 80. };
+        let mut e = event(&s, 1, PenPhase::Down, 1.);
+        let m = s.state.camera.document_to_surface();
+        e.surface_position = Point {
+            x: m[0] * p.x + m[2] * p.y + m[4],
+            y: m[1] * p.x + m[3] * p.y + m[5],
+        };
+        s.pen(e).unwrap();
+        s.interaction.modifiers = Default::default();
+        e.phase = PenPhase::Up;
+        s.pen(e).unwrap();
+        reply(
+            &mut s,
+            Some(TonalSample {
+                stops: [-2.; 2],
+                count: 25,
+            }),
+        );
+        s.dispatch(UiAction::SetToolSetting {
+            id: "tonal_falloff_low".into(),
+            value: 0.75,
+        })
+        .unwrap();
+        reply(&mut s, None);
+        assert_eq!(
+            s.renderer_mut()
+                .region_requests
+                .last()
+                .unwrap()
+                .selection
+                .as_ref()
+                .unwrap()
+                .mode,
+            SelectionMode::Add
+        );
+        assert!(s.command(CommandId::SelectionAdd).selected);
+        invoke(&mut s, CommandId::ApplyTonalSelection);
+        assert_eq!(s.selection_tools.options.mode, SelectionMode::New);
+        assert!(s.command(CommandId::SelectionNew).selected);
+    }
+    #[test]
+    fn tonal_renaming_disabled_preset_preserves_mask_recipe() {
+        let mut options = TonalOptions::default();
+        options.active = 0;
+        options.rename("Dark detail".into()).unwrap();
+        assert!(!options.enabled[0] && !options.enabled[7]);
+        assert!(options.enabled[4]);
+        options.validate().unwrap();
+        let before = options.clone();
+        assert!(options.edit("tonal_upper", f32::INFINITY).is_err());
+        assert_eq!(options, before);
+    }
 }

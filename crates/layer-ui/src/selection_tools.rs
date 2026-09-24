@@ -274,6 +274,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (true, false) => SelectionMode::Add,
             (false, true) => SelectionMode::Subtract,
             _ if keys.command => SelectionMode::New,
+            _ if self.tonal_active() => self.tonal_tools.draft.as_ref().map_or(self.selection_tools.options.mode, |d| d.mode),
             _ => self.selection_tools.options.mode,
         }
     }
@@ -305,7 +306,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .options
                 .corners(*start, *end, self.selection_geometry_modifiers());
         // Use image-space precision, independent of view zoom, for the committed mask.
-        if matches!(kind, SelectionTool::Rectangle | SelectionTool::Tonal) {
+        if kind == SelectionTool::Rectangle {
             FigureShape::Rectangle.guide(start, end, 1.)
         } else {
             let radii = [(end.x - start.x) * 0.5, (end.y - start.y) * 0.5];

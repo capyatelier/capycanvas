@@ -329,6 +329,7 @@ impl ComponentBody {
             );
             let mut child = row.first_child();
             while let Some(w) = child {
+                if w.has_css_class("tool-extra") {crate::tool_extra::present(&w,vertical,text);}
                 if w.has_css_class("option-label") {
                     w.set_visible(text);
                 }
@@ -593,18 +594,37 @@ impl Component {
                     .zip(options)
                     .all(|(a, b)| a.same_schema(b));
             if !same {
-                for field in self.fields.borrow().iter() {
-                    if let Field::Numeric(number) = field {
-                        number.cancel_edit();
-                    }
-                }
-                self.fields.borrow_mut().clear();
-                for child in self.root.imp().children.borrow_mut().drain(1..) {
-                    child.unparent();
-                }
+                // A band's bounds can add/remove numeric fields while its list
+                // is open. Retain each compatible editor instead of rebuilding
+                // the entire form and closing its native popover or contact.
+                let fields = std::mem::take(&mut *self.fields.borrow_mut());
+                let rows: Vec<_> = self.root.imp().children.borrow_mut().drain(1..).collect();
+                let mut old: Vec<_> = self.schema.borrow().iter().cloned().zip(fields).zip(rows)
+                    .map(|((schema,field),row)| Some((schema,field,row))).collect();
+                let mut rows = Vec::new();
+                let mut fields = Vec::new();
                 for option in options {
-                    self.add_option(w, option, context);
+                    let retained = (!changed_context).then(|| old.iter_mut().find(|item| {
+                        item.as_ref().is_some_and(|(schema,_,_)| schema.same_schema(option))
+                    }).and_then(Option::take)).flatten();
+                    let (field,row) = if let Some((_,field,row)) = retained { (field,row) }
+                    else {
+                        self.add_option(w, option, context);
+                        (self.fields.borrow_mut().pop().unwrap(), self.root.imp().children.borrow_mut().pop().unwrap())
+                    };
+                    rows.push(row);fields.push(field);
                 }
+                for (_,field,row) in old.into_iter().flatten() {
+                    if let Field::Numeric(number) = field {number.cancel_edit();}
+                    row.unparent();
+                }
+                let mut previous = self.root.imp().children.borrow().first().cloned();
+                for row in &rows {
+                    row.insert_after(&self.root,previous.as_ref());
+                    previous=Some(row.clone());
+                }
+                self.fields.replace(fields);
+                self.root.imp().children.borrow_mut().extend(rows);
                 self.root.update_option_axis();
                 self.root.queue_allocate();
             }

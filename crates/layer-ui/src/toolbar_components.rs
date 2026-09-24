@@ -118,7 +118,7 @@ impl ToolbarNumericBinding {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ToolOption {
-    List { id: &'static str, label: &'static str, multiple: bool, items: Vec<ToolListItem> },
+    List { id: &'static str, label: &'static str, icon: &'static str, multiple: bool, items: Vec<ToolListItem> },
     Text { id: &'static str, label: &'static str, value: String },
     Info { id: &'static str, text: String },
     Numeric(ToolSetting),
@@ -314,6 +314,7 @@ impl UiState {
                 options.extend(choice("sample-size", "Sample size", false, samples));
             }
         }
+        options.extend(self.tool_extra.iter().cloned());
         for group in [
             ToolActionGroup::SelectionMode,
             ToolActionGroup::SelectionSource,
@@ -333,7 +334,6 @@ impl UiState {
                 .collect();
             options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }
-        options.extend(self.tool_extra.iter().cloned());
         options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
         options.extend(
             self.tool_actions

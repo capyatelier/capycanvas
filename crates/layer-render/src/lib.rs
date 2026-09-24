@@ -373,6 +373,9 @@ pub struct TonalProbe {
     /// Half-open rectangle in source pixels. Point probes are at most 5×5.
     pub bounds: [u32; 4],
     pub point: bool,
+    /// Optional convex sampling footprint, in perimeter order in source pixels.
+    /// Only limits probe statistics, never the generated mask.
+    pub quad: Option<[Point; 4]>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TonalSample {
@@ -388,7 +391,8 @@ impl TonalRequest {
             && self.probe.is_none_or(|p| {
                 let [x,y,r,b] = p.bounds;
                 x < r && y < b && r <= extent[0] && b <= extent[1]
-                    && (!p.point || (r-x <= 5 && b-y <= 5))
+                    && (!p.point || (r-x <= 5 && b-y <= 5 && p.quad.is_none()))
+                    && p.quad.is_none_or(|q| q.iter().all(|v| v.x.is_finite() && v.y.is_finite()))
             })
     }
 }

@@ -48,9 +48,15 @@ bookmarks do not create workspace-layout history entries.
 
 Rust derives the ordered form from existing tool settings, subtools and actions:
 completion actions first, tool/variant choices, independent eyedropper sample
-size, selection combination and sampling-source choices, numeric fields, then
+size, tool-specific fields (including tonal sources and bands), selection
+combination and sampling-source choices, numeric fields, then
 remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
+GTK also presents shared list (single or multiple choice), text, and information
+fields. Narrow bars use menu faces with native popover contents; their complete
+form remains available through overflow. Within one tool context, adding or
+removing fields retains compatible editors and open lists. A context change
+discards old editors and their action bindings.
 
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;

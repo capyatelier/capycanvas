@@ -99,8 +99,9 @@ pub struct Settings {
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
-    /// Shared by Quick Mask and every saved selection, across documents.
+    /// Named recipes available to every document.
     pub tonal_bands: Vec<layer_core::tonal::TonalBand>,
+    /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,

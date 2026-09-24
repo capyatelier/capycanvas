@@ -4036,7 +4036,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     CommandId::SelectionAntialias => options.antialias = !options.antialias,
                     _ => options.constrain_angles = !options.constrain_angles,
                 }
-                if self.tonal_active() {self.queue_tonal(None)?;}
+                if self.tonal_active() {
+                    if let Some(draft) = &mut self.tonal_tools.draft {draft.mode = self.selection_tools.options.mode;}
+                    self.queue_tonal(None)?;
+                }
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, true))
             }

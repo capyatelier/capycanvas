@@ -113,7 +113,7 @@ impl RawRegions {
             seed_pipeline: pipeline("sample_seed"),
             tonal_pipeline: pipeline("tonal_tile"),
             tonal_parameters: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("tonal parameters"), size: 304,
+                label: Some("tonal parameters"), size: 336,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
             }),
             tonal_statistics: device.create_buffer(&wgpu::BufferDescriptor {
@@ -212,7 +212,7 @@ impl RawRegions {
         let tone = if let layer_render::RegionSource::Tonal(t) = &request.source { Some(t.as_ref()) } else { None };
         let coverage = tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_));
         if let Some(t) = tone {
-            let mut data = vec![0u32; 76];
+            let mut data = [0u32; 84];
             for (i,b) in t.bands.iter().enumerate() {
                 for (j,v) in [b.lower.unwrap_or(-1000.), b.upper.unwrap_or(1000.), b.falloff[0], b.falloff[1]].into_iter().enumerate() {
                     data[i*4+j]=v.to_bits();
@@ -221,6 +221,13 @@ impl RawRegions {
             for (i,w) in r.document_color.space.to_xyz()[1].iter().enumerate() { data[64+i]=(*w as f32).to_bits(); }
             if let Some(probe)=t.probe { data[68..72].copy_from_slice(&probe.bounds); }
             data[72..76].copy_from_slice(&[t.bands.len() as u32, u32::from(t.invert), u32::from(t.probe.is_some()), u32::from(t.probe.is_some_and(|p| p.point))]);
+            if let Some(q)=t.probe.and_then(|p| p.quad) {
+                data[74]=2;
+                for (i,p) in q.iter().enumerate() {
+                    data[76+i*2]=p.x.to_bits();
+                    data[77+i*2]=p.y.to_bits();
+                }
+            }
             let bytes:Vec<u8>=data.into_iter().flat_map(u32::to_ne_bytes).collect();
             r.queue.write_buffer(&self.tonal_parameters,0,&bytes);
             encoder.clear_buffer(&self.tonal_statistics,0,None);
