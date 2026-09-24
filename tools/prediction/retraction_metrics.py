@@ -7,6 +7,24 @@ This is offline scoring only; future truth never enters the running predictor.
 import numpy as np
 from flicker_metrics import interpolate, surface, norm, distance_to_path, valid_intervals, occupancy
 from detail_metrics import truth_path
+from balance_metrics import classify_motion
+
+
+def continuing_motion(points):
+    """Truth-only continuation label, including steady curves, excluding braking.
+
+    The seven positions span -24..+24 ms. Overlapping 16 ms chords must
+    retain at least 75% of their recent speed. Neither pressure nor prediction
+    output participates, so changing the stop classifier cannot change its
+    evaluation population. Boundaries without future truth stay unclassified.
+    """
+    _, category = classify_motion(points)
+    if not category.endswith(('steady straight', 'smooth curve')):
+        return 'other'
+    speeds = norm(points[2:] - points[:-2])
+    if speeds[2:].min() < .75 * speeds[:3].max():
+        return 'other'
+    return 'steady line' if category.endswith('steady straight') else 'steady curve'
 
 
 def straightish(points):
@@ -32,11 +50,13 @@ def retraction_metrics(frames, contacts, geometry_horizon='target'):
     s = {key: np.full(n, np.nan) for key in
          ['retreat_tip', 'retreat_body', 'target_backstep_ms', 'display_lead_drop_ms']}
     eligible = np.zeros(n, bool)
+    continuing = []
     for i, cur in enumerate(frames):
         truth = contacts[cur['contact']]['samples']
         m = cur['transform']
         q = surface(interpolate(truth, cur['frame_us'] + np.arange(-24,25,8)*1000), m)
         eligible[i] = straightish(q)
+        continuing.append(continuing_motion(q))
         if not dt[i]:
             continue
         prev = frames[i-1]
@@ -70,7 +90,11 @@ def retraction_metrics(frames, contacts, geometry_horizon='target'):
             weights = np.r_[segments,0.]+np.r_[0.,segments]
             s['retreat_body'][i] = np.sqrt(np.sum(weights*loss**2)/max(weights.sum(),1e-12))
     results = {}
-    for name, selected in [('all',np.ones(n,bool)),('straightish',eligible)]:
+    continuing = np.array(continuing)
+    groups = [('all',np.ones(n,bool)),('straightish',eligible),
+              ('steady motion',continuing != 'other'),
+              *[(name,continuing == name) for name in ['steady line','steady curve']]]
+    for name, selected in groups:
         group = dict(observed_seconds=float(held[selected].sum()),queries=int(selected.sum()))
         for key, values in s.items():
             valid = selected & np.isfinite(values)
@@ -91,5 +115,5 @@ def retraction_metrics(frames, contacts, geometry_horizon='target'):
             metric['severity_seconds']=[float(held[valid&(bins==b)].sum()) for b in range(len(thresholds)+1)]
             group[key]=metric
         results[name]=group
-    s.update(straightish=eligible,ids=ids,held_dt=held)
+    s.update(straightish=eligible,continuing=continuing,ids=ids,held_dt=held)
     return results,s

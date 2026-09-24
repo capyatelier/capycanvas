@@ -12,6 +12,7 @@ pub(super) struct Output {
     anchor: StrokePoint,
     transform: [f32; 6],
     maximum_distance: f32,
+    join_horizon: Option<u32>,
     local: Option<LocalMotion>,
     corrections: Option<CorrectionField>,
 }
@@ -75,6 +76,28 @@ mod tests {
             assert_eq!(raw.point_at(24_000), filtered.point_at(24_000));
         }
     }
+
+    #[test]
+    fn cropping_preview_length_preserves_the_remaining_curve() {
+        let mut real: Vec<_> = (0..=50)
+            .map(|i| point(i as f32 * 9.6, 0.3 * (i as f32).sin(), i * 4000))
+            .collect();
+        real.last_mut().unwrap().position.y += 0.5;
+        let motion = MotionFit::fit(&real, IDENTITY, 1000).unwrap();
+        let config = InstantFeedbackConfig {
+            prediction_horizon_micros: 24_000,
+            ..Default::default()
+        };
+        let full = Output::new(motion, 24_000, IDENTITY, 96.)
+            .with_local_motion(&real, config, 0, None, None, 0.);
+        let mut cropped = full.clone();
+        cropped.horizon = 4000;
+        assert_eq!(
+            full.point_at(4000),
+            cropped.point_at(4000),
+            "visibility cannot change the curve's anchor join"
+        );
+    }
 }
 
 /// Fixed-size, disposable forecast in document coordinates. Its knots are
@@ -126,6 +149,7 @@ impl Output {
             motion,
             horizon,
             maximum_distance,
+            join_horizon: None,
             transform,
             local: None,
             corrections: None,
@@ -139,6 +163,7 @@ impl Output {
         age: u32,
         memory: Option<(u32, f64)>,
         previous: Option<&LocalMotion>,
+        continuity: f64,
     ) -> Self {
         self.local = LocalMotion::fit(
             real,
@@ -147,8 +172,10 @@ impl Output {
             self.horizon,
             memory,
             previous,
+            continuity,
         );
         if let Some(local) = &self.local {
+            self.join_horizon = Some(local.join_horizon());
             self.horizon = local.horizon(self.horizon, age, config.prediction_horizon_micros);
 
             // A stopping distance belongs to the model that estimated it.
@@ -243,7 +270,7 @@ impl Output {
 
     fn unclamped_point_at(&self, time: u32) -> StrokePoint {
         if let Some(local) = &self.local {
-            return local.output_at(time, self.horizon);
+            return local.output_at(time, self.join_horizon.unwrap_or(self.horizon));
         }
         let mut point = self.motion.point_at(time);
         let fitted_anchor = self.motion.fitted_point_at(0).position;
@@ -262,6 +289,10 @@ impl Output {
         point.position.x += innovation.x;
         point.position.y += innovation.y;
         point
+    }
+
+    pub fn sample_time(&self) -> u32 {
+        self.anchor.elapsed_micros
     }
 
     pub fn local_motion(&self) -> Option<LocalMotion> {

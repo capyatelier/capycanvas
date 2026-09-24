@@ -41,8 +41,124 @@ impl WorkspacePreset {
         layout
     }
 
-    /// Last defaults before Photo opened its secondary panels individually.
+    /// Selection-layer defaults before toolbar components were integrated.
+    pub fn legacy_selection_drawers_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_toolbar_components_layout(platform);
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
+        layout
+    }
+
+    /// Toolbar defaults before Photo opened its secondary panels individually.
     pub fn legacy_photo_column_layout(self, platform: crate::Platform) -> DockLayout {
+        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android);
+        let mut layout = self.component_layout(platform, supported);
+        self.arrange_components(&mut layout, supported);
+        if self == Self::Photographer && supported {
+            let flip = layout.panel(Panel::Commands).unwrap().tiles().iter()
+                .find(|t| t.control == ToolbarControl::Command {
+                    command: crate::CommandId::FlipHorizontal,
+                }).unwrap().id;
+            layout.remove_tool(Panel::Commands, flip).expect("Photo command default");
+        }
+        layout
+    }
+
+    /// Exact prior default, before removing Flip Image from Photo's top bar.
+    pub fn legacy_photo_flip_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_bottom_brush_controls_layout(platform);
+        self.arrange_components(&mut layout, platform == crate::Platform::Gtk);
+        layout
+    }
+
+    fn arrange_components(self, layout: &mut DockLayout, supported: bool) {
+        if !supported { return; }
+        if self == Self::Painter {
+            let panel = layout.panels.iter().find(|p| {
+                p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)
+            }).unwrap().id;
+            layout.move_panel([1600., 1000.], panel,
+                DockTarget::CompactEdge { edge: Edge::Left, alignment: EdgeAlignment::Center })
+                .expect("centered brush toolbar");
+        }
+        if self == Self::Photographer {
+            layout.move_panel([1600., 1000.], Panel::Commands,
+                DockTarget::Edge { edge: Edge::Top, outer: true })
+                .expect("outer Photo options bar");
+        }
+    }
+
+    /// Previous component default; only untouched included layouts migrate.
+    pub fn legacy_bottom_brush_controls_layout(self, platform: crate::Platform) -> DockLayout {
+        self.component_layout(platform, platform == crate::Platform::Gtk)
+    }
+
+    fn component_layout(self, platform: crate::Platform, supported: bool) -> DockLayout {
+        let mut layout = self.legacy_toolbar_components_layout(platform);
+        if supported {
+            match self {
+                Self::Painter => {
+                    let panel = layout
+                        .add_toolbar(
+                            None,
+                            "Brush controls",
+                            &[
+                                ToolbarControl::BrushSizeSlider,
+                                ToolbarControl::BrushOpacitySlider,
+                            ],
+                        )
+                        .expect("built-in brush controls");
+                    layout
+                        .panels
+                        .iter_mut()
+                        .find(|p| p.id == panel)
+                        .unwrap()
+                        .tile_style = TileStyle::Medium;
+                    layout
+                        .move_panel(
+                            [1600., 1000.],
+                            panel,
+                            DockTarget::Edge {
+                                edge: Edge::Bottom,
+                                outer: false,
+                            },
+                        )
+                        .expect("bottom brush toolbar");
+                }
+                Self::Photographer => {
+                    let config = layout
+                        .panels
+                        .iter_mut()
+                        .find(|p| p.id == Panel::Commands)
+                        .unwrap();
+                    config.tiles_mut().unwrap().retain(|t| {
+                        !matches!(
+                            t.control,
+                            ToolbarControl::Command {
+                                command: crate::CommandId::ClearLayer
+                                    | crate::CommandId::FillSelection
+                            }
+                        )
+                    });
+                    layout
+                        .insert_tools(
+                            Panel::Commands,
+                            None,
+                            &[ToolbarControl::Divider, ToolbarControl::TOOL_OPTIONS],
+                        )
+                        .unwrap();
+                }
+                Self::Illustrator => (),
+            }
+        }
+        layout
+    }
+
+
+    /// Exact defaults before inline GTK toolbar components; migrate untouched
+    /// included workspaces without replacing any customized arrangement.
+    pub fn legacy_toolbar_components_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_selection_layout(platform);
         if crate::CommandId::Select.available_on(platform) {
             if self == Self::Painter {
@@ -59,6 +175,48 @@ impl WorkspacePreset {
         }
         layout
     }
+
+    /// Exact first GTK component default, used only to upgrade untouched saves.
+    pub fn legacy_brush_controls_layout(platform: crate::Platform) -> DockLayout {
+        let mut layout = Self::Painter.legacy_toolbar_components_layout(platform);
+        if platform == crate::Platform::Gtk {
+            let config = layout
+                .panels
+                .iter_mut()
+                .find(|p| p.id == Panel::Commands)
+                .unwrap();
+            config.content = PanelContent::Toolbar {
+                name: "Brush controls".into(),
+                tiles: Vec::new(),
+            };
+            layout
+                .insert_tools(
+                    Panel::Commands,
+                    None,
+                    &[
+                        ToolbarControl::BrushSizeSlider,
+                        ToolbarControl::BrushOpacitySlider,
+                    ],
+                )
+                .unwrap();
+            let id = layout.next_id;
+            layout.next_id += 2;
+            layout.bands.push(DockBand {
+                alignment: None,
+                id,
+                edge: Edge::Bottom,
+                extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
+                root: DockNode::Tabs {
+                    id: id + 1,
+                    panels: vec![Panel::Commands],
+                    active: Panel::Commands,
+                    tab_style: crate::TabStyle::default(),
+                },
+            });
+        }
+        layout
+    }
+
 
     /// Last shipped defaults before the selection family rollout.
     pub fn legacy_selection_layout(self, platform: crate::Platform) -> DockLayout {
@@ -270,6 +428,7 @@ impl WorkspacePreset {
             second: Box::new(second),
         };
         layout.bands = vec![DockBand {
+            alignment: None,
             id: 1,
             edge: Edge::Left,
             extent: tile_style.size()[0] + WORKSPACE_SPACING,
@@ -282,6 +441,7 @@ impl WorkspacePreset {
                 return layout;
             }
             layout.bands.push(DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Top,
                 extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
@@ -294,6 +454,7 @@ impl WorkspacePreset {
             let width = Panel::Layers.default_width() + WORKSPACE_SPACING;
             layout.bands.extend([
                 DockBand {
+                    alignment: None,
                     id: 3,
                     edge: Edge::Right,
                     extent: width,
@@ -305,6 +466,7 @@ impl WorkspacePreset {
                     ),
                 },
                 DockBand {
+                    alignment: None,
                     id: 7,
                     edge: Edge::Right,
                     extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -506,7 +668,8 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                [Edge::Left, Edge::Right, Edge::Right, Edge::Top]);
+                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
+                else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
             for (id, expected) in [
                 (14, if Panel::Proof.available_on(platform) {vec![Panel::Color, Panel::Proof, Panel::Stats]} else {vec![Panel::Color, Panel::Stats]}),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
@@ -578,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_sketch_has_only_individual_header_tools() {
+    fn projected_sketch_keeps_header_tools_and_supported_brush_sliders() {
         for platform in [
             crate::Platform::Gtk,
             crate::Platform::Web,
@@ -588,7 +751,12 @@ mod tests {
             crate::Platform::Windows,
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
-            assert!(layout.bands.is_empty() && layout.floating.is_empty());
+            assert!(layout.floating.is_empty());
+            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
+                assert_eq!(layout.bands.len(), 1);
+                assert_eq!(layout.bands[0].edge, Edge::Left);
+                assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
+            } else { assert!(layout.bands.is_empty()); }
             assert_eq!(
                 layout.header,
                 crate::HeaderLayout::painter_for_platform(platform)
@@ -609,7 +777,7 @@ mod tests {
     fn photo_adopts_the_reviewed_layout_and_paint_restores_its_original_default() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
             for (preset,mut previous) in [(WorkspacePreset::Photographer,WorkspacePreset::legacy_illustrator_primary_layout(platform)),(WorkspacePreset::Illustrator,WorkspacePreset::legacy_illustrator_layout(platform))] {
-                let mut current=preset.layout(platform);
+                let mut current=preset.legacy_toolbar_components_layout(platform);
                 if preset == WorkspacePreset::Photographer && crate::CommandId::Select.available_on(platform) {
                     use crate::CommandId::*;
                     current.panels.iter_mut().find(|p| p.id == Panel::Toolbar).unwrap().tiles_mut().unwrap().retain(|t|
@@ -622,7 +790,6 @@ mod tests {
                     let DockNode::Tabs {panels,..}=previous.node_mut(group).unwrap() else {panic!()};
                     panels.insert(1,Panel::Proof);
                 }
-                if preset == WorkspacePreset::Photographer { previous.column_stack_mut(4).drawers = true; }
                 assert_eq!(current,previous);
             }
             assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);

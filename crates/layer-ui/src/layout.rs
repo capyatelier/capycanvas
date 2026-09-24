@@ -37,38 +37,207 @@ fn ribbon_lanes(length: f32, count: usize, along: f32) -> usize {
     count.max(1).div_ceil(slots)
 }
 
-fn toolbar_extent(tile: &ToolbarTile, along: f32) -> f32 {
-    if tile.control == ToolbarControl::Divider {
-        TOOLBAR_DIVIDER_SIZE
-    } else {
-        along
+/// Minimum and preferred along-axis lengths, with optional lane expansion.
+/// All nonuniform items use this policy for docking, floats and drawer bodies.
+#[derive(Clone, Copy)]
+struct ItemSpan {
+    min: f32,
+    preferred: f32,
+    fill: bool,
+}
+fn toolbar_item_span(tile: &ToolbarTile, along: f32, axis: Axis, capacity: f32) -> ItemSpan {
+    let length = match tile.control {
+        ToolbarControl::Divider => TOOLBAR_DIVIDER_SIZE,
+        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushOpacitySlider => {
+            4.0 * (along + 2.0) - 2.0
+        }
+        ToolbarControl::ToolOptions { .. } => {
+            (if axis == Axis::Vertical { 8.0 } else { 16.0 }) * (along + 2.0) - 2.0
+        }
+        _ => along,
+    }
+    .min(capacity);
+    let fill = tile.control.options_style().is_some();
+    ItemSpan {
+        min: if fill { along.min(capacity) } else { length },
+        preferred: length,
+        fill,
     }
 }
 fn collapse_toolbar_dividers(tiles: &mut Vec<ToolbarTile>) {
-    // Keep the first separator's identity; only empty groups disappear.
     tiles.dedup_by(|a, b| {
         a.control == ToolbarControl::Divider && b.control == ToolbarControl::Divider
     });
 }
-fn toolbar_span(tiles: &[ToolbarTile], along: f32) -> f32 {
-    tiles.iter().map(|t| toolbar_extent(t, along) + 2.0).sum()
+fn toolbar_span(tiles: &[ToolbarTile], along: f32, axis: Axis) -> f32 {
+    tiles
+        .iter()
+        .map(|t| toolbar_item_span(t, along, axis, f32::INFINITY).preferred + 2.0)
+        .sum()
 }
-fn toolbar_lanes(length: f32, tiles: &[ToolbarTile], along: f32) -> usize {
-    let capacity = (length - 20.0).max(along + 2.0);
+fn toolbar_lanes(length: f32, tiles: &[ToolbarTile], along: f32, axis: Axis) -> usize {
+    let capacity = (length - 22.0).max(1.0);
     let (mut lanes, mut used) = (1, 0.0);
     for tile in tiles {
-        let size = toolbar_extent(tile, along) + 2.0;
+        let size = toolbar_item_span(tile, along, axis, capacity).min;
         if used > 0.0 && used + size > capacity {
             lanes += 1;
             used = 0.0;
         }
-        used += size;
+        used += size + 2.0;
     }
     lanes
 }
 
-/// Dividers retain stable insertion slots but occupy eight logical pixels.
-/// The same compact extents determine ribbon thickness and actual wrapping.
+/// Rows are shared by floating toolboxes, wider edge bars and drawer bodies.
+/// Separators and contextual options occupy an entire row; other items pack
+/// left-to-right. Minimum/preferred heights keep short options in the last row.
+struct ToolbarRow {
+    items: Vec<(usize, f32, f32)>,
+    min_height: f32,
+    preferred_height: f32,
+    full_width: bool,
+}
+fn toolbar_rows(width: f32, tiles: &[ToolbarTile], style: TileStyle) -> Vec<ToolbarRow> {
+    let [w, h] = style.size();
+    let columns = ((width + 2.) / (w + 2.)).floor().max(1.) as usize;
+    let mut rows: Vec<ToolbarRow> = Vec::new();
+    for (i, tile) in tiles.iter().enumerate() {
+        let full_width =
+            tile.control == ToolbarControl::Divider || tile.control.options_style().is_some();
+        if full_width
+            || rows
+                .last()
+                .is_none_or(|r| r.full_width || r.items.len() >= columns)
+        {
+            rows.push(ToolbarRow {
+                items: Vec::new(),
+                min_height: 0.,
+                preferred_height: 0.,
+                full_width,
+            });
+        }
+        let row = rows.last_mut().unwrap();
+        let span = toolbar_item_span(tile, h, Axis::Vertical, f32::INFINITY);
+        let preferred = if tile.control.options_style().is_some() {
+            8usize.div_ceil(columns) as f32 * (h + 2.) - 2.
+        } else {
+            span.preferred
+        };
+        row.items
+            .push((i, if full_width { width } else { w.min(width) }, span.min));
+        row.min_height = row.min_height.max(span.min);
+        row.preferred_height = row.preferred_height.max(preferred);
+    }
+    rows
+}
+fn toolbar_rows_height(rows: &[ToolbarRow], preferred: bool) -> f32 {
+    rows.iter()
+        .map(|r| {
+            if preferred {
+                r.preferred_height
+            } else {
+                r.min_height
+            }
+        })
+        .sum::<f32>()
+        + rows.len().saturating_sub(1) as f32 * 2.
+}
+fn toolbar_grid_layout(
+    width: f32,
+    height: f32,
+    tiles: &[ToolbarTile],
+    standalone: bool,
+    style: TileStyle,
+) -> TileLayout {
+    let pad = if standalone { 0. } else { 4. };
+    let content_width = (width - pad * 2.).max(1.);
+    let content_height = (height - pad * 2. - if standalone { 22. } else { 0. }).max(0.);
+    let rows = toolbar_rows(content_width, tiles, style);
+    let mut spare = (content_height - toolbar_rows_height(&rows, false)).max(0.);
+    let columns = ((content_width + 2.) / (style.size()[0] + 2.))
+        .floor()
+        .max(1.);
+    let inset = ((content_width - (columns * (style.size()[0] + 2.) - 2.)) / 2.).max(0.);
+    let mut bounds = vec![Bounds::default(); tiles.len()];
+    let mut insertion = Vec::with_capacity(tiles.len() + 1);
+    let mut y = pad;
+    for row in rows {
+        let growth = (row.preferred_height - row.min_height).min(spare);
+        let row_height = row.min_height + growth;
+        spare -= growth;
+        let mut x = pad + if row.full_width { 0. } else { inset };
+        for (i, w, h) in row.items {
+            let h = if row.full_width { row_height } else { h };
+            let b = Bounds {
+                x,
+                y: y.min(pad + content_height),
+                width: w,
+                height: h.min((pad + content_height - y).max(0.)),
+            };
+            let vertical_flow = row.full_width || columns == 1.;
+            insertion.push(if vertical_flow {
+                Bounds {
+                    y: (y - 1.5).max(0.),
+                    height: 3.,
+                    ..b
+                }
+            } else {
+                Bounds {
+                    x: (x - 1.5).max(0.),
+                    width: 3.,
+                    ..b
+                }
+            });
+            bounds[i] = b;
+            x += w + 2.;
+        }
+        y += row_height + 2.;
+    }
+    let mut layout = allocated_toolbar_layout(bounds, width, height, Axis::Vertical, standalone);
+    if let Some(last) = layout.tiles.last() {
+        insertion.push(Bounds {
+            x: last.x,
+            y: (last.y + last.height - 1.5).max(0.),
+            width: last.width,
+            height: 3.,
+        });
+    }
+    if insertion.is_empty() {
+        insertion.push(Bounds {
+            x: pad,
+            y: pad,
+            width: style.size()[0].min(content_width),
+            height: 3.,
+        });
+    }
+    layout.insertion = insertion;
+    layout
+}
+/// Intrinsic thickness uses the same rows as final allocation. Dividers must
+/// count as whole rows, even inside drawers or a multi-column edge toolbar.
+fn toolbar_cross_extent(length: f32, tiles: &[ToolbarTile], style: TileStyle, axis: Axis) -> f32 {
+    let [w, h] = style.size();
+    if axis == Axis::Horizontal {
+        return toolbar_lanes(length, tiles, w, axis) as f32 * (h + 2.) - 2.;
+    }
+    let (mut best_width, mut best_height) = (w, f32::INFINITY);
+    for columns in 1..=tiles.len().max(1) {
+        let width = columns as f32 * (w + 2.) - 2.;
+        let height = toolbar_rows_height(&toolbar_rows(width, tiles, style), false) + 22.;
+        if height < best_height {
+            best_width = width;
+            best_height = height;
+        }
+        if height <= length {
+            break;
+        }
+    }
+    best_width
+}
+
+/// Shared strip/toolbox allocation for docked, floating and retained drawer
+/// toolbars. Uniform horizontal strips keep the ordinary tile-grid fast path.
 pub fn toolbar_tile_layout(
     width: f32,
     height: f32,
@@ -77,48 +246,65 @@ pub fn toolbar_tile_layout(
     standalone: bool,
     style: TileStyle,
 ) -> TileLayout {
-    if !tiles.iter().any(|t| t.control == ToolbarControl::Divider) {
+    if axis == Axis::Vertical {
+        return toolbar_grid_layout(width, height, tiles, standalone, style);
+    }
+    if tiles
+        .iter()
+        .all(|t| !t.control.is_component() && t.control != ToolbarControl::Divider)
+    {
         return tile_layout(width, height, axis, tiles.len(), standalone, style);
     }
-    let horizontal = axis == Axis::Horizontal;
-    let [w, h] = style.size();
-    let (length, cross, along_size, cross_size) = if horizontal {
-        (width, height, w, h)
-    } else {
-        (height, width, h, w)
-    };
-    let padding = if standalone { 0.0 } else { 4.0 };
-    let lanes = (((cross - padding * 2.0 + 2.0) / (cross_size + 2.0)).floor() as usize)
-        .max(1)
-        .max(if standalone {
-            toolbar_lanes(length, tiles, along_size)
-        } else {
-            1
-        });
-    let capacity =
-        (length - padding * 2.0 - if standalone { 20.0 } else { 0.0 }).max(along_size + 2.0);
-    // Next-fit with a balanced target uses at most the available lanes: each
-    // finished lane exceeds total/lanes unless the viewport itself is limiting.
-    let target = capacity.min(toolbar_span(tiles, along_size) / lanes as f32 + along_size + 2.0);
-    let inset = ((cross - (lanes as f32 * (cross_size + 2.0) - 2.0)) * 0.5).max(padding);
-    let (mut lane, mut used) = (0, 0.0);
-    let mut bounds = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        let size = toolbar_extent(tile, along_size);
-        if used > 0.0 && used + size + 2.0 > target {
-            lane += 1;
+    let [along, across] = style.size();
+    let pad = if standalone { 0.0 } else { 4.0 };
+    let capacity = (width - pad * 2.0 - if standalone { 22.0 } else { 0.0 }).max(1.0);
+    let spans: Vec<_> = tiles
+        .iter()
+        .map(|tile| toolbar_item_span(tile, along, axis, capacity))
+        .collect();
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut used = 0.0;
+    for (i, span) in spans.iter().enumerate() {
+        if used > 0.0 && used + span.min > capacity {
+            rows.push(Vec::new());
             used = 0.0;
         }
-        let along = padding + used;
-        let across = inset + lane as f32 * (cross_size + 2.0);
-        bounds.push(Bounds {
-            x: if horizontal { along } else { across },
-            y: if horizontal { across } else { along },
-            width: if horizontal { size } else { w },
-            height: if horizontal { h } else { size },
-        });
-        used += size + 2.0;
+        rows.last_mut().unwrap().push(i);
+        used += span.min + 2.0;
     }
+    let inset = ((height - (rows.len() as f32 * (across + 2.0) - 2.0)) * 0.5).max(pad);
+    let mut bounds = vec![Bounds::default(); tiles.len()];
+    for (lane, items) in rows.iter().enumerate() {
+        let spare = (capacity - items.iter().map(|&i| spans[i].min + 2.).sum::<f32>() + 2.).max(0.);
+        let fills = items.iter().filter(|&&i| spans[i].fill).count();
+        let mut x = pad;
+        for &i in items {
+            let width = spans[i].min
+                + if spans[i].fill {
+                    spare / fills as f32
+                } else {
+                    0.
+                };
+            bounds[i] = Bounds {
+                x,
+                y: inset + lane as f32 * (across + 2.0),
+                width,
+                height: across,
+            };
+            x += width + 2.0;
+        }
+    }
+    allocated_toolbar_layout(bounds, width, height, axis, standalone)
+}
+
+fn allocated_toolbar_layout(
+    bounds: Vec<Bounds>,
+    width: f32,
+    height: f32,
+    axis: Axis,
+    standalone: bool,
+) -> TileLayout {
+    let horizontal = axis == Axis::Horizontal;
     let line = |b: Bounds, after: bool| {
         if horizontal {
             Bounds {
@@ -137,23 +323,25 @@ pub fn toolbar_tile_layout(
         }
     };
     let mut insertion: Vec<_> = bounds.iter().map(|&b| line(b, false)).collect();
-    insertion.push(line(*bounds.last().expect("at least one divider"), true));
+    if let Some(&last) = bounds.last() {
+        insertion.push(line(last, true));
+    }
     TileLayout {
         tiles: bounds,
         insertion,
         grip: standalone.then_some(if horizontal {
             Bounds {
-                x: width - 20.0,
+                x: (width - 20.0).max(0.0),
                 y: 0.0,
-                width: 20.0,
+                width: 20.0_f32.min(width),
                 height,
             }
         } else {
             Bounds {
                 x: 0.0,
-                y: height - 20.0,
+                y: (height - 20.0).max(0.0),
                 width,
-                height: 20.0,
+                height: 20.0_f32.min(height),
             }
         }),
     }
@@ -161,18 +349,9 @@ pub fn toolbar_tile_layout(
 
 /// Natural height for a padded toolbar body at a measured drawer/panel width.
 pub fn toolbar_content_height(width: f32, tiles: &[ToolbarTile], style: TileStyle) -> f32 {
-    toolbar_tile_layout(
-        width,
-        tiles.len().max(1) as f32 * (style.size()[1] + 2.) + 8.,
-        Axis::Vertical,
-        tiles,
-        false,
-        style,
-    )
-    .tiles
-    .iter()
-    .map(|b| b.y + b.height + 4.)
-    .fold(style.size()[1] + 8., f32::max)
+    toolbar_rows_height(&toolbar_rows((width - 8.).max(1.), tiles, style), true)
+        .max(style.size()[1])
+        + 8.
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -728,6 +907,9 @@ impl DockNode {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockBand {
+    /// Compact toolbar regions share a strip but align independently along it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<EdgeAlignment>,
     pub id: u32,
     pub edge: Edge,
     pub extent: f32,
@@ -771,7 +953,7 @@ impl FloatingToolbarLayout {
             Self::Compact => style.floating_width(),
             Self::Vertical => style.size()[0],
             Self::Horizontal => {
-                toolbar_span(tiles, style.size()[0]).max(style.size()[0] + 2.0) + 20.0
+                toolbar_span(tiles, style.size()[0], Axis::Horizontal).max(style.size()[0] + 2.0) + 20.0
             }
         }
     }
@@ -832,6 +1014,10 @@ pub struct DockLayout {
     next_id: u32,
 }
 
+#[path = "compact_edges.rs"]
+mod compact_edges;
+pub use compact_edges::EdgeAlignment;
+
 #[path = "layout_saved.rs"]
 mod saved;
 
@@ -869,6 +1055,8 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DockTarget {
+    /// Content-sized toolbar stack aligned at the start, center or end of an edge.
+    CompactEdge { edge: Edge, alignment: EdgeAlignment },
     /// Insert a collapsed column, or a panel/tab group as a new column member.
     StackColumn { column: u32, before: bool },
     Float {
@@ -1271,12 +1459,14 @@ impl DockLayout {
         // the Commands ribbon occupies only the work area between them.
         layout.bands = vec![
             DockBand {
+                alignment: None,
                 id: 1,
                 edge: Edge::Left,
                 extent: TILE_SIZE + WORKSPACE_SPACING,
                 root: tabs(2, &[Panel::Toolbar]),
             },
             DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Left,
                 extent: Panel::Brushes.default_width() + WORKSPACE_SPACING,
@@ -1295,6 +1485,7 @@ impl DockLayout {
                 ),
             },
             DockBand {
+                alignment: None,
                 id: 11,
                 edge: Edge::Right,
                 extent: Panel::Layers.default_width() + WORKSPACE_SPACING,
@@ -1313,6 +1504,7 @@ impl DockLayout {
                 ),
             },
             DockBand {
+                alignment: None,
                 id: 17,
                 edge: Edge::Top,
                 extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -1500,6 +1692,7 @@ impl Default for DockLayout {
             next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
+                    alignment: None,
                     id: 3,
                     edge: Edge::Left,
                     extent: 232.0,
@@ -1512,6 +1705,7 @@ impl Default for DockLayout {
                     },
                 },
                 DockBand {
+                    alignment: None,
                     id: 7,
                     edge: Edge::Right,
                     extent: 232.0,
@@ -1523,6 +1717,7 @@ impl Default for DockLayout {
                     },
                 },
                 DockBand {
+                    alignment: None,
                     id: 1,
                     edge: Edge::Top,
                     extent: TILE_SIZE + WORKSPACE_SPACING,
@@ -1584,6 +1779,9 @@ impl DockLayout {
         for band in &self.bands {
             if !ids.insert(band.id) || !band.extent.is_finite() || band.extent <= 0.0 {
                 return Err("Invalid workspace dock band".into());
+            }
+            if band.alignment.is_some() {
+                self.validate_compact_band(band)?;
             }
             node(&band.root, &mut ids, &mut panels, 0)?;
         }
@@ -1840,6 +2038,7 @@ impl DockLayout {
             _ => Edge::Top,
         };
         next.bands.push(DockBand {
+            alignment: None,
             id: band,
             edge,
             extent: if panel.kind() == PanelKind::Tiles {
@@ -2355,7 +2554,7 @@ impl DockLayout {
         next.detach(&moving);
         let tiles = moving.len() == 1 && selected.kind() == PanelKind::Tiles;
         let dock_edge = match &target {
-            DockTarget::Edge { edge, .. } => Some(*edge),
+            DockTarget::Edge { edge, .. } | DockTarget::CompactEdge { edge, .. } => Some(*edge),
             DockTarget::BesideBand { band } => {
                 next.bands.iter().find(|b| b.id == *band).map(|b| b.edge)
             }
@@ -2368,6 +2567,15 @@ impl DockLayout {
             && (!tiles || matches!(target, DockTarget::Tab { .. }))
         {
             return Err("Top and bottom docks only support standalone toolbars".into());
+        }
+        if matches!(target, DockTarget::CompactEdge { .. }) && !tiles {
+            return Err("Compact edges only support standalone toolbars".into());
+        }
+        if let DockTarget::Tab { group, .. } | DockTarget::Split { group, .. } = target
+            && let Some(band) = next.compact_band(group)
+            && (!tiles || !matches!(target, DockTarget::Split { edge, .. } if edge.axis() != band.edge.axis()))
+        {
+            return Err("Stack standalone toolbars at the ends of a compact edge region".into());
         }
         let source = before.groups.iter().find(|g| g.id == source_group);
         let tile_size = next.panel(selected)?.tile_style.size();
@@ -2387,6 +2595,9 @@ impl DockLayout {
             },
         };
         match target {
+            DockTarget::CompactEdge { edge, alignment } => {
+                next.dock_compact_toolbar(moving, edge, alignment)?;
+            }
             DockTarget::StackColumn {
                 before: insert_before,
                 ..
@@ -2455,6 +2666,7 @@ impl DockLayout {
                 };
                 let id = next.allocate()?;
                 let band = DockBand {
+                    alignment: None,
                     id,
                     edge,
                     extent: if edge.axis() == Axis::Horizontal {
@@ -2489,7 +2701,7 @@ impl DockLayout {
             }
             DockTarget::Split { group, edge } => {
                 let mut fraction = 0.5;
-                if edge.axis() == Axis::Horizontal {
+                if edge.axis() == Axis::Horizontal && next.compact_band(group).is_none() {
                     let target_width = before
                         .groups
                         .iter()
@@ -2595,6 +2807,7 @@ impl DockLayout {
             group,
             edge: Edge::Left | Edge::Right,
         } = target
+            && next.compact_band(group).is_none()
         {
             let after = next.workspace(
                 viewport[0],
@@ -2633,7 +2846,7 @@ impl DockLayout {
     pub(crate) fn same_placement(&self, other: &Self) -> bool {
         #[derive(PartialEq)]
         enum Part<'a> {
-            Band(Edge),
+            Band(Edge, Option<EdgeAlignment>),
             Split(Axis),
             Tabs(u32, &'a [Panel]),
             Stack(bool, bool),
@@ -2690,7 +2903,7 @@ impl DockLayout {
         fn order(layout: &DockLayout) -> Vec<Part<'_>> {
             let mut out = Vec::new();
             for band in &layout.bands {
-                out.push(Part::Band(band.edge));
+                out.push(Part::Band(band.edge, band.alignment));
                 append(layout, &band.root, None, &mut out);
                 out.push(Part::End);
             }
@@ -2992,6 +3205,15 @@ impl DockLayout {
             dividers: Vec::new(),
         };
         for (band_index, band) in bands.iter().enumerate() {
+            if band.alignment.is_some() {
+                if !bands[..band_index]
+                    .iter()
+                    .any(|b| b.edge == band.edge && b.alignment.is_some())
+                {
+                    self.resolve_compact_edge(bands, band.edge, &mut remaining, &mut result);
+                }
+                continue;
+            }
             let parent = remaining;
             let axis = if matches!(band.edge, Edge::Left | Edge::Right) {
                 Axis::Vertical
@@ -3143,24 +3365,14 @@ impl DockLayout {
             let mut width = floating.width.max(self.group_min_width(*id)).min(max_width);
             let natural = if toolbar {
                 let [tile_width, tile_height] = config.tile_style.size();
-                let count = config.tiles().len().max(1);
                 if axis == Axis::Horizontal {
-                    toolbar_lanes(width, config.tiles(), tile_width) as f32 * (tile_height + 2.0)
+                    toolbar_lanes(width, config.tiles(), tile_width, axis) as f32 * (tile_height + 2.0)
                         - 2.0
                 } else {
-                    // Long vertical defaults wrap only when the viewport cannot
-                    // contain one column. Compact grids use the same allocator.
                     if floating.height.is_none() {
-                        width = width
-                            .max(
-                                toolbar_lanes(max_height, config.tiles(), tile_height) as f32
-                                    * (tile_width + 2.0)
-                                    - 2.0,
-                            )
-                            .min(max_width);
+                        width = width.max(toolbar_cross_extent(max_height, config.tiles(), config.tile_style, axis)).min(max_width);
                     }
-                    let columns = ((width + 2.0) / (tile_width + 2.0)).floor().max(1.0) as usize;
-                    count.div_ceil(columns) as f32 * (tile_height + 2.0) + 20.0
+                    toolbar_rows_height(&toolbar_rows(width, config.tiles(), config.tile_style), true) + 22.
                 }
             } else if active.kind() == PanelKind::Tiles {
                 // Divider extents and balanced wrapping can require more room
@@ -3516,6 +3728,11 @@ impl DockLayout {
             .iter_mut()
             .find(|b| b.root.group_for(group.active).is_some())
             .unwrap();
+        // Compact regions derive both dimensions from their contents. They
+        // have no resize divider and already refit after tile-style changes.
+        if band.alignment.is_some() {
+            return;
+        }
         let divider = before
             .dividers
             .iter()
@@ -4131,22 +4348,7 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
             if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
         {
             let config = layout.panel(*active).unwrap();
-            let [w, h] = config.tile_style.size();
-            toolbar_lanes(
-                length,
-                config.tiles(),
-                if ribbon_axis == Axis::Horizontal {
-                    w
-                } else {
-                    h
-                },
-            ) as f32
-                * (if ribbon_axis == Axis::Horizontal {
-                    h
-                } else {
-                    w
-                } + 2.0)
-                - 2.0
+            toolbar_cross_extent(length, config.tiles(), config.tile_style, ribbon_axis)
         }
         DockNode::Tabs { panels, .. } if panels.iter().any(|p| p.kind() == PanelKind::Tiles) => {
             // A tab bar must not consume the ribbon's entire old one-row
@@ -4710,14 +4912,9 @@ mod tests {
         for axis in [Axis::Horizontal, Axis::Vertical] {
             for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
                 let [w, h] = style.size();
-                let (along, cross) = if axis == Axis::Horizontal {
-                    (w, h)
-                } else {
-                    (h, w)
-                };
-                for length in [along + 22.0, along * 3.0 + 40.0, 1000.0] {
-                    let lanes = toolbar_lanes(length, &tiles, along);
-                    let thickness = lanes as f32 * (cross + 2.0) - 2.0;
+                let along = if axis == Axis::Horizontal { w } else { h };
+                for length in [along * 3. + 60., along * 6. + 60., 1000.0] {
+                    let thickness = toolbar_cross_extent(length, &tiles, style, axis);
                     let (width, height) = if axis == Axis::Horizontal {
                         (length, thickness)
                     } else {
@@ -4741,7 +4938,7 @@ mod tests {
                             } else {
                                 b.height
                             },
-                            toolbar_extent(tile, along)
+                            toolbar_item_span(tile, along, axis, f32::INFINITY).preferred
                         );
                         let line = layout.insertion[index];
                         let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];
@@ -4903,6 +5100,7 @@ mod tests {
             )
         };
         layout.bands = vec![DockBand {
+            alignment: None,
             id: 99,
             edge: Edge::Left,
             extent: 612.0,
@@ -6242,6 +6440,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             layout.bands = vec![DockBand {
+                alignment: None,
                 id: 3,
                 edge,
                 extent: 232.0,
@@ -6330,6 +6529,7 @@ mod tests {
     fn tab_size_changes_interpolate_from_the_presented_bounds() {
         let layout = DockLayout {
             bands: vec![DockBand {
+                alignment: None,
                 id: 3,
                 edge: Edge::Bottom,
                 extent: 160.0,

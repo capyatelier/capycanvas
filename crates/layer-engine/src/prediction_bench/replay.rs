@@ -89,7 +89,7 @@ fn reference(points: &[StrokePoint], time: u32, transform: [f32; 6]) -> Option<[
 /// CSV positions and truth are physical surface pixels. Unavailable truth is
 /// blank, never treated as zero error. Query IDs allow exact pair matching.
 pub fn replay(reader: impl BufRead, csv: impl Write) -> io::Result<ReplaySummary> {
-    replay_internal(reader, csv, None)
+    replay_inner(reader, csv, None)
 }
 
 /// Export the full causal preview path as well as endpoint accuracy. Actual
@@ -102,21 +102,21 @@ pub fn replay_with_frames(
     csv: impl Write,
     mut frames: impl Write,
 ) -> io::Result<ReplaySummary> {
-    writeln!(
-        frames,
-        "{}",
-        serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
-    )?;
-    let summary = replay_internal(reader, csv, Some(&mut frames))?;
-    frames.flush()?;
-    Ok(summary)
+    replay_inner(reader, csv, Some(&mut frames))
 }
 
-fn replay_internal(
+fn replay_inner(
     mut reader: impl BufRead,
     csv: impl Write,
-    frames: Option<&mut dyn Write>,
+    mut frames: Option<&mut dyn Write>,
 ) -> io::Result<ReplaySummary> {
+    if let Some(writer) = &mut frames {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
+        )?;
+    }
     let mut prefix = [0; 8];
     reader.read_exact(&mut prefix)?;
     let binary = &prefix == crate::recording::MAGIC;
@@ -347,6 +347,9 @@ fn replay_contacts(
     }
     summary.accuracy.finish();
     csv.flush()?;
+    if let Some(writer) = &mut frames {
+        writer.flush()?;
+    }
     Ok(summary)
 }
 

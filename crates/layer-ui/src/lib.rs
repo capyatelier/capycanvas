@@ -37,6 +37,12 @@ pub use navigator::NavigatorGeometry;
 pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
+mod toolbar_components;
+pub use toolbar_components::*;
+mod toolbar_transport;
+pub use toolbar_transport::*;
+mod toolbar_preview;
+pub use toolbar_preview::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
@@ -44,7 +50,7 @@ pub use color::{
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
 };
-pub use tool_settings::{ToolSetting, ToolSettingAction};
+pub use tool_settings::{ToolActionGroup, ToolSetting, ToolSettingAction};
 use tools::preset;
 pub use tools::{
     Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
@@ -98,7 +104,7 @@ pub use interaction::{
 pub use layout::{
     Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
     ColumnIcon, ColumnStack, Divider, DockBand, DockItem,
-    DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
+    DockLayout, DockNode, DockTarget, Edge, EdgeAlignment, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
     PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
     WorkspacePreset,
@@ -159,6 +165,9 @@ pub enum ToolbarControl {
     Size { pixels: u16 },
     Color,
     Opacity,
+    BrushSizeSlider,
+    BrushOpacitySlider,
+    ToolOptions { #[serde(default)] style: ToolOptionsStyle },
     Panel { panel: Panel },
     Divider,
 }
@@ -298,6 +307,28 @@ pub fn ui_catalog() -> UiCatalog {
         panel_expansion_ms: PANEL_EXPANSION_MS,
         cursors: CursorMode::CHOICES,
         icons: [
+            "brush-size",
+            "paint-flow",
+            "hardness",
+            "brush-spacing",
+            "angle",
+            "rotation-variation",
+            "paint-load",
+            "water",
+            "dilution",
+            "edge-strength",
+            "edge-width",
+            "wet-bleed",
+            "dry-bleed",
+            "strength",
+            "close-gap",
+            "expand",
+            "edge-smooth",
+            "feather",
+            "width",
+            "height",
+            "position-x",
+            "position-y",
             "new-document",
             "open-document",
             "save-document",
@@ -1138,6 +1169,7 @@ pub struct UiState {
     pub brush: BrushState,
     pub colors: ColorState,
     pub tool_settings: Vec<ToolSetting>,
+    pub toolbar_context_generation: u64,
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
     pub tool_panels: ToolPanels,
@@ -1292,6 +1324,17 @@ pub enum UiAction {
     SetToolSetting {
         id: String,
         value: f32,
+    },
+    ResetToolSetting {
+        id: String,
+    },
+    /// A retained toolbar editor must never apply to a different tool/target.
+    ToolbarEdit {
+        context: ToolbarContext,
+        action: Box<UiAction>,
+    },
+    ToggleSliderBookmark {
+        control: ToolbarControl,
     },
     SetColorSampleSize {
         width: u32,

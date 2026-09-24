@@ -1,3 +1,4 @@
+import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
@@ -388,6 +389,8 @@ try {
   } else if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--toolbar-components")) {
+    await checkToolbarComponents({call,evaluate,settle});
   } else if (process.argv.includes("--selection-tools")) {
     await checkSelectionTools({call,evaluate,settle});
     assert.deepEqual(errors,[]);

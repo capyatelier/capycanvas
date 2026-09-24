@@ -96,6 +96,7 @@ struct FloatingResize {
 pub struct UiSession<R: CanvasRenderer> {
     engine: CanvasEngine<R>,
     state: UiState,
+    last_toolbar_context: Option<ToolbarContext>,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
     rendering_suspended: bool,
@@ -228,6 +229,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 colors,
                 tool_settings: Vec::new(),
+                toolbar_context_generation: 0,
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
                 tool_panels: ToolPanels::default(),
@@ -254,11 +256,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 camera,
             },
             effect_catalog,
+            last_toolbar_context: None,
             pending_filters: None,
         };
         session.apply_brush()?;
         session.refresh_document();
         session.refresh_commands();
+        session.update_toolbar_context();
         Ok(session)
     }
 
@@ -1729,7 +1733,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
-        let mut hint = if let Some(hint) = menubar {
+        let compact_edge = (!docks_hidden && crate::ToolbarControl::components_available(self.state.platform))
+            .then(|| self.state.workspace.layout.compact_edge_drop_hint(
+                &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
+            )).flatten();
+        let mut hint = if let Some(hint) = compact_edge.or(menubar) {
             hint
         } else if let DockItem::Column { column } = item {
             if docks_hidden {
@@ -2025,6 +2033,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if let UiAction::ToolbarEdit { context, action } = action {
+            if context != self.state.toolbar_context() || !self.state.toolbar_edit_allowed(&action) {
+                return Err("This toolbar control belongs to a previous tool or edit target".into());
+            }
+            return self.dispatch(*action);
+        }
         if self.defer_selection_action(&action) {
             return Ok(self.changed(0, true));
         }
@@ -2183,6 +2197,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::ToolbarEdit { .. } => unreachable!("validated before dispatch"),
+            UiAction::ToggleSliderBookmark { control } => {
+                let binding = control.slider().ok_or("Not a brush slider")?;
+                let field = binding.field(&self.state).ok_or("This slider is unavailable")?;
+                self.state.settings.slider_bookmarks.entry(self.state.brush.preset.to_string())
+                    .or_default().toggle(&binding, field.value)?;
+                save_settings = true;
+                (BRUSH, false)
+            }
             UiAction::WorkspaceManager { command } => {
                 if self.managed_workspace.is_none() {
                     return Err("Workspace management is not connected".into());
@@ -2684,6 +2707,33 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refresh_tools();
                 (BRUSH, false)
             }
+            UiAction::ResetToolSetting { id } => {
+                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                    return Err("This setting is not used by the selected tool".into());
+                }
+                let defaults = if id.starts_with("transform_") {
+                    let value = match id.as_str() {
+                        "transform_width" | "transform_height" => 1.,
+                        _ => 0.,
+                    };
+                    return self.dispatch(UiAction::SetToolSetting { id, value });
+                } else if id.starts_with("selection_") {
+                    let options = SelectionOptions {
+                        constraint: self.selection_tools.options.constraint,
+                        ..Default::default()
+                    };
+                    let mut fields = options.controls();
+                    fields.extend(options.edge_controls());
+                    fields
+                } else if self.layer_interaction.tool.region().is_some() && id != "opacity" {
+                    region_tools::RegionTools::default().controls()
+                } else {
+                    tool_settings::controls(&layer_core::default_brush(tools::preset(self.state.brush.preset)?))
+                };
+                let value = defaults.iter().find(|f| f.id == id)
+                    .ok_or("This setting has no default")?.value;
+                return self.dispatch(UiAction::SetToolSetting { id, value });
+            }
             UiAction::SetToolSetting { id, value } => {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
@@ -2994,10 +3044,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && matches!(
                         action,
                         PreferenceAction::Edit {
-                            id: PreferenceId::PredictionHorizon,
+                            id: PreferenceId::PredictionHorizon | PreferenceId::PredictionAlgorithm,
                             ..
                         } | PreferenceAction::Reset {
-                            id: PreferenceId::PredictionHorizon
+                            id: PreferenceId::PredictionHorizon | PreferenceId::PredictionAlgorithm
                         }
                     )
                 {
@@ -4414,6 +4464,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        self.update_toolbar_context();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
         }
@@ -4435,6 +4486,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: self.state.revision,
             regions,
             canvas_wake,
+        }
+    }
+    fn update_toolbar_context(&mut self) {
+        let mut target = self.state.toolbar_context();
+        target.generation = 0;
+        if self.last_toolbar_context != Some(target) {
+            self.last_toolbar_context = Some(target);
+            self.state.toolbar_context_generation += 1;
         }
     }
     fn refresh_commands(&mut self) -> bool {
@@ -4808,6 +4867,12 @@ mod tests {
                 })
             })
         }
+        fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
+            (asset == &AssetId::from("preview-test")).then_some(HostImage {
+                width: 4, height: 4, stride: 4, format: layer_render::PixelFormat::R8Unorm,
+                bytes: &[255,255,255,255,255,0,0,255,255,0,0,255,255,255,255,255],
+            })
+        }
         fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> {
             Ok(())
         }
@@ -4884,6 +4949,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("painted_selection_tests.rs");
+    include!("toolbar_component_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -16671,6 +16737,18 @@ mod tests {
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
             assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
+            let algorithm = rows.iter().find(|r| r.id == PreferenceId::PredictionAlgorithm).unwrap();
+            assert_eq!(algorithm.enabled, !supported);
+            if supported {
+                for action in [
+                    PreferenceAction::Edit { id: algorithm.id, value: PreferenceValue::Choice(0) },
+                    PreferenceAction::Reset { id: algorithm.id },
+                ] {
+                    preference(&mut s, action);
+                    assert!(s.preferences().unwrap().error.is_some());
+                    assert_eq!(s.state.settings, settings);
+                }
+            }
             // Legacy settings still load, but neither old actions nor their
             // stored value can override automatic endpoint tracking.
             for action in [

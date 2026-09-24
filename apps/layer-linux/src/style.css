@@ -96,8 +96,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .drawer-shadow.join-se, .drawer-source-se { border-bottom-right-radius: 0; }
 .drawer-shadow.join-sw, .drawer-source-sw { border-bottom-left-radius: 0; }
 .toolbar-divider { padding: 0; min-width: 0; min-height: 0; background: transparent; }
-.toolbar-divider separator { min-width: 1px; min-height: 18px; margin: 0; }
-.toolbar-controls.vertical .toolbar-divider separator, .column-divider separator { min-width: 18px; min-height: 1px; }
+.toolbar-divider separator { min-width: 1px; min-height: 1px; margin: 0; }
+.column-divider separator { min-width: 18px; min-height: 1px; }
 .zen-section { border-radius: 8px; }
 .content-drawer > scrolledwindow + scrolledwindow { border-left: 1px solid alpha(var(--window-fg-color), .12); }
 .panel-context-menu { font-size: var(--ui-text-size); }
@@ -193,6 +193,29 @@ window, label, text { font-size: var(--ui-text-size); }
 .expanded-panel.configuration-flush.configuration-left .panel-preview { border-top-left-radius: 0; }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
+.toolbar-component { padding: 0; }
+.toolbar-component .option-action button, .toolbar-component > box > button { padding: 0; min-width: 0; min-height: 0; border-radius: 6px; }
+.toolbar-component .option-segments > button { border-radius: 0; }
+.toolbar-component .option-segments.horizontal > button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.toolbar-component .option-segments.horizontal > button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.toolbar-component .option-segments.vertical > button:first-child { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+.toolbar-component .option-segments.vertical > button:last-child { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+.toolbar-component dropdown { margin: 0; }
+.toolbar-component.vertical-component dropdown > button { padding: 2px; background: transparent; }
+.toolbar-component.vertical-component.labeled-component dropdown > button { padding-left: 8px; padding-right: 6px; }
+.toolbar-component .number-control { margin: 0; }
+.toolbar-component .toolbar-number scale { min-width: 56px; padding: 0 2px; }
+.toolbar-component .number-readout, .toolbar-component .number-entry, .toolbar-component .number-unit { font-size: var(--ui-text-size); }
+.toolbar-component .toolbar-number .number-value, .toolbar-component .number-entry { min-width: 0; min-height: 24px; padding: 0 4px; }
+.toolbar-component.vertical-component .number-compact .number-value { min-width: 0; min-height: 0; padding: 3px 4px; background: transparent; }
+.toolbar-component.vertical-component.small-component .number-compact .number-value { padding: 1px 2px; }
+.toolbar-component.vertical-component.large-component .number-compact .number-value { padding: 4px 6px; }
+.brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 2px; }
+.toolbar-component button.slider-cap { min-width: 0; min-height: 0; padding: 0; }
+.vertical-component .brush-track { margin: 2px 0; }
+.brush-track trough, .brush-track highlight { min-height: 16px; min-width: 16px; border: none; background: transparent; box-shadow: none; }
+.brush-track slider { min-width: 10px; min-height: 26px; margin: -5px 0; border-radius: 4px; background: var(--capy-thumb); border: 1px solid alpha(currentColor, .6); box-shadow: none; }
+.vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
 .zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: 6px; }
@@ -272,3 +295,5 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 .selection-modes > button { border-radius: 0; margin: 0; }
 .selection-modes > button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
 .selection-modes > button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.brush-preview > contents { padding: 0; border-radius: 10px; background: var(--panel-bg); }
+.brush-preview button { min-width: 0; min-height: 0; padding: 6px; }

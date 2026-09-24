@@ -130,6 +130,9 @@ impl CanvasRenderer for Renderer {
     fn tip_outline(&self, id: &AssetId) -> Option<&TipOutline> {
         self.0.as_ref()?.tip_outline(id)
     }
+    fn tip_mask(&self, id: &AssetId) -> Option<HostImage<'_>> {
+        self.0.as_ref()?.tip_mask(id)
+    }
     fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
         if let Some(gpu) = &mut self.0 {
             gpu.resize_surface(width, height)?;

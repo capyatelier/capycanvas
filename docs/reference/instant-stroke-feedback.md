@@ -149,9 +149,11 @@ configured horizon.
 The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
 existing saved values are preserved.
 
-**Smooth Motion** is the sole shared predictor on every platform and in the C
-API. There is no algorithm setting. Older saved algorithm choices are discarded
-while all other preferences remain intact.
+**Smooth Motion** is shared across platforms. **Settings → Input → Prediction
+algorithm** retains its dropdown for future alternatives, with **Smooth Motion
+(Optimized)** as its only supported choice and default. Saved Previous and other
+retired experimental choices migrate to Optimized while other preferences remain
+intact. The standalone C feedback API retains its ABI and uses Optimized.
 
 The predictor combines a recent acceleration fit with 100 ms of causal drawing
 history. Sustained smooth motion supports stable reach; slow/medium detail keeps
@@ -159,6 +161,23 @@ prompt response without unnecessarily shortening steady lines. A bounded
 correction field smooths the whole preview at matching future times, while stops
 and abrupt direction changes release that memory promptly. Measured ink, sensor
 values, native precedence and physical distance limits remain authoritative.
+
+Reach continuity uses changes in turning rate across that history, so a
+consistent curve can retain length without increasing geometric smoothing.
+An isolated moderate speed dip carries less weight than consecutive deceleration.
+Strong slowing and abrupt turns still revoke continuity immediately. A projected
+stop releases correction memory 8 ms beyond the requested target, or 24 ms when
+falling raw pressure corroborates an impending lift. Pressure remaining steady
+never prevents a stop; measured braking, distance and stale-input bounds still
+apply independently. Falling pressure alone does not cut a steady forecast short.
+
+Optimized filters visible display lead separately from curve geometry. A brief
+fit-window confidence collapse may retain reach while recent drawing history
+still supports continuation, with a missing fit bridged for at most 24 ms.
+The newest observations always refit local geometry. The anchor join has its own
+length, so cropping visibility cannot reshape the remaining curve. Frames with
+no new input consume the previous forecast rather than advancing its endpoint;
+policy changes, view changes, native takeover and stale input clear that memory.
 
 See [recording and evaluation](../development/stroke-recording.md) for the
 whole-preview metrics and regression bank. The chosen continuity behavior can
@@ -169,27 +188,29 @@ every host. Android reports framework `MotionPredictor` availability for the
 connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted
 touches. Linux, Windows and macOS currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
-prediction is selected, the **Prediction amount** slider and its reset action are
-disabled. Native timing comes from its sample timestamps and presentation time.
+prediction is selected, **Prediction amount**, **Prediction algorithm**, and their
+reset actions are disabled. Native timing comes from its sample timestamps and presentation time.
 Endpoint tracking is always full strength for both native and shared prediction;
 the retired `tip_lock` preference still loads but no longer affects rendering.
 If native samples are absent,
-the engine uses its automatic 8 ms fallback. Turning native prediction off, or
+the engine uses the selected shared algorithm with its automatic 8 ms fallback. Turning native prediction off, or
 losing support, restores the saved prediction time.
 
 ## Lead stability and impending lift
 
-Each active stroke owns a small preview-only history. The predicted distance from
+Native prediction owns a small preview-only history. The predicted distance from
 the latest real position is filtered using elapsed presentation time, with 32 ms
 extension and 14 ms retreat time constants, and extension limited to 0.8 physical
 pixels per millisecond. Stops, strong deceleration, sharp turns and lift handling
-bypass that filter so it cannot retain a dangerous old lead. Native and shared
-predictions share the same limits, including bounds on intermediate native points.
+bypass that filter so it cannot retain a dangerous old lead. Intermediate native
+points obey the same limits. Smooth Motion uses the separate motion-history and
+whole-preview correction handling described above.
 
 Up to 16 raw pen-pressure observations over 24 ms are used to fit a falling trend,
 before the user's pressure curve. At least three observations spanning 6 ms and
-a net drop of 0.04 are required, with pressure still falling. Lookahead is capped
-at half the estimated time to zero pressure. Steady light pressure, rebounds,
+a net drop of 0.04 are required, with pressure still falling. Native lookahead is
+capped at half the estimated time to zero pressure; Smooth Motion uses that
+estimate to qualify its early-stop alarm. Steady light pressure, rebounds,
 mouse/finger input, predicted samples, and late sensor corrections do not qualify.
 Pen-up/cancel discards the history; no inferred lift alters document input.
 

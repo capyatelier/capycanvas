@@ -645,6 +645,7 @@ impl NativeHost {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            ToolbarStamp { context: layer_ui::ToolbarContext },
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
             ProofPanel { action: Option<layer_ui::color_management::ProofAction> },
@@ -767,6 +768,7 @@ impl NativeHost {
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
             Query::ProofPanel {action} => {

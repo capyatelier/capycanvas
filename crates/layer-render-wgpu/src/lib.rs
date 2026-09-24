@@ -3337,12 +3337,19 @@ impl WgpuRasterizer {
 }
 
 impl WgpuRasterizer {
-    /// Source-asset cursor geometry for a host with a renderer on another thread.
-    /// This never downloads canvas pixels.
-    pub fn cursor_outlines(&self) -> std::collections::HashMap<AssetId, layer_render::TipOutline> {
+    /// Source assets and cursor geometry for a host with a separate render thread.
+    /// This shares immutable bytes and never downloads canvas pixels.
+    pub fn brush_sources(&self) -> std::collections::HashMap<AssetId, layer_render::BrushSource> {
         self.masks
             .iter()
-            .map(|mask| (mask.id.clone(), self.tip_outline(&mask.id).unwrap().clone()))
+            .map(|mask| (mask.id.clone(), layer_render::BrushSource {
+                image: layer_core::ProjectAsset {
+                    extent: [mask.extent[0], mask.extent[1]],
+                    format: PixelFormat::R8Unorm,
+                    bytes: mask.source.clone(),
+                },
+                outline: self.tip_outline(&mask.id).unwrap().clone(),
+            }))
             .collect()
     }
 }
@@ -3541,6 +3548,11 @@ impl CanvasRenderer for WgpuRasterizer {
             let [width, height, stride] = mask.extent;
             layer_render::mask_outline(width, height, stride, &mask.source)
         }))
+    }
+    fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
+        let mask = self.mask(asset).ok()?;
+        let [width, height, stride] = mask.extent;
+        Some(HostImage { width, height, stride, format: PixelFormat::R8Unorm, bytes: &mask.source })
     }
     type Error = GpuRasterError;
 

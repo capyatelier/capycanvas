@@ -96,7 +96,7 @@ pub(super) struct ToolbarView {
     pub id: Panel,
     pub strip: TileStrip,
     tiles: Vec<ToolbarTile>,
-    buttons: Vec<gtk::Button>,
+    items: Vec<toolbar_components::TileWidget>,
     style: TileStyle,
 }
 
@@ -509,18 +509,9 @@ impl Customization {
 
     pub fn dispose(&self) {
         self.collapse_panel();
+        self.toolbars.borrow_mut().clear();
         for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             popover.unparent();
-        }
-    }
-
-    // Popovers parented to a custom widget need the native layout hook, unlike
-    // those owned by a GtkMenuButton. Keep them placed on window reallocations.
-    pub fn present_popovers(&self) {
-        for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
-            if popover.is_visible() {
-                popover.present();
-            }
         }
     }
 
@@ -833,7 +824,7 @@ impl Customization {
                         id: config.id,
                         strip,
                         tiles: Vec::new(),
-                        buttons: Vec::new(),
+                        items: Vec::new(),
                         style: TileStyle::Small,
                     });
                     toolbars.len() - 1
@@ -846,23 +837,11 @@ impl Customization {
             toolbar.strip.clear();
             toolbar.strip.set_style(config.tile_style);
             toolbar.style = config.tile_style;
-            toolbar.buttons.clear();
-            for tile in config.tiles() {
-                let panel = config.id;
-                let id = tile.id;
-                let button = tile_button(w, config, tile);
-                // The wrapper stays targetable even when the command button is
-                // disabled, so an unavailable command can still be moved/removed.
-                let tile_root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                button.add_css_class("tile-button");
-                button.set_hexpand(true);
-                button.set_vexpand(true);
-                tile_root.append(&button);
-                w.install_panel_drag(&tile_root, DockItem::Tile { panel, tile: id });
-                w.install_context(&tile_root, ContextTarget::Tile { panel, tile: id });
-                toolbar.strip.append(&tile_root);
-                toolbar.buttons.push(button);
-            }
+            toolbar.items = config.tiles().iter().map(|tile| {
+                let item = toolbar_components::TileWidget::new(w, config, tile);
+                toolbar.strip.append(&item.root());
+                item
+            }).collect();
             toolbar.tiles = config.tiles().to_vec();
             toolbar.strip.set_tiles(config.tiles());
         }
@@ -876,9 +855,9 @@ impl Customization {
             .and_then(|bar| {
                 bar.tiles
                     .iter()
-                    .zip(&bar.buttons)
+                    .zip(&bar.items)
                     .find(|(tile, _)| tile.id == anchor.tile)
-                    .map(|(_, button)| button.clone())
+                    .map(|(_, item)| item.button())
             })
     }
     pub fn mark_drawer_origin(&self, origin: Option<(TileAnchor, Edge)>) {
@@ -888,9 +867,9 @@ impl Customization {
             } else {
                 bar.strip.remove_css_class("drawer-source");
             }
-            for (tile, button) in bar.tiles.iter().zip(&bar.buttons) {
+            for (tile, item) in bar.tiles.iter().zip(&bar.items) {
                 drawer_origin(
-                    button,
+                    &item.button(),
                     origin
                         .filter(|(a, _)| a.panel == bar.id && a.tile == tile.id)
                         .map(|(_, d)| d),
@@ -944,18 +923,9 @@ impl Customization {
         };
         for toolbar in self.toolbars.borrow().iter() {
             if let Some(view) = views.iter().find(|v| v.id == toolbar.id) {
-                for (button, tile) in toolbar.buttons.iter().zip(&view.tiles) {
-                    selected(button, tile.choice.selected);
-                    button.set_sensitive(tile.enabled);
-                    button.set_tooltip_text(Some(&tile.tooltip));
-                    if let Some(image) = button.child().and_then(|child| {
-                        if child.is::<gtk::Box>() { child.first_child() } else { Some(child) }
-                    }).and_downcast::<gtk::Image>() {
-                        let name = format!("layer-{}-symbolic", tile.choice.icon);
-                        if crate::icons::name(&image).as_deref() != Some(&name) {
-                            crate::icons::set(&image, Some(&name));
-                        }
-                    }
+                // The owned panel projection releases the session before native callbacks.
+                for (item, tile) in toolbar.items.iter().zip(&view.tiles) {
+                    item.refresh(w, tile, tile.component.as_ref());
                 }
             }
         }
@@ -1131,7 +1101,7 @@ impl Customization {
             self.toolbar_dialog.close();
         }
         self.updating.set(false);
-        self.present_popovers();
+        w.present_popovers();
     }
 }
 

@@ -164,7 +164,10 @@ try:
                 event(tool, 11, words(32768))
                 event(tool, 8, words(serial))
             elif contact["pen"] == "up":
+                event(tool, 11, words(0))
                 event(tool, 9)
+            elif contact["pen"] == "button":
+                event(tool, 17, words(serial, contact["button"], int(contact["down"])))
             elif contact["pen"] == "leave":
                 event(tool, 7)
                 near = False

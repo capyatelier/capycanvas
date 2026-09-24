@@ -90,6 +90,22 @@ pub struct Input {
 
 pub fn install(workspace: &Rc<Workspace>) {
     let input = workspace.input.clone();
+    // GestureSingle resets an active sequence on a different button, and
+    // GestureStylus emits down/up even for that rejected event. Stop tablet
+    // side buttons before either painting or mouse-pan gestures can see them.
+    let pen_buttons = gtk::EventControllerLegacy::new();
+    pen_buttons.set_propagation_phase(gtk::PropagationPhase::Capture);
+    pen_buttons.connect_event(|_, event| {
+        if event.downcast_ref::<gdk::ButtonEvent>().is_some_and(|e| e.button() != 1)
+            && (event.device_tool().is_some()
+                || event.device().is_some_and(|d| d.source() == gdk::InputSource::Pen))
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    workspace.area.add_controller(pen_buttons);
     let stylus = gtk::GestureStylus::new();
     stylus.set_stylus_only(false); // GTK provides one path for pen and mouse.
     stylus.set_button(1);

@@ -38,6 +38,8 @@ class AndroidInteractionTest {
     private var density = 1f
     private var downAt = 0L
     private var contact = false
+    private var popupInput = false
+    private var inputWindow: View? = null
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
     private var mouseButton = MotionEvent.BUTTON_PRIMARY
@@ -59,12 +61,24 @@ class AndroidInteractionTest {
     private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
         if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node
         else node.children.firstNotNullOfOrNull { find(it, tag) }
+    private fun tagged(tag: String): Pair<ViewRootForTest, SemanticsNode>? {
+        find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { return owner to it }
+        return android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
+            findView<ViewRootForTest>(view)?.let { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { root to it } }
+        }
+    }
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
-        instrumentation.runOnMainSync { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot }
+        instrumentation.runOnMainSync {
+            tagged(tag)?.let { (root,node) ->
+                val origin = IntArray(2); val base = IntArray(2)
+                root.view.getLocationOnScreen(origin); owner.view.getLocationOnScreen(base)
+                result = node.boundsInRoot.translate(Offset((origin[0]-base[0]).toFloat(), (origin[1]-base[1]).toFloat()))
+            }
+        }
         return checkNotNull(result) { "Missing $tag" }
     }
-    private fun exists(tag: String) = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag) != null
+    private fun exists(tag: String) = tagged(tag) != null
     private fun snapshot() = host.snapshot!!
     private fun state() = snapshot().getJSONObject("state")
     private fun workspace() = state().getJSONObject("workspace").toString()
@@ -114,7 +128,21 @@ class AndroidInteractionTest {
                 if (!accepted && action == MotionEvent.ACTION_DOWN) contact = false
                 assertTrue("System accepts ${MotionEvent.actionToString(action)} at $next (screen ${coords[0].x}, ${coords[0].y}; origin ${location.toList()}; rotation ${owner.view.display.rotation})", accepted)
             }
-            else instrumentation.runOnMainSync { motion.offsetLocation(-location[0].toFloat(), -location[1].toFloat()); owner.view.dispatchTouchEvent(motion) }
+            else instrumentation.runOnMainSync {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    inputWindow = owner.view
+                    if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
+                        findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "brush-slider-preview") } != null
+                    }?.let { view ->
+                        val p = IntArray(2); view.getLocationOnScreen(p)
+                        if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
+                        else MotionEvent.obtain(motion).also { outside -> outside.action = MotionEvent.ACTION_OUTSIDE; view.dispatchTouchEvent(outside); outside.recycle() }
+                    }
+                }
+                val target = inputWindow ?: owner.view; val p = IntArray(2); target.getLocationOnScreen(p)
+                motion.offsetLocation(-p[0].toFloat(), -p[1].toFloat()); target.dispatchTouchEvent(motion)
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) inputWindow = null
+            }
         } finally { motion.recycle() }
         if (systemInput && action == MotionEvent.ACTION_MOVE) {
             // Android resamples a lone high-velocity event beyond its supplied
@@ -165,6 +193,9 @@ class AndroidInteractionTest {
     }
     @Before fun ready() {
         CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "interaction-workspace-tests/${java.util.UUID.randomUUID()}").absolutePath
+        // A previous canvas tap can leave a recovery offer that steals window
+        // focus. Isolate drawing recovery alongside the workspace fixture.
+        RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
             activity=it
@@ -201,7 +232,7 @@ class AndroidInteractionTest {
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 recovery.delete()
             } }
-            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null }
+            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null; RecoveryController.directoryForTest = null }
         }
     }
 
@@ -1585,4 +1616,181 @@ class AndroidInteractionTest {
             waitFor("Secondary click opens Zen menu") { popupCount()==1 }; back()
         } finally { mouseButton=MotionEvent.BUTTON_PRIMARY }
     }
+    private fun switchToolbarWorkspace(id: String) {
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:$id")) }
+        waitFor("switch $id", 30000) { host.workspaceManager?.let { it.optString("id") == "builtin:workspace:$id" && !it.optBoolean("busy") } == true }
+        settle()
+    }
+    private fun toolbarComponent(kind: String): Pair<String, Int> = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+        .firstNotNullOf { panel -> panel.getJSONObject("content").optJSONArray("tiles")?.objects()?.firstOrNull { it.getJSONObject("control").getString("kind") == kind }
+            ?.let { panel.getString("id") to it.getInt("id") } }
+    private fun captureToolbar(name: String) {
+        val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/toolbar-components").apply { mkdirs() }
+        instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+            File(directory, "$name.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
+        }
+    }
+    @Test fun toolbarComponentsAcrossDevicesAndLayouts() {
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        switchToolbarWorkspace("photographer"); invoke("brush")
+        waitFor("inline size") { exists("number-value-toolbar-size") }
+        val original = bounds("number-value-toolbar-size")
+        for (value in listOf(.5f, 31.9f, 32f, 2048f)) {
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to value))
+            assertEquals("Fixed readout width", original, bounds("number-value-toolbar-size"))
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); invoke("rectangle_select")
+            for ((i, device) in pointerTools.withIndex()) {
+                tool = device; tap(bounds("toolbar-segment-selection-mode-${i + 1}").center)
+                val command = listOf("selection_add", "selection_subtract", "selection_intersect")[i]
+                waitFor("$command selected") { state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("selected") } }
+            }
+            captureToolbar("photo-$theme")
+        }
+        invoke("auto_select"); waitFor("list choice remains") { exists("toolbar-choice-selection-source") }
+        val options = toolbarComponent("tool_options")
+        for (edge in listOf("top", "bottom", "left", "right")) for (alignment in listOf("start", "center", "end")) {
+            action(obj("type" to "move_panel", "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density)), "panel" to options.first, "target" to obj("kind" to "compact_edge", "edge" to edge, "alignment" to alignment)))
+            assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("bands").objects().any { it.optString("alignment") == alignment && it.getString("edge") == edge })
+        }
+        action(obj("type" to "move_panel", "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density)), "panel" to options.first, "target" to obj("kind" to "edge", "edge" to "left", "outer" to true)))
+        invoke("brush"); captureToolbar("vertical-options")
+        switchToolbarWorkspace("painter"); invoke("brush")
+        val size = toolbarComponent("brush_size_slider")
+        for (device in pointerTools) {
+            tool = device
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 5f))
+            val slider = bounds("component-slider-${size.second}")
+            val start = Offset(slider.center.x, slider.top + slider.height * .8f)
+            val end = Offset(slider.center.x, slider.top + slider.height * .2f)
+            event(MotionEvent.ACTION_DOWN, start); SystemClock.sleep(30)
+            event(MotionEvent.ACTION_MOVE, end); SystemClock.sleep(80); event(MotionEvent.ACTION_UP); settle()
+            waitFor("slider $device") { state().getJSONObject("brush").number("diameter") > 5f }
+        }
+        captureToolbar("sketch-sliders")
+        val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
+        for (device in pointerTools) for (edge in listOf("left", "right", "top", "bottom")) for (alignment in listOf("start", "center", "end")) {
+            tool = device
+            val workspaceBounds = bounds("workspace")
+            action(obj("type" to "move_panel", "panel" to size.first, "viewport" to viewport,
+                "target" to obj("kind" to "float", "position" to JSONArray(listOf(workspaceBounds.width / density / 2 - 120, workspaceBounds.height / density / 2 - 120)))))
+            val top = bounds("title-bar").bottom
+            val horizontal = edge == "top" || edge == "bottom"
+            val along = when (alignment) {
+                "start" -> (if (horizontal) workspaceBounds.left else top) + 70 * density
+                "end" -> (if (horizontal) workspaceBounds.right else workspaceBounds.bottom) - 70 * density
+                else -> if (horizontal) workspaceBounds.center.x else (top + workspaceBounds.bottom) / 2
+            }
+            val destination = if (horizontal) Offset(along, if (edge == "top") top + 3 * density else workspaceBounds.bottom - 3 * density)
+                else Offset(if (edge == "left") workspaceBounds.left + 3 * density else workspaceBounds.right - 3 * density, along)
+            event(MotionEvent.ACTION_DOWN, bounds("ribbon-grip-${size.first}").center)
+            event(MotionEvent.ACTION_MOVE, workspaceBounds.center); settle()
+            event(MotionEvent.ACTION_MOVE, destination); settle()
+            val target = host.workspaceGeometry?.hint?.getJSONObject("target") ?: run { captureToolbar("missing-target"); error("Missing $device/$edge/$alignment target; focus=${owner.view.hasWindowFocus()} dragging=${workspaceDragging()} geometry=${host.workspaceGeometry} grip=${bounds("ribbon-grip-${size.first}")} destination=$destination") }
+            assertEquals("compact_edge", target.getString("kind")); assertEquals(edge, target.getString("edge")); assertEquals(alignment, target.getString("alignment"))
+            event(MotionEvent.ACTION_UP); settle()
+            assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("bands").objects().any { it.optString("alignment") == alignment && it.getString("edge") == edge })
+            invoke("undo_workspace")
+            assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("floating").length() > 0)
+            invoke("redo_workspace")
+        }
+
+    }
+
+    @Test fun toolbarEditorsAndOverflow() {
+        switchToolbarWorkspace("photographer")
+        action(obj("type" to "invoke", "command" to "brush"))
+        val options = toolbarComponent("tool_options")
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        tap(bounds("number-value-toolbar-size").center)
+        waitFor("inline toolbar editor") { exists("number-Brush size") }
+        tap(bounds("workspace").center)
+        waitFor("outside tap finishes editor") { !exists("number-Brush size") }
+        tap(bounds("toolbar-more-${options.second}").center)
+        waitFor("complete tool drawer") { exists("tool-drawer") }; settle()
+        captureToolbar("options-drawer")
+        customize(obj("type" to "close_expanded"))
+        val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
+        action(obj("type" to "move_panel", "panel" to options.first, "viewport" to viewport,
+            "target" to obj("kind" to "edge", "edge" to "left", "outer" to true)))
+        action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048))
+        for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
+            customize(obj("type" to "set_tile_style", "panel" to options.first, "style" to style))
+            waitFor("vertical field $style") { exists("toolbar-setting-size") }
+            captureToolbar("options-$style")
+        }
+        tap(bounds("toolbar-setting-size").center); settle()
+        captureToolbar("vertical-value-popup")
+        action(obj("type" to "invoke", "command" to "eraser")); settle()
+        assertTrue(owner.view.hasWindowFocus())
+        switchToolbarWorkspace("painter"); action(obj("type" to "invoke", "command" to "brush"))
+        val size = toolbarComponent("brush_size_slider")
+        popupInput = true
+        for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = device
+            val slider = bounds("component-slider-${size.second}")
+            val mark = slider.center - Offset(0f, 23*density)
+            val near = mark + Offset(0f, 16*density)
+            val far = mark + Offset(0f, 24*density)
+            tap(mark)
+            waitFor("tap retains stamp $device") { exists("brush-slider-preview") }
+            val saved = state().getJSONObject("brush").number("diameter")
+            tap(bounds("slider-bookmark").center); settle()
+            captureToolbar("stamp-$device")
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048f))
+            captureToolbar("stamp-large-$device")
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 3f))
+            tap(far); settle()
+            assertTrue("Distant tap does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals("Nearby tap recalls exact bookmark $device", saved, state().getJSONObject("brush").number("diameter"), .001f)
+            event(MotionEvent.ACTION_DOWN, far)
+            event(MotionEvent.ACTION_MOVE, near); settle()
+            event(MotionEvent.ACTION_UP); settle()
+            assertTrue("Dragging near bookmark does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals(saved, state().getJSONObject("brush").number("diameter"), .001f)
+            captureToolbar("bookmark-centered-$device")
+            tap(bounds("slider-bookmark").center); settle()
+            tap(bounds("workspace").center)
+            waitFor("outside tap dismisses stamp") { !exists("brush-slider-preview") }
+            event(MotionEvent.ACTION_DOWN, slider.center)
+            event(MotionEvent.ACTION_MOVE, slider.center - Offset(0f,20*density)); settle()
+            waitFor("drag shows stamp") { exists("brush-slider-preview") }
+            event(MotionEvent.ACTION_UP); settle()
+            waitFor("lift dismisses stamp") { !exists("brush-slider-preview") }
+            val value = state().getJSONObject("brush").number("diameter")
+            event(MotionEvent.ACTION_DOWN, bounds("slider-cap-${size.second}").center)
+            SystemClock.sleep(700)
+            event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
+            assertEquals("Held cap reorders without editing", value, state().getJSONObject("brush").number("diameter"), .01f)
+            event(MotionEvent.ACTION_CANCEL); settle()
+        }
+
+        for (edge in listOf("left", "right", "top", "bottom")) {
+            action(obj("type" to "move_panel", "panel" to size.first, "viewport" to viewport,
+                "target" to obj("kind" to "compact_edge", "edge" to edge, "alignment" to "center")))
+            settle()
+            for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = device
+                tap(bounds("component-slider-${size.second}").center)
+                waitFor("edge preview $edge/$device") { exists("brush-slider-preview") }; settle()
+                val toolbar = bounds("panel-body-${size.first}")
+                val preview = bounds("brush-slider-preview")
+                val gap = when (edge) {
+                    "left" -> preview.left-toolbar.right
+                    "right" -> toolbar.left-preview.right
+                    "top" -> preview.top-toolbar.bottom
+                    else -> toolbar.top-preview.bottom
+                } / density
+                assertTrue("Preview clears toolbar $edge/$device: $gap", gap >= 7f && gap <= 16f)
+                captureToolbar("preview-$edge-$device")
+                tap(bounds("workspace").center)
+                waitFor("edge preview dismissed") { !exists("brush-slider-preview") }
+            }
+        }
+
+    }
+
 }

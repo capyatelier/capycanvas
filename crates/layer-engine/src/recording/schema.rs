@@ -1,4 +1,4 @@
-use crate::{InstantFeedbackConfig, SampleFlags, ToolKind};
+use crate::{InstantFeedbackConfig, PredictionAlgorithm, SampleFlags, ToolKind};
 use layer_core::{Point, StrokePoint};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -66,7 +66,8 @@ impl From<StrokePoint> for Sample {
 }
 
 // Version 2 recordings reserve an enum discriminant after the three switches.
-// Decode that old slot only here. Runtime config and settings have one predictor.
+// Keep the tuple layout and Optimized slot (3). Retired values, including
+// Previous (4), migrate to the supported predictor without retaining old code.
 mod config_wire {
     use super::*;
     pub fn serialize<S: serde::Serializer>(
@@ -80,7 +81,7 @@ mod config_wire {
             value.enabled,
             value.use_platform_prediction,
             value.use_engine_prediction,
-            1u32,
+            3u32,
             value.timestamp_resolution_micros,
             value.finalization_lag_micros,
             value.prediction_horizon_micros,
@@ -96,13 +97,23 @@ mod config_wire {
         deserializer: D,
     ) -> Result<InstantFeedbackConfig, D::Error> {
         if deserializer.is_human_readable() {
-            return InstantFeedbackConfig::deserialize(deserializer);
+            let mut value = serde_json::Value::deserialize(deserializer)?;
+            // Legacy JSON captures named experimental predictors that have
+            // since been retired; retain the same default migration as v2.
+            if let Some(fields) = value.as_object_mut()
+                && fields
+                    .get("prediction_algorithm")
+                    .is_some_and(|v| !matches!(v.as_str(), Some("optimized")))
+            {
+                fields.remove("prediction_algorithm");
+            }
+            return serde_json::from_value(value).map_err(serde::de::Error::custom);
         }
         let (
             enabled,
             use_platform_prediction,
             use_engine_prediction,
-            retired,
+            algorithm,
             timestamp_resolution_micros,
             finalization_lag_micros,
             prediction_horizon_micros,
@@ -125,13 +136,15 @@ mod config_wire {
             f32,
             f32,
         ) = Deserialize::deserialize(deserializer)?;
-        if retired > 2 {
-            return Err(serde::de::Error::custom("invalid version 2 predictor slot"));
-        }
+        let prediction_algorithm = match algorithm {
+            0..=4 => PredictionAlgorithm::Optimized,
+            _ => return Err(serde::de::Error::custom("invalid version 2 predictor slot")),
+        };
         Ok(InstantFeedbackConfig {
             enabled,
             use_platform_prediction,
             use_engine_prediction,
+            prediction_algorithm,
             timestamp_resolution_micros,
             finalization_lag_micros,
             prediction_horizon_micros,
@@ -141,5 +154,79 @@ mod config_wire {
             minimum_prediction_speed_px_per_second,
             corner_suppression,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predictor_slot_preserves_optimized_and_migrates_retired_captures() {
+        let config = InstantFeedbackConfig {
+            prediction_horizon_micros: 23_000,
+            timestamp_resolution_micros: 1,
+            use_platform_prediction: false,
+            ..Default::default()
+        };
+        let transform = [1., 0., 0., 1., 0., 0.];
+        for slot in 0u32..=5 {
+            // Freeze the original v2 tuple, independent of the runtime struct.
+            let wire = (
+                (
+                    true, false, true, slot, 1u32, 8_000u32, 23_000u32, 96f32, 1f32, 1.5f32, 12f32,
+                    1f32,
+                ),
+                transform,
+            );
+            let bytes = bincode::serde::encode_to_vec(wire, bincode::config::standard()).unwrap();
+            let result =
+                bincode::serde::decode_from_slice::<Policy, _>(&bytes, bincode::config::standard());
+            if slot == 5 {
+                assert!(result.is_err());
+                continue;
+            }
+            let (policy, used) = result.unwrap();
+            assert_eq!(used, bytes.len());
+            assert_eq!(policy.transform, transform);
+            assert_eq!(policy.config, config);
+            if slot == 3 {
+                assert_eq!(
+                    bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap(),
+                    bytes
+                );
+            }
+            let current = Policy { config, transform };
+            assert_eq!(
+                bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap(),
+                bincode::serde::encode_to_vec(current, bincode::config::standard()).unwrap()
+            );
+            let json = serde_json::to_value(policy).unwrap();
+            assert_eq!(
+                serde_json::from_value::<Policy>(json.clone())
+                    .unwrap()
+                    .config,
+                policy.config
+            );
+            let mut legacy = json;
+            legacy["config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("prediction_algorithm");
+            assert_eq!(
+                serde_json::from_value::<Policy>(legacy).unwrap().config,
+                config
+            );
+        }
+        let mut legacy = serde_json::to_value(Policy { config, transform }).unwrap();
+        for retired in ["previous", "trajectory"] {
+            legacy["config"]["prediction_algorithm"] = retired.into();
+            assert_eq!(
+                serde_json::from_value::<Policy>(legacy.clone())
+                    .unwrap()
+                    .config,
+                config
+            );
+        }
     }
 }

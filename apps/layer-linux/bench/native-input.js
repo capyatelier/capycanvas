@@ -220,6 +220,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                         [event.point[0] - previous[0], event.point[1] - previous[1]]);
                     previous = event.point;
                 }
+                if (event.wheel) send('NotifyPointerAxisDiscrete', '(ui)', event.wheel);
                 if ('down' in event) send('NotifyPointerButton', '(ib)', [event.button ?? 272, event.down]);
             }
             return GLib.SOURCE_CONTINUE;

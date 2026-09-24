@@ -34,6 +34,9 @@ pub struct NumericControl {
     pub step: f64,
     /// Smallest stored increment, separate from plus/minus stepping.
     pub resolution: f64,
+    /// Above this value edits use whole units; formatting never mutates state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integer_above: Option<f64>,
     pub digits: u32,
     /// Displayed value = stored value * scale. E.g. opacity uses 100 and "%".
     pub scale: f64,
@@ -60,6 +63,7 @@ impl NumericControl {
             soft_min: min,
             soft_max: max,
             step,
+            integer_above: None,
             resolution: 10f64.powi(-(digits as i32)),
             digits,
             scale: 1.0,
@@ -85,6 +89,7 @@ impl NumericControl {
     pub fn brush_size() -> Self {
         Self {
             mapping: NumericMapping::Log,
+            integer_above: Some(32.),
             ..Self::number(0.5, 2048.0, 1.0, 1).unit("px")
         }
     }
@@ -129,6 +134,7 @@ impl NumericControl {
             || self.step <= 0.0
             || self.resolution <= 0.0
             || self.scale <= 0.0
+            || self.integer_above.is_some_and(|v| !v.is_finite())
             || self.digits > 9
             || self.unit.len() > 16
         {
@@ -202,6 +208,9 @@ impl NumericControl {
         if !formatting {
             resolved =
                 ((resolved / self.resolution).round() * self.resolution).clamp(self.min, self.max);
+            if self.integer_above.is_some_and(|limit| resolved > limit) {
+                resolved = resolved.round().clamp(self.min, self.max);
+            }
         }
         let shown = if resolved == 0.0 {
             0.0
@@ -210,7 +219,8 @@ impl NumericControl {
         };
         let edit = format!("{:.*}", self.digits as usize, shown);
         let text = if let Some(labels) = &self.endpoint_labels
-            && (resolved == self.min || resolved == self.max) {
+            && (resolved == self.min || resolved == self.max)
+        {
             labels[usize::from(resolved == self.max)].clone()
         } else if self.unit.is_empty() {
             edit.clone()
@@ -226,6 +236,62 @@ impl NumericControl {
                 / (self.mapped(self.soft_max) - self.mapped(self.soft_min)))
             .clamp(0.0, 1.0),
         })
+    }
+    /// Short toolbar readout. Omit fractional digits at three digits and above;
+    /// the editable expression and stored value retain their full precision.
+    pub fn compact_text(&self, value: f64) -> String {
+        let text = self.compact_value(value);
+        if self.unit.is_empty() {
+            text
+        } else {
+            format!("{text} {}", self.unit)
+        }
+    }
+    /// Representative widest readouts, including signs, fractional values just
+    /// below a digit/precision boundary, endpoint words, and units. Hosts measure
+    /// these with their native font to reserve a stable input footprint.
+    pub fn width_samples(&self, compact: bool) -> Vec<String> {
+        let mut values = vec![self.min, self.max];
+        if self.digits > 0 {
+            values.extend([
+                ((self.max * self.scale).ceil() - 0.1) / self.scale,
+                ((self.min * self.scale).floor() + 0.1) / self.scale,
+                99.9 / self.scale,
+                -99.9 / self.scale,
+            ]);
+            if let Some(limit) = self.integer_above {
+                values.push(limit - 0.1 / self.scale);
+            }
+        }
+        values
+            .into_iter()
+            .filter(|v| *v >= self.min && *v <= self.max)
+            .filter_map(|v| self.resolve(v, NumericOperation::Format).ok())
+            .map(|v| {
+                if compact {
+                    self.compact_text(v.value)
+                } else {
+                    v.text
+                }
+            })
+            .collect()
+    }
+    /// Value only, for hosts that present the unit separately.
+    pub fn compact_value(&self, value: f64) -> String {
+        let shown = value * self.scale;
+        let digits = if (shown * 10.).round().abs() >= 1000.
+            || self.integer_above.is_some_and(|v| value > v)
+        {
+            0
+        } else {
+            self.digits.min(1)
+        };
+        let text = format!("{:.*}", digits as usize, shown);
+        if digits > 0 {
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            text
+        }
     }
     fn expression(&self, source: &str) -> Result<f64, String> {
         if source.len() > 256 {
@@ -303,16 +369,28 @@ mod tests {
         let mut spec = NumericControl::percent();
         spec.digits = 0;
         spec.endpoint_labels = Some(["White".into(), "Color".into()]);
-        for (position, label, edit) in [(0.,"White","0"),(0.5,"50 %","50"),(1.,"Color","100")] {
-            let result = spec.resolve(0., NumericOperation::Position {position}).unwrap();
+        for (position, label, edit) in [
+            (0., "White", "0"),
+            (0.5, "50 %", "50"),
+            (1., "Color", "100"),
+        ] {
+            let result = spec
+                .resolve(0., NumericOperation::Position { position })
+                .unwrap();
             assert_eq!(result.value, position);
             assert_eq!(result.text, label);
             assert_eq!(result.edit, edit);
             assert_eq!(expr(&spec, &result.edit).unwrap().value, position);
         }
-        let json=serde_json::to_string(&spec).unwrap();
-        assert_eq!(serde_json::from_str::<NumericControl>(&json).unwrap(),spec);
-        assert!(!NumericControl::percent().resolve(0.,NumericOperation::Format).unwrap().text.contains("White"));
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(serde_json::from_str::<NumericControl>(&json).unwrap(), spec);
+        assert!(
+            !NumericControl::percent()
+                .resolve(0., NumericOperation::Format)
+                .unwrap()
+                .text
+                .contains("White")
+        );
     }
 
     #[test]
@@ -451,5 +529,43 @@ mod tests {
                     .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+    #[test]
+    fn size_rounds_edits_above_32_and_compact_readouts_preserve_values() {
+        let spec = NumericControl::brush_size();
+        for (value, expected) in [
+            (31.8, 31.8),
+            (32., 32.),
+            (32.2, 32.),
+            (32.6, 33.),
+            (517.6, 518.),
+            (2047.9, 2048.),
+        ] {
+            let result = spec
+                .resolve(value, NumericOperation::Value { value })
+                .unwrap();
+            assert!((result.value - expected).abs() < 0.0001);
+            assert_eq!(
+                spec.resolve(value, NumericOperation::Format).unwrap().value,
+                value
+            );
+        }
+        for (value, expected) in [
+            (9.5, "9.5"),
+            (32., "32"),
+            (99., "99"),
+            (999.2, "999"),
+            (2048., "2048"),
+        ] {
+            assert_eq!(spec.compact_text(value), format!("{expected} px"));
+            assert_eq!(spec.compact_value(value), expected);
+        }
+        assert_eq!(NumericControl::percent().compact_text(1.), "100 %");
+        assert_eq!(NumericControl::percent().compact_text(0.999), "99.9 %");
     }
 }

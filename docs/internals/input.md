@@ -33,6 +33,12 @@ navigation or a native control. Tool selection, pressure response and navigation
 rules remain shared. Native widgets retain their own focus, text editing and
 accessibility behavior.
 
+Canvas pen side buttons have no action. Pressing or releasing them must not
+interrupt, finish, or restart a tip/eraser stroke, or start mouse navigation.
+Tip contact still begins and ends normally while a side button stays held.
+Adapters filter native button transitions before gesture arbitration and preserve
+tip/eraser identity; mouse navigation buttons keep their existing behavior.
+
 Native control pickup follows the [drag and reorder convention](../ui/drag-and-reorder.md).
 Preserve actual device identity: pen requires the touch-style hold before list
 reordering, mouse does not, and every device must hold before reordering a tile.

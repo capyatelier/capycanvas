@@ -399,7 +399,12 @@ class AndroidTitleBarTest {
                     waitFor("${menu.getString("id")} popup focus") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
                     val popup = screenBounds("workspace-menu")
                     assertEquals("Menu starts under its own label", anchor.left, popup.left, 2 * density)
-                    assertTrue("Menu is below its label", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    val frame = android.graphics.Rect()
+                    instrumentation.runOnMainSync { checkNotNull(node("title-bar")).first.view.getWindowVisibleDisplayFrame(frame) }
+                    if (popup.height <= frame.bottom - anchor.bottom - 48 * density)
+                        assertTrue("${menu.getString("id")} is below its label: $popup / $anchor", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    else
+                        assertTrue("Tall menus fit the viewport: $popup / $frame", popup.top >= frame.top - density && popup.bottom <= frame.bottom + density)
                     if (menu.getString("id") == "select") instrumentation.runOnMainSync {
                         fun row(label: String): SemanticsNode? {
                             fun find(n: SemanticsNode): SemanticsNode? =

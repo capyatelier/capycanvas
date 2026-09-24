@@ -11,6 +11,7 @@ from flicker_metrics import load_trace
 from history_metrics import paired_oscillations, paired_correction_smoothness, braking_exposure, validate_pair
 from retraction_metrics import retraction_metrics
 from stability_metrics import regression_snapshot
+from speed_metrics import speed_weighted_metrics
 
 
 def read_recording(path):
@@ -48,6 +49,7 @@ def score(frames, contacts):
                   correction_smoothness=correction[0], braking=braking_exposure(frames, contacts, flashes))
     signals = {**bs, **{'retreat_'+k:v for k,v in rs.items()},
                **{'oscillation_'+k:v for k,v in os[0].items()}, **{'correction_'+k:v for k,v in cs[0].items()}}
+    result['speed_weighted'] = speed_weighted_metrics(signals)
     return result, signals
 
 
@@ -61,12 +63,13 @@ def analyze(records, frames_path, output, before_path=None):
     (output/'regression-snapshot.json').write_text(json.dumps(snapshot, indent=2)+'\n')
     with (output/'severity.csv').open('w') as f:
         writer=csv.writer(f);writer.writerow(['category','metric','unit','lower','upper','windows','seconds'])
-        for category, row in result['balance'].items():
+        groups = {**result['balance'], **{'retreat / '+k:v for k,v in result['retraction'].items()}}
+        for category, row in groups.items():
             for key, values in row.items():
                 if not isinstance(values,dict) or 'severity_windows' not in values:continue
                 edges=[0,*values['severity_bounds'],float('inf')]
                 for lo,hi,n,seconds in zip(edges,edges[1:],values['severity_windows'],values['severity_seconds']):
-                    writer.writerow([category,key,'ms' if key.startswith('behind_ms') else 'px',lo,hi,n,seconds])
+                    writer.writerow([category,key,'ms' if key.startswith('behind_ms') or key.endswith('_ms') else 'px',lo,hi,n,seconds])
     if before_path:
         before=load_trace(before_path, contacts);validate_pair(before,frames)
         old,old_signals=score(before,contacts)

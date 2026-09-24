@@ -20,6 +20,14 @@ pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, Selecti
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
+/// Immutable brush source shared across a render-worker boundary. Pixel storage
+/// is reference-counted; cursor geometry and UI stamps use the same generation.
+#[derive(Clone, Debug)]
+pub struct BrushSource {
+    pub image: layer_core::ProjectAsset,
+    pub outline: TipOutline,
+}
+
 /// Display-only overlay primitive in logical viewport pixels.
 /// Kept separate from brush dabs: cursors never touch document textures.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -534,6 +542,10 @@ pub trait CanvasRenderer {
     fn tip_outline(&self, _asset: &AssetId) -> Option<&TipOutline> {
         None
     }
+    /// Immutable R8 brush source for small UI stamps; never reads back the GPU.
+    fn tip_mask(&self, _asset: &AssetId) -> Option<HostImage<'_>> {
+        None
+    }
 
     fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error>;
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
@@ -689,8 +701,11 @@ mod tests {
     }
 
     #[test]
-    fn brush_contact_layout_is_a_gpu_friendly_80_bytes() {
-        assert_eq!(std::mem::size_of::<Dab>(), 80);
+    fn brush_contact_layout_includes_swept_pose_and_sensor_values() {
+        assert_eq!(std::mem::size_of::<Dab>(), 128);
         assert_eq!(std::mem::align_of::<Dab>(), 4);
+        assert_eq!(std::mem::offset_of!(Dab, previous), 80);
+        assert_eq!(std::mem::offset_of!(Dab, contact), 96);
+        assert_eq!(std::mem::offset_of!(Dab, previous_contact), 112);
     }
 }

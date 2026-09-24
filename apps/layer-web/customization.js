@@ -1,3 +1,4 @@
+import { createToolbarComponent } from "./toolbar-components.js";
 import { colorButton } from './color-controls.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
@@ -96,7 +97,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     node.style.top = `${Math.max(6, Math.min(anchor[1], innerHeight - r.height - 6))}px`;
   }
   function contextTarget(node) {
-    if (node.closest("input,select,textarea,[contenteditable=true],.scroll-thumb")) return null;
+    if (node.closest("input,select,textarea,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
     return node.closest("[data-context]");
   }
   workspace.addEventListener("contextmenu", (e) => {
@@ -209,9 +210,41 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     fields.set(row, sync); sync(); return row;
   }
   function discardFields(node) {
+    node.disposeComponent?.();
+    for (const component of node.querySelectorAll("[data-toolbar-component]")) component.disposeComponent?.();
     for (const row of fields.keys()) if (node.contains(row)) fields.delete(row);
     node.disposeEditor?.();
     for(const row of node.querySelectorAll("[data-control]")) row.disposeEditor?.();
+  }
+  function tileWidget(panel, view, tile) {
+    if (tile.component) return createToolbarComponent({ app, tile, view, element, button, icon, dispatch, draggable, target, place, panel });
+    const root = element("div", "tile-button tool-tile"); root.dataset.tile = tile.id;
+    const item = { kind: "tile", panel, tile: tile.id };
+    if (tile.control.kind === "divider") {
+      root.classList.add("tile-divider"); root.setAttribute("role", "separator");
+    } else {
+      const node = button("", () => {
+        const r = root.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
+        dispatch({ type: "activate_tile", panel, tile: tile.id });
+      });
+      if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
+      node.append(icon(tile.icon));
+      if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
+      root.append(node);
+    }
+    target(root, item); draggable(root, item); refreshTile(root, tile); return root;
+  }
+  function refreshTile(root, tile) {
+    if (!root) return;
+    if (root.updateComponent) { root.updateComponent(tile); return; }
+    const node = root.querySelector('button'); if (!node) return;
+    node.disabled = !tile.enabled; node.title = tile.tooltip;
+    node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
+    const glyph = node.querySelector('svg'); if (glyph?.dataset.asset !== tile.icon) glyph?.replaceWith(icon(tile.icon));
+  }
+  function layoutTile(tile, bounds, axis) {
+    tile.hidden = !bounds || bounds.width <= 0 || bounds.height <= 0;
+    if (!tile.hidden) { place(tile, bounds); tile.layoutComponent?.(bounds, axis); }
   }
   function refreshPanels() {
     views.clear();
@@ -223,7 +256,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       }
       // Color/brush updates also publish this region. Retain unchanged panel
       // DOM instead of rewriting attributes and forcing style work on every pick.
-      const viewKey = JSON.stringify([config.content.kind, view]);
+      const viewKey = menuKey([config.content.kind, view, state().theme]);
       if (panelViewKeys.get(panel) === viewKey) continue;
       panelViewKeys.set(panel, viewKey);
       const toolbar = config.content.kind === "toolbar";
@@ -232,7 +265,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         const key = JSON.stringify([config.content.tiles, view.tile_style]);
         if (panel.dataset.tiles !== key) {
           panel.dataset.tiles = key;
-          const old = panel.querySelector(".toolbar-controls"); if (old) tileResize.unobserve(old);
+          const old = panel.querySelector(".toolbar-controls"); if (old) { tileResize.unobserve(old); discardFields(old); }
           const strip = element("div", "toolbar-controls");
           strip.dataset.panel = config.id;
           strip.dataset.tileStyle = view.tile_style;
@@ -240,38 +273,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           strip.dataset.labeled = String(view.tile_label_lines > 0);
           strip.style.setProperty("--tile-label-lines", view.tile_label_lines);
           strip.style.setProperty("--tile-label-weight", view.tile_label_bold ? 700 : 400);
-          for (const tile of view.tiles) {
-            // Like GTK, drag/context target surrounds the command button. A
-            // disabled command remains movable and removable.
-            const tileRoot = element("div", "tile-button tool-tile");
-            tileRoot.dataset.tile = tile.id;
-            if(tile.control.kind === "divider") {
-              tileRoot.classList.add("tile-divider"); tileRoot.setAttribute("role","separator");
-              target(tileRoot,{kind:"tile",panel:config.id,tile:tile.id});
-              strip.append(draggable(tileRoot,{kind:"tile",panel:config.id,tile:tile.id})); continue;
-            }
-            const node = button("", () => {
-              const r = tileRoot.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
-              dispatch({ type: "activate_tile", panel: config.id, tile: tile.id });
-            });
-            if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
-            const glyph = icon(tile.icon);
-            node.append(glyph);
-            if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
-            tileRoot.append(node);
-            target(tileRoot, { kind: "tile", panel: config.id, tile: tile.id });
-            strip.append(draggable(tileRoot, { kind: "tile", panel: config.id, tile: tile.id }));
-          }
+          for (const tile of view.tiles) strip.append(tileWidget(config.id, view, tile));
           strip.append(grip({ kind: "panel", panel: config.id }));
           panel.replaceChildren(strip);
           tileResize.observe(strip);
         }
-        for (const tile of view.tiles) {
-          const node = panel.querySelector(`[data-tile="${tile.id}"] > button`);
-          if(!node) continue;
-          node.disabled = !tile.enabled; node.title = tile.tooltip;
-          node.setAttribute("aria-label", tile.label); node.setAttribute("aria-pressed", tile.selected);
-        }
+        for (const tile of view.tiles) refreshTile(panel.querySelector(`[data-tile="${tile.id}"]`), tile);
       } else {
         for (const control of view.controls) {
           let row = panel.querySelector(`[data-control="${control.control}"]`);
@@ -484,7 +491,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   function layoutTiles(strip, geometry) {
     const handle = strip.querySelector(":scope > .panel-grip"); handle.hidden = !geometry.grip;
     if (geometry.grip) place(handle, geometry.grip);
-    [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => place(tile, geometry.tiles[i]));
+    [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => layoutTile(tile, geometry.tiles[i], strip.dataset.axis));
   }
   function refresh() {
     refreshPanels(); refreshPicker(); refreshManager(); refreshPrompt();
@@ -527,7 +534,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, field, discardFields, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, field, discardFields, tileWidget, refreshTile, layoutTile, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 
