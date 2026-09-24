@@ -1196,13 +1196,37 @@ impl ColorPanelLayout {
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
-        layout.transparent[1] = layout.foreground[1];
-        layout.black[1] = layout.background[1];
-        layout.white[1] = layout.black[1] + layout.black[3] - layout.white[3];
+        layout.align_neutral_swatches(size);
         // The caption has its own compact row below both swatch groups.
         let font = (size * 0.044).clamp(9., 12.);
         layout.intensity_caption = [size * 0.5, layout.height() + font + 2., font];
         Some(layout)
+    }
+    fn align_neutral_swatches(&mut self, size: f32) {
+        self.transparent[1] = self.foreground[1];
+        let center = size * 0.5;
+        let mut previous = self.transparent;
+        let radius = previous[2] * 0.5;
+        let edge_distance = (previous[0] + radius - center)
+            .hypot(previous[1] + radius - center) - radius;
+        let bottom = self.background[1] + self.background[3];
+        for circle in [&mut self.black, &mut self.white] {
+            let previous_radius = previous[2] * 0.5;
+            let dx = previous[0] + previous_radius - center;
+            let dy = previous[1] + previous_radius - center;
+            let previous_distance = dx.hypot(dy);
+            let radius = circle[2] * 0.5;
+            let distance = edge_distance + radius;
+            // Overlap the circles while leaving each center available to tap.
+            let separation = ((previous_radius + radius) * 0.56).max(previous_radius + 1.);
+            let cosine = ((previous_distance * previous_distance + distance * distance
+                - separation * separation) / (2. * previous_distance * distance)).clamp(-1., 1.);
+            let angle = dy.atan2(dx) + cosine.acos();
+            circle[0] = center + distance * angle.cos() - radius;
+            // Keep the footer compact; this changes the narrow-size gap by about 1px.
+            circle[1] = (center + distance * angle.sin() - radius).min(bottom - circle[3]);
+            previous = *circle;
+        }
     }
     /// Include the complete swatch groups and the optional HDR caption.
     pub fn height(&self) -> f32 {
@@ -1224,19 +1248,17 @@ impl ColorPanelLayout {
         let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
         let transparent = [size - bg, foreground[1], bg, bg];
         let black_size = (bg * 0.90).round();
-        let black = [transparent[0] - black_size * 0.48, background[1], black_size, black_size];
         let white_size = (bg * 0.80).round().max(20.);
-        let white = [black[0] - black_size * 0.48, black[1] + black_size - white_size, white_size, white_size];
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
-        Some(Self {
+        let mut layout = Self {
             wheel,
             foreground,
             background,
             transparent,
-            black,
-            white,
+            black: [0., 0., black_size, black_size],
+            white: [0., 0., white_size, white_size],
             edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
@@ -1253,7 +1275,9 @@ impl ColorPanelLayout {
             readout: [0., 0., c.round(), c.round()],
             readout_radius: (size - 28.) * 0.49 + 6.,
             intensity_caption: [0.; 3],
-        })
+        };
+        layout.align_neutral_swatches(size);
+        Some(layout)
     }
 }
 
