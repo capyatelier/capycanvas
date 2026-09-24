@@ -1,6 +1,6 @@
 /* Compact libadwaita color roles, native DOM controls over a full-window canvas. */
 :root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --text: #fafafb; --accent: #3584e4; --button: #ffffff0d; --thumb: #d3d3d3; --settings: #333333; --sidebar: #2e2e32; }
-body { --popover: var(--panel); --chrome-surface: color-mix(in srgb, var(--bg) 75%, transparent); --selection-tint: var(--accent); --selection: 28%; --header-selection: 28%; --selected: color-mix(in srgb, var(--selection-tint) var(--selection), transparent); }
+body { --popover: var(--panel); --chrome-surface: color-mix(in srgb, var(--bg) 75%, transparent); --selected: color-mix(in srgb, var(--accent) 28%, transparent); --header-active: color-mix(in srgb, var(--accent) 28%, var(--panel)); --header-active-hover: color-mix(in srgb, var(--accent) 36%, var(--panel)); }
 :is(#workspace, #status, .image-placement-controls) { --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
 #header, .header-editor, .header-drag-preview { --header-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); }
 :is(#workspace, #status, .image-placement-controls) :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover) { --control-radius: 6px; }
@@ -89,7 +89,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 /* Override the general 36px header button height inside the shared 34px pill. */
 #header .workspace-switcher button { flex:none; max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-body[data-theme="light"] { color-scheme: light; --selection-tint: hsl(from var(--accent) calc(h + 9) s l); --selection: 22%; --header-selection: 42%; --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
+body[data-theme="light"] { color-scheme: light; --selected: #c1d8f0; --header-active: #4c8fd5; --header-active-hover: color-mix(in srgb, #4c8fd5, black 8%); --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 .panel-context-menu { font-size: var(--ui-text-size); }
@@ -711,7 +711,7 @@ body[data-theme="light"] .battery-charging path { fill:var(--battery-ink); strok
 .system-battery.charging .battery-percent { transform:translateX(-.5px); }
 
 /* Workspace-owned title bar: allocations and all drop positions come from Rust. */
-#header { --header-tile:36px; --header-icon:20px; --header-surface:var(--chrome-surface); --header-control-bg:var(--header-surface); --header-feedback-bg:var(--header-surface); --header-active:color-mix(in srgb,var(--selection-tint) var(--header-selection),var(--panel)); touch-action:manipulation; }
+#header { --header-tile:36px; --header-icon:20px; --header-surface:var(--chrome-surface); --header-control-bg:var(--header-surface); --header-feedback-bg:var(--header-surface); touch-action:manipulation; }
 body[data-theme="light"] #header { text-shadow:none; }
 .header-item { position:absolute; display:flex; align-items:center; border-radius:var(--header-radius); }
 .header-item-content { display:flex; align-items:center; justify-content:center; flex:1; min-width:0; height:100%; }
@@ -742,9 +742,9 @@ body[data-theme="light"] #header { text-shadow:none; }
 :where(:root:not([data-touch])) #header :is(.header-tool,.header-menu > summary):hover:not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background-color:color-mix(in srgb,var(--text) 10%,var(--header-feedback-bg)); }
 #header .header-tool[data-drawer-facing]:not([aria-pressed="true"]) { background-color:var(--panel); }
 #header :is(.header-tool,.header-menu > summary):is(:active,[data-header-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background-color:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg)); }
-#header .header-tool[aria-pressed="true"] { background-color:color-mix(in srgb,var(--selection-tint) var(--header-selection),var(--header-feedback-bg)); }
+#header .header-tool[aria-pressed="true"] { background-color:var(--header-active); }
 :where(:root:not([data-touch])) #header .workspace-switcher button:hover:not(:disabled) { background:color-mix(in srgb,var(--text) 8%,transparent); }
-:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:color-mix(in srgb,var(--selection-tint) calc(var(--header-selection) + 8%),var(--panel)); }
+:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:var(--header-active-hover); }
 #header .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 .header-bar { position:absolute; border-radius:var(--header-radius); background:var(--header-surface); pointer-events:none; }
 #header :is(.header-item,.header-overflow).in-bar { --header-control-bg:transparent; --header-feedback-bg:transparent; }
