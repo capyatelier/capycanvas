@@ -630,19 +630,23 @@ impl Header {
                         .borrow_mut()
                         .push((CommandId::ZenMode, b.clone()));
                 }
-                b.connect_clicked(glib::clone!(
-                    #[weak]
-                    w,
-                    move |_| {
-                        if !w.header.editing.get() {
-                            w.dispatch(if let Some(command) = command {
-                                UiAction::Invoke { command }
-                            } else {
-                                UiAction::ActivateHeaderItem { id }
-                            });
+                if let HeaderItem::Tool { control: control @ (ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) } = entry.item {
+                    crate::color_picker::bind_button(w, &b, layer_ui::DrawerAnchor::Header { id }, control);
+                } else {
+                    b.connect_clicked(glib::clone!(
+                        #[weak]
+                        w,
+                        move |_| {
+                            if !w.header.editing.get() {
+                                w.dispatch(if let Some(command) = command {
+                                    UiAction::Invoke { command }
+                                } else {
+                                    UiAction::ActivateHeaderItem { id }
+                                });
+                            }
                         }
-                    }
-                ));
+                    ));
+                }
                 button = Some(b.clone());
                 b.upcast()
             }

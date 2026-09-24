@@ -16,16 +16,7 @@ fn encoded(v: f64) -> f64 {
         1.055 * v.powf(1. / 2.4) - 0.055
     }
 }
-pub(super) fn to_lab([r, g, b]: [f64; 3]) -> [f64; 3] {
-    let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
-    let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
-    let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
-    [
-        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
-    ]
-}
+pub(super) use layer_core::color::oklab::{from_lab, to_lab};
 /// CSS OKLCH units: lightness percent, unscaled chroma, hue degrees.
 /// Neutrals retain the picker's hue instead of exposing matrix roundoff.
 /// https://www.w3.org/TR/css-color-4/#oklch
@@ -42,16 +33,6 @@ pub(super) fn to_oklch_in(space: RgbSpace, rgb: [f32; 3], previous_hue: f32) -> 
         (chroma, b.atan2(a).to_degrees().rem_euclid(360.))
     };
     [(l * 100.) as f32, chroma as f32, hue as f32]
-}
-pub(super) fn from_lab([l, a, b]: [f64; 3]) -> [f64; 3] {
-    let ll = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
-    let mm = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
-    let ss = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
-    [
-        4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss,
-        -1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss,
-        -0.0041960863 * ll - 0.7034186147 * mm + 1.7076147010 * ss,
-    ]
 }
 fn toe(x: f64) -> f64 {
     let k = 1.206 / 1.03;

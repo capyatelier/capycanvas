@@ -362,3 +362,78 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     // Keep destination window alpha; only mix color inside its coverage.
     return view_store(vec4(rgb * opacity * window_coverage(p),opacity));
 }
+
+struct PickerVertex {
+    @builtin(position) position: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) @interpolate(flat) geometry: vec4<f32>,
+    @location(2) @interpolate(flat) sample: vec3<f32>,
+    @location(3) @interpolate(flat) original: vec3<f32>,
+    @location(4) @interpolate(flat) candidate: vec3<f32>,
+};
+@vertex fn picker_vertex(@builtin(vertex_index) index: u32,
+    @location(0) geometry: vec4<f32>, @location(1) sample: vec4<f32>,
+    @location(2) original: vec4<f32>, @location(3) candidate: vec4<f32>) -> PickerVertex {
+    let corners = array(vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
+    let local = corners[index] * 48.;
+    return PickerVertex(surface_clip(geometry.xy + local * geometry.z), local, geometry, sample.xyz, original.rgb, candidate.rgb);
+}
+fn picker_line(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let d = b-a;
+    return length(p-a-d*clamp(dot(p-a,d)/dot(d,d),0.,1.));
+}
+// A small stacked-layer glyph accompanies the aim mark for raw-layer sampling.
+fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
+    let q = p - center;
+    let top = min(picker_line(q,vec2(-3.5,0.),vec2(0.,-2.)),picker_line(q,vec2(0.,-2.),vec2(3.5,0.)));
+    let bottom = min(picker_line(q,vec2(-3.5,0.),vec2(0.,2.)),picker_line(q,vec2(0.,2.),vec2(3.5,0.)));
+    let back = min(picker_line(q,vec2(-3.5,2.8),vec2(0.,4.8)),picker_line(q,vec2(0.,4.8),vec2(3.5,2.8)));
+    return min(min(top,bottom),back)-.32;
+}
+@fragment fn picker_fragment(v: PickerVertex) -> @location(0) vec4<f32> {
+    let p = v.local;
+    let aa = 1. / v.geometry.z;
+    if v.geometry.w > .5 {
+        // Pipette tip is exactly at the sampled point, with contrasting outlines.
+        let q = vec2((p.x-p.y)*.70710678, (p.x+p.y)*.70710678);
+        let barrel = max(abs(q.x-10.)-6., abs(q.y)-2.5);
+        let cap = max(abs(q.x-18.)-2., abs(q.y)-5.);
+        let tip = picker_line(p,vec2(0.),vec2(4.,-4.))-.65;
+        var d = min(min(abs(barrel)-.65,cap), tip);
+        if v.sample.z > .5 { d = min(d,picker_layer_mark(p,vec2(9.,8.))); }
+        let coverage = clamp((1.2+aa-d)/aa,0.,1.);
+        let ink = clamp((aa*.5-d)/aa,0.,1.);
+        return view_store(vec4(vec3(coverage-ink),coverage));
+    }
+    let radius = length(p);
+    let coverage = clamp((46.+aa*.5-radius)/aa,0.,1.);
+    if coverage <= 0. { discard; }
+    let sample_surface = v.sample.xy + p * v.geometry.z * .5;
+    let point = vec2(dot(camera.inverse.xz,sample_surface),dot(camera.inverse.yw,sample_surface)) + camera.offset_document.xy;
+    var rgb = view_ui_rgb(camera.surround.rgb);
+    if all(point >= vec2(0.)) && all(point < camera.offset_document.zw) {
+        let paint = proof_artwork(artwork_at(point,camera.inverse.xy*.5,camera.inverse.zw*.5),point);
+        let checker = select(.80,.94,(i32(floor(point.x/16.))+i32(floor(point.y/16.)))%2==0);
+        rgb = view_working_rgb(paint.rgb) + vec3(checker)*(1.-paint.a);
+    }
+    var ring = view_working_rgb(select(v.candidate,v.original,p.y>=0.));
+    let light = clamp(-p.y/46.*.5+.5,0.,1.);
+    // Hairline edge reflections stay inside the glass, with no outer stroke or shadow.
+    let outer_light = exp(-pow((radius-45.55)/.38,2.));
+    let outer_dark = exp(-pow((radius-45.95)/.22,2.));
+    let inner_light = exp(-pow((radius-32.25)/.42,2.));
+    ring = mix(ring,vec3(1.),outer_light*(.08+.12*light));
+    ring = mix(ring,vec3(.04),outer_dark*.12);
+    ring = mix(ring,vec3(1.-light),inner_light*.12);
+    // One physical pixel of analytic coverage also smooths the interior circle.
+    rgb = mix(rgb,ring,clamp((radius-32.+aa*.5)/aa,0.,1.));
+    let cross = min(picker_line(p,vec2(-2.8,0.),vec2(2.8,0.)),
+                    picker_line(p,vec2(0.,-2.8),vec2(0.,2.8)))-.32;
+    var mark = cross;
+    if v.sample.z > .5 { mark = min(mark,picker_layer_mark(p,vec2(9.,-8.))); }
+    // A fine white keyline, rather than a heavy halo, separates the aim from artwork.
+    rgb = mix(rgb,vec3(1.),clamp((.35+aa*.5-mark)/aa,0.,1.));
+    rgb = mix(rgb,vec3(.035),clamp((aa*.5-mark)/aa,0.,1.));
+    if camera.viewport.z > .5 { rgb = display_color(rgb); }
+    return view_store(vec4(rgb*coverage,coverage));
+}

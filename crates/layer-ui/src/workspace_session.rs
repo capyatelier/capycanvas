@@ -192,7 +192,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             preset: self.state.brush.preset,
             tools: self.tools.clone(),
             colors: self.state.colors.clone(),
-            canvas_tool: self.layer_interaction.tool,
+            canvas_tool: self.eyedropper.picking.previous.unwrap_or(self.layer_interaction.tool),
             selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools
@@ -383,10 +383,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             opacity: brush.opacity,
             color: self.state.colors.preview(self.state.colors.definition()),
         };
-        self.layer_interaction.tool = working.canvas_tool;
+        let canvas_tool = if self.state.platform == Platform::Gtk && working.canvas_tool.picks_color() {
+            LayerCanvasTool::Paint
+        } else { working.canvas_tool };
+        self.layer_interaction.tool = canvas_tool;
         self.layer_interaction.gradient = working.gradient;
         self.layer_interaction.figure = working.figure;
-        self.state.layer_tools.tool = working.canvas_tool;
+        self.state.layer_tools.tool = canvas_tool;
         self.region_tools = region_tools;
         self.selection_tools = selection_tools::SelectionTools::default();
         self.selection_tools.options = working.selection;
@@ -399,6 +402,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         self.state.customization = CustomizationState::default();
         self.eyedropper.cancel();
+        self.eyedropper.picking = Default::default();
+        self.state.color_picker.preview = None;
         self.cursor.hover.reset();
         self.interaction.keep_chrome_until_contact = working.zen_mode;
         self.refresh_tools();

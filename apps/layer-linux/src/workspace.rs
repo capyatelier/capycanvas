@@ -868,11 +868,13 @@ pub struct Workspace {
     columns: columns::Columns,
     refreshing: Cell<bool>,
     frame_timer: RefCell<Option<crate::canvas::FrameTimer>>,
+    color_preview_timer: RefCell<Option<glib::SourceId>>,
     frame_deadline: Cell<u64>,
     navigation_input: Cell<u64>,
 }
 impl Drop for Workspace {
     fn drop(&mut self) {
+        if let Some(timer) = self.color_preview_timer.get_mut().take() { timer.remove(); }
         // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
         // Join the GPU worker before any native window/surface fields drop.
         self.local_tone.suspend();
@@ -1119,6 +1121,7 @@ impl Workspace {
             columns: columns::Columns::default(),
             refreshing: Cell::new(false),
             frame_timer: RefCell::new(None),
+            color_preview_timer: RefCell::new(None),
             frame_deadline: Cell::new(0),
             navigation_input: Cell::new(0),
             input: Rc::default(),
@@ -1680,10 +1683,16 @@ impl Workspace {
     }
 
     pub fn cursor_input(&self, event: Option<layer_engine::PenEvent>) {
+        let had_preview = self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().color_picker.preview.is_some());
         if let Some(gpu) = self.gpu.borrow_mut().as_mut() {
             gpu.session.cursor_input(event);
         }
         self.refresh_cursor();
+        if self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().layer_tools.tool.picks_color())
+            && let Some(owner) = self.surface.imp().owner.borrow().upgrade() {
+            if had_preview && event.is_none() { owner.refresh(regions::COLOR_PREVIEW); }
+            owner.wake();
+        }
     }
 
     pub fn refresh_cursor(&self) {
@@ -1860,7 +1869,7 @@ impl Workspace {
                     let hdr = g.session.engine().document().color.depth.is_float();
                     let rendition = hdr.then(|| g.session.effective_sdr_rendition());
                     let proof = g.session.state().soft_proof || g.session.state().gamut_warning;
-                    self.hdr_status.set_visible(hdr && !proof);
+                    self.hdr_status.set_visible(hdr && !proof && g.session.state().workspace.layout.canvas_info.visible);
                     let preview = g.session.state().preview_sdr || g.session.state().sdr_appearance_preview.is_some();
                     let headroom = g.session.renderer_mut().display_headroom;
                     if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS | regions::BRUSH; }
@@ -2261,7 +2270,47 @@ impl Workspace {
             None => (),
         }
     }
+    fn refresh_color_preview(&self) {
+        let colors = self.gpu.borrow().as_ref().map(|g| {
+            let state = g.session.state();
+            (state.preview_colors().into_owned(), state.color_picker.preview.is_some())
+        });
+        if let Some((colors, preview)) = colors {
+            let view = self.view_color();
+            let headroom = self.picker_headroom();
+            if self.color_panel.root.is_mapped() {
+                if preview { self.color_panel.refresh_preview(&colors, view, headroom); }
+                else { self.color_panel.refresh(&colors, view, headroom); }
+            }
+            self.drawer.refresh_color_preview(&colors, view, headroom, preview);
+            for drawer in self.columns.drawers.borrow().iter() {
+                drawer.refresh_color_preview(&colors, view, headroom, preview);
+            }
+        }
+    }
     fn refresh(self: &Rc<Self>, regions: u32) {
+        if regions == regions::COLOR_PREVIEW
+            && self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().color_picker.preview.is_some()) {
+            if self.color_preview_timer.borrow().is_none() {
+                // Bound native panel redraws separately from the full-rate
+                // canvas/loupe. Read the newest color without postponing the
+                // deadline; leaving or committing a preview bypasses this wait.
+                let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(17), glib::clone!(
+                    #[weak(rename_to = this)] self,
+                    move || {
+                        this.color_preview_timer.borrow_mut().take();
+                        this.refresh_color_preview();
+                    }
+                ));
+                *self.color_preview_timer.borrow_mut() = Some(timer);
+            }
+            return;
+        }
+        if let Some(timer) = self.color_preview_timer.borrow_mut().take() { timer.remove(); }
+        if regions == regions::COLOR_PREVIEW {
+            self.refresh_color_preview();
+            return;
+        }
         self.publication.content_revision.set(
             self.gpu
                 .borrow()
@@ -2311,8 +2360,8 @@ impl Workspace {
             self.placement_actions.refresh(&state);
             self.selection_resize.refresh(self, &state);
         }
-        if regions & (regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
-            self.color_panel.refresh(state.display_colors(), self.view_color(), self.picker_headroom());
+        if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
+            self.color_panel.refresh(&state.preview_colors(), self.view_color(), self.picker_headroom());
             crate::color_editor::refresh_display(self);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {

@@ -181,6 +181,41 @@ impl ViewColor {
     }
 }
 
+/// Small retained outlines avoid rasterizing a whole wheel for a moving marker.
+pub(crate) fn marker_outline(snapshot: &gtk::Snapshot, point: [f32; 2], radius: f32) {
+    for (outset, width, color) in [
+        (2., 4., gdk::RGBA::new(0., 0., 0., 0.5)),
+        (1., 2., gdk::RGBA::WHITE),
+    ] {
+        let r = radius + outset;
+        let border = gtk::gsk::RoundedRect::from_rect(
+            gtk::graphene::Rect::new(point[0]-r, point[1]-r, r*2., r*2.), r,
+        );
+        snapshot.append_border(&border, &[width; 4], &[color; 4]);
+    }
+}
+
+pub(crate) fn append_solid(snapshot: &gtk::Snapshot, view: ViewColor, rgba: [f32; 4], bounds: &gtk::graphene::Rect) {
+    let rgb = view.space().convert(RgbSpace::Srgb, [rgba[0], rgba[1], rgba[2]].map(f64::from));
+    if rgb.iter().all(|c| (-0.000001..=1.000001).contains(c)) {
+        let [r, g, b] = rgb.map(|c| c.clamp(0., 1.) as f32);
+        snapshot.append_color(&gdk::RGBA::new(r, g, b, rgba[3]), bounds);
+    } else {
+        snapshot.append_texture(&view.solid(rgba), bounds);
+    }
+}
+/// Opaque marker artwork. Colors within sRGB use a native color node, avoiding
+/// fresh GPU images. Preserve tagged textures for colors outside sRGB and HDR.
+pub(crate) fn append_picker_solid(snapshot: &gtk::Snapshot, view: ViewColor, headroom: f32,
+    space: RgbSpace, pixel: [f32; 4], bounds: &gtk::graphene::Rect) {
+    if headroom <= 1. {
+        let color = RgbColor::from_linear(space, pixel).expect("validated picker color");
+        append_solid(snapshot, view, view.checker_colors(color)[0], bounds);
+    } else {
+        snapshot.append_texture(&picker_texture(view, headroom, space, [1,1], &[pixel]), bounds);
+    }
+}
+
 /// HDR picker artwork: Float32 evaluation followed by a half-float, tagged
 /// display derivative. SDR-only displays use the document's saved rendition.
 pub(crate) fn picker_texture(view: ViewColor, headroom: f32, space: RgbSpace,
@@ -189,6 +224,16 @@ pub(crate) fn picker_texture(view: ViewColor, headroom: f32, space: RgbSpace,
 }
 pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: RgbSpace,
     extent: [u32; 2], pixels: &[[f32; 4]], gain: f64) -> gdk::Texture {
+    picker_texture_data(view, headroom, space, extent, pixels, gain, None)
+}
+/// Apply geometric coverage after color mapping, without changing HDR exposure.
+pub(crate) fn picker_texture_with_coverage(view: ViewColor, headroom: f32, space: RgbSpace,
+    extent: [u32; 2], pixels: &[[f32; 4]], coverage: &[f32]) -> gdk::Texture {
+    assert_eq!(pixels.len(), coverage.len());
+    picker_texture_data(view, headroom, space, extent, pixels, 1., Some(coverage))
+}
+fn picker_texture_data(view: ViewColor, headroom: f32, space: RgbSpace,
+    extent: [u32; 2], pixels: &[[f32; 4]], gain: f64, coverage: Option<&[f32]>) -> gdk::Texture {
     let document = if let ViewColor::Mapped { document, .. } = view { document } else { space };
     let to_document = space.linear_transform(document);
     let document_pixel = |p: [f32; 4]| {
@@ -199,10 +244,11 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
     if headroom > 1. {
         let to_srgb = document.linear_transform(RgbSpace::Srgb);
         let mut bytes = Vec::with_capacity(pixels.len() * 8);
-        for &p in pixels {
+        for (i, &p) in pixels.iter().enumerate() {
             let p = document_pixel(p);
             let rgb = hdr_display_rgb(p, headroom, to_srgb);
-            for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([p[3]]) {
+            let alpha = p[3] * coverage.map_or(1., |c| c[i]);
+            for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([alpha]) {
                 bytes.extend_from_slice(&half::f16::from_f32(v).to_bits().to_ne_bytes());
             }
         }
@@ -213,11 +259,11 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
         } else { Default::default() };
         let mapper = rendition.mapper(document, view.space());
         let mut bytes = Vec::with_capacity(pixels.len() * 4);
-        for p in pixels {
+        for (i, p) in pixels.iter().enumerate() {
             let p = document_pixel(*p);
             let rgb = mapper.map_rgb([p[0],p[1],p[2]]).map(f64::from);
             bytes.extend(rgb.map(|v| (view.space().encode(v).clamp(0.,1.) * 255.).round() as u8));
-            bytes.push((p[3] * 255.).round() as u8);
+            bytes.push((p[3] * coverage.map_or(1., |c| c[i]) * 255.).round() as u8);
         }
         view.rgba8(extent, bytes)
     }
@@ -255,13 +301,17 @@ mod pair;
 pub use pair::ColorPair;
 
 pub(crate) fn append_checker(snapshot: &gtk::Snapshot, bounds: gtk::graphene::Rect, radius: f32, textures: &[gdk::Texture; 2]) {
+    checker(snapshot, bounds, radius, |index, bounds| snapshot.append_texture(&textures[index], bounds));
+}
+fn checker(snapshot: &gtk::Snapshot, bounds: gtk::graphene::Rect, radius: f32,
+    paint: impl Fn(usize, &gtk::graphene::Rect)) {
     snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(bounds, radius));
     // An opaque base avoids alpha seams at fractional checker edges.
-    snapshot.append_texture(&textures[0], &bounds);
+    paint(0, &bounds);
     for y in 0..(bounds.height() / 8.).ceil() as i32 {
         for x in 0..(bounds.width() / 8.).ceil() as i32 {
             if (x + y) % 2 == 0 { continue; }
-            snapshot.append_texture(&textures[1], &gtk::graphene::Rect::new(
+            paint(1, &gtk::graphene::Rect::new(
                 bounds.x() + (x * 8) as f32, bounds.y() + (y * 8) as f32, 8., 8.,
             ));
         }
@@ -291,9 +341,16 @@ mod patch {
             let Some(textures) = self.textures.borrow().clone() else {
                 return;
             };
-            append_checker(snapshot, bounds, if self.round.get() {
+            let radius = if self.round.get() {
                 bounds.width().min(bounds.height()) * 0.5
-            } else { 0. }, &textures);
+            } else { 0. };
+            if let Some((color, view, headroom)) = self.key.get()
+                && headroom <= 1. {
+                let colors = view.checker_colors(color);
+                checker(snapshot, bounds, radius, |index, bounds| append_solid(snapshot, view, colors[index], bounds));
+            } else {
+                append_checker(snapshot, bounds, radius, &textures);
+            }
         }
     }
 }
@@ -324,6 +381,50 @@ impl ColorPatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "isolated Wayland display and GTK GPU renderer"]
+    fn native_solid_colors_match_tagged_textures() {
+        gtk::init().unwrap();
+        let window = gtk::Window::new();
+        window.set_default_size(64, 64);
+        window.present();
+        let renderer = window.renderer().unwrap();
+        let bounds = gtk::graphene::Rect::new(0., 0., 16., 16.);
+        let check = |native: gtk::Snapshot, reference: gdk::Texture, color_node: Option<bool>| {
+            let node = native.to_node().unwrap();
+            if let Some(expected) = color_node {
+                assert_eq!(node.downcast_ref::<gtk::gsk::ColorNode>().is_some(), expected);
+            }
+            let pair = gtk::Snapshot::new();
+            pair.append_node(&node);
+            pair.append_texture(&reference, &gtk::graphene::Rect::new(16., 0., 16., 16.));
+            let rendered = renderer.render_texture(&pair.to_node().unwrap(), None);
+            let mut pixels = vec![0; 32*16*4];
+            rendered.download(&mut pixels, 32*4);
+            for c in 0..4 {
+                let native = pixels[(8*32+8)*4+c];
+                let reference = pixels[(8*32+24)*4+c];
+                assert!(native.abs_diff(reference) <= 2, "channel {c}: {native} vs {reference}");
+            }
+        };
+        for view in [ViewColor::Srgb, ViewColor::DisplayP3] {
+            for (rgba, inside_srgb) in [([0.,1.,0.,1.], false), ([1.,0.05,0.1,1.], false),
+                ([0.3,0.4,0.7,0.4], true), ([0.01,0.02,0.03,1.], true)] {
+                let native = gtk::Snapshot::new();
+                append_solid(&native, view, rgba, &bounds);
+                check(native, view.solid(rgba), Some(view == ViewColor::Srgb || inside_srgb));
+            }
+            let document = layer_core::color::DocumentColor { space: RgbSpace::DisplayP3,
+                depth: layer_core::color::SampleDepth::F16, ..Default::default() };
+            let view = view.with_rendition(document, Default::default());
+            for pixel in [[4.,0.2,0.1,1.], [-0.2,0.3,1.7,1.], [0.03,0.07,0.1,1.]] {
+                let native = gtk::Snapshot::new();
+                append_picker_solid(&native, view, 1., document.space, pixel, &bounds);
+                check(native, picker_texture(view, 1., document.space, [1,1], &[pixel]), None);
+            }
+        }
+        window.destroy();
+    }
     #[test]
     fn gtk_color_management_is_a_valid_debug_flag() {
         for (existing, expected) in [

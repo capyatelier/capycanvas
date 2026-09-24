@@ -4,9 +4,9 @@ use crate::{
     number_control::NumberControl,
     workspace::{Workspace, selected},
 };
-use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
+use gtk::{glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
-    ColorAction, ColorPanelLayout, ColorReadout, ColorShape, ColorSlot, ColorState,
+    ColorAction, ColorPanelLayout, ColorShape, ColorSlot, ColorState,
     ColorWheelGeometry, Theme, ToolSetItem, ToolSetView, ToolSetting, ToolSettingAction, UiAction,
     ToolActionGroup, UiState,
 };
@@ -115,6 +115,7 @@ impl ToolSet {
                         && a.preview == b.preview
                 })
         };
+        self.groups.set_visible(self.panel != layer_ui::Panel::Tools && !view.groups.is_empty());
         let previous = self.view.borrow();
         if !same(&previous.groups, &view.groups) {
             while let Some(child) = self.groups.first_child() {
@@ -191,7 +192,7 @@ impl ToolSet {
     }
 }
 fn tool_label(item: &ToolSetItem) -> gtk::Box {
-    aligned_icon_label(item.label, item.icon, 1.0)
+    aligned_icon_label(item.label, item.icon, if matches!(item.action, UiAction::ColorPicker { .. }) { 0.0 } else { 1.0 })
 }
 
 pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
@@ -218,20 +219,31 @@ use std::{
 
 pub struct ToolSettings {
     pub root: gtk::Box,
+    form: gtk::Box,
+    picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
     actions: RefCell<Vec<(ToolSettingAction, gtk::Widget)>>,
     updating: Rc<Cell<bool>>,
 }
 impl ToolSettings {
     pub fn new() -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let form = body();
+        let picker = crate::color_picker::Settings::new();
+        root.append(&form);
+        root.append(&picker.root);
         Self {
-            root: body(),
+            root, form, picker,
             fields: RefCell::default(),
             actions: RefCell::default(),
             updating: Rc::new(Cell::new(false)),
         }
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
+        let picking = state.layer_tools.tool.picks_color();
+        self.form.set_visible(!picking);
+        self.picker.root.set_visible(picking);
+        if picking { self.picker.refresh(workspace, state); return; }
         let controls = &state.tool_settings;
         self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
@@ -249,8 +261,8 @@ impl ToolSettings {
                 .zip(&state.tool_actions)
                 .all(|((old, _), next)| old == next);
         if !same_schema {
-            while let Some(child) = self.root.first_child() {
-                self.root.remove(&child);
+            while let Some(child) = self.form.first_child() {
+                self.form.remove(&child);
             }
             fields.clear();
             actions.clear();
@@ -261,7 +273,7 @@ impl ToolSettings {
             mode_row.add_css_class("selection-modes");
             mode_row.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
             if state.layer_tools.tool.selection_tool().is_some() {
-                self.root.append(&mode_row);
+                self.form.append(&mode_row);
             }
             let mut group = "";
             for control in controls {
@@ -274,7 +286,7 @@ impl ToolSettings {
                         title.set_xalign(0.0);
                         title.set_margin_top(6);
                         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        self.root.append(&title);
+                        self.form.append(&title);
                     }
                 }
                 let input = NumberControl::new(control.numeric.clone(), control.label, "");
@@ -290,7 +302,7 @@ impl ToolSettings {
                         });
                     }
                 ));
-                self.root.append(&input);
+                self.form.append(&input);
                 fields.push((control.clone(), input));
             }
             let mut source_group: Option<gtk::CheckButton> = None;
@@ -368,13 +380,13 @@ impl ToolSettings {
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
                 if mode { mode_row.append(&widget); }
-                else { self.root.append(&widget); }
+                else { self.form.append(&widget); }
                 actions.push((*action, widget));
             }
             if state.layer_tools.tool.selection_tool().is_some() {
                 let menu = crate::selection_masks::menu_button(workspace, "Selection Actions…", crate::selection_masks::Menu::Selection);
                 menu.set_widget_name("selection-actions-menu");
-                self.root.append(&menu);
+                self.form.append(&menu);
             }
         }
         for ((_, input), control) in fields.iter().zip(controls) {
@@ -515,6 +527,9 @@ mod wheel_button {
             snapshot.rotate(self.rotation.get());
             snapshot.translate(&gtk::graphene::Point::new(-center.x(), -center.y()));
             self.parent_snapshot(snapshot);
+            if self.readout.get() && let Some(wheel) = o.parent().and_downcast::<ColorWheel>() {
+                crate::color_readout::draw(o.upcast_ref(), snapshot, &wheel.imp().color.borrow(), wheel.imp().view.get());
+            }
             snapshot.restore();
         }
         fn contains(&self, x: f64, y: f64) -> bool {
@@ -539,11 +554,17 @@ glib::wrapper! {
     pub struct WheelButton(ObjectSubclass<wheel_button::WheelButton>) @extends gtk::Button, gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Actionable;
 }
+#[path = "color_wheel_field.rs"]
+mod field;
+
 mod wheel {
     use super::*;
     #[derive(Default)]
     pub struct Wheel {
         pub color: RefCell<ColorState>,
+        pub preview: Cell<bool>,
+        pub(super) field: crate::color_preview_raster::PreviewRaster<super::field::Key, super::field::Request>,
+        pub(super) paths: RefCell<Option<super::field::Paths>>,
         pub intensity: RefCell<Option<crate::hdr_color_scale::HdrColorScale>>,
         pub hdr: Cell<bool>,
         // Background precedes foreground so their deliberate overlap also picks correctly.
@@ -552,9 +573,15 @@ mod wheel {
         pub menu_slot: Cell<ColorSlot>,
         pub view: Cell<ViewColor>,
         pub headroom: Cell<f32>,
-        pub linear_field: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, Vec<[f32; 4]>)>>,
+        pub linear_field: RefCell<Option<super::field::LinearField>>,
         pub disc: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, ViewColor, f32, f32, gtk::gdk::Texture)>>,
         pub ring: RefCell<Option<(u32, ColorShape, layer_core::color::RgbSpace, ViewColor, gtk::gdk::Texture)>>,
+        #[cfg(test)]
+        pub field_render_ms: RefCell<Vec<f64>>,
+        #[cfg(test)]
+        pub snapshot_ms: RefCell<Vec<f64>>,
+        #[cfg(test)]
+        pub refresh_ms: RefCell<Vec<f64>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Wheel {
@@ -633,24 +660,27 @@ mod wheel {
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            #[cfg(test)]
+            let started = std::time::Instant::now();
             let (size, [x, y]) = self.obj().drawing_bounds();
             if let Some(geometry) = ColorWheelGeometry::new(size) {
                 snapshot.save();
                 snapshot.translate(&gtk::graphene::Point::new(x, y));
                 let bounds = gtk::graphene::Rect::new(0., 0., size, size);
-                let center = gtk::graphene::Point::new(geometry.center[0], geometry.center[1]);
-                let ring = gtk::gsk::PathBuilder::new();
-                ring.add_circle(&center, (geometry.outer + geometry.inner) * 0.5);
-                snapshot.push_stroke(
-                    &ring.to_path(),
-                    &gtk::gsk::Stroke::new(geometry.outer - geometry.inner),
-                );
                 let state = self.color.borrow();
+                let shape = state.wheel_shape();
+                // GSK caches masks by path identity, not just equal geometry.
+                // Rebuilding these paths on hover re-rasterizes full-size masks.
+                let mut paths = self.paths.borrow_mut();
+                if paths.as_ref().is_none_or(|p| p.size != size || p.shape != shape) {
+                    *paths = Some(field::Paths::new(size, shape, &geometry));
+                }
+                let paths = paths.as_ref().unwrap();
+                snapshot.push_stroke(&paths.ring, &paths.stroke);
                 let view = self.view.get();
                 // Retain the managed guide at display DPI; ordinary color
                 // changes and panel motion only sample the cached texture.
                 let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
-                let shape = state.wheel_shape();
                 let space = state.rgb_space();
                 {
                     let mut cache = self.ring.borrow_mut();
@@ -677,29 +707,21 @@ mod wheel {
                     snapshot.append_texture(&cache.as_ref().unwrap().4, &bounds);
                 }
                 snapshot.pop();
-                let hue = state.wheel_components()[0];
-                {
-                    let mut cache = self.disc.borrow_mut();
-                    let headroom = self.headroom.get();
-                    let intensity = state.hdr_intensity();
-                    if cache.as_ref().is_none_or(|(s, h, p, c, v, e, d, _)| *s != side || *h != hue || *p != shape || *c != space || *v != view || *e != intensity || *d != headroom) {
-                        let texture = if matches!(view, ViewColor::Mapped { .. }) {
-                            let mut linear = self.linear_field.borrow_mut();
-                            if linear.as_ref().is_none_or(|(s, h, p, c, _)| *s != side || *h != hue || *p != shape || *c != space) {
-                                let mut pixels = vec![[0.;4]; side as usize * side as usize];
-                                state.render_field_base_linear(side, &mut pixels);
-                                *linear = Some((side, hue, shape, space, pixels));
-                            }
-                            crate::display_color::picker_texture_with_gain(view, headroom, space, [side,side], &linear.as_ref().unwrap().4, f64::from(intensity).exp2())
-                        } else {
-                            let mut pixels = vec![0; side as usize * side as usize * 4];
-                            state.render_field_in(side, view.space(), &mut pixels);
-                            view.rgba8([side,side], pixels)
-                        };
-                        *cache = Some((side, hue, shape, space, view, intensity, headroom, texture));
-                    }
-                    snapshot.push_fill(&color_field_path(shape, &geometry), gtk::gsk::FillRule::Winding);
-                    snapshot.append_texture(&cache.as_ref().unwrap().7, &bounds);
+                let key = field::Key::new(side, &state, view, self.headroom.get());
+                let current = self.disc.borrow().as_ref().map(|d| (d.0,d.1,d.2,d.3,d.4,d.5,d.6));
+                if self.preview.get() {
+                    self.obj().request_preview_field(key, &state, current == Some(key.tuple()));
+                } else if current != Some(key.tuple()) {
+                    #[cfg(test)]
+                    let started = std::time::Instant::now();
+                    let texture = field::render(key, &state, &mut self.linear_field.borrow_mut());
+                    *self.disc.borrow_mut() = Some(key.disc(texture));
+                    #[cfg(test)]
+                    self.field_render_ms.borrow_mut().push(started.elapsed().as_secs_f64() * 1000.);
+                }
+                if let Some(cache) = self.disc.borrow().as_ref() {
+                    snapshot.push_fill(&paths.field, gtk::gsk::FillRule::Winding);
+                    snapshot.append_texture(&cache.7, &bounds);
                     snapshot.pop();
                 }
                 draw_wheel(snapshot, &state, &geometry, view, self.headroom.get());
@@ -714,6 +736,8 @@ mod wheel {
             if let Some(menu) = self.menu.borrow().as_ref() {
                 self.obj().snapshot_child(menu, snapshot);
             }
+            #[cfg(test)]
+            self.snapshot_ms.borrow_mut().push(started.elapsed().as_secs_f64() * 1000.);
         }
     }
 }
@@ -765,7 +789,6 @@ pub struct ColorPanel {
     quick_colors: Vec<(bool, WheelButton, ColorPatch)>,
     shape_buttons: [WheelButton; 2],
     readout: WheelButton,
-    readout_drawing: gtk::DrawingArea,
     swap: WheelButton,
     menu_swap: gtk::Button,
     menu_edit: gtk::Button,
@@ -859,21 +882,6 @@ impl ColorPanel {
         readout.add_css_class("flat");
         readout.add_css_class("color-readout");
         readout.set_widget_name("color-readout");
-        let readout_drawing = gtk::DrawingArea::new();
-        readout_drawing.set_can_target(false);
-        readout_drawing.set_draw_func(glib::clone!(
-            #[weak]
-            wheel,
-            move |area, cr, width, _| {
-                draw_readout(area, cr, width as f64, &wheel.imp().color.borrow(), wheel.imp().view.get());
-            }
-        ));
-        readout.connect_state_flags_changed(glib::clone!(
-            #[weak]
-            readout_drawing,
-            move |_, _| readout_drawing.queue_draw()
-        ));
-        readout.set_child(Some(&readout_drawing));
         readout.set_parent(&wheel);
         wheel.imp().corners.borrow_mut().push(readout.clone());
         edit_color.set_parent(&wheel);
@@ -911,7 +919,6 @@ impl ColorPanel {
             quick_colors,
             shape_buttons,
             readout,
-            readout_drawing,
             swap,
             menu_swap,
             menu_edit,
@@ -927,7 +934,7 @@ impl ColorPanel {
             // Rejected out-of-storage-range edits leave the native control at
             // the accepted value, including in retained color-panel drawers.
             let colors = workspace.gpu.borrow().as_ref().map(|g| g.session.state().display_colors().clone());
-            if let Some(colors) = colors { i.refresh(&colors, workspace.view_color(), workspace.picker_headroom()); }
+            if let Some(colors) = colors { i.refresh_color(&colors, workspace.view_color(), workspace.picker_headroom(), false); }
         }));
         self.edit_color.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
             let slot = workspace.gpu.borrow().as_ref().map(|g| g.session.state().display_colors().slot);
@@ -1147,7 +1154,20 @@ impl ColorPanel {
         self.wheel.add_controller(drag);
     }
     pub fn headroom(&self) -> f32 { self.wheel.imp().headroom.get() }
+    pub fn refresh_preview(&self, state: &ColorState, view: ViewColor, headroom: f32) {
+        self.refresh_color(state, view, headroom, true);
+    }
     pub fn refresh(&self, state: &ColorState, view: ViewColor, headroom: f32) {
+        self.refresh_color(state, view, headroom, false);
+    }
+    fn refresh_color(&self, state: &ColorState, view: ViewColor, headroom: f32, preview: bool) {
+        let preview_changed = self.wheel.imp().preview.replace(preview) != preview;
+        if preview_changed { self.wheel.queue_draw(); }
+        if preview_changed || !preview {
+            self.wheel.imp().field.cancel();
+        }
+        #[cfg(test)]
+        let started = std::time::Instant::now();
         let hdr = matches!(view, ViewColor::Mapped { .. });
         self.intensity.set_visible(hdr);
         if self.wheel.imp().hdr.replace(hdr) != hdr { self.wheel.queue_resize(); }
@@ -1155,7 +1175,7 @@ impl ColorPanel {
         self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
         let ev = state.definition().brightness_ev(state.rgb_space()).ok().flatten();
         self.intensity.set_sensitive(state.slot != ColorSlot::Transparent);
-        if hdr { self.intensity.refresh(state, view, headroom); }
+        if hdr { self.intensity.refresh_color(state, view, headroom, preview); }
         let previous_headroom = self.wheel.imp().headroom.replace(headroom);
         let previous_view = self.wheel.imp().view.replace(view);
         if self.initialized.replace(true) && previous_view == view && previous_headroom == headroom && *self.wheel.imp().color.borrow() == *state {
@@ -1184,7 +1204,7 @@ impl ColorPanel {
         self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
-        self.readout_drawing.queue_draw();
+        self.readout.queue_draw();
         for (white, button, sample) in &self.quick_colors {
             let preset = &state.quick_colors()[usize::from(*white)];
             selected(button, preset.selected);
@@ -1199,133 +1219,9 @@ impl ColorPanel {
             let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Temporary => state.temporary, ColorSlot::Transparent => layer_core::color::RgbColor { linear_rgb: None, space: state.rgb_space(), rgba: [0.; 4] } };
             sample.set_display_color(color, view, headroom);
         }
+        #[cfg(test)]
+        self.wheel.imp().refresh_ms.borrow_mut().push(started.elapsed().as_secs_f64() * 1000.);
     }
-}
-
-fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: &ColorState, view: ViewColor) {
-    let mut font = (half * 2. * 0.044).clamp(9., 12.);
-    let radius = ColorPanelLayout::new((half * 2.) as f32)
-        .unwrap()
-        .readout_radius as f64;
-    let color = area.color();
-    let ink = |alpha| {
-        cr.set_source_rgba(
-            color.red() as f64,
-            color.green() as f64,
-            color.blue() as f64,
-            alpha,
-        )
-    };
-    cr.select_font_face(
-        "Adwaita Sans",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(font);
-    ink(0.9);
-    cr.move_to(2., font + 1.);
-    let _ = cr.show_text(state.readout_label());
-    let label_width = cr.text_extents(state.readout_label()).unwrap().x_advance();
-    let gamut = |space| if matches!(view, ViewColor::Mapped { .. }) { state.definition().in_hdr_gamut(space) } else { state.definition().in_gamut(space) };
-    if !gamut(view.space()).unwrap() || !gamut(state.rgb_space()).unwrap()
-    {
-        // The definition remains intact. The compact marker's tooltip and
-        // accessible label identify the gamut the preview cannot represent.
-        cr.move_to(label_width + 6., font + 1.);
-        let _ = cr.show_text("!");
-    }
-    if area
-        .parent()
-        .is_some_and(|button| button.has_visible_focus())
-    {
-        // Keep the focus outline in the corner, clear of the picking field.
-        rounded_rect(cr, 1., 1., label_width + 5., font + 4., 5.);
-        cr.set_line_width(1.5);
-        let _ = cr.stroke();
-    }
-    cr.select_font_face(
-        "Adwaita Sans",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Normal,
-    );
-    let rgb = state.readout == ColorReadout::Rgb;
-    let texts = state.readout_layout_text();
-    let mut options = cr.font_options().unwrap();
-    options.set_hint_metrics(cairo::HintMetrics::Off);
-    cr.set_font_options(&options);
-    let available = radius * std::f64::consts::FRAC_PI_2 - 4.;
-    let (widths, total, digit_advance) = loop {
-        cr.set_font_size(font);
-        let digit_advance = ('0'..='9')
-            .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
-            .fold(0., f64::max);
-        // Measure the individual glyph advances used for drawing on the arc.
-        let widths = texts.each_ref().map(|text| {
-            text.chars()
-                .map(|c| if c.is_ascii_digit() || c == ' ' { digit_advance }
-                    else { cr.text_extents(&c.to_string()).unwrap().x_advance() })
-                .sum::<f64>()
-                + if rgb { font * 0.8 + 2. } else { 0. }
-        });
-        let total: f64 = widths.iter().sum();
-        if total + 6. <= available || font <= 8. {
-            break (widths, total, digit_advance);
-        }
-        font -= 0.25;
-    };
-    let chip = font * 0.8;
-    let gap = ((available - total) * 0.5).clamp(3., radius * 0.24);
-    let mut cursor = -(total + gap * 2.) * 0.5;
-    for (index, text) in texts.iter().enumerate() {
-        let width = widths[index];
-        let mid = (-135_f64).to_radians() + (cursor + width * 0.5) / radius;
-        cursor += width + gap;
-        let mut along = -width * 0.5;
-        if rgb {
-            let angle = mid + (along + chip * 0.5) / radius;
-            let _ = cr.save();
-            cr.translate(half + radius * angle.cos(), half + radius * angle.sin());
-            cr.rotate(angle + std::f64::consts::FRAC_PI_2);
-            let [r, g, b] = [[0.93, 0.31, 0.36], [0.25, 0.73, 0.43], [0.29, 0.56, 0.98]][index];
-            cr.set_source_rgb(r, g, b);
-            rounded_rect(cr, -chip * 0.5, -font * 0.76, chip, chip, 2.);
-            let _ = cr.fill();
-            let _ = cr.restore();
-            along += chip + 2.;
-        }
-        for c in text.chars() {
-            let glyph = c.to_string();
-            let glyph_advance = cr.text_extents(&glyph).unwrap().x_advance();
-            let advance = if c.is_ascii_digit() || c == ' ' { digit_advance } else { glyph_advance };
-            let angle = mid + (along + advance * 0.5) / radius;
-            let _ = cr.save();
-            cr.translate(half + radius * angle.cos(), half + radius * angle.sin());
-            cr.rotate(angle + std::f64::consts::FRAC_PI_2);
-            ink(0.8);
-            cr.move_to(-glyph_advance * 0.5, 0.);
-            let _ = cr.show_text(&glyph);
-            let _ = cr.restore();
-            along += advance;
-        }
-    }
-}
-fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    cr.new_sub_path();
-    for (cx, cy, a) in [
-        (x + w - r, y + r, -90.),
-        (x + w - r, y + h - r, 0.),
-        (x + r, y + h - r, 90.),
-        (x + r, y + r, 180.),
-    ] {
-        cr.arc(
-            cx,
-            cy,
-            r,
-            a * std::f64::consts::PI / 180.,
-            (a + 90.) * std::f64::consts::PI / 180.,
-        );
-    }
-    cr.close_path();
 }
 
 fn color_field_path(shape: ColorShape, g: &ColorWheelGeometry) -> gtk::gsk::Path {
@@ -1353,23 +1249,13 @@ fn draw_wheel(snapshot: &gtk::Snapshot, state: &ColorState, g: &ColorWheelGeomet
         (state.wheel_hue_marker(g, state.wheel_components()[0]), hue),
         (state.wheel_marker(g), [color[0], color[1], color[2]]),
     ].into_iter().enumerate() {
-        let path = gtk::gsk::PathBuilder::new();
-        path.add_circle(&gtk::graphene::Point::new(point[0], point[1]), radius);
-        snapshot.push_fill(&path.to_path(), gtk::gsk::FillRule::Winding);
         let bounds = gtk::graphene::Rect::new(point[0]-radius, point[1]-radius, radius*2.,radius*2.);
-        let texture = if index == 1 && matches!(view, ViewColor::Mapped { .. }) {
+        snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(bounds, radius));
+        if index == 1 && matches!(view, ViewColor::Mapped { .. }) {
             let mut p = state.definition().linear_in(state.rgb_space()).unwrap(); p[3] = 1.;
-            crate::display_color::picker_texture(view, headroom, state.rgb_space(), [1,1], &[p])
-        } else { view.solid([rgb[0],rgb[1],rgb[2],1.]) };
-        snapshot.append_texture(&texture, &bounds);
+            crate::display_color::append_picker_solid(snapshot, view, headroom, state.rgb_space(), p, &bounds);
+        } else { crate::display_color::append_solid(snapshot, view, [rgb[0],rgb[1],rgb[2],1.], &bounds); }
         snapshot.pop();
-        let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0.,0.,g.center[0]*2.,g.center[1]*2.));
-        cr.arc(point[0] as f64,point[1] as f64,radius as f64,0.,std::f64::consts::TAU);
-        cr.set_source_rgba(0.,0.,0.,0.5);
-        cr.set_line_width(4.);
-        let _ = cr.stroke_preserve();
-        cr.set_source_rgb(1.,1.,1.);
-        cr.set_line_width(2.);
-        let _ = cr.stroke();
+        crate::display_color::marker_outline(snapshot, point, radius);
     }
 }

@@ -68,6 +68,7 @@ pub struct ViewportPresenter {
     document_extent: [u32; 2],
     encode_srgb: bool,
     corner_radius: f32,
+    picker: crate::present_picker::Picker,
     cursor_pipeline: wgpu::RenderPipeline,
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
@@ -653,6 +654,7 @@ impl ViewportPresenter {
                 .shader_encoding(format)
                 .expect("view encoding was validated"),
             corner_radius: 0.0,
+            picker: Default::default(),
             cursor_pipeline,
             cursor_buffer,
             cursor_vertices: Vec::with_capacity(256),
@@ -764,6 +766,10 @@ impl ViewportPresenter {
     /// requires the same image to survive presentations; buffered images redraw fully.
     pub fn set_target_retention(&mut self, retained: bool) {
         self.retained = retained.then(Default::default);
+    }
+
+    pub fn set_color_picker(&mut self, renderer: &WgpuRasterizer, overlay: Option<layer_render::ColorPickerOverlay>) {
+        self.picker.set(overlay, renderer.device(), &self.shader, &self.pipeline_layout, self.format);
     }
 
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {
@@ -1019,6 +1025,7 @@ impl ViewportPresenter {
                 .write(encoder, &renderer.queue, &self.uniform, bytes)?;
             self.camera_data = Some(data);
         }
+        self.picker.upload(&mut self.uploads, renderer, encoder)?;
         if !self.cursor_vertices.is_empty() {
             // repr(C) contains only initialized f32s, without padding.
             let bytes = unsafe {
@@ -1075,7 +1082,10 @@ impl ViewportPresenter {
             } else {
                 crate::pixel_rect::PixelRect::EMPTY
             };
-            let mut regions = Vec::with_capacity(3 + 2 * self.overviews.len());
+            let mut regions = Vec::with_capacity(5 + 2 * self.overviews.len());
+            for bounds in previous.picker.into_iter().chain(self.picker.bounds()) {
+                crate::present_damage::add_region(&mut regions, crate::present_damage::surface_bounds(bounds, view, self.quarter_turns));
+            }
             crate::present_damage::add_region(&mut regions, repaint);
             if !full && previous.selection_revision != renderer.selection_paint_revision {
                 crate::present_damage::add_region(&mut regions,
@@ -1133,6 +1143,7 @@ impl ViewportPresenter {
             previous.hdr = self.hdr_options;
             previous.proof = self.proof_options;
             previous.cursor = cursor;
+            previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);
             (regions, full)
         } else {
@@ -1218,6 +1229,7 @@ impl ViewportPresenter {
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
             }
+            if !overview_only { self.picker.draw(&mut pass); }
             if !overview_only && !self.cursor_vertices.is_empty() {
                 pass.set_pipeline(&self.cursor_pipeline);
                 pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));

@@ -58,6 +58,7 @@ pub(super) struct Retained {
     pub hdr: [f32; 8],
     pub proof: [u32; 4],
     pub cursor: PixelRect,
+    pub picker: Option<[f32; 4]>,
     pub overviews: Vec<[f32; 24]>,
 }
 impl Default for Retained {
@@ -69,6 +70,7 @@ impl Default for Retained {
             hdr: [f32::NAN; 8],
             proof: [u32::MAX; 4],
             cursor: PixelRect::EMPTY,
+            picker: None,
             overviews: Vec::new(),
         }
     }

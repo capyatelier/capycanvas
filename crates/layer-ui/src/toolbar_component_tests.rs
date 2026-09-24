@@ -211,10 +211,10 @@ fn toolbar_component_defaults_round_trip_on_supported_hosts() {
                     .iter()
                     .map(|t| t.control)
                     .collect::<Vec<_>>(),
-                vec![
-                    ToolbarControl::BrushSizeSlider,
-                    ToolbarControl::BrushOpacitySlider
-                ]
+                if platform == Platform::Gtk { vec![ToolbarControl::BrushSizeSlider,
+                    ToolbarControl::ColorPicker, ToolbarControl::BrushOpacitySlider,
+                    ToolbarControl::Command { command: CommandId::Undo }, ToolbarControl::Command { command: CommandId::Redo }] }
+                else { vec![ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider] }
             );
         }
         if preset == WorkspacePreset::Photographer {
@@ -468,6 +468,7 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
         })
         .is_err()
     );
+    key(&mut s, "Escape", true, false, false);
     s.dispatch(UiAction::Invoke {
         command: CommandId::AutoSelect,
     })

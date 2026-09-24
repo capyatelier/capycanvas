@@ -157,6 +157,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let retired_regions = self.input(UiInput::Blur)?.change.regions;
         self.engine.discard_unsubmitted_input();
         self.input_pending = false;
+        self.cancel_picker();
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
@@ -219,6 +220,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.host_error = None;
         }
         self.rendering_suspended = false;
+        self.cancel_picker();
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();

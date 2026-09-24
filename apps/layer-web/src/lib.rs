@@ -751,6 +751,7 @@ impl WebApp {
             workspace,
             brush,
             colors,
+            color_picker,
             tool_settings,
             tool_actions,
             tool_set,
@@ -798,6 +799,7 @@ impl WebApp {
         field!(workspace);
         field!(brush);
         field!(colors);
+        field!(color_picker);
         field!(tool_settings);
         field!(tool_actions);
         field!(tool_set);

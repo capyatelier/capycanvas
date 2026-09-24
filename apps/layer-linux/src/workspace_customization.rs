@@ -70,18 +70,22 @@ pub(super) fn tile_button(
     button.add_css_class("flat");
     button.set_widget_name(&format!("tile-{id}"));
     button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
-    button.connect_clicked(glib::clone!(
-        #[weak]
-        w,
-        move |button| {
-            if let Some(b) = button.compute_bounds(&w.surface) {
-                w.customization
-                    .anchor
-                    .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
+    if matches!(tile.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
+        crate::color_picker::bind_button(w, &button, layer_ui::DrawerAnchor::Tile { panel, tile: id }, tile.control);
+    } else {
+        button.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |button| {
+                if let Some(b) = button.compute_bounds(&w.surface) {
+                    w.customization
+                        .anchor
+                        .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
+                }
+                w.dispatch(UiAction::ActivateTile { panel, tile: id });
             }
-            w.dispatch(UiAction::ActivateTile { panel, tile: id });
-        }
-    ));
+        ));
+    }
     if tile.control == ToolbarControl::Divider {
         let line = gtk::Separator::new(gtk::Orientation::Horizontal);
         line.set_halign(gtk::Align::Center);
