@@ -266,6 +266,18 @@ pub struct CanvasPreview {
     pub image: Option<ReadbackImage>,
 }
 
+/// Display-only picker geometry in physical surface pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorPickerOverlay {
+    pub center: [f32; 2],
+    pub sample: [f32; 2],
+    pub scale: f32,
+    pub classic: bool,
+    pub layer: bool,
+    pub original: [f32; 4],
+    pub candidate: [f32; 4],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorSampleSource {
     Composite,
@@ -278,13 +290,25 @@ pub enum ColorSampleArea {
     Point,
     Average3,
     Average5,
+    Circle3,
+    Circle5,
+    Circle15,
+    Circle51,
+    Circle101,
 }
 impl ColorSampleArea {
+    /// Circular perceptual samples; legacy square samples retain linear averaging.
+    pub fn perceptual(self) -> bool {
+        matches!(self, Self::Circle3 | Self::Circle5 | Self::Circle15 | Self::Circle51 | Self::Circle101)
+    }
     pub fn width(self) -> u32 {
         match self {
             Self::Point => 1,
-            Self::Average3 => 3,
-            Self::Average5 => 5,
+            Self::Average3 | Self::Circle3 => 3,
+            Self::Average5 | Self::Circle5 => 5,
+            Self::Circle15 => 15,
+            Self::Circle51 => 51,
+            Self::Circle101 => 101,
         }
     }
 }
@@ -294,8 +318,9 @@ pub struct ColorSampleRequest {
     pub source: ColorSampleSource,
     /// Document coordinates for Composite, layer-local coordinates for Layer.
     pub position: [u32; 2],
-    /// Centered square, clipped to the document extent. Average premultiplied
-    /// linear RGB and coverage, then unassociate; transparent RGB has no weight.
+    /// Centered footprint clipped to the source extent. Circular samples average
+    /// Oklab with alpha weights; legacy squares average premultiplied linear RGB.
+    /// Point sampling is exact. Transparent RGB has no weight.
     pub area: ColorSampleArea,
 }
 #[derive(Clone, Copy, Debug)]

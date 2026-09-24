@@ -275,8 +275,22 @@ impl UiState {
             } else {
                 "Variant"
             };
-            options.extend(choice("variant", label, false, variants));
-            options.extend(choice("sample-size", "Sample size", false, samples));
+            if self.platform == crate::Platform::Gtk && self.layer_tools.tool.picks_color() {
+                options.extend(choice("picker-style", "Style", false, variants));
+                let sources = [("Visible color", false), ("Selected layer", true)].into_iter()
+                    .filter(|(_, layer)| !layer || self.color_picker.can_sample_layer)
+                    .map(|(label, layer)| ToolSetItem { label, icon: if layer { "layers" } else { "eye" },
+                        action: UiAction::ColorPicker { action: crate::ColorPickerAction::Source { layer } },
+                        selected: self.color_picker.layer == layer, preview: None }).collect();
+                options.extend(choice("variant", "Source", false, sources));
+                let sizes = [("Single pixel",1),("3 px circle",3),("5 px circle",5),("15 px circle",15),("31 px circle",31)].into_iter()
+                    .map(|(label,width)| ToolSetItem { label, icon: "eyedropper", action: UiAction::SetColorSampleSize { width },
+                        selected: self.color_picker.sample_width == width, preview: None }).collect();
+                options.extend(choice("sample-size", "Sample size", false, sizes));
+            } else {
+                options.extend(choice("variant", label, false, variants));
+                options.extend(choice("sample-size", "Sample size", false, samples));
+            }
         }
         for group in [
             ToolActionGroup::SelectionMode,

@@ -1,5 +1,5 @@
 //! Point/area sampling from artwork textures before view transforms. At most
-//! 25 texels, one reusable buffer and one asynchronous request are resident.
+//! 10,201 texels, one reusable buffer and one asynchronous request are resident.
 //! Source-backed pixels use the bounded working cache; no paint materialization
 //! or full-image readback is needed.
 use super::*;
@@ -84,7 +84,7 @@ impl WgpuRasterizer {
         } else {
             self.device.working_format().block_copy_size(None).unwrap()
         };
-        let capacity = if stride == 16 { 512 } else { 128 };
+        let capacity = u64::from(count * stride).div_ceil(256) * 256;
         if self
             .color_sampler
             .buffer
@@ -105,7 +105,7 @@ impl WgpuRasterizer {
                 })
             })
             .clone();
-        let mut formats = [false; 25];
+        let mut formats = vec![false; count as usize];
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -177,8 +177,8 @@ impl WgpuRasterizer {
                             layout: wgpu::TexelCopyBufferLayout {
                                 offset: u64::from(((row - top) * width + column - left) * stride),
                                 // Metal needs an explicit row pitch even for these
-                                // single-row copies. Offsets still pack at most 25 texels.
-                                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                                // single-row copies. Offsets pack at most 10,201 texels.
+                                bytes_per_row: Some((width * stride).div_ceil(256) * 256),
                                 ..Default::default()
                             },
                         },
@@ -196,6 +196,7 @@ impl WgpuRasterizer {
         encoder.submit(&self.queue);
         let ready = buffer.clone();
         let tx = self.color_sampler.tx.clone();
+        let space = self.document_color.space;
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
@@ -206,12 +207,22 @@ impl WgpuRasterizer {
                             .slice(..)
                             .get_mapped_range()
                             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let mut sum = [0.; 4];
+                        let mut sum = [0f64; 4];
+                        let mut weight = 0.;
+                        let perceptual = request.area.perceptual();
+                        let to_srgb = space.linear_transform(layer_core::color::RgbSpace::Srgb);
+                        let from_srgb = layer_core::color::RgbSpace::Srgb.linear_transform(space);
                         for (i, texel) in data[..count as usize * stride as usize]
                             .chunks_exact(stride as usize)
                             .enumerate()
                         {
-                            let color = if formats[i] {
+                            let dx = (left + i as u32 % width) as f64 - x as f64;
+                            let dy = (top + i as u32 / width) as f64 - y as f64;
+                            if perceptual && dx * dx + dy * dy > (request.area.width() as f64 * 0.5).powi(2) {
+                                continue;
+                            }
+                            weight += 1.;
+                            let color: [f32; 4] = if formats[i] {
                                 std::array::from_fn(|c| {
                                     f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
                                 })
@@ -224,18 +235,23 @@ impl WgpuRasterizer {
                                 ]
                             };
                             if color[3] > 0. {
-                                for c in 0..4 {
-                                    sum[c] += color[c];
+                                let alpha = color[3] as f64;
+                                if perceptual {
+                                    let rgb = [color[0], color[1], color[2]].map(|v| v as f64 / alpha);
+                                    let lab = layer_core::color::oklab::to_lab(layer_core::color::rgb::apply(to_srgb, rgb));
+                                    for c in 0..3 { sum[c] += lab[c] * alpha; }
+                                    sum[3] += alpha;
+                                } else {
+                                    for c in 0..4 { sum[c] += color[c] as f64; }
                                 }
                             }
                         }
                         let rgba = if sum[3] > 0. {
-                            [
-                                sum[0] / sum[3],
-                                sum[1] / sum[3],
-                                sum[2] / sum[3],
-                                sum[3] / count as f32,
-                            ]
+                            let mut rgb = [sum[0], sum[1], sum[2]].map(|v| v / sum[3]);
+                            if perceptual {
+                                rgb = layer_core::color::rgb::apply(from_srgb, layer_core::color::oklab::from_lab(rgb));
+                            }
+                            [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, (sum[3] / weight) as f32]
                         } else {
                             [0.; 4]
                         };

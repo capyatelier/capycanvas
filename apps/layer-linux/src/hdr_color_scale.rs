@@ -1,10 +1,73 @@
 //! Managed intensity arc. GtkRange retains keyboard and accessible range actions;
 //! native capture gestures use the same angular geometry as the visible track.
-use crate::display_color::{ViewColor, picker_texture};
-use gtk::{cairo, gdk, glib, prelude::*, subclass::prelude::*};
+use crate::display_color::{ViewColor, picker_texture_with_coverage};
+use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 use layer_core::color::RgbColor;
 use layer_ui::HdrIntensityArc;
 use std::cell::{Cell, RefCell};
+
+struct ArcPaths {
+    key: (i32, f64, f64),
+    zero: gtk::gsk::Path,
+}
+impl ArcPaths {
+    fn new(key: (i32, f64, f64), g: &HdrIntensityArc) -> Self {
+        Self { key, zero: Self::zero(key.1, key.2, g) }
+    }
+    fn zero(min: f64, max: f64, g: &HdrIntensityArc) -> gtk::gsk::Path {
+        let point = g.point(((0. - min) / (max - min)) as f32);
+        let dx = (point[0] - g.center[0]) / g.radius;
+        let dy = (point[1] - g.center[1]) / g.radius;
+        let zero = gtk::gsk::PathBuilder::new();
+        zero.move_to(point[0] + dx * (g.width * 0.5 + 2.), point[1] + dy * (g.width * 0.5 + 2.));
+        zero.line_to(point[0] + dx * (g.width * 0.5 + 5.), point[1] + dy * (g.width * 0.5 + 5.));
+        zero.to_path()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct ArcKey {
+    width: i32,
+    dpi: i32,
+    min: f64,
+    max: f64,
+    color: (RgbColor, ViewColor, f32),
+}
+impl ArcKey {
+    fn compatible(self, other: Self) -> bool {
+        self.width == other.width && self.dpi == other.dpi
+            && self.min == other.min && self.max == other.max
+            && self.color.1 == other.color.1 && self.color.2 == other.color.2
+    }
+    fn bounds(self) -> gtk::graphene::Rect {
+        let width = self.width as f32 / self.dpi as f32;
+        let g = HdrIntensityArc::new(width).unwrap();
+        let top = (g.center[1] + g.radius * 0.5 - g.width * 0.5 - 2.).floor();
+        let height = ((g.center[1] + g.radius + g.width * 0.5 + 2. - top) * self.dpi as f32).ceil();
+        gtk::graphene::Rect::new(0., top, width, height / self.dpi as f32)
+    }
+    fn render(self) -> gdk::Texture {
+        let (base, view, headroom) = self.color;
+        let bounds = self.bounds();
+        let height = (bounds.height() * self.dpi as f32).round() as i32;
+        let g = HdrIntensityArc::new(bounds.width()).unwrap();
+        let linear = base.linear_in(base.space).expect("validated picker color");
+        let mut coverage = Vec::with_capacity((self.width * height) as usize);
+        let pixels: Vec<_> = (0..self.width * height).map(|i| {
+            let point = [((i % self.width) as f32 + 0.5) / self.dpi as f32,
+                bounds.y() + ((i / self.width) as f32 + 0.5) / self.dpi as f32];
+            let fraction = g.fraction(point);
+            let closest = g.point(fraction);
+            let distance = (point[0] - closest[0]).hypot(point[1] - closest[1]);
+            coverage.push(((g.width * 0.5 - distance) * self.dpi as f32 + 0.5).clamp(0., 1.));
+            let gain = (self.min + f64::from(fraction) * (self.max - self.min)).exp2();
+            [preview_gain(linear[0], gain), preview_gain(linear[1], gain), preview_gain(linear[2], gain), 1.]
+        }).collect();
+        // Bake native-DPI antialiasing into the worker result. A changing texture
+        // under a GTK stroke mask requires additional GPU work on the UI thread.
+        picker_texture_with_coverage(view, headroom, base.space, [self.width as u32, height as u32], &pixels, &coverage)
+    }
+}
 
 mod imp {
     use super::*;
@@ -13,7 +76,10 @@ mod imp {
         pub color: RefCell<Option<(RgbColor, ViewColor, f32)>>,
         pub updating: Cell<bool>,
         pub reset: Cell<bool>,
-        pub texture: RefCell<Option<(i32, i32, f64, f64, gdk::Texture)>>,
+        pub(crate) texture: RefCell<Option<(ArcKey, gdk::Texture)>>,
+        pub preview: Cell<bool>,
+        pub(super) raster: crate::color_preview_raster::PreviewRaster<ArcKey, ArcKey>,
+        pub(super) paths: RefCell<Option<ArcPaths>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for HdrColorScale {
@@ -46,54 +112,26 @@ mod imp {
             let min = obj.adjustment().lower();
             let max = obj.adjustment().upper();
             let dpi = obj.scale_factor();
-            let width = obj.width() * dpi;
-            let top = (g.center[1] + g.radius * 0.5 - g.width * 0.5 - 2.).floor();
-            let height =
-                ((g.center[1] + g.radius + g.width * 0.5 + 2. - top) * dpi as f32).ceil() as i32;
-            let bounds =
-                gtk::graphene::Rect::new(0., top, obj.width() as f32, height as f32 / dpi as f32);
+            let key = ArcKey { width: obj.width() * dpi, dpi, min, max, color: (base, view, headroom) };
+            let bounds = key.bounds();
             let mut cache = self.texture.borrow_mut();
-            if cache
-                .as_ref()
-                .is_none_or(|(w, d, a, b, _)| *w != width || *d != dpi || *a != min || *b != max)
-            {
-                let linear = base.linear_in(base.space).expect("validated picker color");
-                let pixels: Vec<_> = (0..width * height)
-                    .map(|i| {
-                        let point = [
-                            (i % width) as f32 / dpi as f32,
-                            top + (i / width) as f32 / dpi as f32,
-                        ];
-                        let gain = (min + f64::from(g.fraction(point)) * (max - min)).exp2();
-                        [preview_gain(linear[0], gain), preview_gain(linear[1], gain), preview_gain(linear[2], gain), 1.]
-                    })
-                    .collect();
-                *cache = Some((
-                    width,
-                    dpi,
-                    min,
-                    max,
-                    picker_texture(
-                        view,
-                        headroom,
-                        base.space,
-                        [width as u32, height as u32],
-                        &pixels,
-                    ),
-                ));
+            let ready = cache.as_ref().is_some_and(|(k, _)| *k == key);
+            if self.preview.get() {
+                self.raster.request(&*obj, key, || (!ready).then_some(key), ArcKey::render,
+                    |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); },
+                    ArcKey::compatible);
+            } else if !ready {
+                *cache = Some((key, key.render()));
             }
-            let path = gtk::gsk::PathBuilder::new();
-            let start = g.point(0.);
-            path.move_to(start[0], start[1]);
-            for i in 1..=128 {
-                let p = g.point(i as f32 / 128.);
-                path.line_to(p[0], p[1]);
+            let mut paths = self.paths.borrow_mut();
+            if paths.as_ref().is_none_or(|p| p.key.0 != obj.width()) {
+                *paths = Some(ArcPaths::new((obj.width(), min, max), &g));
+            } else if let Some(paths) = paths.as_mut() && paths.key != (obj.width(), min, max) {
+                paths.key = (obj.width(), min, max);
+                paths.zero = ArcPaths::zero(min, max, &g);
             }
-            let stroke = gtk::gsk::Stroke::new(g.width);
-            stroke.set_line_cap(gtk::gsk::LineCap::Round);
-            snapshot.push_stroke(&path.to_path(), &stroke);
-            snapshot.append_texture(&cache.as_ref().unwrap().4, &bounds);
-            snapshot.pop();
+            let paths = paths.as_ref().unwrap();
+            if let Some((_, texture)) = cache.as_ref() { snapshot.append_texture(texture, &bounds); }
             let [cx, cy] = g.point(((obj.value() - min) / (max - min)) as f32);
             let radius = g.marker_radius;
             let thumb =
@@ -104,84 +142,34 @@ mod imp {
             }
             p[3] = 1.;
             snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(thumb, radius));
-            snapshot.append_texture(
-                &picker_texture(view, headroom, base.space, [1, 1], &[p]),
-                &thumb,
-            );
+            crate::display_color::append_picker_solid(snapshot, view, headroom, base.space, p, &thumb);
             snapshot.pop();
-            let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
-                0.,
-                0.,
-                obj.width() as f32,
-                obj.height() as f32,
-            ));
-            cr.arc(
-                cx as f64,
-                cy as f64,
-                radius as f64,
-                0.,
-                std::f64::consts::TAU,
-            );
-            cr.set_source_rgba(0., 0., 0., 0.5);
-            cr.set_line_width(4.);
-            let _ = cr.stroke_preserve();
-            cr.set_source_rgb(1., 1., 1.);
-            cr.set_line_width(2.);
-            let _ = cr.stroke();
-            let ink = obj.color();
-            cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.9);
+            crate::display_color::marker_outline(snapshot, [cx, cy], radius);
+            let mut ink = obj.color();
+            ink.set_alpha(0.9);
             if obj.has_visible_focus() {
-                cr.arc(
-                    cx as f64,
-                    cy as f64,
-                    (radius + 4.) as f64,
-                    0.,
-                    std::f64::consts::TAU,
-                );
-                let _ = cr.stroke();
+                let r = radius + 5.;
+                snapshot.append_border(&gtk::gsk::RoundedRect::from_rect(
+                    gtk::graphene::Rect::new(cx-r, cy-r, r*2., r*2.), r), &[2.;4], &[ink;4]);
             }
-            let radius = g.width * 0.5;
-            let zero = g.point(((0. - min) / (max - min)) as f32);
-            let dx = (zero[0] - g.center[0]) / g.radius;
-            let dy = (zero[1] - g.center[1]) / g.radius;
-            cr.move_to(
-                (zero[0] + dx * (radius + 2.)) as f64,
-                (zero[1] + dy * (radius + 2.)) as f64,
-            );
-            cr.line_to(
-                (zero[0] + dx * (radius + 5.)) as f64,
-                (zero[1] + dy * (radius + 5.)) as f64,
-            );
-            cr.set_line_width(1.);
-            let _ = cr.stroke();
+            snapshot.append_stroke(&paths.zero, &gtk::gsk::Stroke::new(1.), &ink);
             // Read-only type follows the lower arc; all numeric editing is in the sheet.
             let font = (obj.width() as f64 * 0.044).clamp(9., 12.);
-            cr.select_font_face(
-                "Adwaita Sans",
-                cairo::FontSlant::Normal,
-                cairo::FontWeight::Normal,
-            );
-            cr.set_font_size(font);
             let text = format!("{:+.2} EV", obj.value());
             let radius = (g.radius + g.width * 0.5 + 3.) as f64 + font;
-            let advance: f64 = text
-                .chars()
-                .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
-                .sum();
-            let mut cursor = -advance * 0.5;
-            for c in text.chars() {
-                let text = c.to_string();
-                let width = cr.text_extents(&text).unwrap().x_advance();
+            // Retained glyph nodes share GTK's font atlas. The curved label
+            // must not rasterize/upload a new Cairo surface on every preview.
+            let glyphs: Vec<_> = text.chars().map(|c| {
+                let layout = crate::color_readout::layout(obj.upcast_ref(), font, false, &c.to_string());
+                let width = crate::color_readout::advance(&layout);
+                (layout, width)
+            }).collect();
+            let mut cursor = -glyphs.iter().map(|(_, width)| width).sum::<f64>() * 0.5;
+            for (layout, width) in glyphs {
                 let a = 76f64.to_radians() - (cursor + width * 0.5) / radius;
-                let _ = cr.save();
-                cr.translate(
-                    g.center[0] as f64 + radius * a.cos(),
-                    g.center[1] as f64 + radius * a.sin(),
-                );
-                cr.rotate(a - std::f64::consts::FRAC_PI_2);
-                cr.move_to(-width * 0.5, 0.);
-                let _ = cr.show_text(&text);
-                let _ = cr.restore();
+                crate::color_readout::append(snapshot, &layout, [
+                    g.center[0] as f64 + radius * a.cos(), g.center[1] as f64 + radius * a.sin(),
+                ], a.to_degrees() - 90., true, ink);
                 cursor += width;
             }
         }
@@ -256,11 +244,13 @@ impl HdrColorScale {
             );
         }
     }
-    pub fn refresh(&self, state: &layer_ui::ColorState, view: ViewColor, headroom: f32) {
+    pub fn refresh_color(&self, state: &layer_ui::ColorState, view: ViewColor, headroom: f32, preview: bool) {
+        let changed = self.imp().preview.replace(preview) != preview;
+        if changed || !preview { self.imp().raster.cancel(); }
+        if changed { self.queue_draw(); }
         let color = (state.picker_base(), view, headroom);
         if self.imp().color.borrow().as_ref() != Some(&color) {
             *self.imp().color.borrow_mut() = Some(color);
-            self.imp().texture.borrow_mut().take();
             self.queue_draw();
         }
         self.imp().updating.set(true);

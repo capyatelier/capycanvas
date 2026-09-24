@@ -8,6 +8,8 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
+#[path = "color_picker_session.rs"]
+mod color_picker_session;
 #[path = "source_edit.rs"]
 pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
@@ -216,6 +218,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
                 colors,
+                color_picker: Default::default(),
                 tool_settings: Vec::new(),
                 toolbar_context_generation: 0,
                 tool_actions: Vec::new(),
@@ -543,6 +546,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cursor.hover.reset();
         }
         self.cursor.event = event;
+        if self.eyedropper.picking.previous.is_some() && !self.eyedropper.picking.finishing
+            && self.eyedropper.picking.touch.is_none() {
+            if let Some(e) = event.filter(|e| e.phase == PenPhase::Hover) {
+                self.picker_position([e.surface_position.x, e.surface_position.y]);
+            } else if event.is_none() {
+                self.eyedropper.picking.position = None;
+                self.eyedropper.cancel();
+                self.state.color_picker.preview = None;
+            }
+        }
     }
 
     /// Snapshot of shared cursor geometry. Render loops reuse a host-owned
@@ -556,6 +569,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// All hosts consume the same GPU segments and outline geometry.
     pub fn update_canvas_cursor(&mut self, view: &mut CanvasCursor) -> bool {
         view.segments.clear();
+        if self.eyedropper.picking.previous.is_some() { return false; }
         let Some(event) = self.cursor.event else {
             return false;
         };
@@ -660,6 +674,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && matches!(
                 &input,
                 UiInput::Key { pressed: true, .. }
+                    | UiInput::ColorPickerHold { .. }
                     | UiInput::Pointer {
                         phase: ContactPhase::Down,
                         ..
@@ -673,8 +688,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             reply.handled = true;
             return Ok(reply);
         }
+        if let Some(change) = self.color_picker_input(&input)? {
+            reply.handled = true;
+            reply.change = change;
+            return Ok(reply);
+        }
         let mut released_chrome_pin = false;
         match input {
+            UiInput::ColorPickerHold { .. } => (),
             UiInput::Chrome {
                 event,
                 facts,
@@ -1080,6 +1101,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::Blur => {
+                if self.cancel_picker() {
+                    reply.change = self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true);
+                }
                 self.eyedropper.cancel();
                 if self.cancel_layer_gesture()? {
                     reply.cancel_paint = true;
@@ -2096,7 +2120,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let was_expanded = self.state.customization.has_drawer();
         let was_filter_drawer = self.filter_drawer_open();
         let was_zen = self.state.workspace.zen_mode;
+        if self.picker_cancel_action(&action) {
+            self.cancel_picker();
+            return Ok(self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true));
+        }
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
+        let configuring_picker = self.eyedropper.picking.previous.is_some()
+            && matches!(&action, UiAction::ColorPicker { .. });
         let choosing_drawing_set = matches!(&action, UiAction::SelectBrushSet { .. })
             && self.state.customization.drawer.as_ref().is_some_and(|drawer|
                 drawer.columns.iter().flatten().any(|p| matches!(p, Panel::BrushSets | Panel::SculptSets)));
@@ -2616,18 +2646,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.apply_brush()?;
                 (BRUSH, false)
             }
+            UiAction::ColorPicker { action } => {
+                self.configure_picker(action)?;
+                (BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true)
+            }
             UiAction::SetColorSampleSize { width } => {
                 use layer_render::ColorSampleArea;
                 let area = match width {
                     1 => ColorSampleArea::Point,
+                    3 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle3,
+                    5 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle5,
+                    15 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle15,
+                    51 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle51,
+                    101 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle101,
                     3 => ColorSampleArea::Average3,
                     5 => ColorSampleArea::Average5,
-                    _ => return Err("Choose Point, 3×3 or 5×5 sampling".into()),
+                    _ => return Err("Choose a supported sample size".into()),
                 };
-                self.eyedropper.cancel();
                 self.eyedropper.area = area;
+                self.resample_picker();
                 self.refresh_tools();
-                (BRUSH, false)
+                (BRUSH | COLOR_PREVIEW, true)
             }
             UiAction::ResetToolSetting { id } => {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
@@ -3031,6 +3070,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             || tool_before != (self.state.brush.tool, self.layer_interaction.tool)
         {
             self.eyedropper.cancel();
+            if self.eyedropper.picking.previous.is_some() {
+                if !self.layer_interaction.tool.picks_color() {
+                    self.eyedropper.picking.previous = None;
+                    self.eyedropper.picking.finishing = false;
+                    self.eyedropper.picking.position = None;
+                }
+                self.state.color_picker.preview = None;
+                if explicit_color || revision != self.engine.document().revision { self.cancel_picker(); }
+                else if self.eyedropper.picking.previous.is_some() { self.resample_picker(); }
+                changed |= BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW;
+            }
             self.region_tools.cancel();
         }
         if !was_filter_drawer && self.filter_drawer_open() {
@@ -3046,7 +3096,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .and_then(|panel| layout.active_panel(panel));
         }
         if self.state.customization.drawer.is_some()
-            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set && !choosing_selection)
+            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set && !choosing_selection && !configuring_picker)
                 || self.state.customization.expanded.is_some()
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
@@ -3197,6 +3247,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.layer_interaction.tool == LayerCanvasTool::Hand {
             // Hand input is routed through UiInput::Pointer's pan gesture.
+            return Ok(());
+        }
+        if self.state.platform == Platform::Gtk && (self.eyedropper.picking.previous.is_some()
+            || self.eyedropper.picking.consumed.contains(&event.device_id)) {
+            if event.phase == PenPhase::Hover {
+                self.cursor_input(Some(event));
+            } else {
+                let _ = self.color_picker_input(&UiInput::Pointer {
+                    id: event.device_id, phase: match event.phase {
+                        PenPhase::Down => ContactPhase::Down, PenPhase::Up => ContactPhase::Up,
+                        PenPhase::Cancel => ContactPhase::Cancel, _ => ContactPhase::Move,
+                    }, kind: if event.tool == layer_engine::ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen },
+                    button: PointerButton::Primary,
+                    position: [event.surface_position.x, event.surface_position.y],
+                });
+            }
             return Ok(());
         }
         if self.layer_interaction.tool.picks_color() {
@@ -3579,10 +3645,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.poll_region_tool()?;
         let sample_space = self.engine.document().color.space;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
-            self.state.colors.set_color(color)?;
-            self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
-            self.apply_brush()?;
-            changed |= regions::BRUSH;
+            if self.eyedropper.picking.previous.is_some() {
+                self.state.color_picker.preview = Some(color);
+                changed |= regions::COLOR_PREVIEW;
+            } else if !self.eyedropper.preview_only {
+                self.state.colors.set_color(color)?;
+                self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
+                self.apply_brush()?;
+                changed |= regions::BRUSH;
+            }
+        }
+        if self.eyedropper.picking.previous.is_some() && !self.eyedropper.busy()
+            && self.eyedropper.sample.is_none() && self.state.color_picker.preview.take().is_some() {
+            changed |= regions::COLOR_PREVIEW;
+        }
+        if self.eyedropper.picking.finishing && !self.eyedropper.busy() {
+            if let Some(color) = self.eyedropper.sample {
+                self.state.colors.set_color(color)?;
+                self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
+                self.apply_brush()?;
+            }
+            self.cancel_picker();
+            changed |= regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW;
         }
         if self.engine.document().revision != revision || self.layer_interaction.changed {
             self.layer_interaction.changed = false;
@@ -3807,6 +3891,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                 })?;
                 Ok((BRUSH | DOCUMENT, false))
+            }
+            CommandId::Eyedropper if self.state.platform == Platform::Gtk => {
+                if self.eyedropper.picking.previous.is_some() { self.cancel_picker(); }
+                else { self.start_picker()?; }
+                Ok((BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true))
             }
             CommandId::Hand | CommandId::Eyedropper => {
                 self.layer_action(LayerAction::Tool {
@@ -4220,7 +4309,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
         }
 
-        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
+        if matches!(self.state.platform, Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
             && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
                 [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
@@ -4234,6 +4323,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }),
             );
         }
+        if self.state.platform == Platform::Gtk && self.layer_interaction.tool.picks_color() {
+            self.state.tool_set.groups.clear();
+            self.state.tool_set.subtools = [
+                ("Color Picker", "color-picker", ColorPickerStyle::Glass),
+                ("Eyedropper", "eyedropper", ColorPickerStyle::Eyedropper),
+            ].into_iter().map(|(label, icon, style)| ToolSetItem {
+                label, icon, selected: self.state.color_picker.style == style,
+                action: UiAction::ColorPicker { action: ColorPickerAction::Style { style } }, preview: None,
+            }).collect();
+        }
+        self.state.color_picker.layer = self.eyedropper.layer;
+        self.state.color_picker.sample_width = self.eyedropper.area.width();
+        self.state.color_picker.can_sample_layer = self.picker_layer_available();
         self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set);
         self.state.tool_settings = if self.operation.active() {
             self.transform_controls()
@@ -4774,6 +4876,7 @@ mod tests {
     }
 
     include!("session_color_tests.rs");
+    include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("toolbar_component_tests.rs");
@@ -7296,8 +7399,9 @@ mod tests {
         s.frame(1, 1).unwrap();
         let old = *s.renderer_mut().sample_requests.last().unwrap();
         s.dispatch(UiAction::SetColorSampleSize { width: 5 }).unwrap();
-        assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
-            && item.action == UiAction::SetColorSampleSize { width: 5 }));
+        assert_eq!(s.state.color_picker.sample_width, 5);
+        if platform != Platform::Gtk { assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
+            && item.action == UiAction::SetColorSampleSize { width: 5 })); }
         assert!(s.dispatch(UiAction::SetColorSampleSize { width: 4 }).is_err());
         let color = s.state.colors.rgba();
         s.renderer_mut().sample_reply = Some(ColorSample { request_id: old.request_id, rgba: [1.; 4] });
@@ -7305,11 +7409,14 @@ mod tests {
         s.frame(2, 2).unwrap();
         assert_eq!(s.state.colors.rgba(), color);
         let next = *s.renderer_mut().sample_requests.last().unwrap();
-        assert_eq!(next.area, ColorSampleArea::Average5);
+        assert_eq!(next.area, if platform == Platform::Gtk { ColorSampleArea::Circle5 } else { ColorSampleArea::Average5 });
         assert_ne!(next.request_id, old.request_id);
         s.renderer_mut().sample_reply = Some(ColorSample { request_id: next.request_id, rgba: [0.25, 0.5, 0.75, 0.2] });
         s.frame(3, 3).unwrap();
-        assert_ne!(s.state.colors.rgba(), color);
+        if platform == Platform::Gtk {
+            assert_eq!(s.state.colors.rgba(), color);
+            assert!(s.state.color_picker.preview.is_some());
+        } else { assert_ne!(s.state.colors.rgba(), color); }
         assert_eq!(s.state.colors.rgba()[3], 1.);
         assert_eq!(s.state.brush.opacity, opacity);
         assert_eq!(s.engine.document().revision, revision);

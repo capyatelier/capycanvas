@@ -133,7 +133,7 @@ impl Body {
             Self::Toolbar(_) => regions::LAYOUT | regions::BRUSH | regions::COMMANDS,
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
             Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
-            Self::Color(_) => regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
+            Self::Color(_) => regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
             Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
             Self::Proof(_) => regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT,
@@ -148,7 +148,7 @@ impl Body {
             Self::Toolbar(v) => v.refresh(w, state),
             Self::Tools(v) => v.refresh_state(w, state),
             Self::Settings(v) => v.refresh(w, state),
-            Self::Color(v) => v.refresh(&state.colors, w.view_color(), w.picker_headroom()),
+            Self::Color(v) => v.refresh(&state.preview_colors(), w.view_color(), w.picker_headroom()),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
@@ -787,6 +787,16 @@ impl Drawer {
         ));
         *self.animation.borrow_mut() = Some(animation.clone());
         animation.play();
+    }
+    pub fn refresh_color_preview(&self, colors: &layer_ui::ColorState, display: crate::display_color::ViewColor, headroom: f32, preview: bool) {
+        if let Some(view) = self.view.borrow().as_ref() {
+            for body in &view.bodies {
+                if let Body::Color(panel) = body && panel.root.is_mapped() {
+                    if preview { panel.refresh_preview(colors, display, headroom); }
+                    else { panel.refresh(colors, display, headroom); }
+                }
+            }
+        }
     }
     pub fn refresh(
         self: &Rc<Self>,

@@ -27,6 +27,7 @@ pub mod recovery;
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
+pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle};
 mod export;
 pub use export::{ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportResolution, ExportSize};
 mod export_presets;
@@ -162,6 +163,7 @@ pub enum ToolbarControl {
     Brush { id: u32 },
     Size { pixels: u16 },
     Color,
+    ColorPicker,
     Opacity,
     BrushSizeSlider,
     BrushOpacitySlider,
@@ -425,6 +427,7 @@ pub fn ui_catalog() -> UiCatalog {
             "navigator",
             "hand",
             "eyedropper",
+            "color-picker",
             "gradient",
             "figure",
             "ruler",
@@ -1101,6 +1104,7 @@ pub struct UiState {
     pub workspace: WorkspaceState,
     pub brush: BrushState,
     pub colors: ColorState,
+    pub color_picker: ColorPickerState,
     pub tool_settings: Vec<ToolSetting>,
     pub toolbar_context_generation: u64,
     pub tool_actions: Vec<ToolSettingAction>,
@@ -1265,6 +1269,9 @@ pub enum UiAction {
         context: ToolbarContext,
         action: Box<UiAction>,
     },
+    ColorPicker {
+        action: ColorPickerAction,
+    },
     SetColorSampleSize {
         width: u32,
     },
@@ -1391,7 +1398,8 @@ pub mod regions {
     pub const CAMERA: u32 = 32;
     pub const HOST: u32 = 64;
     pub const CUSTOMIZATION: u32 = 128;
-    pub const ALL: u32 = 255;
+    pub const COLOR_PREVIEW: u32 = 256;
+    pub const ALL: u32 = 511;
 }
 
 pub fn srgb_to_linear(value: f32) -> f32 {
