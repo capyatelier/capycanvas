@@ -109,10 +109,14 @@ pub struct DrawerConnection {
 }
 impl DrawerPlacement {
     /// Ancestor clipping must not round off a tile's connected corners.
-    /// Only flatten container corners actually reached by the originating tile.
+    /// Only flatten container corners whose rounding reaches the originating tile.
     pub fn source_corners(&self, container: Bounds) -> [bool; 4] {
         let a = self.anchor;
         let b = container;
+        let [reach_x, reach_y] = match self.direction {
+            Edge::Top | Edge::Bottom => [SURFACE_RADIUS, 0.5],
+            Edge::Left | Edge::Right => [0.5, SURFACE_RADIUS],
+        };
         let facing = match self.direction {
             Edge::Top => [true, true, false, false],
             Edge::Right => [false, true, true, false],
@@ -127,10 +131,10 @@ impl DrawerPlacement {
         ];
         std::array::from_fn(|i| {
             facing[i]
-                && corners[i][0] >= a.x - 0.5
-                && corners[i][0] <= a.x + a.width + 0.5
-                && corners[i][1] >= a.y - 0.5
-                && corners[i][1] <= a.y + a.height + 0.5
+                && corners[i][0] >= a.x - reach_x
+                && corners[i][0] <= a.x + a.width + reach_x
+                && corners[i][1] >= a.y - reach_y
+                && corners[i][1] <= a.y + a.height + reach_y
         })
     }
     pub fn connection(&self) -> Option<DrawerConnection> {
@@ -931,6 +935,32 @@ mod tests {
                     }),
                     [false; 4]
                 );
+                for (offset, reached) in [(6.0, true), (SURFACE_RADIUS + 1.0, false)] {
+                    let padded = if vertical {
+                        Bounds {
+                            x: anchor.x - offset,
+                            width: 200.0,
+                            ..anchor
+                        }
+                    } else {
+                        Bounds {
+                            y: anchor.y - offset,
+                            height: 200.0,
+                            ..anchor
+                        }
+                    };
+                    let leading = match direction {
+                        Edge::Top | Edge::Left => 0,
+                        Edge::Right => 1,
+                        Edge::Bottom => 3,
+                    };
+                    let corners = p.source_corners(padded);
+                    assert_eq!(
+                        corners[leading], reached,
+                        "{direction:?} corner {offset}px before the tile"
+                    );
+                    assert_eq!(corners.iter().filter(|c| **c).count(), usize::from(reached));
+                }
                 let c = p.connection().unwrap();
                 assert_eq!(c.depth, 6.0);
                 assert_eq!(c.length, 36.0);

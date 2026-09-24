@@ -79,7 +79,7 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
     }
     const pill=await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.children].map(n=>n.getBoundingClientRect().height),radius:getComputedStyle(p).borderRadius}})()");
     assert.equal(pill.height,34,'Workspace pill stays compact at every title-bar size');
-    assert.ok(pill.buttons.every(h=>h===26));assert.equal(pill.radius,'18px');
+    assert.ok(pill.buttons.every(h=>h===26));assert.equal(pill.radius,'999px');
     assert.ok(Math.abs(pill.center-pill.headerCenter)<.1,'Workspace pill stays vertically centered');
     const s=await shot(`${theme}-${size}-${scale}x`);
     const width=Buffer.from(s.data,'base64').readUInt32BE(16);assert.equal(width,1440*scale,'Capture has physical scale, not a CSS transform');

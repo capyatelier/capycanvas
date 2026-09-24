@@ -31,6 +31,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     const view=customization.view(panel),root=element("div","toolbar-controls");
     root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;root.dataset.axis=axis;
     root.style.setProperty("--tile-icon-size",`${view.tile_icon_size}px`);
+    root.style.setProperty("--tile-radius",`${view.tile_corner_radius}px`);
     root.dataset.labeled=String(view.tile_label_lines>0);
     root.style.setProperty("--tile-label-lines",view.tile_label_lines);
     root.style.setProperty("--tile-label-weight",view.tile_label_bold?700:400);
@@ -41,6 +42,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     root.refreshPanel=()=>{
       const current=customization.view(panel);
       root.style.setProperty("--tile-icon-size",`${current.tile_icon_size}px`);
+      root.style.setProperty("--tile-radius",`${current.tile_corner_radius}px`);
       for(const tile of current.tiles) {
         customization.refreshTile([...root.children].find(n=>Number(n.dataset.tile)===tile.id),tile);
       }
@@ -94,19 +96,26 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function markSource(source,direction) {
     if(!source)return;
     source.dataset.drawerFacing=direction;
-    // Flatten only ancestor corners actually reached by this active tile.
-    const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[direction];
+    // Flatten only ancestor corners whose rounding reaches this active tile.
+    const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[direction],vertical=direction==='top'||direction==='bottom';
     for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
-      const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]];
-      const square=facing.filter(i=>{const[x,y]=corners[i];return x>=a.left-.5&&x<=a.right+.5&&y>=a.top-.5&&y<=a.bottom+.5;});
+      const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]],style=getComputedStyle(node);
+      const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomRightRadius,style.borderBottomLeftRadius].map(r=>Math.max(.5,parseFloat(r)||0));
+      const square=facing.filter(i=>{const[x,y]=corners[i],[rx,ry]=vertical?[radii[i],.5]:[.5,radii[i]];return x>=a.left-rx&&x<=a.right+rx&&y>=a.top-ry&&y<=a.bottom+ry;});
       if(square.length)node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');
     }
+  }
+  function squircleCorner([cx,cy],[sx,sy],[ex,ey]) {
+    return Array.from({length:24},(_,i)=>{
+      const angle=(i+1)*Math.PI/48,along=Math.sqrt(Math.cos(angle)),across=Math.sqrt(Math.sin(angle));
+      return `L ${cx+sx*along+ex*across} ${cy+sy*along+ey*across}`;
+    }).join(" ");
   }
   function bridge(node,c) {
     if(!node){node=document.createElementNS("http://www.w3.org/2000/svg","svg");node.classList.add("drawer-bridge");node.setAttribute('aria-hidden','true');workspace.append(node);}
     place(node,c.bounds);node.setAttribute("viewBox",`0 0 ${c.bounds.width} ${c.bounds.height}`);
-    const path=node.firstElementChild||document.createElementNS(node.namespaceURI,"path"),[a,b]=c.radii,l=c.length,d=c.depth,k=.5522848;
-    path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} C ${l} ${d-b+b*k} ${l+b-b*k} ${d} ${l+b} ${d} L ${-a} ${d} C ${-a+a*k} ${d} 0 ${d-a+a*k} 0 ${d-a} Z`);
+    const path=node.firstElementChild||document.createElementNS(node.namespaceURI,"path"),[a,b]=c.radii,l=c.length,d=c.depth;
+    path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} ${squircleCorner([l+b,d-b],[-b,0],[0,b])} L ${-a} ${d} ${squircleCorner([-a,d-a],[0,a],[a,0])} Z`);
     path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);if(!path.parentNode)node.append(path);
     return node;
   }
@@ -183,8 +192,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       if(r.connection) {
         const c=r.connection;
         r.bridge=bridge(r.bridge,c);r.bridge.style.zIndex=r.column==null?"1899":"1799";
-        r.root.style.borderRadius=c.square_corners.map(square=>square?"0":"8px").join(" ");
-      } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="8px";}
+        r.root.style.borderRadius=c.square_corners.map(square=>square?"0":"var(--surface-radius)").join(" ");
+      } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="var(--surface-radius)";}
       r.shadow.style.borderRadius=r.root.style.borderRadius;
 
       r.root.style.zIndex=r.column==null?"1900":"1800";

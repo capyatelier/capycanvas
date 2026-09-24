@@ -120,12 +120,12 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     await call('Input.dispatchMouseEvent',{type:'mouseReleased',...p,button:'left',buttons:0,clickCount:1});await wait();
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:500,y:450,buttons:0});await wait();
   };
-  const style=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(n);return{background:s.backgroundColor,selected:n.getAttribute('aria-selected'),facing:n.dataset.drawerFacing,radii:[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomRightRadius,s.borderBottomLeftRadius]}})()`);
+  const style=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(n);return{background:s.backgroundColor,selected:n.getAttribute('aria-selected'),facing:n.dataset.drawerFacing,radii:[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomRightRadius,s.borderBottomLeftRadius],tileRadius:parseFloat(s.getPropertyValue('--tile-radius'))*parseFloat(s.getPropertyValue('--corner-fit'))}})()`);
   const sample=async(data,points)=>evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const scale=i.width/innerWidth;return ${JSON.stringify(points)}.map(([x,y])=>[...g.getImageData(Math.floor(x*scale),Math.floor(y*scale),1,1).data]);})()`);
   const check=async(selector,id,name)=>{
     const s=await style(selector),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[s.facing];
     assert.ok(facing,`${name}: source faces drawer`);
-    assert.deepEqual(s.radii.map((r,i)=>r=== (facing.includes(i)?'0px':'6px')),[true,true,true,true],`${name}: joined corners`);
+    assert.deepEqual(s.radii.map((r,i)=>r=== (facing.includes(i)?'0px':`${+s.tileRadius.toFixed(4)}px`)),[true,true,true,true],`${name}: joined corners`);
     const b=await rect(selector),d=await rect(`.content-drawer[data-drawer="${id}"]`);
     const points=[[b.x+2,b.y+b.height/2],[b.right-2,b.y+b.height/2],[b.x+b.width/2,b.y+2],[b.x+b.width/2,b.bottom-2]];
     if(s.facing==='right')points.push([(b.right+d.x)/2,b.y+b.height/2]);

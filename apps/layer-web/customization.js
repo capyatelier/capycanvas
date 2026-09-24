@@ -269,6 +269,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           strip.dataset.panel = config.id;
           strip.dataset.tileStyle = view.tile_style;
           strip.style.setProperty("--tile-icon-size", `${view.tile_icon_size}px`);
+          strip.style.setProperty("--tile-radius", `${view.tile_corner_radius}px`);
           strip.dataset.labeled = String(view.tile_label_lines > 0);
           strip.style.setProperty("--tile-label-lines", view.tile_label_lines);
           strip.style.setProperty("--tile-label-weight", view.tile_label_bold ? 700 : 400);
