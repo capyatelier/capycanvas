@@ -45,6 +45,11 @@ impl WorkspacePreset {
                 DockTarget::CompactEdge { edge: Edge::Left, alignment: EdgeAlignment::Center },
             ).expect("centered brush toolbar");
         }
+        if self == Self::Photographer && platform == crate::Platform::Gtk {
+            layout.move_panel([1600., 1000.], Panel::Commands,
+                DockTarget::Edge { edge: Edge::Top, outer: true })
+                .expect("outer Photo options bar");
+        }
         layout
     }
 
@@ -622,7 +627,8 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                [Edge::Left, Edge::Right, Edge::Right, Edge::Top]);
+                if platform == crate::Platform::Gtk { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
+                else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
             for (id, expected) in [
                 (14, if Panel::Proof.available_on(platform) {vec![Panel::Color, Panel::Proof, Panel::Stats]} else {vec![Panel::Color, Panel::Stats]}),
                 (15, vec![Panel::Properties, Panel::Adjustments]),

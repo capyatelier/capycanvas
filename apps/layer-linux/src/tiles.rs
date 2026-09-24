@@ -88,10 +88,41 @@ mod imp {
                 );
             };
             for (child, bounds) in children.iter().zip(layout.tiles) {
-                if let Some(component) = child.downcast_ref::<crate::workspace::toolbar_components::ComponentBody>() {
+                if let Some(component) =
+                    child.downcast_ref::<crate::workspace::toolbar_components::ComponentBody>()
+                {
                     component.set_presentation(axis, self.style.get());
                 }
-                allocate(child, bounds);
+                if let Some(button) = child.first_child().and_downcast::<gtk::Button>()
+                    && button.has_css_class("toolbar-divider")
+                    && let Some(line) = button.child().and_downcast::<gtk::Separator>()
+                {
+                    let horizontal = bounds.width >= bounds.height;
+                    line.set_orientation(if horizontal {
+                        gtk::Orientation::Horizontal
+                    } else {
+                        gtk::Orientation::Vertical
+                    });
+                    line.set_halign(if horizontal {
+                        gtk::Align::Fill
+                    } else {
+                        gtk::Align::Center
+                    });
+                    line.set_valign(if horizontal {
+                        gtk::Align::Center
+                    } else {
+                        gtk::Align::Fill
+                    });
+                    line.set_margin_start(if horizontal { 4 } else { 0 });
+                    line.set_margin_end(if horizontal { 4 } else { 0 });
+                    line.set_margin_top(if horizontal { 0 } else { 4 });
+                    line.set_margin_bottom(if horizontal { 0 } else { 4 });
+                }
+                let visible = bounds.width > 0. && bounds.height > 0.;
+                child.set_child_visible(visible);
+                if visible {
+                    allocate(child, bounds);
+                }
             }
             if let Some(grip) = self.grip.borrow().as_ref() {
                 grip.set_child_visible(layout.grip.is_some());
@@ -101,7 +132,12 @@ mod imp {
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            for child in self.children.borrow().iter() {
+            for child in self
+                .children
+                .borrow()
+                .iter()
+                .filter(|w| w.is_child_visible())
+            {
                 self.obj().snapshot_child(child, snapshot);
             }
             if let Some(grip) = self.grip.borrow().as_ref().filter(|g| g.is_child_visible()) {

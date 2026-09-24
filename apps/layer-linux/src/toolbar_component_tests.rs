@@ -1386,3 +1386,142 @@ fn native_toolbar_visual_audit_input() {
     }
     d.finish();
 }
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_rows_input"]
+fn native_toolbar_rows_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarRows");
+    restore(&d, WorkspacePreset::Photographer);
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::Brush,
+    });
+    pump(150);
+    for (id, values) in [
+        ("size", vec![0.5, 31.9, 32., 2048.]),
+        ("opacity", vec![0., 0.125, 0.999, 1.]),
+    ] {
+        let number = d.named(&format!("toolbar-setting-{id}"));
+        let button = find_css(&number, "number-value").unwrap();
+        let before = button.compute_bounds(&d.w.window).unwrap();
+        for value in values {
+            d.w.dispatch(UiAction::SetToolSetting {
+                id: id.into(),
+                value,
+            });
+            pump(80);
+            let after = button.compute_bounds(&d.w.window).unwrap();
+            assert_eq!(before, after, "{id} readout must reserve its numeric range");
+            let label = find_css(&number, "number-readout")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap();
+            assert!(
+                label.layout().pixel_size().0 <= label.width(),
+                "units and digits fit {id}"
+            );
+        }
+    }
+    d.capture_canvas("stable-horizontal-values.png");
+    for edge in [Edge::Top, Edge::Bottom] {
+        for alignment in [
+            EdgeAlignment::Start,
+            EdgeAlignment::Center,
+            EdgeAlignment::End,
+        ] {
+            d.w.dispatch(UiAction::MovePanel {
+                panel: Panel::Commands,
+                target: DockTarget::CompactEdge { edge, alignment },
+                viewport: [1600., 1000.],
+            });
+            pump(100);
+            assert!(d.named("toolbar-choice-tool").is_mapped());
+            assert!(
+                d.named("toolbar-setting-size").is_mapped(),
+                "compact {edge:?} {alignment:?} shows inline settings"
+            );
+        }
+    }
+    d.capture_canvas("compact-horizontal-options.png");
+    d.w.dispatch(UiAction::MovePanel {
+        panel: Panel::Commands,
+        target: DockTarget::Float {
+            position: [320., 180.],
+        },
+        viewport: [1600., 1000.],
+    });
+    pump(150);
+    let mut view = state(&d.w).workspace;
+    let group = view.layout.panel_group(Panel::Commands).unwrap();
+    let f = view
+        .layout
+        .floating
+        .iter_mut()
+        .find(|f| f.root.id() == group)
+        .unwrap();
+    f.toolbar_layout = FloatingToolbarLayout::Compact;
+    f.width = 3. * 38. - 2.;
+    f.height = None;
+    d.w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(view),
+    });
+    pump(180);
+    for edge in [None, Some(Edge::Left), Some(Edge::Right)] {
+        if let Some(edge) = edge {
+            let mut view = state(&d.w).workspace;
+            view.layout
+                .move_panel(
+                    [1600., 1000.],
+                    Panel::Commands,
+                    DockTarget::Edge { edge, outer: true },
+                )
+                .unwrap();
+            let group = view.layout.panel_group(Panel::Commands).unwrap();
+            let band = view
+                .layout
+                .bands
+                .iter_mut()
+                .find(|b| b.root.id() == group)
+                .unwrap();
+            band.extent = 3. * 38. - 2. + WORKSPACE_SPACING;
+            d.w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(view),
+            });
+            pump(150);
+        }
+        let view = state(&d.w);
+        let resolved = view
+            .workspace
+            .layout
+            .workspace(1600., 1000., HEADER_HEIGHT, STATUS_HEIGHT);
+        let group = resolved
+            .groups
+            .iter()
+            .find(|g| g.active == Panel::Commands)
+            .unwrap();
+        let cells = &group.tiles.as_ref().unwrap().tiles;
+        assert_eq!(cells[0].y, cells[1].y);
+        assert!(cells[1].x > cells[0].x);
+        let config = view.workspace.layout.panel(Panel::Commands).unwrap();
+        for (tile, bounds) in config.tiles().iter().zip(cells) {
+            if tile.control == ToolbarControl::Divider || tile.control.options_style().is_some() {
+                assert_eq!(bounds.width, group.bounds.width);
+            }
+        }
+        let tool = d.named("toolbar-choice-tool");
+        let size = d.named("toolbar-setting-size");
+        assert!(tool.is_mapped() && size.is_mapped());
+        let a = tool.compute_bounds(&d.w.window).unwrap();
+        let b = size.compute_bounds(&d.w.window).unwrap();
+        assert!(
+            (a.y() - b.y()).abs() < 1. && b.x() > a.x(),
+            "options pack across the first row"
+        );
+        d.click(&find_css(&size, "number-value").unwrap());
+        let popup = descendant::<gtk::Popover>(&size).unwrap();
+        d.number(&popup.child().unwrap(), "51");
+        d.key(0xff1b);
+        assert_eq!(state(&d.w).brush.diameter, 51.);
+        d.capture_canvas(&format!("toolbox-rows-{edge:?}.png"));
+    }
+    d.finish();
+}

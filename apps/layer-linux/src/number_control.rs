@@ -30,6 +30,7 @@ mod imp {
         pub show_units: Cell<bool>,
         pub popover_enabled: Cell<bool>,
         pub editor_title: OnceCell<String>,
+        pub width_reserve: OnceCell<gtk::Widget>,
         pub popover: OnceCell<gtk::Popover>,
         pub popover_control: OnceCell<super::NumberControl>,
         pub interaction_end_pending: Cell<bool>,
@@ -177,6 +178,9 @@ impl NumberControl {
         show_units: bool,
     ) {
         let imp = self.imp();
+        if let Some(reserve) = imp.width_reserve.get() {
+            reserve.set_visible(!show_icon && !stacked);
+        }
         if let Some(label) = imp.value_label.get() {
             label.set_attributes(None);
             imp.readout_scale.set(1.);
@@ -352,22 +356,12 @@ impl NumberControl {
             if inline {
                 // Reserve the full formatted range, not the current value's
                 // digit count. Expressions scroll inside this same footprint.
-                let chars = [
-                    spec.min,
-                    spec.max,
-                    (99.9 / spec.scale).clamp(spec.min, spec.max),
-                ]
-                .into_iter()
-                .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
-                .map(|v| {
-                    if compact {
-                        spec.compact_text(v.value).chars().count()
-                    } else {
-                        v.text.chars().count()
-                    }
-                })
-                .max()
-                .unwrap_or(1) as i32;
+                let chars = spec
+                    .width_samples(compact)
+                    .iter()
+                    .map(|v| v.chars().count())
+                    .max()
+                    .unwrap_or(1) as i32;
                 value_label.set_width_chars(if compact { 0 } else { chars });
                 value_label.set_max_width_chars(if compact { -1 } else { chars });
                 entry.set_width_chars(if compact { 1 } else { chars });
@@ -382,25 +376,28 @@ impl NumberControl {
             stack.set_valign(gtk::Align::Center);
             stack.add_named(&display, Some("value"));
             stack.add_named(&entry, Some("entry"));
-            if inline && !compact {
-                // GTK's width-chars uses average character width, which can be
-                // narrower than digits. Measure the widest formatted value too.
-                let reserve = gtk::Button::new();
-                reserve.add_css_class("number-value");
-                reserve.add_css_class("flat");
-                let text = [spec.min, spec.max]
-                    .into_iter()
-                    .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
-                    .map(|v| v.text)
-                    .max_by_key(|v| v.len())
-                    .unwrap_or_default();
-                reserve.set_label(
-                    &text
-                        .chars()
-                        .map(|c| if c.is_ascii_digit() { '8' } else { c })
-                        .collect::<String>(),
-                );
+            if inline {
+                // Invisible stack pages participate in measurement. Measure all
+                // range samples in the actual font; expressions scroll within
+                // this fixed footprint instead of resizing nearby controls.
+                let reserve = gtk::Stack::new();
+                reserve.set_hhomogeneous(true);
+                for text in spec.width_samples(compact) {
+                    let sample = gtk::Button::new();
+                    sample.add_css_class("number-value");
+                    sample.add_css_class("flat");
+                    let label = gtk::Label::new(Some(
+                        &text
+                            .chars()
+                            .map(|c| if c.is_ascii_digit() { '8' } else { c })
+                            .collect::<String>(),
+                    ));
+                    label.add_css_class("number-readout");
+                    sample.set_child(Some(&label));
+                    reserve.add_child(&sample);
+                }
                 stack.add_named(&reserve, Some("measure"));
+                control.imp().width_reserve.set(reserve.upcast()).unwrap();
             }
             header.append(&stack);
             display.connect_clicked(glib::clone!(

@@ -247,7 +247,36 @@ impl NumericControl {
             format!("{text} {}", self.unit)
         }
     }
-    /// Value only, for hosts that present the unit beside the field's icon.
+    /// Representative widest readouts, including signs, fractional values just
+    /// below a digit/precision boundary, endpoint words, and units. Hosts measure
+    /// these with their native font to reserve a stable input footprint.
+    pub fn width_samples(&self, compact: bool) -> Vec<String> {
+        let mut values = vec![self.min, self.max];
+        if self.digits > 0 {
+            values.extend([
+                ((self.max * self.scale).ceil() - 0.1) / self.scale,
+                ((self.min * self.scale).floor() + 0.1) / self.scale,
+                99.9 / self.scale,
+                -99.9 / self.scale,
+            ]);
+            if let Some(limit) = self.integer_above {
+                values.push(limit - 0.1 / self.scale);
+            }
+        }
+        values
+            .into_iter()
+            .filter(|v| *v >= self.min && *v <= self.max)
+            .filter_map(|v| self.resolve(v, NumericOperation::Format).ok())
+            .map(|v| {
+                if compact {
+                    self.compact_text(v.value)
+                } else {
+                    v.text
+                }
+            })
+            .collect()
+    }
+    /// Value only, for hosts that present the unit separately.
     pub fn compact_value(&self, value: f64) -> String {
         let shown = value * self.scale;
         let digits = if (shown * 10.).round().abs() >= 1000.

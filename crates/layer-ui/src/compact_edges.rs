@@ -201,13 +201,7 @@ impl DockLayout {
                 unreachable!()
             };
             let config = self.panel(*active).unwrap();
-            let [w, h] = config.tile_style.size();
-            let (a, c) = if axis == Axis::Horizontal {
-                (w, h)
-            } else {
-                (h, w)
-            };
-            toolbar_lanes(length, config.tiles(), a, axis) as f32 * (c + 2.) - 2.
+            toolbar_cross_extent(length, config.tiles(), config.tile_style, axis)
         };
         let cross = runs
             .iter()

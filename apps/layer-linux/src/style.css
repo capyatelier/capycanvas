@@ -96,8 +96,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .drawer-shadow.join-se, .drawer-source-se { border-bottom-right-radius: 0; }
 .drawer-shadow.join-sw, .drawer-source-sw { border-bottom-left-radius: 0; }
 .toolbar-divider { padding: 0; min-width: 0; min-height: 0; background: transparent; }
-.toolbar-divider separator { min-width: 1px; min-height: 18px; margin: 0; }
-.toolbar-controls.vertical .toolbar-divider separator, .column-divider separator { min-width: 18px; min-height: 1px; }
+.toolbar-divider separator { min-width: 1px; min-height: 1px; margin: 0; }
+.column-divider separator { min-width: 18px; min-height: 1px; }
 .zen-section { border-radius: 8px; }
 .content-drawer > scrolledwindow + scrolledwindow { border-left: 1px solid alpha(var(--window-fg-color), .12); }
 .panel-context-menu { font-size: var(--ui-text-size); }

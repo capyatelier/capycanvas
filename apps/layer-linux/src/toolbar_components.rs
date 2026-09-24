@@ -189,7 +189,7 @@ mod imp {
                     axis,
                     &sizes,
                     button,
-                    if self.vertical.get() { 4. } else { 10. },
+                    if self.vertical.get() { 2. } else { 10. },
                 );
                 allocate(&children[0], layout.more);
                 for (child, b) in children[1..].iter().zip(layout.fields) {

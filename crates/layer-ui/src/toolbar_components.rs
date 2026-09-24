@@ -311,56 +311,48 @@ pub fn tool_options_layout(
     let height = finite_size(height);
     let gap = finite_size(gap);
     let vertical = axis == Axis::Vertical;
-    let more = if vertical {
-        let h = finite_size(button[1]).min(height);
-        Bounds {
-            y: height - h,
-            width,
-            height: h,
-            ..Bounds::default()
-        }
-    } else {
-        let w = finite_size(button[0]).min(width);
-        Bounds {
-            x: width - w,
-            width: w,
-            height,
-            ..Bounds::default()
-        }
+    let more = Bounds {
+        x: (width - finite_size(button[0])).max(0.),
+        y: (height - finite_size(button[1])).max(0.),
+        width: finite_size(button[0]).min(width),
+        height: finite_size(button[1]).min(height),
     };
-    let mut offset = 0.0;
+    let row_height = sizes
+        .iter()
+        .map(|s| finite_size(s[1]))
+        .fold(finite_size(button[1]), f32::max);
+    let (mut x, mut y) = (0., 0.);
     let mut fitting = true;
     let fields = sizes
         .iter()
         .map(|size| {
             let w = finite_size(size[0]);
             let h = finite_size(size[1]);
-            fitting &= w > 0.0
-                && h > 0.0
-                && if vertical {
-                    w <= width && offset + h + gap <= more.y
+            if x > 0. && x + w > width {
+                x = 0.;
+                y += row_height + gap;
+            }
+            // One-column vertical controls fill their tile. Wider toolboxes keep
+            // the same compact cells, packed left-to-right, then top-to-bottom.
+            let b = Bounds {
+                x,
+                y,
+                width: if vertical && width < w * 2. + gap {
+                    width
                 } else {
-                    h <= height && offset + w + gap <= more.x
-                };
+                    w
+                },
+                height: row_height,
+            };
+            fitting &= w > 0.
+                && h > 0.
+                && w <= width
+                && y + row_height <= height
+                && !(b.y + b.height + gap > more.y && b.x + b.width + gap > more.x);
             if !fitting {
                 return None;
             }
-            let b = if vertical {
-                Bounds {
-                    x: 0.,
-                    y: offset,
-                    width,
-                    height: h,
-                }
-            } else {
-                Bounds {
-                    x: offset,
-                    y: 0.,
-                    width: w,
-                    height,
-                }
-            };
-            offset += if vertical { h + gap } else { w + gap };
+            x += b.width + gap;
             Some(b)
         })
         .collect();
@@ -412,22 +404,33 @@ pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [
 /// Icons belong to the shared field schema, including compact native hosts.
 pub fn tool_setting_icon(id: &str) -> &'static str {
     match id {
-        "size" | "size_jitter" => "size",
+        "size" => "brush-size",
+        "size_jitter" => "size",
         "opacity" => "opacity",
-        "flow" | "wet_flow" | "dry_flow" => "airbrush",
-        "hardness" => "blur",
-        "spacing" | "distance" => "ruler",
-        "angle" | "rotation_jitter" => "rotate-right",
+        "flow" => "paint-flow",
+        "hardness" => "hardness",
+        "spacing" => "brush-spacing",
+        "distance" => "ruler",
+        "angle" | "transform_angle" => "angle",
+        "rotation_jitter" => "rotation-variation",
         "grain_depth" => "grain",
-        "paint" => "brush",
-        "water_load" | "pull" | "dilution" | "wet_edge" => "watercolor",
-        "edge_width" | "transform_width" | "transform_height" => "size",
-        "transform_x" | "transform_y" => "move",
-        "transform_angle" => "rotate-right",
-        "smoothing" => "blur",
-        "gap_closing" => "auto-select",
-        "expansion" => "size",
-        "strength" => "liquify",
+        "paint" => "paint-load",
+        "water_load" => "water",
+        "pull" => "eyedropper",
+        "dilution" => "dilution",
+        "wet_edge" => "edge-strength",
+        "edge_width" => "edge-width",
+        "wet_flow" => "wet-bleed",
+        "dry_flow" => "dry-bleed",
+        "transform_width" | "selection_width" | "selection_ratio_width" => "width",
+        "transform_height" | "selection_height" | "selection_ratio_height" => "height",
+        "transform_x" => "position-x",
+        "transform_y" => "position-y",
+        "selection_feather" => "feather",
+        "smoothing" => "edge-smooth",
+        "gap_closing" => "close-gap",
+        "expansion" => "expand",
+        "strength" => "strength",
         "tolerance" => "color-select",
         _ => "settings",
     }

@@ -48,7 +48,10 @@ not the toolbar allocation or canvas size. Value changes retain native editors.
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;
 a tap outside accepts valid text and ends editing. Inputs and dropdowns use the
-panel controls' typography and colors. Double-click a numeric label (or its
+panel controls' typography and colors. Horizontal values reserve a fixed width
+from the numeric range, signs, fractional boundaries and units, measured in the
+native font; changing a value or entering an expression never shifts its neighbors.
+Double-click a numeric label (or its
 horizontal icon) to reset that setting to its tool/preset default. Icon mode
 keeps horizontal dropdown labels readable. Vertical
 options use flat icon choices and icon/value buttons; tapping a value opens
@@ -57,6 +60,12 @@ put the icon beside the label and value; the other styles stack icon and value.
 Text follows the shared 11 pt typography; form icons stay 16px. Units sit
 beside values on the same baseline and hide when space is tight. Only oversized
 numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
+Floating toolboxes and side toolbars wider than one tile fill rows left-to-right.
+Dividers span the full width; the options component occupies its own full-width
+row and packs its compact controls in the same order. Drawer height measurement
+uses these same rows. Short allocations clip trailing content and keep
+visible insertion targets attached to their original tile IDs.
+
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
 shorter form fields. GTK supplies natural sizes and theme spacing; Rust fits
 complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
@@ -122,3 +131,10 @@ Use the release test executable through `LAYER_NATIVE_TEST_EXECUTABLE` when
 iterating. The tablet proxy exercises GDK pen input, not physical tablet hardware;
 its synthetic serials cannot authorize native popup grabs, so popup journeys
 run separately without that proxy.
+
+The Photo default's command/options band is outermost at the top, above both
+side columns. Only untouched included layouts migrate; custom layouts and their
+history remain intact. Compact top/bottom options use a preferred length of
+sixteen tiles (side options retain eight), then shrink to the available edge.
+`native_toolbar_rows_input` verifies stable readout bounds across range changes,
+all six horizontal compact anchors, and editing in floating/left/right toolboxes.

@@ -401,3 +401,27 @@ original grip allocations and input handlers.
 Final checks passed: the release build and GTK unit tests, native icon audits at
 1× and 2×, tool/color controls, toolbar sizing, Zen selection, all filter editing
 workflows, and the drawer/toolbar pointer suite in both themes.
+
+## Toolbar numeric fields — 2026-09-23
+
+Numeric fields use the shared `tool_setting_icon` mapping. The bank adds 22
+16px vectors, using the existing foreground paint and 1.5px contour weight.
+These distinguish parameter meanings from the tools that happen to expose them:
+
+| Fields | Glyphs / meaning |
+| --- | --- |
+| Brush size, size variation | Diameter dimension / differently sized stamps |
+| Flow, hardness, spacing | Paint moving / crisp versus soft edge / separated stamps |
+| Angle, rotation variation | Measured angle / varying stamp rotations |
+| Paint load, water load, dilution | Filled paint drop / water drop / mixing drops |
+| Wet bleed, dry bleed | Liquid versus dry pigment moving outward |
+| Edge strength, edge width | Nested edge / measured boundary thickness |
+| Width, height, ratio width/height | Horizontal / vertical dimensions |
+| X, Y position | Point relative to the respective coordinate axis |
+| Feather radius, smoothing, gap closing, expansion | Feather / smoothed contour / bridged gap / outward boundary |
+| Strength | Gauge |
+
+Opacity, texture, color pickup, bleed distance and tolerance retain the existing
+opacity, grain, eyedropper, ruler and color-selection glyphs. Core coverage checks
+all published brush, region, selection and transform fields against the bank.
+The GTK icon audit renders every packaged glyph at 16/24/32px in both themes.

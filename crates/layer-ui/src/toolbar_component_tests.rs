@@ -285,7 +285,8 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
                 assert_eq!(layout.tiles.len(), tiles.len());
                 assert_eq!(layout.insertion.len(), tiles.len() + 1);
                 for b in &layout.tiles {
-                    assert!(b.width > 0. && b.height > 0. && b.x.is_finite() && b.y.is_finite());
+                    assert!(b.width > 0. && b.height >= 0. && b.x.is_finite() && b.y.is_finite());
+                    if axis == Axis::Vertical { assert!(b.y + b.height <= height); }
                     for other in &layout.tiles {
                         if b != other {
                             assert!(b.intersection(*other).is_none());
@@ -705,4 +706,149 @@ fn compact_edge_moves_preserve_toolbar_identity_and_one_step_history() {
     })
     .unwrap();
     assert_eq!(s.state().workspace.layout, moved);
+}
+
+#[test]
+fn toolbar_toolboxes_pack_rows_and_span_dividers_and_options() {
+    let controls = [
+        ToolbarControl::Color,
+        ToolbarControl::Color,
+        ToolbarControl::Color,
+        ToolbarControl::Divider,
+        ToolbarControl::Color,
+        ToolbarControl::Color,
+        ToolbarControl::TOOL_OPTIONS,
+    ];
+    let tiles: Vec<_> = controls
+        .into_iter()
+        .enumerate()
+        .map(|(i, control)| ToolbarTile {
+            id: i as u32,
+            control,
+        })
+        .collect();
+    for style in [
+        TileStyle::Small,
+        TileStyle::Medium,
+        TileStyle::Large,
+        TileStyle::MediumLabeled,
+        TileStyle::Labeled,
+    ] {
+        let [w, h] = style.size();
+        for columns in [2, 3, 4] {
+            let width = columns as f32 * (w + 2.) - 2.;
+            let layout = toolbar_tile_layout(width, 1000., Axis::Vertical, &tiles, true, style);
+            let b = &layout.tiles;
+            assert_eq!(b[0].y, b[1].y);
+            assert!(b[1].x > b[0].x);
+            if columns == 2 {
+                assert!(b[2].y > b[1].y);
+            }
+            assert_eq!(b[3].width, width);
+            assert_eq!(b[3].height, 8.);
+            assert_eq!(b[6].x, 0.);
+            assert_eq!(b[6].width, width);
+            assert!(b[6].y >= b[5].y + h);
+            let options = tool_options_layout(
+                width,
+                b[6].height,
+                Axis::Vertical,
+                &[[w, h]; 12],
+                [w, h],
+                2.,
+            );
+            let first = options.fields[0].unwrap();
+            let second = options.fields[1].unwrap();
+            assert_eq!(first.y, second.y);
+            assert!(second.x > first.x);
+            for cell in options.fields.into_iter().flatten() {
+                assert!(cell.x + cell.width <= width && cell.y + cell.height <= b[6].height);
+                assert!(cell.intersection(options.more).is_none());
+            }
+        }
+    }
+    // The new Photo band owns both top corners, so side panels start below it.
+    let layout = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    let resolved = layout.workspace(1600., 1000., HEADER_HEIGHT, STATUS_HEIGHT);
+    let top = resolved
+        .groups
+        .iter()
+        .find(|g| g.active == Panel::Commands)
+        .unwrap();
+    assert_eq!(top.bounds.x, WORKSPACE_SPACING);
+    assert_eq!(top.bounds.width, 1600. - 2. * WORKSPACE_SPACING);
+    let tools = resolved
+        .groups
+        .iter()
+        .find(|g| g.active == Panel::Toolbar)
+        .unwrap();
+    assert!(tools.bounds.y >= top.bounds.y + top.bounds.height);
+}
+
+#[test]
+fn toolbar_number_width_samples_cover_ranges_and_units() {
+    for spec in [
+        NumericControl::brush_size(),
+        NumericControl::percent(),
+        NumericControl::number(-131072., 131072., 1., 0).unit("px"),
+        NumericControl::number(0., 32., 1., 1).unit("px"),
+        NumericControl::number(-180., 180., 1., 0).unit("°"),
+    ] {
+        for compact in [false, true] {
+            let reserved = spec
+                .width_samples(compact)
+                .iter()
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap();
+            for i in 0..=1000 {
+                let v = spec.min + (spec.max - spec.min) * i as f64 / 1000.;
+                let text = if compact {
+                    spec.compact_text(v)
+                } else {
+                    spec.resolve(v, NumericOperation::Format).unwrap().text
+                };
+                assert!(
+                    text.chars().count() <= reserved,
+                    "{text} exceeds range reservation {reserved}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
+    let mut fields = Vec::new();
+    for brush in brush_catalog() {
+        fields.extend(tool_settings::controls(&layer_core::default_brush(
+            tools::preset(brush.id).unwrap(),
+        )));
+    }
+    fields.extend(region_tools::RegionTools::default().controls());
+    for constraint in [
+        SelectionConstraint::Free,
+        SelectionConstraint::Ratio,
+        SelectionConstraint::Size,
+    ] {
+        let options = SelectionOptions {
+            constraint,
+            ..Default::default()
+        };
+        fields.extend(options.controls());
+        fields.extend(options.edge_controls());
+    }
+    let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+    for id in fields.iter().map(|f| f.id).chain([
+        "transform_x",
+        "transform_y",
+        "transform_width",
+        "transform_height",
+        "transform_angle",
+    ]) {
+        let icon = tool_setting_icon(id);
+        assert_ne!(icon, "settings", "{id} needs a meaningful icon");
+        assert!(ui_catalog().icons.contains(&icon));
+        assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file());
+    }
 }
