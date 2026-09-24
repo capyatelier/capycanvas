@@ -6,8 +6,7 @@ struct LayerPropertiesPanel: View {
     @ObservedObject var store: EditorStore
     @State private var selectedCurve = ""
     private var view: JSON { store.state["layer_properties"] }
-    private var controls: [JSON] { view["controls"].array.filter { $0["section"].string != "Advanced" } }
-    private var advanced: [JSON] { view["controls"].array.filter { $0["section"].string == "Advanced" } }
+    private var controls: [JSON] { view["controls"].array }
     private var curves: [JSON] { controls.filter { $0["kind"]["kind"].string == "curve" } }
     var body: some View {
         let epoch = store.state["document_file"]["epoch"].uint
@@ -20,7 +19,8 @@ struct LayerPropertiesPanel: View {
                     selectedCurve = curves[$0]["key"].string
                 }
                 CurveProperty(store: store, layer: view["layer"].uint, epoch: epoch, control: curve,
-                    maximum: view["curve_max"].isNull ? nil : view["curve_max"].number)
+                    maximum: view["curve_max"].isNull ? nil : view["curve_max"].number,
+                    white: view["curve_white"].isNull ? nil : view["curve_white"].number)
                     .id("\(epoch):\(view["layer"].uint):\(curve["key"].string)")
             }
             ForEach(controls.indices, id: \.self) { index in
@@ -32,15 +32,6 @@ struct LayerPropertiesPanel: View {
                     }
                     PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
                         .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
-                }
-            }
-            if !advanced.isEmpty {
-                DisclosureGroup("Advanced") {
-                    ForEach(advanced.indices, id: \.self) { index in
-                        let control = advanced[index]
-                        PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
-                            .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
-                    }
                 }
             }
         }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
@@ -120,15 +111,17 @@ private struct CurveProperty: View {
     let epoch: UInt64
     let control: JSON
     let maximum: Double?
+    let white: Double?
     @Environment(\.isEnabled) private var enabled
     @GestureState private var contact = false
     @State private var selected: Int?
     @State private var dragging = false
     @State private var dragPoint: (index: Int, point: CGPoint)?
+    @State private var lastTap: (index: Int, time: Date)?
     private var key: String { control["key"].string }
     private var points: [JSON] { control["value"]["value"].array }
+    private var modified: Bool { control["modified"].bool }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var removable: Bool { selected.map { $0 > 0 && $0 < points.count - 1 } ?? false }
     private func change(_ point: [Double], index: Int?, remove: Bool = false, phase: String? = nil) {
         store.effect(layer, epoch: epoch, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
     }
@@ -148,8 +141,7 @@ private struct CurveProperty: View {
                     }
                     context.stroke(grid, with: .color(palette["text"].opacity(0.2)), lineWidth: 1)
                     let ink = palette["text"].opacity(0.7)
-                    if let maximum, maximum > 0 {
-                        let white = 1 / maximum
+                    if let maximum, let white, maximum > 0 {
                         var reference = Path()
                         reference.move(to: CGPoint(x: white * size.width, y: 0))
                         reference.addLine(to: CGPoint(x: white * size.width, y: size.height))
@@ -159,10 +151,10 @@ private struct CurveProperty: View {
                         context.draw(Text("SDR white · 0 EV").font(.system(size: 11)).foregroundColor(ink),
                             at: CGPoint(x: 5, y: 5), anchor: .topLeading)
                         context.draw(Text(String(format: "%.0f · %+.0f EV", maximum, log2(maximum))).font(.system(size: 11)).foregroundColor(ink),
-                            at: CGPoint(x: size.width - 5, y: size.height - 5), anchor: .bottomTrailing)
+                            at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
                     } else {
                         context.draw(Text("Output").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: 5, y: 5), anchor: .topLeading)
-                        context.draw(Text("Input").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - 5, y: size.height - 5), anchor: .bottomTrailing)
+                        context.draw(Text("Input").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
                     }
                     var curve = Path()
                     for (index, p) in control["plot"].array.enumerated() {
@@ -198,8 +190,13 @@ private struct CurveProperty: View {
                         guard dragging else { return }
                         guard geometry.size.width > 0, geometry.size.height > 0 else { cancelDrag(); return }
                         if let point = dragPoint {
+                            let tapped = hypot(event.translation.width, event.translation.height) < 4
+                            let now = Date()
+                            let double = tapped && lastTap.map { $0.index == point.index && now.timeIntervalSince($0.time) < 0.4 } == true
+                            lastTap = tapped && !double ? (point.index, now) : nil
                             change([point.point.x + event.translation.width / geometry.size.width,
-                                point.point.y - event.translation.height / geometry.size.height], index: point.index, phase: "up")
+                                point.point.y - event.translation.height / geometry.size.height], index: point.index, remove: double, phase: "up")
+                            if double { selected = nil }
                         } else {
                             // Commit insertion once. Subsequent drags address the
                             // actual returned model, never a guessed insertion index.
@@ -213,13 +210,14 @@ private struct CurveProperty: View {
                     .accessibilityLabel("\(control["label"].string), \(points.count) points")
                     .accessibilityIdentifier("effect-curve")
             }.frame(height: 200)
-            HStack {
-                Button("Remove point") { change([0, 0], index: selected, remove: true); selected = nil }
-                    .disabled(!removable).accessibilityIdentifier("curve-remove")
-                Spacer(minLength: 0)
-                Button("Reset") { selected = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
-                    .accessibilityIdentifier("curve-reset")
-            }.buttonStyle(.plain)
+                .overlay(alignment: .bottomTrailing) {
+                    if modified {
+                        Button { selected = nil; lastTap = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
+                            Image(systemName: "arrow.counterclockwise").frame(width: 28, height: 28).contentShape(Rectangle())
+                        }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
+                            .help("Reset curve").accessibilityLabel("Reset curve").accessibilityIdentifier("curve-reset")
+                    }
+                }
         }.onChange(of: points.map { $0[0].number }) { previous, current in
             guard current.count == previous.count + 1,
                 let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }

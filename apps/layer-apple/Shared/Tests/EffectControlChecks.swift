@@ -93,7 +93,7 @@ extension XCTestCase {
         #endif
         expectation(for: NSPredicate(format: "label == %@", "Red, 3 points"), evaluatedWith: curve)
         waitForExpectations(timeout: 10)
-        XCTAssertTrue(app.buttons["curve-remove"].isEnabled, "A new curve point must be selected without another tap")
+        XCTAssertTrue(app.buttons["curve-reset"].waitForExistence(timeout: 5), "An edited curve offers reset on the chart")
         let curved = changed(from: blue)
         XCTAssertGreaterThan(curved[0], blue[0])
         XCTAssertEqual(curved[1], blue[1]); XCTAssertEqual(curved[2], blue[2])
@@ -124,6 +124,14 @@ extension XCTestCase {
         expectPixels(curved)
         editorHistory("Redo", in: app); expectPixels(moved)
         attachEditor(in: app, name: "filter-red-curve-drag")
+        #if os(macOS)
+        destination.doubleClick()
+        #else
+        destination.doubleTap()
+        #endif
+        expectPixels(blue); history(before: moved, after: blue)
+        XCTAssertEqual(curve.label, "Red, 2 points", "Double-clicking a point removes it")
+        editorHistory("Undo", in: app); expectPixels(moved)
         #if os(iOS)
         // A touch on the plot edits its curve. Scroll from the noninteractive
         // heading instead of starting the gesture inside that editing surface.
@@ -134,9 +142,6 @@ extension XCTestCase {
         #else
         reveal(app.buttons["curve-reset"])
         #endif
-        workspaceActivate(app.buttons["curve-remove"])
-        expectPixels(blue); history(before: moved, after: blue)
-        editorHistory("Undo", in: app); expectPixels(moved)
         workspaceActivate(app.buttons["curve-reset"])
         expectPixels(blue); history(before: moved, after: blue)
         workspaceActivate(app.buttons["layer-Delete selected layers"])

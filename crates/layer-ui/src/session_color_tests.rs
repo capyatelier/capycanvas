@@ -714,3 +714,40 @@ fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history()
     s.dispatch(UiAction::Invoke{command:CommandId::SoftProof}).unwrap();assert_eq!(s.proof_panel_mode(),ProofMode::Sdr);assert!(s.state.requests.is_empty());
     s.dispatch(UiAction::Invoke{command:CommandId::SdrRendition}).unwrap();assert!(s.state.requests.is_empty());assert_eq!(s.engine.document().sdr_rendition,dial);
 }
+
+#[test]
+fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
+    use layer_core::{EffectInstance, EffectParameterKind, EffectValue, Layer, LayerKind};
+    use layer_core::color::SampleDepth;
+    use std::sync::Arc;
+    let mut document = Document::new("HDR", 32, 32);
+    document.color.depth = SampleDepth::F16;
+    let mut legacy = (*layer_core::bundled_effect_catalog().get("curves").unwrap().program()).clone();
+    let parameters = Arc::make_mut(&mut legacy.parameters);
+    let domain = parameters.iter_mut().find(|p| &*p.key == "domain").unwrap();
+    domain.kind = EffectParameterKind::Choice { options: ["Encoded RGB".into(), "Linear HDR".into()].into() };
+    let legacy_id = document.allocate_layer_id();
+    let mut layer = Layer::paint(legacy_id, "Legacy curves");
+    layer.kind = LayerKind::Effect;
+    let mut instance = EffectInstance::new(Arc::new(legacy));
+    instance.set("domain", EffectValue::Choice(1)).unwrap();
+    layer.effect = Some(Arc::new(instance));
+    document.layers.insert(0, layer);
+    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
+    s.set_platform(Platform::Gtk);
+    s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
+    let id = s.state.layer_properties.layer.unwrap();
+    let effect = s.engine.document().layer(layer_core::LayerId(id)).unwrap().effect.clone().unwrap();
+    assert_eq!(effect.choice("domain"), Some("Log HDR"));
+    assert_eq!(s.state.layer_properties.curve_max, Some(16.));
+    assert_eq!(s.state.layer_properties.curve_white, Some(8. / 12.));
+    let set = |key: &str, value| UiAction::Effect { action: EffectAction::Set { layer: id, key: key.into(), value } };
+    assert!(s.dispatch(set("domain", EffectValue::Choice(2))).is_err());
+    s.dispatch(set("domain", EffectValue::Choice(0))).unwrap();
+    assert_eq!(s.state.layer_properties.curve_max, None);
+    assert_eq!(s.state.layer_properties.curve_white, None);
+    s.dispatch(UiAction::Layer { action: LayerAction::Select { id: legacy_id.0, mask: false } }).unwrap();
+    assert_eq!(s.state.layer_properties.layer, Some(legacy_id.0));
+    assert_eq!(s.state.layer_properties.curve_white, Some(1. / 16.));
+}

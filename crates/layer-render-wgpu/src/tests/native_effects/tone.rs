@@ -313,8 +313,17 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
 }
 
 #[test]
-fn hdr_linear_curves_and_exposure_retain_range_across_physical_passes() {
+fn hdr_log_curves_and_exposure_retain_range_across_physical_passes() {
+    use std::f64::consts::{E, LN_2, LOG2_E};
     let points=vec![[0.,0.05],[0.25,0.2],[0.75,0.85],[1.,0.95]];
+    let floor=f64::from(layer_core::LOG_CURVE_FLOOR_STOPS);
+    let span=4.-floor;
+    let toe=floor.exp2()*E;
+    let reference=|v:f64| {
+        let x=if v<=toe {v/(toe*LN_2*span)} else {(v.log2()-floor)/span};
+        let y=curve_reference(&points,x);
+        if y<=LOG2_E/span {y*toe*LN_2*span} else {(y*span+floor).exp2()}
+    };
     for (space, depth) in RgbSpace::ALL.into_iter().flat_map(|space| [SampleDepth::F16, SampleDepth::F32].map(|depth| (space, depth))) {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth}).unwrap();
         for image in [false,true] {
@@ -326,7 +335,7 @@ fn hdr_linear_curves_and_exposure_retain_range_across_physical_passes() {
                 let mut exposure=effect(3,"exposure",image);set(&mut exposure,"exposure",EffectValue::Number(1.));
                 let actual=frame(&mut r,&[exposure,curve,source(rgb,alpha)]);
                 assert_eq!(actual[3],alpha);
-                for c in 0..3 {let expected=if alpha==0.{0.}else{curve_reference(&points,f64::from(rgb[c])/16.)*32.};
+                for c in 0..3 {let expected=if alpha==0.{0.}else{reference(f64::from(rgb[c]))*2.};
                     let actual=if alpha==0.{actual[c]}else{actual[c]/alpha} as f64;
                     assert!((actual-expected).abs()<=2e-6+expected.abs()*2e-5,"HDR curve {space:?}, physical={image}, alpha={alpha}: {actual} != {expected}");
                 }

@@ -160,6 +160,8 @@ impl FilterPickerState {
     }
 }
 
+const CURVE_DETACH_MARGIN: f32 = 0.1;
+
 fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
     let gap = ((upper - lower) * 0.25).min(0.001);
     value.clamp(lower + gap, upper - gap)
@@ -283,6 +285,7 @@ pub struct LayerPropertiesView {
     pub controls: Vec<PropertyControl>,
     /// Linear input/output range for HDR curve axes; absent for encoded curves.
     pub curve_max: Option<f32>,
+    pub curve_white: Option<f32>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PropertyControl {
@@ -293,6 +296,7 @@ pub struct PropertyControl {
     pub kind: PropertyKind,
     pub value: EffectValue,
     pub default: EffectValue,
+    pub modified: bool,
     /// Optional shortcut alongside a color editor, supplied by shared policy.
     pub color_action: Option<UiAction>,
 }
@@ -336,6 +340,7 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
         EffectParameterKind::Curve => PropertyKind::Curve,
         EffectParameterKind::Gradient => PropertyKind::Gradient,
     };
+    let modified = value != p.default;
     PropertyControl {
         plot: if let EffectValue::Curve(points) = &value {
             (0..=128)
@@ -353,6 +358,7 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
         kind,
         value,
         default: p.default.clone(),
+        modified,
         color_action: None,
     }
 }
@@ -384,6 +390,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
+    let mut curve_white = None;
     let description = if let Some(effect) = &layer.effect {
         let program = float32_program(&effect.program, doc.color.depth);
         controls.extend(
@@ -394,18 +401,18 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 .map(|(p, v)| control(p, v.clone())),
         );
         if effect.program.id.as_ref() == "curves" {
-            let linear = effect.value("domain") == Some(&EffectValue::Choice(1));
-            if linear {
-                if let Some(EffectValue::Number(stops)) = effect.value("hdr_stops") { curve_max = Some(stops.exp2()); }
+            if let (Some(space), Some(EffectValue::Number(stops))) = (effect.choice("domain"), effect.value("hdr_stops")) {
+                curve_white = layer_core::hdr_curve_white(space, *stops);
+                curve_max = curve_white.map(|_| stops.exp2());
             }
+            let hdr = curve_white.is_some();
             controls.retain(|c| match c.key.as_str() {
-                "domain" => doc.color.depth.is_float() || linear,
-                "hdr_stops" => linear,
+                "domain" => doc.color.depth.is_float() || hdr,
+                "hdr_stops" => hdr,
                 _ => true,
             });
             for c in &mut controls {
                 if matches!(c.key.as_str(), "domain" | "hdr_stops") {
-                    c.section = Some("Advanced".into());
                     // Older masters embed their original parameter labels.
                     c.label = if c.key == "domain" { "Curve space" } else { "HDR range" }.into();
                 }
@@ -413,11 +420,13 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         }
         effect.program.label.to_string()
     } else if layer.kind == LayerKind::Background {
+        let paper = layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE);
         controls.push(PropertyControl {
             plot: Vec::new(), key: "paper_color".into(), label: "Paper color".into(),
             section: None, kind: PropertyKind::Color,
-            value: EffectValue::Color(layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)),
+            value: EffectValue::Color(paper),
             default: EffectValue::Color(layer_core::color::RgbColor::WHITE),
+            modified: paper != layer_core::color::RgbColor::WHITE,
             color_action: Some(UiAction::Effect { action: EffectAction::UseCurrentColor {
                 layer: layer.id.0, key: "paper_color".into(),
             } }),
@@ -434,6 +443,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             kind: PropertyKind::Number { numeric },
             value: EffectValue::Number(layer.opacity),
             default: EffectValue::Number(1.),
+            modified: layer.opacity != 1.,
             color_action: None,
         });
         controls.push(PropertyControl {
@@ -449,6 +459,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 },
                 value: EffectValue::Choice(layer.properties.blend as u32),
                 default: EffectValue::Choice(0),
+                modified: layer.properties.blend as u32 != 0,
                 color_action: None,
             });
         String::new()
@@ -460,11 +471,13 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         enabled: !doc.is_locked(layer.id),
         controls,
         curve_max,
+        curve_white,
     }
 }
 pub(super) struct EffectGesture {
     original: Layer,
     key: String,
+    detached_curve_point: bool,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -531,6 +544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.effect_gesture = Some(EffectGesture {
                 original,
                 key: key.clone(),
+                detached_curve_point: false,
             });
         } else if !self
             .effect_gesture
@@ -679,14 +693,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let EffectValue::Curve(mut points) = effect.values[i].clone() else {
                     return Err("Not a curve".into());
                 };
+                let dragging = self.effect_gesture.as_ref().filter(|g| g.original.id.0 == layer && g.key == key);
+                let detached = dragging.is_some_and(|g| g.detached_curve_point);
+                let off_graph = dragging.is_some()
+                    && point.iter().any(|v| !(-CURVE_DETACH_MARGIN..=1. + CURVE_DETACH_MARGIN).contains(v));
                 if let Some(i) = index {
-                    if i >= points.len() {
+                    if i >= points.len() || (detached && i == 0) {
                         return Err("Unknown curve point".into());
                     }
-                    if remove {
+                    if detached {
+                        if off_graph {
+                            return Ok(());
+                        }
+                        points.insert(i, [point_between(point[0], points[i - 1][0], points[i][0]), point[1].clamp(0., 1.)]);
+                        self.effect_gesture.as_mut().unwrap().detached_curve_point = false;
+                    } else if remove {
                         if i > 0 && i + 1 < points.len() {
                             points.remove(i);
                         }
+                    } else if off_graph && i > 0 && i + 1 < points.len() {
+                        points.remove(i);
+                        self.effect_gesture.as_mut().unwrap().detached_curve_point = true;
                     } else {
                         let x = if i == 0 {
                             0.

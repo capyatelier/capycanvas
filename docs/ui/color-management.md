@@ -329,7 +329,13 @@ chosen intensity, and EV edits retain the marker. The field, ramp and bubbles
 use managed half-float display textures on a capable GTK display, or the
 shared SDR appearance on an SDR-only display. The hue guide stays an SDR
 reference. SDR documents retain the existing picker/layout.
-Curves and the histogram mark SDR white; curve processing options are in Advanced.
+Curves and the histogram mark SDR white. HDR curves use a log (EV) axis from
+8 stops below white to the HDR range above it, with a linear toe through zero.
+The curve space and HDR range sit directly below the curve.
+Clicking adds a point. Dragging a point off the graph removes it (it returns if
+dragged back before release), as does double-clicking or double-tapping it.
+Once a channel is edited, a reset icon in the graph's bottom-right corner
+restores it. Curves have no separate point buttons.
 
 Export's overview chooses **Dynamic range: SDR or HDR** and format. Size,
 Color & transparency and Presets open focused panels with a Back action and

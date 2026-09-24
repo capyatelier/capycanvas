@@ -6,7 +6,8 @@ use adw::prelude::*;
 use gtk::glib;
 use layer_core::EffectValue;
 use layer_ui::{
-    EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction, UiState,
+    ContactPhase, EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction,
+    UiState,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -580,7 +581,6 @@ impl EffectPanels {
             }
             if let Some(layer) = view.layer {
                 let mut section = None;
-                let mut target = self.body.clone();
                 for (index, control) in view.controls.iter().enumerate() {
                     if section != control.section.as_deref() {
                         if index > 0 {
@@ -589,12 +589,7 @@ impl EffectPanels {
                             self.body.append(&divider);
                         }
                         section = control.section.as_deref();
-                        target = self.body.clone();
-                        if section == Some("Advanced") {
-                            target = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                            let expander = gtk::Expander::builder().label("Advanced").child(&target).build();
-                            self.body.append(&expander);
-                        } else if let Some(text) = section {
+                        if let Some(text) = section {
                             let heading = gtk::Label::new(Some(text));
                             heading.set_xalign(0.);
                             heading.add_css_class("heading");
@@ -621,7 +616,7 @@ impl EffectPanels {
                             input.connect_value_changed(move |i| {
                                 dispatch(EffectValue::Number(i.value() as f32))
                             });
-                            target.append(&input);
+                            self.body.append(&input);
                             Field::Number(input)
                         }
                         PropertyKind::Toggle => {
@@ -630,7 +625,7 @@ impl EffectPanels {
                             input.connect_active_notify(move |i| {
                                 dispatch(EffectValue::Toggle(i.is_active()))
                             });
-                            target.append(&row(&control.label, &input));
+                            self.body.append(&row(&control.label, &input));
                             Field::Toggle(input)
                         }
                         PropertyKind::Choice { options } => {
@@ -640,7 +635,7 @@ impl EffectPanels {
                             input.connect_selected_notify(move |i| {
                                 dispatch(EffectValue::Choice(i.selected()))
                             });
-                            target.append(&row(&control.label, &input));
+                            self.body.append(&row(&control.label, &input));
                             Field::Choice(input)
                         }
                         PropertyKind::Color => {
@@ -656,8 +651,8 @@ impl EffectPanels {
                                 bucket.set_widget_name("paper-color-bucket");
                                 crate::icons::set_button(&bucket, "layer-fill-symbolic");
                                 line.append(&bucket);
-                                target.append(&line);
-                            } else { target.append(&row(&control.label, &input.widget)); }
+                                self.body.append(&line);
+                            } else { self.body.append(&row(&control.label, &input.widget)); }
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {
@@ -667,7 +662,7 @@ impl EffectPanels {
                         }
                         PropertyKind::Gradient => {
                             let input = GradientEditor::new(w, layer, &control.key);
-                            target.append(&input.root);
+                            self.body.append(&input.root);
                             Field::Gradient(input)
                         }
                     };
@@ -685,8 +680,10 @@ impl EffectPanels {
                 }
                 (Field::Curve(i), EffectValue::Curve(p)) => {
                     *i.points.borrow_mut() = p.clone();
-                    i.range.set(view.curve_max);
-                    i.root.queue_draw();
+                    i.range.set(view.curve_max.zip(view.curve_white));
+                    i.modified.set(c.modified);
+                    i.reset.set_visible(c.modified);
+                    i.area.queue_draw();
                 }
                 (Field::Gradient(i), EffectValue::Gradient(stops)) => i.update(stops),
                 _ => {}
@@ -1040,28 +1037,63 @@ impl GradientEditor {
     }
 }
 struct CurveEditor {
-    root: gtk::DrawingArea,
+    root: gtk::Overlay,
+    area: gtk::DrawingArea,
+    reset: gtk::Button,
+    modified: Rc<Cell<bool>>,
     points: Rc<RefCell<Vec<[f32; 2]>>>,
-    range: Rc<Cell<Option<f32>>>,
+    range: Rc<Cell<Option<(f32, f32)>>>,
+}
+fn curve_point(
+    layer: u64,
+    key: &str,
+    phase: Option<ContactPhase>,
+    index: Option<usize>,
+    point: [f32; 2],
+    remove: bool,
+) -> UiAction {
+    let action = EffectAction::CurvePoint { layer, key: key.into(), index, point, remove };
+    UiAction::Effect {
+        action: match phase {
+            Some(phase) => EffectAction::Gesture { phase, action: Box::new(action) },
+            None => action,
+        },
+    }
+}
+fn graph_point(area: &gtk::DrawingArea, x: f64, y: f64) -> [f32; 2] {
+    [
+        (x / area.width() as f64) as f32,
+        1. - (y / area.height() as f64) as f32,
+    ]
+}
+fn nearest_point(points: &[[f32; 2]], area: &gtk::DrawingArea, x: f64, y: f64) -> Option<usize> {
+    let (width, height) = (area.width() as f64, area.height() as f64);
+    points.iter().position(|p| {
+        (f64::from(p[0]) * width - x).hypot((1. - f64::from(p[1])) * height - y) < 12.
+    })
 }
 impl CurveEditor {
     fn new(w: &Rc<Workspace>, layer: u64, key: &str) -> Self {
-        let root = gtk::DrawingArea::builder()
+        let area = gtk::DrawingArea::builder()
             .content_width(160)
             .content_height(200)
             .hexpand(true)
             .build();
-        root.set_tooltip_text(Some(
-            "Drag points to shape the curve. Click to add; right-click to remove.",
+        area.set_tooltip_text(Some(
+            "Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.",
         ));
         let points = Rc::new(RefCell::new(vec![[0., 0.], [1., 1.]]));
-        let range = Rc::new(Cell::new(None::<f32>));
-        root.set_draw_func(glib::clone!(
+        let range = Rc::new(Cell::new(None::<(f32, f32)>));
+        let modified = Rc::new(Cell::new(false));
+        area.set_draw_func(glib::clone!(
             #[strong]
             points,
             #[strong]
             range,
+            #[strong]
+            modified,
             move |area, cr, width, height| {
+                let right = width as f64 - if modified.get() { 33. } else { 5. };
                 let (width, height) = (width as f64, height as f64);
                 let c = area.color();
                 cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 0.12);
@@ -1078,8 +1110,8 @@ impl CurveEditor {
                 cr.stroke().ok();
                 cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 0.7);
                 cr.set_font_size(11.);
-                if let Some(peak) = range.get() {
-                    let white = 1. / f64::from(peak);
+                if let Some((peak, white)) = range.get() {
+                    let white = f64::from(white);
                     cr.set_dash(&[3., 3.], 0.);
                     cr.move_to(white * width, 0.); cr.line_to(white * width, height);
                     cr.move_to(0., (1. - white) * height); cr.line_to(width, (1. - white) * height);
@@ -1087,11 +1119,11 @@ impl CurveEditor {
                     cr.move_to(5., 13.); let _ = cr.show_text("SDR white · 0 EV");
                     let label = format!("{peak:.0} · +{:.0} EV", peak.log2());
                     let label_width = cr.text_extents(&label).map_or(70., |e| e.x_advance());
-                    cr.move_to((width - label_width - 5.).max(5.), height - 5.);
+                    cr.move_to((right - label_width).max(5.), height - 5.);
                     let _ = cr.show_text(&label);
                 } else {
                     cr.move_to(5., 13.); let _ = cr.show_text("Output");
-                    cr.move_to(width - 40., height - 5.); let _ = cr.show_text("Input");
+                    cr.move_to(right - 35., height - 5.); let _ = cr.show_text("Input");
                 }
                 let p = points.borrow();
                 cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 1.);
@@ -1118,15 +1150,17 @@ impl CurveEditor {
                 }
             }
         ));
+        let key: Rc<str> = key.into();
         let drag = gtk::GestureDrag::new();
-        let selected = Rc::new(Cell::new(None));
+        let selected = Rc::new(Cell::new(None::<usize>));
         let start = Rc::new(Cell::new([0.; 2]));
-        let key = key.to_string();
+        let pressed = Rc::new(Cell::new(None::<usize>));
+        let last_tap = Rc::new(Cell::new(None::<(usize, i64)>));
         drag.connect_drag_begin(glib::clone!(
             #[weak]
             w,
             #[weak]
-            root,
+            area,
             #[strong]
             points,
             #[strong]
@@ -1134,41 +1168,21 @@ impl CurveEditor {
             #[strong]
             start,
             #[strong]
+            pressed,
+            #[strong]
             key,
             move |_, x, y| {
                 start.set([x, y]);
-                let p = [
-                    (x / root.width() as f64) as f32,
-                    1. - (y / root.height() as f64) as f32,
-                ];
-                let nearest = points
-                    .borrow()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, q)| {
-                        ((q[0] - p[0]) * root.width() as f32)
-                            .hypot((q[1] - p[1]) * root.height() as f32)
-                            < 12.
-                    })
-                    .map(|(i, _)| i);
+                let nearest = nearest_point(&points.borrow(), &area, x, y);
+                pressed.set(nearest);
                 if let Some(i) = nearest {
+                    let point = points.borrow()[i];
                     selected.set(Some(i));
+                    w.dispatch(curve_point(layer, &key, Some(ContactPhase::Down), Some(i), point, false));
                 } else {
-                    w.dispatch(UiAction::Effect {
-                        action: EffectAction::CurvePoint {
-                            layer,
-                            key: key.clone(),
-                            index: None,
-                            point: p,
-                            remove: false,
-                        },
-                    });
-                    selected.set(
-                        points
-                            .borrow()
-                            .iter()
-                            .position(|q| (q[0] - p[0]).abs() < 0.002),
-                    );
+                    let point = graph_point(&area, x, y);
+                    w.dispatch(curve_point(layer, &key, Some(ContactPhase::Down), None, point, false));
+                    selected.set(points.borrow().iter().position(|q| (q[0] - point[0]).abs() < 0.002));
                 }
             }
         ));
@@ -1176,7 +1190,7 @@ impl CurveEditor {
             #[weak]
             w,
             #[weak]
-            root,
+            area,
             #[strong]
             selected,
             #[strong]
@@ -1184,53 +1198,101 @@ impl CurveEditor {
             #[strong]
             key,
             move |_, dx, dy| {
-                if let Some(index) = selected.get() {
+                if let Some(i) = selected.get() {
                     let [x, y] = start.get();
-                    w.dispatch(UiAction::Effect {
-                        action: EffectAction::CurvePoint {
-                            layer,
-                            key: key.clone(),
-                            index: Some(index),
-                            point: [
-                                ((x + dx) / root.width() as f64) as f32,
-                                1. - ((y + dy) / root.height() as f64) as f32,
-                            ],
-                            remove: false,
-                        },
-                    });
+                    let point = graph_point(&area, x + dx, y + dy);
+                    w.dispatch(curve_point(layer, &key, Some(ContactPhase::Move), Some(i), point, false));
                 }
             }
         ));
-        root.add_controller(drag);
-        let remove = gtk::GestureClick::new();
-        remove.set_button(3);
-        remove.connect_pressed(glib::clone!(
+        drag.connect_drag_end(glib::clone!(
             #[weak]
             w,
             #[weak]
-            root,
+            area,
             #[strong]
-            points,
-            move |_, _, x, y| {
-                let index = points.borrow().iter().position(|p| {
-                    (p[0] * root.width() as f32 - x as f32)
-                        .hypot((1. - p[1]) * root.height() as f32 - y as f32)
-                        < 12.
-                });
-                if index.is_some() {
-                    w.dispatch(UiAction::Effect {
-                        action: EffectAction::CurvePoint {
-                            layer,
-                            key: key.clone(),
-                            index,
-                            point: [0.; 2],
-                            remove: true,
-                        },
-                    });
+            selected,
+            #[strong]
+            start,
+            #[strong]
+            pressed,
+            #[strong]
+            last_tap,
+            #[strong]
+            key,
+            move |_, dx, dy| {
+                let [x, y] = start.get();
+                let point = graph_point(&area, x + dx, y + dy);
+                let Some(i) = selected.take() else {
+                    w.dispatch(curve_point(layer, &key, Some(ContactPhase::Cancel), None, point, false));
+                    return;
+                };
+                let now = glib::monotonic_time();
+                let interval = gtk::Settings::default().map_or(400, |s| s.gtk_double_click_time());
+                let tapped = pressed.take() == Some(i) && dx.hypot(dy) < 4.;
+                let double = tapped
+                    && last_tap.get().is_some_and(|(j, t)| j == i && now - t < i64::from(interval) * 1000);
+                last_tap.set((tapped && !double).then_some((i, now)));
+                w.dispatch(curve_point(layer, &key, Some(ContactPhase::Up), Some(i), point, double));
+            }
+        ));
+        drag.connect_cancel(glib::clone!(
+            #[weak]
+            w,
+            #[strong]
+            selected,
+            #[strong]
+            key,
+            move |_, _| {
+                if let Some(i) = selected.take() {
+                    w.dispatch(curve_point(layer, &key, Some(ContactPhase::Cancel), Some(i), [0.; 2], false));
                 }
             }
         ));
-        root.add_controller(remove);
-        Self { root, points, range }
+        area.add_controller(drag);
+        let secondary = gtk::GestureClick::new();
+        secondary.set_button(3);
+        secondary.connect_pressed(glib::clone!(
+            #[weak]
+            w,
+            #[weak]
+            area,
+            #[strong]
+            points,
+            #[strong]
+            key,
+            move |_, _, x, y| {
+                let index = nearest_point(&points.borrow(), &area, x, y);
+                if index.is_some() {
+                    w.dispatch(curve_point(layer, &key, None, index, [0.; 2], true));
+                }
+            }
+        ));
+        area.add_controller(secondary);
+        let reset = crate::icons::button("layer-reset-symbolic");
+        reset.add_css_class("flat");
+        reset.add_css_class("circular");
+        reset.set_halign(gtk::Align::End);
+        reset.set_valign(gtk::Align::End);
+        reset.set_margin_end(2);
+        reset.set_margin_bottom(2);
+        reset.set_visible(false);
+        reset.set_tooltip_text(Some("Reset curve"));
+        reset.set_widget_name("curve-reset");
+        reset.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            #[strong]
+            last_tap,
+            #[strong]
+            key,
+            move |_| {
+                last_tap.set(None);
+                w.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: key.to_string() } });
+            }
+        ));
+        let root = gtk::Overlay::builder().child(&area).build();
+        root.add_overlay(&reset);
+        Self { root, area, reset, modified, points, range }
     }
 }

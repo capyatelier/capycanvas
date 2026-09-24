@@ -18,6 +18,7 @@ pub(super) fn properties(
             label: label.into(),
             section: None,
             kind,
+            modified: value != default,
             value,
             default,
             color_action: None,
@@ -63,6 +64,7 @@ pub(super) fn properties(
         enabled,
         controls,
         curve_max: None,
+        curve_white: None,
     }
 }
 

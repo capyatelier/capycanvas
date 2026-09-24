@@ -574,6 +574,8 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .property-controls.disabled { opacity:.4; pointer-events:none; }
 .curve-editor { display:block; width:100%; height:200px; background:color-mix(in srgb,var(--text) 12%,transparent); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 .curve-editor * { pointer-events:none; }
+.curve-field { position:relative; }
+.curve-field > button { position:absolute; right:2px; bottom:2px; width:28px; height:28px; min-height:28px; padding:0; display:grid; place-items:center; }
 .gradient-editor { display:flex; flex-direction:column; gap:6px; }
 .gradient-ramp { height:32px; margin:0 6px; border-radius:4px; cursor:crosshair; }
 .gradient-stops { position:relative; height:14px; margin:0 6px; }

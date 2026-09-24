@@ -40,7 +40,7 @@ HDR and Windows performance acceptance remain unqualified.
 - Authored colors retain exact linear RGB when transfer encoding would lose
   information. This is necessary for typed values, sampled colors and workspace
   serialization, even though the ordinary picker still displays encoded RGB.
-- Color validation, intensity, histogram bins and bundled exposure/linear-curves
+- Color validation, intensity, histogram bins and bundled exposure/HDR-curves
   controls use the selected precision. Existing Float16 storage validation stays
   in place. There is no alternate tone mapper or floating mask format.
 

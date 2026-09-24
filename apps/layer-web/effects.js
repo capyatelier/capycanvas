@@ -100,18 +100,35 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     const grid=svg("path",{d:"M50 0V200M100 0V200M150 0V200M0 50H200M0 100H200M0 150H200",stroke:"currentColor",opacity:.2});
     const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g",{fill:"currentColor"});graph.append(grid,path,points);
     const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7}),axis=svg("text",{x:5,y:13,fill:"currentColor","font-size":10});graph.append(white,axis);
-    let control,drag;
+    let control,drag,pressed,origin,lastTap=null;
+    const node=element("div","curve-field"),reset=button("",()=>{lastTap=null;send({op:"reset",layer,key});});
+    reset.append(icon("reset"));reset.title="Reset curve";reset.dataset.action="curve-reset";node.append(graph,reset);
+    node.title="Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.";
     const position=e=>{const b=graph.getBoundingClientRect();return [(e.clientX-b.left)/b.width,1-(e.clientY-b.top)/b.height];};
     const nearest=p=>control.value.value.findIndex(q=>Math.hypot((q[0]-p[0])*graph.clientWidth,(q[1]-p[1])*graph.clientHeight)<12);
+    const gesture=(phase,index,point,remove=false)=>send({op:"gesture",phase,action:{op:"curve_point",layer,key,index,point,remove}});
     graph.onpointerdown=e=>{
       if(e.button)return;e.preventDefault();e.stopPropagation();const point=position(e);let index=nearest(point);
-      if(index<0){send({op:"curve_point",layer,key,index:null,point,remove:false});index=control.value.value.findIndex(q=>Math.abs(q[0]-point[0])<.002);}
-      if(index>=0){drag=index;graph.setPointerCapture(e.pointerId);}
+      pressed=index>=0;origin=[e.clientX,e.clientY];
+      if(pressed)gesture("down",index,control.value.value[index]);
+      else{gesture("down",null,point);index=control.value.value.findIndex(q=>Math.abs(q[0]-point[0])<.002);}
+      drag=index;graph.setPointerCapture(e.pointerId);
     };
-    graph.onpointermove=e=>{if(drag==null)return;e.preventDefault();send({op:"curve_point",layer,key,index:drag,point:position(e),remove:false});};
-    graph.onpointerup=graph.onpointercancel=()=>{drag=null;};
+    graph.onpointermove=e=>{if(drag==null||drag<0)return;e.preventDefault();gesture("move",drag,position(e));};
+    graph.onpointerup=e=>{
+      if(drag==null)return;
+      if(drag<0)gesture("cancel",null,[0,0]);
+      else{
+        const tapped=pressed&&Math.hypot(e.clientX-origin[0],e.clientY-origin[1])<4;
+        const double=tapped&&lastTap?.index===drag&&e.timeStamp-lastTap.time<400;
+        lastTap=tapped&&!double?{index:drag,time:e.timeStamp}:null;
+        gesture("up",drag,position(e),double);
+      }
+      drag=null;
+    };
+    graph.onpointercancel=()=>{if(drag==null)return;gesture("cancel",drag<0?null:drag,[0,0]);drag=null;};
     graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();const index=nearest(position(e));if(index>=0)send({op:"curve_point",layer,key,index,point:[0,0],remove:true});};
-    return {node:graph,update:c=>{control=c;const peak=state().layer_properties.curve_max;white.setAttribute("d",peak?`M${200/peak} 0V200M0 ${200-200/peak}H200`:"");axis.textContent=peak?`SDR white · 0 EV | ${peak} · +${Math.log2(peak)} EV`:"Output / Input";path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
+    return {node,update:c=>{reset.hidden=!c.modified;control=c;const {curve_max:peak,curve_white:reference}=state().layer_properties;white.setAttribute("d",peak?`M${200*reference} 0V200M0 ${200-200*reference}H200`:"");axis.textContent=peak?`SDR white · 0 EV | ${peak} · +${Math.log2(peak)} EV`:"Output / Input";path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
   }
   function refresh(){
     refreshPicker();
