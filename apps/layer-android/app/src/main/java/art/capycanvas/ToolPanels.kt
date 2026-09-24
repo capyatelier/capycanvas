@@ -12,6 +12,8 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 
 /** The selected tool determines groups, subtools and settings in Rust. */
@@ -82,13 +85,22 @@ import org.json.JSONObject
 @Composable internal fun ToolSettingsControls(host: CanvasHost, state: JSONObject) {
     if (state.getJSONObject("layer_tools").optString("tool") in listOf("pick_visible", "pick_layer")) {
         val picker=state.getJSONObject("color_picker")
-        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            ColorChoice("Source",if(picker.optBoolean("can_sample_layer"))listOf("false" to "Visible color","true" to "Selected layer") else listOf("false" to "Visible color"),picker.getBoolean("layer").toString()) {
-                host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "source","layer" to (it=="true"))))
+        ProvideTextStyle(LocalTextStyle.current.copy(fontSize=13.sp)) {
+        Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().testTag("picker-setting-source"),verticalAlignment=Alignment.CenterVertically) {
+                Text("Source",Modifier.width(76.dp),maxLines=1)
+                PropertyChoice("Source",if(picker.optBoolean("can_sample_layer"))listOf("Visible color","Selected layer") else listOf("Visible color"),if(picker.getBoolean("layer"))1 else 0,onOpenChanged={host.pickerPopupOpen=it}) {
+                    host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "source","layer" to (it==1))))
+                }
             }
-            ColorChoice("Sample size",picker.array("sample_sizes").values().map { val n=(it as Number).toInt();n.toString() to if(n==1)"Single pixel" else "$n px circle" },picker.getInt("sample_width").toString()) {
-                host.dispatch(obj("type" to "set_color_sample_size","width" to it.toInt()))
+            val sizes=picker.array("sample_sizes").values().map{(it as Number).toInt()}
+            Row(Modifier.fillMaxWidth().testTag("picker-setting-size"),verticalAlignment=Alignment.CenterVertically) {
+                Text("Sample size",Modifier.width(76.dp),maxLines=1)
+                PropertyChoice("Sample size",sizes.map{if(it==1)"Single pixel" else "$it px circle"},sizes.indexOf(picker.getInt("sample_width")),onOpenChanged={host.pickerPopupOpen=it}) {
+                    host.dispatch(obj("type" to "set_color_sample_size","width" to sizes[it]))
+                }
             }
+        }
         }
         return
     }

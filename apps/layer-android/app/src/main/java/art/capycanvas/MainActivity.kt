@@ -82,6 +82,10 @@ class MainActivity : ComponentActivity() {
         host.filterPreviewCache.resume()
         host.workspaceInput(obj("type" to "resume"))
     }
+    override fun onPause() {
+        host.input(obj("type" to "blur"))
+        super.onPause()
+    }
     override fun onStop() {
         host.filterPreviewCache.pause()
         host.recovery.capture()
@@ -107,7 +111,7 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) {
             enterFullscreen()
             host.workspaceInput(obj("type" to "refresh_switcher"))
-        } else host.input(obj("type" to "blur"))
+        } else if (!host.pickerPopupOpen) host.input(obj("type" to "blur"))
     }
 }
 

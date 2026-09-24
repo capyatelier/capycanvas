@@ -201,6 +201,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     /** Focused native color buttons own Space/Enter instead of canvas shortcuts. */
     internal var colorControlFocus: Any? = null
+    internal var pickerPopupOpen = false
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
     private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
@@ -730,7 +731,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (publishContent && measuredPublications != null) panelContentChanges++
         recordPublication()
         main.post {
-            colorPreview = null
+            colorPreview = next.objectOrNull("color_preview")
             if (publishContent) panelContent = content
             snapshot = next
             drawingTabs.refresh()

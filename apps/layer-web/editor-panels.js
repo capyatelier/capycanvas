@@ -144,20 +144,20 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
     let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,paintKey="",fieldKey="",ringKey="";
     const field=document.createElement("canvas"),ring=document.createElement("canvas");
-    let fieldBusy=false,fieldPending=null,fieldEpoch=0,disposed=false,previewing=false;
+    let fieldJob=null,fieldPending=null,fieldEpoch=0,fieldGeometry='',disposed=false,previewing=false;
     function installField(bytes,side,key){
       if(field.width!==side)field.width=field.height=side;
       fieldContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),side,side),0,0);
       fieldKey=key;
     }
     async function renderField(){
-      if(fieldBusy||!fieldPending||disposed)return;
-      const job=fieldPending;fieldPending=null;fieldBusy=true;
+      if(fieldJob||!fieldPending||disposed)return;
+      const job=fieldPending;fieldPending=null;fieldJob=job;
       try {
         const bytes=await fieldWorker({operation:'color-field',metadata:job.metadata,buffers:[]});
         if(!disposed&&job.epoch===fieldEpoch){installField(bytes,job.side,job.key);paintKey='';queuePaint();}
       } catch(error) { if(!disposed)console.error('Color field preview',error); }
-      finally {fieldBusy=false;renderField();}
+      finally {fieldJob=null;renderField();}
     }
     const ctx=wheel.getContext("2d",{willReadFrequently:true});
     const fieldContext=field.getContext("2d",{willReadFrequently:true}),ringContext=ring.getContext("2d",{willReadFrequently:true});
@@ -206,10 +206,14 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
       const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
+      const fieldLayout=JSON.stringify([view.rgb_space,view.shape,view.rendition,fieldPixels]);
+      if(fieldLayout!==fieldGeometry){fieldGeometry=fieldLayout;fieldEpoch++;fieldPending=null;}
       const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],view.intensity,view.rendition,fieldPixels]);
       if(key!==fieldKey) {
         if(previewing){
-          fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
+          if(fieldJob?.key!==key||fieldJob.epoch!==fieldEpoch){
+            fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
+          }
         } else {
           fieldPending=null;fieldEpoch++;installField(app.color_field_pixels(fieldPixels),fieldPixels,key);
         }

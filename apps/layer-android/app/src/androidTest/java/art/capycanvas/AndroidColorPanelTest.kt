@@ -43,6 +43,8 @@ class AndroidColorPanelTest {
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
     private var button = MotionEvent.BUTTON_PRIMARY
+    private var waitForInput = true
+    private var replayOrigin: IntArray? = null
     private val systemInput = InstrumentationRegistry.getArguments().getString("systemInput") == "true"
     private val tools = listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)
     private val output get() = File(activity.getExternalFilesDir(null), "validation/color-panel").apply { mkdirs() }
@@ -130,16 +132,15 @@ class AndroidColorPanelTest {
         point = next
         if (action == MotionEvent.ACTION_DOWN) { downAt = SystemClock.uptimeMillis(); contact = true }
         val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 7; toolType = tool })
-        val coords = arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = if (action == MotionEvent.ACTION_UP) 0f else .7f })
+        val coords = arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = if (action in listOf(MotionEvent.ACTION_UP,MotionEvent.ACTION_HOVER_ENTER,MotionEvent.ACTION_HOVER_MOVE,MotionEvent.ACTION_HOVER_EXIT)) 0f else .7f })
         val source = when (tool) { MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; else -> InputDevice.SOURCE_TOUCHSCREEN }
         val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) button else 0
         val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, buttons, 1f, 1f, 0, 0, source, 0)
         try {
             if (systemInput) {
-                val origin = IntArray(2)
-                instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+                val origin = replayOrigin ?: IntArray(2).also { instrumentation.runOnMainSync { owner.view.getLocationOnScreen(it) } }
                 motion.offsetLocation(origin[0].toFloat(), origin[1].toFloat())
-                assertTrue("Android accepts typed pointer input", instrumentation.uiAutomation.injectInputEvent(motion, true))
+                assertTrue("Android accepts typed pointer input", instrumentation.uiAutomation.injectInputEvent(motion, waitForInput))
             } else instrumentation.runOnMainSync { owner.view.dispatchTouchEvent(motion) }
         } finally { motion.recycle() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
@@ -161,6 +162,16 @@ class AndroidColorPanelTest {
         val area=state().getJSONObject("camera").array("work_area")
         return Offset((area.getDouble(0)+area.getDouble(2)*.72).toFloat(),(area.getDouble(1)+area.getDouble(3)*.70).toFloat())
     }
+    private fun secondFinger(down:Boolean) {
+        val properties=(7..8).map{id->MotionEvent.PointerProperties().apply{this.id=id;toolType=MotionEvent.TOOL_TYPE_FINGER}}.toTypedArray()
+        val coords=(0..1).map{i->MotionEvent.PointerCoords().apply{x=point.x+i*100f;y=point.y;pressure=.7f}}.toTypedArray()
+        val event=MotionEvent.obtain(downAt,SystemClock.uptimeMillis(),(if(down)MotionEvent.ACTION_POINTER_DOWN else MotionEvent.ACTION_POINTER_UP) or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),2,properties,coords,0,0,1f,1f,0,0,InputDevice.SOURCE_TOUCHSCREEN,0)
+        try {
+            val origin=IntArray(2);instrumentation.runOnMainSync{owner.view.getLocationOnScreen(origin)}
+            event.offsetLocation(origin[0].toFloat(),origin[1].toFloat())
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(event,true))
+        } finally {event.recycle()}
+    }
     private fun fullCapture(name:String) {
         val image=instrumentation.uiAutomation.takeScreenshot()
         File(output,"$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG,100,it) };image.recycle()
@@ -172,15 +183,15 @@ class AndroidColorPanelTest {
         action(obj("type" to "select_brush","id" to 1))
         action(obj("type" to "set_brush_size","value" to 80))
         action(obj("type" to "set_color","rgba" to JSONArray(listOf(1,0,0,1))))
-        tap(p)
+        event(MotionEvent.ACTION_DOWN,p-Offset(12f,0f));event(MotionEvent.ACTION_MOVE,p);event(MotionEvent.ACTION_MOVE,p+Offset(12f,0f));event(MotionEvent.ACTION_UP);settle()
         action(obj("type" to "set_color","rgba" to JSONArray(listOf(0,1,0,1))))
         val original=colors().toString()
         action(obj("type" to "invoke","command" to "eyedropper"))
-        event(MotionEvent.ACTION_HOVER_ENTER,p)
+        event(MotionEvent.ACTION_HOVER_MOVE,p)
         event(MotionEvent.ACTION_HOVER_MOVE,p)
         waitFor("hover sample") {picker().objectOrNull("preview")!=null}
         assertEquals(original,colors().toString())
-        assertTrue(picker().getJSONObject("preview").array("rgba").getDouble(0)>.8)
+        assertTrue("Red sample: ${picker()}",picker().getJSONObject("preview").array("rgba").getDouble(0)>.8 && picker().getJSONObject("preview").array("rgba").getDouble(1)<.2)
         fullCapture("picker-pen-hover")
         event(MotionEvent.ACTION_DOWN,p);settle()
         assertEquals("Pen down remains a preview",original,colors().toString())
@@ -193,12 +204,19 @@ class AndroidColorPanelTest {
         tool=MotionEvent.TOOL_TYPE_FINGER
         event(MotionEvent.ACTION_DOWN,p+Offset(0f,offset))
         waitFor("finger hold samples above contact") {picker().objectOrNull("preview")!=null}
-        assertTrue(picker().getJSONObject("preview").array("rgba").getDouble(0)>.8)
+        assertTrue("Red sample: ${picker()}",picker().getJSONObject("preview").array("rgba").getDouble(0)>.8 && picker().getJSONObject("preview").array("rgba").getDouble(1)<.2)
+        secondFinger(true);settle()
+        assertTrue("Second finger selects layer",picker().getBoolean("layer"))
         fullCapture("picker-touch-offset")
+        secondFinger(false)
         event(MotionEvent.ACTION_UP)
         waitFor("finger lift accepts") {state().getJSONObject("layer_tools").getString("tool")=="paint"}
         action(obj("type" to "invoke","command" to "eyedropper"));tap(p)
         assertEquals("Finger tap cancels", "paint",state().getJSONObject("layer_tools").getString("tool"))
+        for(key in listOf(KeyEvent.KEYCODE_I,KeyEvent.KEYCODE_ESCAPE)) {
+            instrumentation.sendKeyDownUpSync(key)
+            waitFor("picker keyboard shortcut") {state().getJSONObject("layer_tools").getString("tool")==if(key==KeyEvent.KEYCODE_I)"pick_layer" else "paint"}
+        }
         instrumentation.runOnMainSync {host.workspaceInput(obj("type" to "switch","id" to "builtin:workspace:painter"))}
         waitFor("Sketch workspace",30000) {host.workspaceManager?.optString("id")=="builtin:workspace:painter" && host.workspaceManager?.optBoolean("busy")==false}
         settle()
@@ -209,10 +227,22 @@ class AndroidColorPanelTest {
         waitFor("settings drawer") {state().getJSONObject("customization").objectOrNull("drawer")!=null}
         assertEquals("[[\"tool_settings\"]]",state().getJSONObject("customization").getJSONObject("drawer").array("columns").toString())
         assertEquals("explicit",state().getJSONObject("customization").getJSONObject("drawer").getString("dismissal"))
-        waitFor("settings controls") {find(owner.semanticsOwner.unmergedRootSemanticsNode,"color-choice-Sample size")!=null}
-        tap(bounds("color-choice-Sample size").center)
+        waitFor("settings controls") {find(owner.semanticsOwner.unmergedRootSemanticsNode,"picker-setting-size")!=null}
+        SystemClock.sleep(350) // Wait for drawer placement before aiming a real contact.
+        tap(bounds("picker-setting-size").let{Offset(it.right-40*density,it.center.y)})
+        fullCapture("picker-size-popup")
         // Dropdown opens as a native popup; choose its real semantic row.
-        instrumentation.uiAutomation.rootInActiveWindow.findAccessibilityNodeInfosByText("101 px circle").first().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+        var popupPoint=Offset.Zero
+        waitFor("native size menu") {
+            fun label(node:SemanticsNode):SemanticsNode?=if(node.config.getOrNull(SemanticsProperties.Text)?.any{it.text=="101 px circle"}==true)node else node.children.firstNotNullOfOrNull(::label)
+            android.view.inspector.WindowInspector.getGlobalWindowViews().any { view ->
+                findOwner(view)?.let { root -> label(root.semanticsOwner.unmergedRootSemanticsNode)?.let { target ->
+                    val a=IntArray(2);val b=IntArray(2);root.view.getLocationOnScreen(a);owner.view.getLocationOnScreen(b)
+                    popupPoint=target.boundsInRoot.center+Offset((a[0]-b[0]).toFloat(),(a[1]-b[1]).toFloat());true
+                } }==true
+            }
+        }
+        tap(popupPoint)
         waitFor("101 pixel setting") {picker().getInt("sample_width")==101}
         fullCapture("picker-sketch-settings")
         action(obj("type" to "invoke","command" to "eyedropper"))
@@ -225,6 +255,7 @@ class AndroidColorPanelTest {
         for((i,rgba) in listOf(listOf(1,0,0,1),listOf(0,0,1,1),listOf(0,1,0,1)).withIndex()) {
             action(obj("type" to "set_color","rgba" to JSONArray(rgba)));tap(p+Offset((i-1)*85f,0f))
         }
+        action(obj("type" to "set_color_sample_size","width" to 101))
         fun measurements(reset:Boolean):JSONObject {
             val done=CountDownLatch(1);var result:JSONObject?=null
             instrumentation.runOnMainSync {host.measurements(reset){result=it;done.countDown()}}
@@ -233,17 +264,22 @@ class AndroidColorPanelTest {
         val reports=JSONArray()
         for(visible in listOf(false,true,false,true)) {
             action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "color","visible" to visible)))
+            waitFor("wheel visibility") {(find(owner.semanticsOwner.unmergedRootSemanticsNode,"color-wheel")!=null)==visible}
             action(obj("type" to "invoke","command" to "eyedropper"))
-            event(MotionEvent.ACTION_HOVER_ENTER,p);event(MotionEvent.ACTION_HOVER_MOVE,p)
+            event(MotionEvent.ACTION_HOVER_MOVE,p);event(MotionEvent.ACTION_HOVER_MOVE,p)
             waitFor("preview ready"){picker().objectOrNull("preview")!=null};SystemClock.sleep(300)
             measurements(true)
+            replayOrigin=IntArray(2).also { instrumentation.runOnMainSync { owner.view.getLocationOnScreen(it) } }
             val start=SystemClock.uptimeMillis()
+            waitForInput=false
             repeat(600) { i->
                 val delay=start+i*5-SystemClock.uptimeMillis();if(delay>0)SystemClock.sleep(delay)
                 event(MotionEvent.ACTION_HOVER_MOVE,p+Offset(100f*cos(i*.03f),20f*sin(i*.03f)))
             }
             val elapsed=SystemClock.uptimeMillis()-start
-            val report=measurements(false).put("wheel",visible).put("duration_ms",elapsed)
+            waitForInput=true
+            replayOrigin=null
+            val report=measurements(false).put("wheel",visible).put("duration_ms",elapsed).put("sample_width",101)
             reports.put(report)
             assertEquals("Hover retains panel models",0,report.getInt("panel_content_changes"))
             event(MotionEvent.ACTION_HOVER_EXIT,p)

@@ -235,6 +235,7 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
+        if state.platform.color_picker() { map.serialize_entry("color_preview", &self.session.color_preview())?; }
         map.serialize_entry("color_panel", &if matches!(state.platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {state.display_colors().view_mapped(self.session.effective_sdr_rendition())}else{state.display_colors().view_in(self.ui_color_space)})?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),

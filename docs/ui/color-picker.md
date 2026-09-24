@@ -1,6 +1,7 @@
 # Color picking
 
-GTK design and review scope, September 2026. Other hosts remain pending review.
+Implemented on GTK, Web and Android, September 2026. GTK was reviewed before
+the Web and Android rollout. Other hosts retain their existing picker.
 
 ## Research
 
@@ -38,8 +39,8 @@ the Eyedropper category and pipette icon, with both Color Picker and Eyedropper
 on the left of its settings drawer. Neither picker drawer dismisses on an
 outside UI contact. Dropdown popups remain interactive, and no instructional
 hint text occupies the settings panel.
-GTK counts focus in a native popup as focus within the same window; opening a
-dropdown must not trigger canvas blur. Moving focus to another window still
+GTK and Android count a settings popup as focus within the same window;
+opening a dropdown must not trigger canvas blur. Leaving the application still
 cancels temporary picking.
 
 Touch and hold on the canvas starts the same picker with the loupe lifted above
@@ -50,7 +51,7 @@ A second finger toggles visible/selected-layer sampling when a paintable layer
 is selected. A fine stacked-layer mark above and to the right of the crosshair indicates raw layer
 sampling, whether changed by touch or the Source dropdown. Changing source keeps
 the settings drawer open. Native hold timing, movement slop and sequence
-ownership belong to GTK; sampling, preview, acceptance and cancellation belong
+ownership belong to each host; sampling, preview, acceptance and cancellation belong
 to shared Rust.
 
 The loupe has a 2× interior, a tiny central cross, and a 14-logical-pixel split ring with the
@@ -76,6 +77,13 @@ This avoids blocking input on rasterization; the former 33 ms coalescing alone
 did not address those stalls. The shorter panel budget reads the latest sample
 without postponing its deadline, independently of full-rate loupe movement.
 The same renderer serves docked and drawer color panels, at native display DPI.
+Web and Android publish preview colors separately from retained workspace and
+panel models. Web sends field raster requests to a dedicated Wasm worker;
+Android uses a conflated coroutine channel and pure JNI raster functions on a
+background dispatcher. Both keep one raster in flight and the latest pending
+request. A finished older hue may appear during movement, but results for a
+previous size, shape or rendition, or arriving after cancellation, are rejected. The loupe stays
+on the canvas GPU path; preview work never mutates brush colors or history.
 Sampling uses artwork coordinates independent of canvas zoom, rotation, flips,
 selection boundaries and display/proof transforms. The zoomed interior is a
 view of the visible artwork, including when sampling raw layer paint.
@@ -112,13 +120,11 @@ color mixing are separate workflows and are deferred rather than crowding this
 drawer. The existing color panel already supplies numeric inspection and color
 library access.
 
-GTK implementation and visual/input checks must be reviewed before rollout to
-other platforms.
-
 ## Validation
 
 - GTK release build: `cargo build --locked --release -p layer-linux`.
-- Shared UI/workspace library tests: 564 passed. Coverage includes reversible
+- Shared UI/host/workspace library tests: 586 UI, 29 host and 5 workspace checks
+  pass (one unrelated host test is ignored). Coverage includes reversible
   hover, exact acceptance during rapid motion, stale readbacks, transparent
   samples, tool restoration, touch ownership, source switching and Navigator
   navigation. Temporary picking is omitted from saved workspace tool state.
@@ -161,3 +167,44 @@ other platforms.
   `spatial_filters_match_linear_sampling_oracles`, which fails its Ripple oracle
   with 91,837 differing pixels. The identical failure was reproduced from an
   untouched `dc27e04d` snapshot; it is outside this picker change.
+- Web release build: `apps/layer-web/build.sh`. The shared
+  `apps/layer-web/color-picker.test.mjs` runs through `test.mjs --color-picker`
+  on a composited desktop and `device.test.mjs --color-picker` on the Huion.
+  It checks keyboard entry/cancel, Sketch toolbar order, both drawer layouts,
+  settings, real red-paint sampling, pen-up acceptance, touch offset/source/cancel,
+  and a visible wheel preview without synchronous field or workspace rebuilds.
+  The existing color-panel regression covers 60 layouts, both themes, three
+  shapes, and mouse/touch/pen/keyboard input. Use a composited browser for GPU
+  screenshots; headless captures can omit the canvas surface.
+- Web performance uses `tools/performance/web-pen.mjs --os-input --picker`
+  with a dedicated tablet test origin and CDP endpoint. Build/push
+  `tools/performance/AndroidPenMotion.java` as described in
+  [the Huion pen guide](../development/web-pen-huion-2026-09-20.md), or set
+  `LAYER_PEN_HELPER` to the dedicated device dex path. The replay remains clear
+  of the floating color panel. `LAYER_PICKER_SAMPLE_SIZE=101` exercises the
+  largest sample. On the 90 Hz Huion, three alternating five-second point-sample
+  runs measured 78.5–79.9 canvas submissions/sec with the wheel closed and
+  73.3–73.9 open; input-to-submit p95 was 26.3–26.5 ms closed and 27.2–27.8 ms
+  open. Frame CPU p95 was 2.3–2.8 ms. These are submission and input timings,
+  not compositor presentation measurements. No synchronous wheel rasters or
+  workspace model rebuilds occurred during these runs. A five-second 101-pixel
+  run measured 75.5 submissions/sec closed and 64.7 open, with input-to-submit
+  p95 of 27.9 and 27.6 ms respectively. Large-area averaging and browser
+  composition still cost throughput on this tablet; an additional preview timer
+  did not recover it, so the Web port retains display-paced updates.
+- Android builds with `:app:assembleDebug :app:assembleDebugAndroidTest`.
+  `AndroidColorPanelTest#glassPickerInputAndSettings` and
+  `#pickerWheelPreviewPerformance`, with instrumentation argument
+  `-e systemInput true`, exercise production Compose/Rust and OS-injected
+  stylus, touch and keyboard input on the Huion. The performance test alternates
+  a visible and hidden wheel at the 101-pixel setting with 200 Hz hover input;
+  it records frame CPU time and publication counters in the app's validation
+  directory. On the Huion, 101-pixel samples measured median frame CPU time of
+  4.6 ms closed and 4.8–5.1 ms open, with p95 below 9.6 ms and no full snapshot
+  or panel-content publications during hover. Test workspace/settings storage
+  is isolated from user preferences.
+  The existing `touchPenAndMousePickWithoutHoldAndKeepCapture` regression also
+  passes through View dispatch, including intentionally invalid post-cancel
+  motion that Android's OS injector correctly refuses to deliver.
+  These device checks use typed input replay, not a person moving the pen, and
+  do not qualify physical HDR output or very large documents.
