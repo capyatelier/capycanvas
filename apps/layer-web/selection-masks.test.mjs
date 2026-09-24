@@ -15,8 +15,8 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   assert.equal((await view()).has_selection,false,'Leaving an untouched Quick Mask retains no selection');
   await invoke('quick_mask');
   assert.equal(await evaluate('!!document.querySelector("#selection-mask-actions")'),false);
-  assert.equal(await evaluate('layerApp.state().layer_properties.controls.length'),4);
-  assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_painting").value.value'),0);
+  assert.equal(await evaluate('layerApp.state().layer_properties.controls.length'),3);
+  assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_mode").value.value'),0);
   assert.equal(await evaluate('layerApp.state().layers[0].quick_mask'),true);
   assert.equal(await evaluate('layerApp.state().layers[0].selection_icon'),'layer-brush-symbolic');
   await toggleLayers();
@@ -24,6 +24,17 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
 
   await toggleLayers();
   await point(at(-45,0));
+  const maskPixels=async()=>{
+    const shot=await call('Page.captureScreenshot',{format:'png'}), center=at(0,0);
+    return evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${shot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const scale=c.width/innerWidth;const p=g.getImageData((${center.x}-120)*scale,(${center.y}-70)*scale,240*scale,140*scale).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
+  };
+  let previousPixels=await maskPixels();
+  for(const x of [-40,-35]) {
+    await point(at(x,0),'pen','mouseMoved');
+    const next=await maskPixels();
+    assert.ok(next>previousPixels+5,`G-Pen updates sub-spacing movement during contact: ${previousPixels} -> ${next}`);
+    previousPixels=next;
+  }
   for(let x=-30;x<=45;x+=15)await point(at(x,0),'pen','mouseMoved');
   await point(at(45,0),'pen','mouseReleased');
   assert.equal(await evaluate('JSON.stringify(layerApp.state().colors,(_,v)=>typeof v==="bigint"?String(v):v)'),colors,'Mask colors leave artwork colors intact');
@@ -42,20 +53,28 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await toggleLayers();
   await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:true}});
   await evaluate(`if(!document.querySelector('.effect-properties')?.getBoundingClientRect().height)document.querySelector('.dock-tab[data-panel="properties"],.column-tab[data-panel="properties"]')?.click()`);await settle();
-  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Color / transparent');n.value='1';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
-  assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_painting").value.value'),1);
-  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Color / transparent');n.value='0';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
+  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Selection paint');n.value='1';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
+  assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_mode").value.value'),1);
+  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Selection paint');n.value='0';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
   const propertiesShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/quick-mask-properties.png`,Buffer.from(propertiesShot.data,'base64'));
   const propertyMaskPixels=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${propertiesShot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const p=g.getImageData(0,100,c.width*.75,c.height-100).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
   assert.ok(propertyMaskPixels>100,'Changing painting convention preserves the visible mask');
+  await send({type:'set_color',rgba:[0,.5,1,1]});
+  await evaluate(`document.querySelector('.effect-properties [data-action="paper-color-bucket"]').click()`);await settle();
+  assert.deepEqual(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_color").value.value.rgba'),[0,.5,1,1],'Bucket copies the mask painting color');
   await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:false}});
   await toggleLayers();
   await evaluate(`document.querySelector('.content-drawer .layer-row[data-layer="0"] .selection-layer-load').click()`);await settle();
   assert.equal((await view()).quick_mask,false);
   assert.equal((await view()).has_selection,true);
+  await invoke('quick_mask');
   await invoke('save_selection_layer');
+  assert.equal((await view()).quick_mask,false,'Saving exits Quick Mask');
   await send({type:'layer',action:{op:'cancel_rename'}});
   const id=await evaluate('String(layerApp.state().layers.find(l=>l.selection_layer).id)');
+  assert.equal(String((await view()).mask_editing.layer),id,'Saving activates the saved mask');
+  await invoke('return_to_artwork');
+  assert.equal(await evaluate(`layerApp.state().layers.find(l=>String(l.id)==='${id}').visible`),false,'Leaving a selection layer hides its overlay');
   const row=`.content-drawer .layer-row[data-layer="${id}"]`;
   assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(row+' .layer-name-entry')})`),false,'Model cancellation removes the rename editor');
   const sizes=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(row)});const a=r.querySelector('.layer-thumbnail').getBoundingClientRect(),b=r.querySelector('.selection-layer-load').getBoundingClientRect();return {aw:a.width,bw:b.width,gap:b.left-a.right};})()`);

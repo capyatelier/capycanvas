@@ -183,7 +183,9 @@ Additional reproducible checks:
   previews, thumbnails and export isolation (requires a GPU).
 - Web `--selection-tools` also exercises Paint selection Add/Subtract controls,
   Quick Mask rows/properties, independent colors, compact Load icons, mouse/touch inline rename,
-  Grow/Shrink dialogs, saved-mask edit/load and reselect.
+  Grow/Shrink dialogs, saved-mask edit/load and reselect. It also checks G-Pen
+  coverage during sub-spacing moves, the color bucket, Quick Mask save/activation,
+  automatic hiding, and touch/pen slider scrolling with press rollback.
   Its light/dark screenshot assertions inspect the painted canvas area. Tested
   on Huion Kamvas Pad 12 / Chrome 143 / ARM Valhall with CDP mouse/touch/pen
   input. Injected input verifies the device rendering and host paths, not the
@@ -195,7 +197,8 @@ Additional reproducible checks:
   rename, Grow, independent colors, compact Load icons and artwork export isolation.
   Light/dark captures are written to the app’s external files directory. Run alongside
   `AndroidRasterTest#selectionToolsRenderAndCombineOnDevice` and
-  `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons`. Huion tests
+  `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons` and
+  `AndroidTitleBarTest#toolSliderPressThenScrollRestoresValue`. Huion tests
   use the actual Vulkan device and Android input dispatcher with injected stylus
   events; they do not establish physical pressure/tilt feel.
 - Run `native_quick_mask_input` through the native GTK harness above. It checks

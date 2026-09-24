@@ -303,14 +303,15 @@ class AndroidRasterTest {
         compose.waitUntil(30_000) { compose.onAllNodesWithTag("layer-thumbnail-0-false",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("layer-thumbnail-0-false",useUnmergedTree=true).assertIsDisplayed()
         val properties=host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties")
-        assertEquals(4,properties.array("controls").length())
-        assertEquals(0,properties.array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value"))
+        assertEquals(3,properties.array("controls").length())
+        assertEquals(0,properties.array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value"))
         // Inject through Android's actual input dispatcher and CanvasSurfaceView.
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val camera = host.snapshot!!.getJSONObject("state").getJSONObject("camera")
         val viewport = camera.getJSONArray("viewport")
         val origin = host.surfaceOrigin
         val start = SystemClock.uptimeMillis()
+        var previousMaskPixels=0
         for (i in 0..12) {
             val phase = when(i) { 0 -> android.view.MotionEvent.ACTION_DOWN; 12 -> android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
             val properties = arrayOf(android.view.MotionEvent.PointerProperties().apply { id=7; toolType=android.view.MotionEvent.TOOL_TYPE_STYLUS })
@@ -321,6 +322,15 @@ class AndroidRasterTest {
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coordinates,0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_STYLUS,0)
             try { assertTrue(automation.injectInputEvent(event,true)) } finally { event.recycle() }
             SystemClock.sleep(16)
+            if(i<=2) {
+                SystemClock.sleep(80)
+                val shot=requireNotNull(automation.takeScreenshot())
+                val pixels=IntArray(280*160)
+                try { shot.getPixels(pixels,0,280,(origin.x+viewport.getDouble(0)/2-140).toInt(),(origin.y+viewport.getDouble(1)/2-80).toInt(),280,160) } finally { shot.recycle() }
+                val count=pixels.count { android.graphics.Color.red(it)>android.graphics.Color.green(it)+40 && android.graphics.Color.red(it)>android.graphics.Color.blue(it)+40 }
+                if(i>0)assertTrue("G-Pen refreshes sub-spacing motion before lift: $previousMaskPixels -> $count",count>previousMaskPixels+5)
+                previousMaskPixels=count
+            }
         }
         compose.waitUntil(30_000) { !tick() }
         assertEquals(artColors,host.snapshot!!.getJSONObject("state").getJSONObject("colors").toString())
@@ -341,21 +351,29 @@ class AndroidRasterTest {
             val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "properties" in it.array("panels").values() }.getInt("id")
             send(obj("type" to "select_panel_tab", "group" to group, "panel" to "properties"))
         }
-        compose.onNodeWithText("Color / transparent").performClick()
-        compose.onNodeWithText("Black / white").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value")==1 }
-        compose.onNodeWithText("Black / white").performClick()
-        compose.onNodeWithText("Color / transparent").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value")==0 }
+        compose.onNodeWithText("Selection paint").performClick()
+        compose.onNodeWithText("Grayscale mask").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value")==1 }
+        compose.onNodeWithText("Grayscale mask").performClick()
+        compose.onNodeWithText("Selection paint").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value")==0 }
         compose.waitForIdle()
         automation.takeScreenshot()?.let { image -> try { File(activity.getExternalFilesDir(null),"quick-mask-properties.png").outputStream().use {image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)} } finally {image.recycle()} }
+        send(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(0,.5,1,1))))
+        compose.onNodeWithTag("paper-color-bucket").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_color" }.getJSONObject("value").getJSONObject("value").getJSONArray("rgba").getDouble(1)==.5 }
         send(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to false)))
         compose.onNodeWithTag("selection-load-0").performClick()
         compose.waitUntil(30_000) { !view().optBoolean("quick_mask") }
         assertTrue(view().getBoolean("has_selection"))
+        invoke("quick_mask")
         invoke("save_selection_layer")
+        assertFalse(view().getBoolean("quick_mask"))
         send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
         val id=host.snapshot!!.getJSONObject("state").array("layers").objects().first {it.optBoolean("selection_layer")}.getLong("id")
+        assertEquals(id,view().getJSONObject("mask_editing").getLong("layer"))
+        invoke("return_to_artwork")
+        assertFalse(host.snapshot!!.getJSONObject("state").array("layers").objects().first {it.getLong("id")==id}.getBoolean("visible"))
         val label=host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("label")
         compose.onNodeWithText(label).performTouchInput { doubleClick() }
         compose.waitUntil(10_000) { view().optLong("rename_layer",-1)==id }

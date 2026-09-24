@@ -303,7 +303,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .number-track { display: flex; align-items: center; gap: 6px; }
 .number-control .number-step { display: grid; place-items: center; flex: none; min-width: 32px; min-height: 32px; width: 32px; height: 32px; padding: 0; }
 .number-step svg { width: 16px; height: 16px; }
-.number-control .number-slider { appearance: none; flex: 1; width: 0; min-width: 0; height: 32px; padding: 0; margin: 0; border: 0; background: transparent; touch-action: pan-y; }
+.number-control .number-slider { --slider-thumb-size: 16px; appearance: none; flex: 1; width: 0; min-width: 0; height: 32px; padding: 0; margin: 0; border: 0; background: transparent; touch-action: pan-y; }
 .number-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--number-fill, var(--accent)) var(--fill), var(--number-track, var(--input)) var(--fill)); }
 .number-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--number-track, var(--input)); }
 .number-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--number-fill, var(--accent)); }
@@ -312,7 +312,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .number-slider::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
 .panel .number-track { gap: 6px; }
 .panel .number-track .number-step { min-width: 24px; min-height: 24px; width: 24px; height: 24px; }
-.panel .number-control .number-slider { height: 24px; }
+.panel .number-control .number-slider { --slider-thumb-size: 0px; height: 24px; }
 .panel .number-slider::-webkit-slider-thumb { width: 0; height: 0; margin-top: 2px; box-shadow: none; }
 .panel .number-slider::-moz-range-thumb { width: 0; height: 0; box-shadow: none; }
 .number-spin { background: var(--input); border-radius: 6px; overflow: hidden; }
@@ -873,7 +873,7 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .filter-types .cancel-filter { align-self:flex-start; }
 .content-drawer :is(.filter-types,.filter-picker,.effect-properties) { margin:8px; }
 .paper-color-property { display:flex; gap:6px; }
-.paper-color-property > :first-child { flex:1; min-width:0; height:36px; }
+.paper-color-property > :first-child { flex:1; min-width:0; max-width:none; height:36px; }
 .drawer-column > .layers-panel { padding:8px; }
 
 .layer-swipe { position: relative; overflow: hidden; flex: none; --swipe: 0px; }

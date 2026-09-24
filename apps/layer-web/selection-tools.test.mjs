@@ -71,6 +71,28 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await contact(mode('selection_fixed_size'));
     await invoke('color_select');
     for(const id of ['tolerance','expansion','smoothing']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
+    // A short native Tool viewport makes slider-started scrolling observable.
+    await evaluate(`(()=>{const s=document.querySelector('.content-drawer [data-tool-setting=tolerance] .number-slider');window.sliderScroll=s.closest('.drawer-column');sliderScroll.style.maxHeight='170px';sliderScroll.style.overflowY='auto';})()`);
+    for (const device of ['touch','pen']) {
+      await send({type:'set_tool_setting',id:'tolerance',value:.1});
+      const before=await evaluate('layerApp.state().tool_settings.find(s=>s.id==="tolerance").value');
+      const start=await evaluate(`(()=>{sliderScroll.scrollTop=0;const s=sliderScroll.querySelector('[data-tool-setting=tolerance] .number-slider');s.scrollIntoView({block:'nearest'});const b=s.getBoundingClientRect();return{x:b.x+b.width*.7,y:b.y+b.height/2,top:sliderScroll.scrollTop};})()`);
+      const move=async(type,p=start)=>{
+        if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:1,x:p.x,y:p.y}]});
+        else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],x:p.x,y:p.y,button:'left',buttons:type==='up'?0:1,pointerType:'pen',force:.7});
+        await new Promise(r=>setTimeout(r,60));
+      };
+      await move('down'); await settle();
+      assert.notEqual(await evaluate('layerApp.state().tool_settings.find(s=>s.id==="tolerance").value'),before,`${device} edits on press`);
+      for(const dy of [20,45,80])await move('move',{x:start.x,y:start.y-dy});
+      await move('up',{x:start.x,y:start.y-80});await settle();
+      assert.equal(await evaluate('layerApp.state().tool_settings.find(s=>s.id==="tolerance").value'),before,`${device} restores the slider when scrolling`);
+      assert.ok(await evaluate('sliderScroll.scrollTop')>start.top+10,`${device} pans from the slider`);
+      await evaluate(`sliderScroll.scrollTop=${start.top}`);await settle();
+      await move('down');await move('move',{x:start.x+20,y:start.y});await move('up',{x:start.x+20,y:start.y});await settle();
+      assert.notEqual(await evaluate('layerApp.state().tool_settings.find(s=>s.id==="tolerance").value'),before,`${device} keeps horizontal edits`);
+    }
+    await evaluate("sliderScroll.style.maxHeight='';sliderScroll.style.overflowY='';sliderScroll.scrollTop=0;delete window.sliderScroll");
     for(const id of ['selection_visible','selection_editing','selection_reference']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-action=${id}]')`));
     await mkdir('artifacts/selection-web',{recursive:true});
     for(const theme of ['light','dark']) {

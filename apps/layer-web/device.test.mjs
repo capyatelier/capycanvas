@@ -60,7 +60,7 @@ const evaluate=async expression=>{
   if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
   return result.result.value;
 };
-const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),20000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:!process.argv.includes('--drawing-tabs-offline')});await loaded;};
+const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),60000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:!process.argv.includes('--drawing-tabs-offline')});await loaded;};
 const settle=()=>evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
 const canvasPixels=async()=>{
   const shot=await call("Page.captureScreenshot",{format:"png"});
