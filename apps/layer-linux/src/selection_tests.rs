@@ -102,14 +102,14 @@ fn native_quick_mask_input() {
     d.w.dispatch(UiAction::Invoke {command:CommandId::SaveSelectionLayer}); pump(150);
     let id = state(&d.w).layers.iter().find(|l|l.selection_layer).unwrap().id;
     d.w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::CancelRename});
-    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::EditLayer {id}}); pump(100);
-    assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
+    pump(100);
     d.click_name(&layers); pump(100);
     let name = find_css(&d.named(&format!("art-layer-{id}")), "layer-name").unwrap();
     let point = d.point(&name);
     d.perform(serde_json::json!([{"point":point},{"down":true},{"down":false},{"down":true},{"down":false}]));
     assert_eq!(state(&d.w).layer_tools.rename_layer,Some(id), "double-clicking the name edits it");
     d.key(0xff1b);
+    assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
     d.click_name(&layers); pump(100);
     let saved = || d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
     let before = saved();

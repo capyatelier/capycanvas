@@ -40,8 +40,8 @@ to create a layer mask through the existing layer-mask commands.
 
 For familiarity with layer-oriented drawing workflows, entering Quick Mask
 shows and selects a **Quick Mask** row at the top of the Layers panel. Give
-it a coverage thumbnail, distinct selection icon, and **Temporary** label. Pin
-it outside artwork groups; it represents the global selection being edited.
+it a normal coverage thumbnail, paintbrush target indicator, and compact Load
+icon. Pin it outside artwork groups; it represents the global selection being edited.
 
 This row is a view of the current selection and editing session, not a new
 artwork layer. It does not blend, clip other layers, participate in merge/flatten,
@@ -117,7 +117,7 @@ masks, the recommended presentation changes location more than editing meaning.
 
 | Decision | Familiarity assessment |
 | --- | --- |
-| Show a temporary Quick Mask row in Layers | The temporary named mask is familiar; its location among layer rows is new. Pin it separately and mark it Temporary to avoid implying an artwork layer or permanent insertion. |
+| Show a temporary Quick Mask row in Layers | The temporary named mask is familiar; its location among layer rows is new. Pin it outside groups; its Quick Mask name and removal on exit identify the temporary editing mode. |
 | Independent persistent Selection Layers | Closer to document-wide saved masks than mandatory attachment to a paint layer. Root-level placement is the most direct mapping. |
 | Attach each saved region to an artwork layer | Adds an unfamiliar ownership rule and risks confusion with a layer visibility mask. Keep this optional future behavior. |
 | Select a saved row to edit its coverage | Familiar separation between editing a stored mask and using that mask as a selection. |

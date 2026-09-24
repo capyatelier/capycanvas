@@ -78,7 +78,8 @@ Keep this the complete, discoverable home for current-selection commands.
 | Paint | Quick Mask | Core. Checkable mode toggle; explicit Exit Quick Mask while active. |
 | From layer | Select Layer Opacity → Replace / Add / Subtract / Intersect | Core. Also available on artwork thumbnails. |
 | From mask | Load Layer Mask as Selection → Replace / Add / Subtract / Intersect | Core. Also available on artwork-mask thumbnails. |
-| Modify | Feather…; Grow…; Shrink… | Next, highest priority among refinements. Operate on the current result, not on the next gesture. |
+| Modify | Grow…; Shrink… | Core. Circular extrema, 1–128 image pixels, Apply/Cancel, one undo step; preserve soft values and use zero beyond the canvas. |
+| Modify | Feather… | Next. Operate on the current result, not on the next gesture. |
 | Modify | Border…; Smooth… | Next. Border creates a selected band; Smooth reduces small irregularities. |
 | Geometry | Move Selection; Transform Selection… | Next. Affect coverage/placement only; artwork stays stationary. |
 | Store | Save as Selection Layer… | Core. Named snapshot; default root placement; keeps current editing target. |
@@ -90,8 +91,8 @@ Use Grow/Shrink consistently; searchable aliases may include Expand/Contract.
 Do not expose both wordings as separate operations. Feather means softening
 coverage; it is distinct from smoothing the contour and from brush Hardness.
 Grow, Shrink, Border, and Feather take image-pixel distances, not screen pixels.
-Refinement dialogs need live preview, Apply/Cancel, one undo step, and explicit
-canvas-edge behavior. Resolve their scalar algorithms before implementation;
+Grow/Shrink apply after confirmation; future refinements should add live preview.
+All need Apply/Cancel, one undo step, and explicit canvas-edge behavior;
 do not accidentally binarize all soft coverage through the outline threshold.
 
 In ordinary artwork mode, Invert remains unavailable when there is no current
@@ -158,8 +159,8 @@ away from the contact and viewport edges, and do not move it during a stroke.
 | Polygon | Constrain Angles; Complete Selection; Cancel Selection | Existing. Escape/cancel retains the previously committed selection. |
 | Auto Select/Color Select | Sampling source: editing layer / visible artwork / reference layers; relevant tolerance and region settings | Existing. Saved masks and overlays are excluded from artwork sampling. |
 | Selection Brush | Add / Subtract; Size; Hardness; Opacity; pressure-for-size option; overlay settings | Core. No New/Intersect row or generic feather toggle. |
-| Quick Mask / Selection Layer editing | Supported brush, eraser, fill, gradient settings; grayscale foreground/background; Swap; Reset to Black/White; overlay controls | Core. Same coverage tools with an explicit different destination. |
-| Mask editing indicator | Editing selection / Editing selection layer: name; Exit Quick Mask / Return to artwork | Core. Visible even with Layers closed or overlay hidden. |
+| Quick Mask / Selection Layer editing | Supported brush, eraser, fill and gradient settings | Core. Painting convention and overlay settings stay in Properties; ordinary color controls provide swap/reset. |
+| Mask editing indicator | Paintbrush in the active layer row; Quick Mask command checked while active | Core. Layer indicator remains visible when its overlay is hidden. |
 | Select panel | Selection Actions… | Core. Keyboard-free access to the current-selection menu. |
 
 Keep Selection Brush's temporary Alt/Option mode swap and physical eraser rules
@@ -170,8 +171,11 @@ All persistent modes must remain selectable without a keyboard.
 
 ## 4. Temporary Quick Mask row
 
-The row is pinned, selected while editing, labeled Temporary, and removed on exit.
-Its context menu is short and target-specific:
+The row uses ordinary layer presentation, is pinned and selected while editing,
+and is removed on exit. A compact Load icon ends editing.
+Painting behavior, overlay color/opacity, and selected/protected display stay
+in Properties; the eye controls visibility. Its context menu is short and
+target-specific:
 
 | Item | Behavior | Priority |
 | --- | --- | --- |
@@ -180,10 +184,9 @@ Its context menu is short and target-specific:
 | Invert Mask | Invert current selection coverage; stay in the mode. | Core; reuse current-selection inversion |
 | Select Entire Canvas | Set mask coverage to 1. | Core; adapt Select All |
 | Clear Selection Coverage | Set mask coverage to 0. Does not exit or remove the selection restriction. | Core |
-| Fill Mask | Paint foreground gray across the document mask using paint opacity. | Core |
-| Show Overlay | Checkable; eye invokes the same display action. | Core |
-| Overlay Settings… | Selected/Protected display side, color, display opacity. | Core |
-| Modify Mask → Feather / Grow / Shrink / Border / Smooth | Mask-targeted versions of delivered coverage refinements. | Next |
+| Fill Mask | Paint across the document mask using the selected painting convention and paint opacity. | Core |
+| Modify → Grow / Shrink | Target the working mask. | Core |
+| Modify Mask → Feather / Border / Smooth | Other coverage refinements. | Next |
 | Move / Transform Mask | Adjust selection coverage only. | Next |
 
 Do not expose Rename, Duplicate Layer, Delete Layer, merge, blend mode, artwork
@@ -209,8 +212,8 @@ Its context menu and the Layer menu for this row use the same actions:
 | Use | Load Inverted Selection | Core. Invert a copy, not the stored mask. Equivalent to Invert source in Load dialog. |
 | Update | Replace from Current Selection | Core. Explicitly overwrite this ID's coverage. |
 | Mask | Invert Stored Mask; Select Entire Canvas in Mask; Clear Stored Mask; Fill Mask | Core. Durable edits to this saved mask; locks apply. |
-| Mask | Modify Stored Mask → Feather / Grow / Shrink / Border / Smooth; Transform Stored Mask… | Next. Same scalar operations, explicitly routed to the saved ID. |
-| Display | Show Overlay; Overlay Settings… | Core. No load, clipping activation, or artwork visibility change. |
+| Mask | Modify → Grow / Shrink | Core. Same scalar operations, explicitly routed to the saved ID. |
+| Mask | Feather / Border / Smooth; Transform Stored Mask… | Next. |
 | Organize | Rename…; Duplicate; Delete; Lock Editing | Core adaptations of ordinary node actions. Rename/duplicate/delete must retain their distinct meanings. |
 | Organize | Move Up / Down; Move into Group… / Move to Root; Group Selected Layers | Core integration with existing tree semantics and keyboard-accessible reorder. General creation defaults to root. |
 
@@ -281,7 +284,6 @@ direction and must not accidentally call this destructive replacement path.
 | Edit | Stroke Selection… | Later. Paint an outline with width/alignment/brush settings; Border Selection changes coverage instead. |
 | Document | Crop Canvas to Selection… | Next. Crop to the bounding rectangle of nonzero coverage; holes/soft edges do not erase artwork. Affects the whole document and stored masks. |
 | View | Show Selection Outline | Core. Hides ants without changing coverage or editing target. |
-| View | Show Mask Overlay; Mask Overlay Settings… | Core. Active mask's display actions, matching row eye/settings. |
 | View | Show Selection Action Bar | Next, only when the optional bar exists. |
 
 Outline visibility and mask-overlay visibility are independent display settings.
@@ -308,7 +310,10 @@ Quick Mask uses Q; mask color swap uses X; Reset to Black/White is a visible
 command with D as a proposed mask-mode default after conflict checking. Escape
 cancels a contact/preview first, then exits Quick Mask while retaining edits.
 Selection Brush reuses existing size shortcuts and its specified Alt/Option
-mode swap. Native text fields retain all editing shortcuts.
+mode swap. Native text fields retain all editing shortcuts. Other selection
+tools use Shift Add, Alt Subtract, Shift+Alt Intersect, and Ctrl/Cmd New when
+held before the gesture. The operation is latched until completion; keys first
+pressed during construction provide geometric constraints instead.
 
 Apply these load gestures only to coverage thumbnails, with visible menu/button
 equivalents:

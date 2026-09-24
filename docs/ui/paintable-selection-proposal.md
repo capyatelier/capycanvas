@@ -149,16 +149,16 @@ cancels an unfinished contact. Save the previous tool, artwork editing target,
 and foreground/background colors for restoration. If the current tool supports
 mask painting, retain it; otherwise activate the most recently used supported
 brush, with a hard round brush as fallback. Preserve the original preset for exit.
-Show an explicit **Editing selection** indicator with an **Exit Quick Mask**
-action available without a keyboard.
+The selected row carries the paintbrush target indicator. Its Load icon and
+context menu provide a keyboard-free exit.
 
 Initialize the working coverage as follows:
 
 | Entry state | Working mask |
 | --- | --- |
 | Existing selection | Preserve its full coverage, including soft edges, inversion, and placement. |
-| No selection | Full selected coverage. Initial black painting protects areas; white restores them. |
-| Explicit empty selection | Zero coverage. White can build a selection from scratch. |
+| No selection | Empty working coverage. Opaque painting builds the selected region. |
+| Explicit empty selection | Zero coverage; painting builds a selection from scratch. |
 
 Entering and leaving without an edit preserves the exact original selection,
 including the distinction between no selection and explicit full coverage.
@@ -171,11 +171,14 @@ Painting into it is not clipped by its own current coverage.
 ### Temporary Layers row
 
 Show and select a pinned **Quick Mask** row at the top of Layers, outside groups,
-with a coverage thumbnail, selection icon, and **Temporary** label. Its eye
+with the ordinary coverage thumbnail, paintbrush target icon, and compact Load
+icon immediately to the right of the thumbnail. Avoid extra explanatory text. Its eye
 controls overlay display only. Hiding the overlay leaves mask editing active and
 the editing-target indicator visible. The row is a projection of the editing
 session, not a durable layer insertion, and cannot be renamed or reordered.
-Do not expose artwork blend, opacity, clipping, merge, or export controls.
+The common Layers toolbar stays stationary when the target changes, with
+unsupported artwork controls disabled. Mask settings live in Properties.
+Do not expose artwork merge/export operations in the mask context menu.
 
 Exiting removes the row without a layer-history entry. Choosing an artwork row
 finishes Quick Mask and selects that target; choosing a Selection Layer finishes
@@ -186,40 +189,40 @@ through menus and the editing-target controls when Layers is closed.
 
 ### Painting and display
 
-Use a separate grayscale foreground/background pair, initially black and white.
-Show **Black removes; white selects** beside the mask color controls. Gray gives
-partial selection. Mask gray is a coverage value, independent of artwork color
-space, proofing, or HDR exposure. A displayed gray value of 50% targets 50%
-coverage. Keep artwork colors intact for exit.
+Quick Mask and Selection Layers use the same four Properties controls:
+**Painting**, **Overlay color**, **Overlay opacity**, and **Overlay**
+(Selected areas / Protected areas). There is no mask editing popup, strip, Done,
+or Swap property. The managed overlay color picker and current-color action
+work like Paper color. Layer visibility controls the overlay.
 
-Provide a visible swap control and a remappable X shortcut in this mode.
-Grayscale choices persist within the document's current Quick Mask session.
-For a painted gray value G and effective brush alpha A, blend coverage as
-`S * (1 - A) + G * A`. Ordinary brush opacity, spacing, pressure, and tip shape
-continue to determine A. Do not apply Selection Brush's automatic loop fill to
-ordinary brush strokes in Quick Mask.
+Default **Color / transparent** painting follows the familiar selection-layer
+convention: any color adds selected coverage; transparent color and erasers
+remove it. Optional **Black / white** painting maps black to zero, white to one,
+and gray to partial coverage. Mask colors remain independent of artwork colors;
+entering starts from the artwork colors, constrained to gray when appropriate.
+Ordinary color-panel swap/reset actions and shortcuts remain available.
 
-Eraser and transparent-color painting remove the protective mask, moving
-coverage toward 1 using the eraser's alpha. A physical pen eraser follows that
-same rule. This differs deliberately from Selection Brush's eraser contact,
-which directly subtracts selection. The Quick Mask eraser tooltip says
-**Erase mask to select**.
+For paint target G and effective brush alpha A, blend as `S * (1 - A) + G * A`.
+In Color / transparent mode G is 1 for paint and 0 for erasing; in Black / white
+mode G is the chosen gray (0 for erasing). Brush opacity, spacing, pressure, and
+tip shape determine A. A physical pen eraser also removes selected coverage.
+Ordinary mask brush strokes do not use Selection Brush's automatic loop fill.
 
-Quick Mask initially tints **protected** areas red at 50% display opacity.
-Its overlay settings include **Protected / Selected**, color, and display
-opacity. Changing the displayed side never changes coverage, grayscale
-meaning, or eraser behavior. Selection Brush always shows selected areas.
-Remember Quick Mask's display-side setting separately.
+Overlay defaults to **selected** areas red at 50%. Display side/color/opacity
+never change coverage or painting meaning. Quick Mask remembers these settings
+for the document session. Selection Layers persist their own settings; saving a
+Quick Mask copies them. Several visible saved masks composite their individual
+tints in layer order without modifying the current selection.
 
 ### Supported operations
 
 | Operation | Quick Mask behavior |
 | --- | --- |
 | Coverage-capable drawing brushes | Apply the preset's supported tip shape, texture, size, opacity, and pressure to grayscale coverage. |
-| Eraser | Erase protective coverage as described above. |
+| Eraser | Remove selected coverage using the eraser’s alpha. |
 | Fill | Use the existing artwork sampling sources and region classification to find an area, then paint that area into the mask. Never classify the overlay or use the mask as its own clip. |
-| Fill selection command | Present as **Fill mask** and apply foreground gray to the entire document mask, with the current paint opacity. |
-| Gradient | Paint a grayscale or grayscale-to-transparent gradient into the mask using the existing gradient geometry. |
+| Fill selection command | Present as **Fill mask** and apply the selected painting convention to the entire document mask, with the current paint opacity. |
+| Gradient | Paint coverage or coverage-to-transparent using the selected painting convention and existing gradient geometry. |
 | Pan, zoom, rotate/flip view | Preserve the editing mode and mask values. |
 | Undo/redo | Undo/redo mask edits as selection edits, one step per completed gesture. |
 
@@ -251,7 +254,7 @@ Before changing documents, cancel the unfinished contact, drain completed edits,
 and exit Quick Mask. Returning to the document uses ordinary editing mode.
 Saving drains completed edits and stores the resulting selection without exiting
 the visible mode. Opening/recovering that snapshot starts outside Quick Mask;
-the transient mode and temporary grayscale UI state are not project data.
+the transient mode and temporary painting UI state are not project data.
 Export and color sampling use artwork without the selection overlay.
 
 ## Selection Layers
@@ -262,16 +265,15 @@ Provide named **Selection Layer** rows with a coverage thumbnail, selection icon
 eye for overlay preview, and an explicit **Load Selection** action. Their coverage
 does not render as artwork or continuously control another layer's visibility. Saving a
 snapshot starts its overlay hidden; explicitly editing that row reveals it.
-Visible saved layers preview selected coverage. Quick Mask and the active stored
-mask also offer protected-area display. The shared overlay color/opacity affects
-only display, and several visible saved layers combine by maximum for preview.
+Visible saved layers use their own overlay color/opacity and selected/protected
+setting. These settings affect display only.
 There is still only one current selection restricting artwork edits.
 
 | Action | Required behavior |
 | --- | --- |
 | Save as Selection Layer… | Snapshot current coverage, including completed Quick Mask edits. Ask for a name with an automatic default; preserve the current editing target and working selection. Default to the document root. |
-| New Selection Layer… | Create an empty stored mask and enter its editing mode with white selected for painting. A group-specific creation command explicitly parents it to that group. |
-| Click row / Edit Selection Layer | Edit stored coverage directly with shared grayscale mask controls. Show **Editing selection layer: name** and a visible **Return to artwork** action. Preserve the current selection separately; it does not clip stored-mask painting. |
+| New Selection Layer… | Create an empty stored mask and enter Color / transparent painting. A group-specific creation command explicitly parents it to that group. |
+| Click row / Edit Selection Layer | Edit stored coverage directly with the shared mask Properties and paintbrush row indicator. Preserve the current selection separately; it does not clip stored-mask painting. |
 | Load Selection | Resolve the stored mask's placement, copy coverage to the current selection, and return to the last valid artwork editing target. Never consume or delete the saved row. |
 | Add / Subtract / Intersect with Selection | Combine stored coverage with the current selection and return to artwork, using existing selection Boolean operations. |
 | Replace from Current Selection | Explicitly replace the chosen saved payload, retaining its identity, name, and parent. Later current-selection edits do not follow through. |
@@ -283,7 +285,7 @@ the visible action provides the same operation without modifiers. Keep thumbnail
 loading distinct from row selection, row multiselection, rename, and reorder.
 The command inventory specifies combination modifiers and context menus.
 
-Editing a stored layer uses Quick Mask's grayscale, brush, erase, fill, gradient,
+Editing a stored layer uses Quick Mask's painting, brush, erase, fill, gradient,
 and tool-availability rules, but commits to its stable saved-layer ID. It does
 not insert a second temporary Quick Mask row. Leaving for artwork keeps completed
 stored edits. Restore artwork tools/colors when leaving mask editing. A locked
@@ -385,7 +387,7 @@ Implementation milestones, in delivery order:
    suppression, and coverage-scaled overlays have core/GPU regression coverage.
    GTK mouse and injected Wayland pen journeys pass; light/dark controls reviewed.
    Overlay preferences remain part of the shared mask interface below.
-3. GTK Quick Mask and Selection Layers: temporary row, grayscale editing,
+3. GTK Quick Mask and Selection Layers: ordinary temporary row, painting conventions,
    saved-mask actions, display preferences, and editing indicator. Implemented.
    Native GTK light/dark journeys check coverage, exit, save/edit/load, and tint
    persistence. Grayscale thumbnails and multiple visible saved-mask previews

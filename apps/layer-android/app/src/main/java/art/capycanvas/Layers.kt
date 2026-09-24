@@ -147,35 +147,33 @@ internal class LayerSwipe {
     Box(modifier.fillMaxSize().onGloballyPositioned { panelOrigin = it.boundsInRoot().topLeft }) {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (!view.optBoolean("quick_mask") && active?.optBoolean("selection_layer") != true) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        var blendOpen by remember { mutableStateOf(false) }
-                        Box(Modifier.weight(1f)) {
-                            Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,RoundedCornerShape(6.dp))
-                                .clickable(enabled = controls.getBoolean("blend")) { blendOpen = true }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(active?.getString("blend_label") ?: "Normal",Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
-                                SharedIcon("chevron-down", "Layer blend mode",Modifier.size(12.dp))
-                            }
-                            DropdownMenu(blendOpen,{blendOpen=false}) {
-                                host.catalog.array("layer_blends").values().forEachIndexed { i,label -> DropdownMenuItem(text={Text(label.toString())},onClick={
-                                    blendOpen=false; host.layer(obj("op" to "blend","id" to active!!.getLong("id"),"value" to i))
-                                }) }
-                            }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    var blendOpen by remember { mutableStateOf(false) }
+                    Box(Modifier.weight(1f)) {
+                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,RoundedCornerShape(6.dp))
+                            .clickable(enabled = controls.getBoolean("blend")) { blendOpen = true }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(active?.getString("blend_label") ?: "Normal",Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                            SharedIcon("chevron-down", "Layer blend mode",Modifier.size(12.dp))
                         }
-                        NumericSetting("Layer opacity",active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
-                            enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
-                    }
-                    Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-                        for ((icon, label, property, op, capability) in listOf(
-                            listOf("alpha-lock","Alpha lock","alpha_locked","alpha_lock","alpha_lock"),
-                            listOf("lock","Lock editing","locked","lock","edit_lock"),
-                            listOf("clip","Clip to layer below","clipped","clip","clip"))) {
-                            LayerButton(host,icon,label,enabled=controls.getBoolean(capability),selected=active?.optBoolean(property)==true,
-                                action=active?.let { obj("type" to "layer","action" to obj("op" to op,"id" to it.getLong("id"),"value" to !it.getBoolean(property))) })
+                        DropdownMenu(blendOpen,{blendOpen=false}) {
+                            host.catalog.array("layer_blends").values().forEachIndexed { i,label -> DropdownMenuItem(text={Text(label.toString())},onClick={
+                                blendOpen=false; host.layer(obj("op" to "blend","id" to active!!.getLong("id"),"value" to i))
+                            }) }
                         }
-                        LayerButton(host,"reference",view.getString("reference_action_label"),enabled=view.getBoolean("can_reference"),
-                            selected=view.getBoolean("references_selected"),subtle=true,action=obj("type" to "layer","action" to obj("op" to "reference_selection")))
                     }
+                    NumericSetting("Layer opacity",active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
+                        enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
+                }
+                Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
+                    for ((icon, label, property, op, capability) in listOf(
+                        listOf("alpha-lock","Alpha lock","alpha_locked","alpha_lock","alpha_lock"),
+                        listOf("lock","Lock editing","locked","lock","edit_lock"),
+                        listOf("clip","Clip to layer below","clipped","clip","clip"))) {
+                        LayerButton(host,icon,label,enabled=controls.getBoolean(capability),selected=active?.optBoolean(property)==true,
+                            action=active?.let { obj("type" to "layer","action" to obj("op" to op,"id" to it.getLong("id"),"value" to !it.getBoolean(property))) })
+                    }
+                    LayerButton(host,"reference",view.getString("reference_action_label"),enabled=view.getBoolean("can_reference"),
+                        selected=view.getBoolean("references_selected"),subtle=true,action=obj("type" to "layer","action" to obj("op" to "reference_selection")))
                 }
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("layer-rows"),state=list) {

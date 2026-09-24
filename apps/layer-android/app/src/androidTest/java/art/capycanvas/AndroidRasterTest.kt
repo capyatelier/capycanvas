@@ -356,16 +356,16 @@ class AndroidRasterTest {
         invoke("save_selection_layer")
         send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
         val id=host.snapshot!!.getJSONObject("state").array("layers").objects().first {it.optBoolean("selection_layer")}.getLong("id")
+        val label=host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("label")
+        compose.onNodeWithText(label).performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { view().optLong("rename_layer",-1)==id }
+        send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
         send(obj("type" to "selection", "action" to obj("op" to "edit_layer", "id" to id)))
         assertEquals(id,view().getJSONObject("mask_editing").getLong("layer"))
         assertEquals("layer-brush-symbolic",host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("selection_icon"))
         val thumb=compose.onNodeWithTag("layer-thumbnail-$id-false",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
         val load=compose.onNodeWithTag("selection-load-$id").fetchSemanticsNode().boundsInRoot
         assertTrue("Thumbnail $thumb and Load $load align",kotlin.math.abs(thumb.width-load.width)<=thumb.width*.1f && load.left>=thumb.right && load.left-thumb.right<20f)
-        val label=host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("label")
-        compose.onNodeWithText(label).performTouchInput { doubleClick() }
-        compose.waitUntil(10_000) { view().optLong("rename_layer",-1)==id }
-        send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
         send(obj("type" to "selection", "action" to obj("op" to "begin_resize", "grow" to true, "layer" to id)))
         compose.onNodeWithText("Grow Selection").assertIsDisplayed()
         compose.onNodeWithText("Apply").performClick()

@@ -156,6 +156,9 @@ impl CanvasRenderer for WebRenderer {
     fn cancel_selection_paint(&mut self) {
         if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.cancel_selection_paint(); }
     }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_quick_mask_thumbnail(selection); }
+    }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
         if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_selection_overlay(overlay); }
     }

@@ -1,7 +1,7 @@
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
-export function createLayerPanel({ selectionUi, app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, dismissContext, contentChanged = () => {} }) {
+export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, contentChanged = () => {} }) {
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
@@ -53,8 +53,7 @@ export function createLayerPanel({ selectionUi, app, catalog, state, panel, elem
   const more = glyphButton("more", "Layer actions", () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
   more.classList.add("layer-more"); menu(more, active, () => active()?.mask_selected ?? false); footer.append(more);
-  const quickMask=selectionUi.quickRow();
-  panel.append(header, quickMask, rows, footer);
+  panel.append(header, rows, footer);
   const nameIcon = value => value.replace(/^layer-/, "").replace(/-symbolic$/, "");
   function makeRow(layer) {
     const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
@@ -85,11 +84,12 @@ export function createLayerPanel({ selectionUi, app, catalog, state, panel, elem
     thumbnails.append(clipping, content.b, link, mask.b);
     const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
-    const load=button('Load',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'selection-layer-load');
+    const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'selection-layer-load');
+    load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
     load.title='Load a copy as the current selection';load.setAttribute('aria-label',load.title);
-    row.append(eye, check, thumbnails, text, load, lock, grip);
+    row.append(eye, check, thumbnails, text, lock, grip);
     row.onclick = e => { if (!e.target.closest("button,input")) select(false); };
-    name.ondblclick = () => send({ op: "begin_rename", id: get().id });
+    name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
     Object.assign(record, { load, eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
     const remove = button("Delete", e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
@@ -198,7 +198,6 @@ export function createLayerPanel({ selectionUi, app, catalog, state, panel, elem
       for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
-    quickMask.refresh();header.hidden=view.quick_mask||!!current?.selection_layer;
     if (current) { opacity.update(current.opacity); blend.value = current.blend; }
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current;
     deleteButton.disabled = !state().layer_tools.can_delete;
@@ -246,10 +245,12 @@ export function createLayerPanel({ selectionUi, app, catalog, state, panel, elem
       r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
       r.grip.hidden = !layer.can_drop_below;
+      if (view.rename_layer !== layer.id && r.entry) r.closeRename();
       if (view.rename_layer === layer.id && !r.entry) {
         const input = element("input", "layer-name-entry"); input.value = layer.label; input.maxLength = 128; r.entry = input; r.name.hidden = true; r.text.prepend(input);
         let finished = false;
-        const done = cancel => { if (finished) return; finished = true; input.remove(); r.entry = null; r.name.hidden = false;
+        r.closeRename = () => { finished = true; input.remove(); r.entry = null; r.name.hidden = false; };
+        const done = cancel => { if (finished) return; r.closeRename();
           send(cancel || !input.value.trim() ? { op: "cancel_rename" } : { op: "rename", id: layer.id, name: input.value }); };
         input.onblur = () => done(false); input.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(e.key === "Escape"); } };
         input.focus(); input.select();
@@ -286,6 +287,10 @@ export function createLayerPanel({ selectionUi, app, catalog, state, panel, elem
           const token = ++thumbnailRequest;
           if (app.request_layer_thumbnail(token, mask ? r.layer.mask_id : r.layer.id)) {
             owned.add(token);revisions.set(key,revision); pending.set(token,{key,revision,revisions,owned,canvas: (mask ? r.mask : r.content).image});
+          } else if (app.shader_work_pending()) {
+            // A drawer can request its first mask preview while the canvas is
+            // idle. Start deferred compilation without waiting for canvas input.
+            wake();
           }
         }
       }

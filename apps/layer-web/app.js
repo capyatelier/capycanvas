@@ -705,7 +705,7 @@ function buildPanels() {
     sizeButtons.set(value, choice);
   }
   panels.get("sizes").append(controls, grid);
-  layerPanel = createLayerPanel({ selectionUi, app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
+  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
     contentChanged:panelContentChanged});
 }
@@ -714,7 +714,7 @@ function contentPanel(id, splitPicker=false) {
   if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
   } else if(id==="layers") {
-    const view=createLayerPanel({selectionUi,app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,dismissContext:()=>customization.dismissContext()});
+    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
@@ -1568,7 +1568,7 @@ try {
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
-  selectionUi = createSelectionUi({app,catalog,state:()=>state,workspace,element,button,icon,numberField,dispatch});
+  selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   buildHeader();
   buildPanels();

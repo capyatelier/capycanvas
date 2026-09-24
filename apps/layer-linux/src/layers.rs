@@ -1214,7 +1214,6 @@ impl LayerPanel {
         }
     }
     pub fn refresh(&self, state: &UiState) {
-        self.header.set_visible(!state.layer_tools.quick_mask && !state.layer_tools.editing_layer.as_ref().is_some_and(|l| l.selection_layer));
         self.updating.set(true);
         // Update only changed rows; list virtualization bounds GTK widget count.
         let same = self.model.n_items() as usize == state.layers.len()

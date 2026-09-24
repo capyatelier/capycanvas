@@ -11,7 +11,7 @@ Preview-less tool rows match brush categories: at least 44 px on GTK/Web and
 Select, Brush, and Sculpt opener icons follow their category's remembered tool,
 including while another category is active. Rust publishes the icon from shared
 workspace memory; hosts update their retained header and toolbar images.
-Selection modes use one compact row of icon toggles, with names and explanations
+Selection modes use one connected group of icon toggles, with names and explanations
 in accessible labels and tooltips instead of permanent text. The overlapping
 rectangle symbols follow the familiar New/Add/Subtract/Intersect order.
 Select by Color uses the wand motif with RGB sparkles.
@@ -25,6 +25,13 @@ through its Tool option or Shift. Polygon vertices remain
 transient until closed and are discarded on Escape, focus loss, tool changes,
 or pointer cancellation. Existing selections remain intact until completion.
 Geometry is independent of zoom; ellipses retain image-space edge precision.
+
+Hold Shift before starting a selection to Add, Alt to Subtract, or Shift+Alt to
+Intersect. Ctrl/Cmd temporarily chooses New. The operation is latched for the
+whole gesture (including a polygon); releasing keys does not change a pending
+result or the remembered tool mode. Shift/Alt pressed after the initial contact
+constrain shape geometry instead. Selection Brush keeps its two-mode behavior:
+Alt swaps Add/Subtract and Shift chooses Add. All modes have visible controls.
 
 Select by Color shares region classification, tolerance, visible/editing/reference
 sampling, stale-result validation, expansion, and edge smoothing with Auto select.
@@ -94,9 +101,11 @@ completed contacts; unfinished contacts cancel. Retained real input and queued
 contacts are bounded. Native estimated corrections/predictions do not modify
 these masks; committed real samples determine coverage.
 
-`selection_masks.rs` owns Quick Mask lifecycle, independent grayscale colors,
+`selection_masks.rs` owns Quick Mask lifecycle, independent painting colors,
 explicit saved-mask actions, reselect, and display settings. A temporary Layers
-row is host presentation, without a document ID. Saved coverage uses independent
+row uses the ordinary row/thumbnail projection with the reserved UI ID 0; that
+ID never enters the document tree. Its preview revision tracks coverage, not
+unrelated UI refreshes. Saved coverage uses independent
 Selection Layers, shared history and project persistence. Loading copies coverage;
 editing and replacing a stored layer are explicit operations. Returning to a
 parked document and adopting a project reset temporary editing state. Filters
@@ -106,20 +115,46 @@ The GPU material and mask paths share `brush_footprint.wgsl`, contact geometry,
 tip/grain/dual textures and accumulation semantics. Mask gradients and fills
 write scalar coverage; connected fills classify artwork. Raw-alpha and stored
 layer-mask loading share the region/refinement pipeline and preserve soft values.
-Saved previews use a cached GPU union and a packed integer texture, keeping the
+Saved previews composite each visible layer’s color/opacity into a cached packed
+RGBA integer texture, keeping the
 presenter within the portable four-storage-buffer limit. Their grayscale 32px
 thumbnails and tint are excluded from artwork sampling/export.
 
-GTK and Web present 44px actions; Android uses 48dp. All three have a pinned
-Quick Mask row, a persistent editing strip,
-explicit Load buttons and Ctrl-thumbnail loading (Shift add, Alt subtract,
-Shift+Alt intersect). Shared Select/Layer/View menus expose lifecycle, coverage
-sources, saved destinations and display actions without keyboard modifiers.
-The temporary row uses a compact actions menu so its title stays on one line.
-Properties shows mask information instead of artwork opacity/blending controls.
-Web preflights saved-mask thumbnail pipelines asynchronously; pending previews
-retry without blocking canvas input. Mask color dialogs use bounded SDR values
-even when the artwork document is HDR.
+Quick Mask and Selection Layers share normal layer rows, coverage thumbnails,
+a paintbrush target indicator, and a thumbnail-sized Load icon immediately to
+the thumbnail’s right. Double-click/tap a renamable layer’s name to edit it.
+The shared Layers toolbar stays stationary, disabling unsupported controls,
+so selecting a mask does not move its name between double-clicks/taps.
+Quick Mask has no separate editing strip or popup. Its temporary row remains
+outside groups and cannot be renamed/reordered; exiting removes it.
+
+`selection_properties.rs` publishes the same four Properties controls for both
+mask kinds: Painting, Overlay color, Overlay opacity, and selected/protected
+areas. Color uses the same managed picker/current-color action as paper.
+Color / transparent painting is the default: every opaque color adds coverage;
+eraser/transparent removes it. Black / white is optional (black removes, white
+selects, gray gives partial coverage). Both blend with ordinary paint opacity.
+Entry without a current selection provides an empty working mask; leaving an
+untouched mask preserves no selection and creates no history. Overlay defaults
+to selected areas in red at 50%. Saved layers persist these properties and use
+ordinary single-step history; saving a Quick Mask copies its properties.
+
+Select → Modify and mask row → Modify provide Grow/Shrink with an integer
+1–128 image-pixel distance. Apply queues one asynchronous GPU circular
+maximum/minimum operation; Cancel leaves coverage untouched. Soft coverage is
+preserved, values beyond the canvas are zero, and the result is one undo step.
+Packed horizontal range extrema reduce circular refinement to O(radius) per
+pixel, including soft masks. Pipelines compile only when their operation needs
+them.
+The dialog captures its target and revision; stale or locked destinations fail
+without modifying artwork. Feathering an existing result, border, smooth, and
+selection-only transforms remain separate work.
+
+Layer menus group creation, organization, settings, and selection operations.
+Overlay settings live in Properties. Loading is also available through menus
+and Ctrl-thumbnail (Shift add, Alt subtract, Shift+Alt intersect). Web preflights
+mask thumbnail pipelines asynchronously; an idle Layers drawer wakes compilation
+and retries pending previews without blocking canvas input. Mask painting colors use bounded SDR values in HDR documents.
 
 Additional reproducible checks:
 
@@ -130,7 +165,8 @@ Additional reproducible checks:
   covers scalar blending, coherent brush sweeps, gradients, source coverage,
   previews, thumbnails and export isolation (requires a GPU).
 - Web `--selection-tools` also exercises Selection Brush Add/Subtract controls,
-  Quick Mask, independent grayscale colors, saved-mask edit/load and reselect.
+  Quick Mask rows/properties, independent colors, compact Load icons, mouse/touch inline rename,
+  Grow/Shrink dialogs, saved-mask edit/load and reselect.
   Its light/dark screenshot assertions inspect the painted canvas area. Tested
   on Huion Kamvas Pad 12 / Chrome 143 / ARM Valhall with CDP mouse/touch/pen
   input. Injected input verifies the device rendering and host paths, not the
@@ -138,9 +174,9 @@ Additional reproducible checks:
   holds a screen wake lock during this suite and preserves recovery prompts
   using Keep for Later.
 - Android `AndroidRasterTest#paintableSelectionsOnDevice` tests Selection Brush
-  GPU history, native stylus Quick Mask contacts, mask menus, independent colors,
-  the saved-layer Load button and artwork export isolation. Light/dark captures
-  are written to the app’s external files directory. Run alongside
+  GPU history, native stylus Quick Mask contacts, normal thumbnails, double-tap
+  rename, Grow, independent colors, compact Load icons and artwork export isolation.
+  Light/dark captures are written to the app’s external files directory. Run alongside
   `AndroidRasterTest#selectionToolsRenderAndCombineOnDevice` and
   `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons`. Huion tests
   use the actual Vulkan device and Android input dispatcher with injected stylus
@@ -154,3 +190,8 @@ Additional reproducible checks:
   final asynchronous capture. First-use pipeline/init completion was 74.695 ms;
   interactive hosts compile pipelines asynchronously. These are workstation
   measurements, not tablet latency claims.
+- `cargo test --locked -p layer-render-wgpu selection_resize_latency --lib --
+  --ignored --nocapture --test-threads=1` measures a 2048² soft mask with no
+  binary early-outs. On the workstation above, GPU completion plus capture took
+  80 ms on first use and 28–30 ms for 32/128-pixel Grow/Shrink. These measure a
+  completed operation, not brush latency; tablet timings depend on its GPU.
