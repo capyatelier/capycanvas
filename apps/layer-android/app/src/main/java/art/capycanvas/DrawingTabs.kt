@@ -142,7 +142,7 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             val id=item.getLong("id");val selected=controller.selected==id
             Row(entry.drawingBounds(drag.rows,id).testTag("drawing-tab-$id")
                 .clip(if(vertical)ControlShape else TileShape)
-                .background(if(selected)colors.accent.copy(alpha=.16f)else Color.Transparent)
+                .background(if(!selected)Color.Transparent else if(vertical)colors.accent.copy(alpha=.16f)else colors.tabActive)
                 .then(if(drag.active==id)Modifier.border(2.dp,colors.accent,if(vertical)ControlShape else TileShape)else Modifier)
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
@@ -157,7 +157,7 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             }
         }
         if(vertical)Column(Modifier.fillMaxWidth().verticalScroll(scroll)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.fillMaxWidth().height(64.dp))}}}
-        else Row(Modifier.fillMaxSize()){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
+        else Row(Modifier.fillMaxSize().padding(vertical=1.dp).background(colors.headerBar,TileShape)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
         if(drag.active!=null&&drag.valid) {
             val target=drag.before?.let{drag.rows[it]}?:order.lastOrNull()?.let{drag.rows[it]}
             if(target!=null){val at=if(vertical){(if(drag.before==null)target.bottom else target.top)-drag.area.top}else{(if(drag.before==null)target.right else target.left)-drag.area.left}

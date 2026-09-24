@@ -89,7 +89,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 /* Override the general 36px header button height inside the shared 34px pill. */
 #header .workspace-switcher button { flex:none; max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #dedede; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
+body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 .panel-context-menu { font-size: var(--ui-text-size); }
@@ -710,7 +710,7 @@ body[data-theme="light"] .battery-charging path { fill:var(--battery-ink); strok
 .system-battery.charging .battery-percent { transform:translateX(-.5px); }
 
 /* Workspace-owned title bar: allocations and all drop positions come from Rust. */
-#header { --header-tile:36px; --header-icon:20px; --header-surface:var(--bg); --header-control-bg:var(--header-surface); --header-feedback-bg:transparent; touch-action:manipulation; }
+#header { --header-tile:36px; --header-icon:20px; --header-surface:var(--bg); --header-control-bg:var(--header-surface); --header-feedback-bg:transparent; --header-bar:color-mix(in srgb,var(--bg) 75%,transparent); --header-active:color-mix(in srgb,var(--accent) 22%,var(--panel)); --header-tab-active:color-mix(in srgb,var(--bg),var(--text) 10%); touch-action:manipulation; }
 body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 50%,transparent); --header-feedback-bg:var(--header-surface); text-shadow:none; }
 .header-item { position:absolute; display:flex; align-items:center; border-radius:var(--header-radius); }
 .header-item-content { display:flex; align-items:center; justify-content:center; flex:1; min-width:0; height:100%; }
@@ -725,9 +725,9 @@ body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 
 #header #zen-button > svg, .header-drag-preview[data-kind="capy"] .header-tool > svg { width:calc(var(--header-tile) * 440 / 512); height:calc(var(--header-tile) * 440 / 512); }
 #header .header-menu-overflow > summary { width:100%; }
 :is(#header,.header-drag-preview) :is(.workspace-switcher button,.header-menu-labels summary) { height:26px; min-height:26px; padding:0 10px; border-radius:999px; font-weight:500; background:transparent; }
-#header .header-menu-labels { --header-control-bg:transparent; --header-feedback-bg:transparent; }
+#header .header-menu-labels { --header-control-bg:transparent; --header-feedback-bg:transparent; background:var(--header-bar); }
 :is(#header,.header-drag-preview) .header-menu-labels summary { padding:0 8px; }
-#header .workspace-switcher button[aria-pressed="true"] { color:var(--text); background:color-mix(in srgb,var(--accent) 28%,var(--bg)); }
+#header .workspace-switcher button[aria-pressed="true"] { color:var(--text); background:var(--header-active); }
 #header #document-title { position:static; transform:none; display:block; overflow:hidden; text-overflow:ellipsis; width:100%; height:var(--header-tile); line-height:var(--header-tile); padding:0 8px; text-align:center; background:var(--header-control-bg); }
 #header .workspace-switcher { max-width:none; width:max-content; flex:none; }
 #header #header-workspace-selector { width:100%; }
@@ -742,12 +742,13 @@ body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 
 #header :is(.header-tool,.header-menu > summary):is(:active,[data-header-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background-color:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg)); }
 #header .header-tool[aria-pressed="true"] { background-color:color-mix(in srgb,var(--accent) 22%,var(--header-feedback-bg)); }
 :where(:root:not([data-touch])) #header .workspace-switcher button:hover:not(:disabled) { background:color-mix(in srgb,var(--bg),var(--text) 8%); }
-:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 36%,var(--bg)); }
+:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 30%,var(--panel)); }
 #header .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
-.header-bar { position:absolute; border-radius:999px; background:var(--tabbar); pointer-events:none; }
+.header-bar { position:absolute; border-radius:var(--header-radius); background:var(--header-bar); pointer-events:none; }
 #header :is(.header-item,.header-overflow).in-bar { --header-control-bg:transparent; --header-feedback-bg:transparent; }
-#header :is(.header-item.in-bar :is(.header-tool,.header-menu > summary),.header-overflow.in-bar > summary) { width:100%; padding:0; border:5px solid transparent; border-radius:999px; background-clip:padding-box; -webkit-backdrop-filter:none; backdrop-filter:none; }
-#header .header-item.in-bar .header-tool[data-drawer-facing] { border-width:0; border-radius:var(--header-radius); }
+#header :is(.header-item.in-bar :is(.header-tool,.header-menu > summary),.header-overflow.in-bar > summary) { width:100%; padding:0; border:solid transparent; border-width:1px 0; border-radius:var(--header-radius); background-clip:padding-box; -webkit-backdrop-filter:none; backdrop-filter:none; }
+#header .header-item.in-bar .header-tool[aria-pressed="true"] { background-color:var(--header-active); }
+#header .header-item.in-bar .header-tool[data-drawer-facing] { border-width:0; }
 #header .header-item.in-bar .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 /* Browsers that lack backdrop-filter still retain the 50% background fill. */
 body[data-theme="light"] #header :where(.header-tool,.header-menu > summary,#document-title,#system-clock,.system-status-tile,.header-status-placeholder) { -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
@@ -867,10 +868,10 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 /* Drawing tabs use the final flexible title allocation, independently of dock tabs. */
 .drawing-title { display:flex; flex:1; min-width:0; width:100%; height:100%; }
 .drawing-title [hidden] { display:none !important; }
-.drawing-tabs { display:flex; flex:1; width:100%; min-width:0; gap:3px; }
-.drawing-tab { position:relative; display:flex; flex:1 1 0; min-width:0; border-radius:999px; background:var(--header-control-bg); }
+.drawing-tabs { display:flex; flex:1; width:100%; min-width:0; gap:0; margin-block:1px; border-radius:var(--header-radius); background:var(--header-bar); }
+.drawing-tab { position:relative; display:flex; flex:1 1 0; min-width:0; border-radius:999px; background:transparent; }
 .drawing-tab-pick { flex:1; min-width:0; padding-inline:32px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; touch-action:none; border-radius:999px; }
-.drawing-tab-pick[aria-selected="true"] { background:var(--accent-bg, #477b9c); }
+#header .drawing-tab-pick[aria-selected="true"] { background:var(--header-tab-active); }
 .drawing-tab-close { position:absolute; right:0; top:0; bottom:0; width:28px; min-width:28px; padding:4px; border-radius:0 999px 999px 0; }
 .drawing-selector { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .drawing-list { width:min(600px,90vw); max-height:80vh; padding:16px; }

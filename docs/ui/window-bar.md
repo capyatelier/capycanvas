@@ -66,11 +66,17 @@ designer or opening shortcut.
   Drag motion itself never mutates the session or saves intermediate layouts.
 
 Adjacent icon controls (tools, Main Menu, Settings, Full Screen and a region's
-More button) join one capsule bar on the tab-bar surface, inset 1px so a Small
-bar matches the workspace switcher's 34px. Tiles inside a bar abut, keep
-whole-tile targets and show inset capsule feedback. Capy, menu labels, the
-switcher, the document title or tabs, clock, battery and Space stay separate
-with 6px gaps, and customization shows every item separately. Drawer origins
+More button) join one bar, inset 1px so a Small bar matches the workspace
+switcher's 34px. Tiles inside a bar abut, keep whole-tile targets and fill the
+bar's full height with toolbar-style feedback. Capy gets its own single-tile
+bar. Multiple drawing tabs form one full-height strip in the same way. Bars,
+menu labels and the tab strip use the canvas surround at 75% opacity, so
+artwork behind them stays partly visible; the workspace switcher keeps the
+inactive-tab well. The selected workspace and tool use the panels' opaque
+selection blue; the selected drawing tab uses an opaque grey like GNOME's
+window close button. Capy, menu labels, the switcher, the document title or
+tabs, clock, battery and Space stay separate with 6px gaps, and customization
+shows every item separately. Drawer origins
 fill their whole tile with square bottom corners while open.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;

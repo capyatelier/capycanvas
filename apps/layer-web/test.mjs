@@ -931,7 +931,7 @@ try {
       );
       assert.equal(
         surfaces.bar,
-        theme === "dark" ? "rgb(46, 46, 46)" : "rgb(222, 222, 222)",
+        theme === "dark" ? "rgb(46, 46, 46)" : "rgb(210, 210, 210)",
       );
       assert.equal(surfaces.active, surfaces.panel);
       assert.equal(

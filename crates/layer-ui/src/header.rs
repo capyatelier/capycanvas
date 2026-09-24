@@ -125,6 +125,9 @@ impl HeaderItem {
             Self::Menu | Self::Settings | Self::Fullscreen | Self::Tool { .. }
         )
     }
+    pub fn has_bar(self) -> bool {
+        self.joins_bar() || self == Self::Capy
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -669,6 +672,7 @@ impl HeaderLayout {
         let gap = 12.; // At least 24 logical px of window-drag space around center.
         let item_gap = 6.;
         let joins = |e: &HeaderEntry| !editing && e.item.joins_bar();
+        let barred = |e: &HeaderEntry| !editing && e.item.has_bar();
         let spacing =
             |a: &HeaderEntry, b: &HeaderEntry| if joins(a) && joins(b) { 0. } else { item_gap };
         // Zero-width native metrics denote unavailable informational items
@@ -799,8 +803,11 @@ impl HeaderLayout {
                 if !joins(entry) || gap > 0. {
                     result.bars.extend(bar.take());
                 }
-                if joins(entry) {
+                if barred(entry) {
                     bar.get_or_insert_default().items.push(entry.id);
+                }
+                if !joins(entry) {
+                    result.bars.extend(bar.take());
                 }
             }
             if overflow && overflow_width > 0. {
@@ -1240,6 +1247,7 @@ mod tests {
         assert_eq!(
             g.bars.iter().map(|b| b.items.clone()).collect::<Vec<_>>(),
             vec![
+                vec![id(0, 0)],
                 vec![id(0, 1), id(0, 2)],
                 vec![id(0, 4)],
                 vec![id(2, 0), id(2, 1)],
@@ -1247,7 +1255,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            g.bars[0].bounds.height, 34.,
+            g.bars[1].bounds.height, 34.,
             "matches the workspace switcher"
         );
         assert_eq!(

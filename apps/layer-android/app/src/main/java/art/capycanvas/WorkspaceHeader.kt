@@ -124,7 +124,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
         val bars = geometry?.optJSONArray("bars")?.objects() ?: emptyList()
         val joined = bars.flatMap { bar -> bar.array("items").values().map { (it as Number).toInt() } }.toSet()
-        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.tabs, SquircleShape(50))) }
+        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.headerBar, TileShape)) }
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
             val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
             Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
@@ -258,7 +258,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.tabs, SquircleShape(50)).padding(4.dp),
+                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.headerBar, SquircleShape(50)).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
@@ -310,8 +310,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val inset = inBar && !open
     HoverTip(label, modifier) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight())
-        .then(if (inset) click.padding(5.dp).clip(SquircleShape(50)) else Modifier.clip(shape))
+        .then(if (inset) click.padding(vertical = 1.dp).clip(TileShape) else Modifier.clip(shape))
         .background(if (surface && !inBar) colors.headerSurface else Color.Transparent).background(when {
+        selected && inBar -> colors.activeSolid
         selected -> colors.active
         open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)

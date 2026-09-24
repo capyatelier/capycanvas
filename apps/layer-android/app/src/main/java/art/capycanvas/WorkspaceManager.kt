@@ -124,7 +124,7 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
             val id = row.getString("id")
             val selected = view.optString("id") == id
             Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(SquircleShape(50))
-                .background(if (selected) colors.active else Color.Transparent)
+                .background(if (selected) colors.activeSolid else Color.Transparent)
                 .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
                     host.workspaceInput(obj("type" to "switch", "id" to id))
                 }.padding(horizontal = 10.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {

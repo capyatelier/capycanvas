@@ -41,6 +41,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -76,15 +77,18 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
     val surround = role("bg")
     val headerSurface = if (dark) Color.Transparent else surround.copy(alpha = .5f)
+    val headerBar = surround.copy(alpha = .75f)
     val panel = role("panel")
     val tabs = role("tabbar")
     val sidebar = role("sidebar")
     val input = role("input")
     val text = role("text")
+    val tabActive = lerp(surround, text, .1f)
     val secondary = text.copy(alpha = .55f)
     val accent = Color(0xff3584e4)
     val sliderFill = lerp(panel, text, .5f)
     val active = accent.copy(alpha = .22f)
+    val activeSolid = active.compositeOver(panel)
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")
     val divider = text.copy(alpha = .12f)

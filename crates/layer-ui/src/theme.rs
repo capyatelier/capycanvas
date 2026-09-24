@@ -96,7 +96,7 @@ impl Settings {
         ThemePalette {
             bg,
             panel: surface([65; 3], [237; 3]),
-            tabbar: surface([46; 3], [222; 3]),
+            tabbar: surface([46; 3], [210; 3]),
             input: surface([51; 3], [250; 3]),
             view: surface([43; 3], [228; 3]),
             settings: surface([51; 3], if android { [250; 3] } else { [250, 250, 251] }),
