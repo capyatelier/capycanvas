@@ -83,6 +83,7 @@ mod selection_refine;
 mod selection_paint;
 mod selection_previews;
 mod selection_readback;
+mod tonal;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;

@@ -5,6 +5,8 @@ use layer_core::{
     Rect, Selection, StrokeId,
 };
 use layer_render::{DabStyle, ViewState};
+#[path = "tonal_tests.rs"]
+mod tonal_selection;
 #[path = "selection_option_tests.rs"]
 mod selection_options;
 #[path = "selection_paint_tests.rs"]

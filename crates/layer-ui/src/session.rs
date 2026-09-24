@@ -6730,6 +6730,7 @@ mod tests {
             assert_eq!(request.source, RegionSource::Composite);
             assert!(request.limit.is_none());
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6776,6 +6777,7 @@ mod tests {
                 layer_core::Affine::translation(Point { x: -8., y: -12. })
             );
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6812,6 +6814,7 @@ mod tests {
             let before = s.engine.document().selection.clone();
             invoke(&mut s, CommandId::Hand);
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6846,6 +6849,7 @@ mod tests {
                 [id]
             );
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6872,6 +6876,7 @@ mod tests {
             })
             .unwrap();
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });

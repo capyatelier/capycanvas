@@ -48,15 +48,16 @@ impl RegionRequests {
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
-        let extent = match request.source { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(id), _ => r.document_extent };
-        if extent.contains(&0)
+        let extent = match request.source.raw_source() { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(*id), _ => r.document_extent };
+        let tone = if let layer_render::RegionSource::Tonal(t) = &request.source { Some(t.as_ref()) } else { None };
+        if tone.is_some_and(|t| !t.valid(extent)) || extent.contains(&0)
             || request.position[0] >= extent[0]
             || request.position[1] >= extent[1]
             || !request.tolerance.is_finite()
             || !(0.0..=1.).contains(&request.tolerance)
             || !request.refinement.is_valid()
             || request.selection.as_ref().is_some_and(|s| !s.is_valid())
-            || (matches!(request.source, layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Coverage(_)) && request.selection.is_none())
+            || (matches!(request.source, layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::Tonal(_)) && request.selection.is_none())
         {
             return Err(GpuRasterError::InvalidExtent);
         }
@@ -66,7 +67,9 @@ impl RegionRequests {
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
             let mut ready = true;
-            if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
+            if tone.is_some() {
+                ready &= self.raw.prepare_tonal(&startup.compiler);
+            } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_)) { ready &= self.flood.prepare(&startup.compiler, request.refinement); }
                 ready &= self.raw.prepare(&startup.compiler);
             }
@@ -113,7 +116,7 @@ impl RegionRequests {
             flood::Region { coverage: copy, bounds_offset: 0 }
         } else {
             let classified = self.raw.encode(r, &request, &mut encoder)?;
-            if matches!(request.source, layer_render::RegionSource::Coverage(_)) {
+            if tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_)) {
                 flood::Region { coverage: classified, bounds_offset: 0 }
             } else { self.flood.encode_input(
                 &r.device, &mut encoder, &r.empty_view, extent, request.position,
@@ -134,7 +137,9 @@ impl RegionRequests {
         #[cfg(test)]
         let flood_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let coverage_size = region.bounds_offset;
-        let size = coverage_size + 32;
+        let probe=tone.and_then(|t| t.probe);
+        let mask_size = coverage_size + 32;
+        let size = mask_size + if probe.is_some() { self.raw.tonal_statistics.size() } else { 0 };
         if self.readback.as_ref().is_none_or(|b| b.size() < size) {
             self.readback = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("region history snapshot"),
@@ -144,7 +149,8 @@ impl RegionRequests {
             }));
         }
         let readback = self.readback.as_ref().unwrap();
-        encoder.copy_buffer_to_buffer(&region.coverage, 0, readback, 0, size);
+        encoder.copy_buffer_to_buffer(&region.coverage, 0, readback, 0, mask_size);
+        if probe.is_some() { encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,readback,mask_size,self.raw.tonal_statistics.size()); }
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
             t.end(&mut encoder);
@@ -183,7 +189,9 @@ impl RegionRequests {
         }
         self.pending = Some(region);
         selection_readback::capture_selection(readback, size, coverage_size, extent,
-            byte_coverage, request.request_id, self.tx.clone(), |result,_| result);
+            byte_coverage, request.request_id, self.tx.clone(), move |mut result,_,extra| {
+                result.tonal_sample=probe.and_then(|p| tonal::sample(extra,p)); result
+            });
         Ok(true)
     }
 }

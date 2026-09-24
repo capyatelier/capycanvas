@@ -188,6 +188,7 @@ mod selection_tools_checks {
             assert!(s.command(command).selected);
             invoke(&mut s, CommandId::Lasso);
             s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: std::sync::Arc::new(
                     layer_core::SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444])
@@ -335,6 +336,7 @@ mod selection_tools_checks {
                 "no partial history entry"
             );
             s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: Arc::new(
                     layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff804020])
@@ -383,6 +385,7 @@ mod selection_tools_checks {
         let id = s.renderer_mut().region_requests.last().unwrap().request_id;
         invoke(&mut s, CommandId::SelectionSubtract);
         s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
             request_id: id,
             pixels: std::sync::Arc::new(
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xffffffff]).unwrap(),

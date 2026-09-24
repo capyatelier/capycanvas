@@ -23,6 +23,7 @@ pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
 mod selection;
+pub mod tonal;
 pub use selection::*;
 pub use effects::*;
 mod presets;

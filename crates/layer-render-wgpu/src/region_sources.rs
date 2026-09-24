@@ -16,6 +16,9 @@ pub(super) struct RawRegions {
     capture: artwork::Capture,
     layout: wgpu::BindGroupLayout,
     seed_pipeline: Deferred<wgpu::ComputePipeline>,
+    tonal_pipeline: Deferred<wgpu::ComputePipeline>,
+    tonal_parameters: wgpu::Buffer,
+    pub(super) tonal_statistics: wgpu::Buffer,
     tile_pipeline: Deferred<wgpu::ComputePipeline>,
     seed: wgpu::Buffer,
     empty_selection: wgpu::Buffer,
@@ -42,6 +45,7 @@ impl RawRegions {
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 &working_color::shader(device),
                 include_str!("region_sources.wgsl"),
+                include_str!("tonal.wgsl"),
                 include_str!("region_color.wgsl"),
                 &bindings,
                 &include_str!("selection_clip.wgsl")
@@ -60,11 +64,11 @@ impl RawRegions {
                 count: None,
             })
             .collect();
-        entries.extend((16..20).map(|binding| wgpu::BindGroupLayoutEntry {
+        entries.extend((16..22).map(|binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
-                ty: if binding == 16 {
+                ty: if binding == 16 || binding == 20 {
                     wgpu::BufferBindingType::Uniform
                 } else {
                     wgpu::BufferBindingType::Storage {
@@ -107,6 +111,16 @@ impl RawRegions {
             capture: Default::default(),
             layout,
             seed_pipeline: pipeline("sample_seed"),
+            tonal_pipeline: pipeline("tonal_tile"),
+            tonal_parameters: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tonal parameters"), size: 304,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            }),
+            tonal_statistics: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tonal probe histogram"), size: (tonal::STAT_WORDS*4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             tile_pipeline: pipeline("classify_tile"),
             seed: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("region seed color"),
@@ -137,8 +151,12 @@ impl RawRegions {
         }
         ready
     }
+    pub fn prepare_tonal(&self, compiler: &startup::Compiler) -> bool {
+        compiler.pipeline(&self.tonal_pipeline, startup::BRUSH);
+        self.tonal_pipeline.ready()
+    }
     pub fn storage_bytes(&self) -> u64 {
-        self.capture.storage_bytes()
+        self.capture.storage_bytes() + self.tonal_parameters.size() + self.tonal_statistics.size()
             + self.seed.size()
             + self.empty_selection.size()
             + self.uniform.as_ref().map_or(0, |b| b.size())
@@ -159,12 +177,12 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let [w, h] = match request.source { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(id), _ => r.document_extent };
-        let layer = match &request.source {
+        let [w, h] = match request.source.raw_source() { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(*id), _ => r.document_extent };
+        let layer = match request.source.raw_source() {
             layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => Some(*id),
             _ => None,
         };
-        let frame = match &request.source {
+        let frame = match request.source.raw_source() {
             layer_render::RegionSource::Composite => Some(
                 r.artwork_frame
                     .clone()
@@ -189,10 +207,25 @@ impl RawRegions {
                 Some(Arc::new(frame))
             }
             layer_render::RegionSource::Layer(_) | layer_render::RegionSource::Coverage(_) => None,
-            layer_render::RegionSource::Selection(_) => return Err(GpuRasterError::InvalidExtent),
+            layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Tonal(_) => return Err(GpuRasterError::InvalidExtent),
         };
-        let coverage = matches!(request.source, layer_render::RegionSource::Coverage(_));
-        let stored_mask = coverage.then(|| layer.and_then(|id| r.layer_masks.definitions.get(&id)).cloned()).flatten();
+        let tone = if let layer_render::RegionSource::Tonal(t) = &request.source { Some(t.as_ref()) } else { None };
+        let coverage = tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_));
+        if let Some(t) = tone {
+            let mut data = vec![0u32; 76];
+            for (i,b) in t.bands.iter().enumerate() {
+                for (j,v) in [b.lower.unwrap_or(-1000.), b.upper.unwrap_or(1000.), b.falloff[0], b.falloff[1]].into_iter().enumerate() {
+                    data[i*4+j]=v.to_bits();
+                }
+            }
+            for (i,w) in r.document_color.space.to_xyz()[1].iter().enumerate() { data[64+i]=(*w as f32).to_bits(); }
+            if let Some(probe)=t.probe { data[68..72].copy_from_slice(&probe.bounds); }
+            data[72..76].copy_from_slice(&[t.bands.len() as u32, u32::from(t.invert), u32::from(t.probe.is_some()), u32::from(t.probe.is_some_and(|p| p.point))]);
+            let bytes:Vec<u8>=data.into_iter().flat_map(u32::to_ne_bytes).collect();
+            r.queue.write_buffer(&self.tonal_parameters,0,&bytes);
+            encoder.clear_buffer(&self.tonal_statistics,0,None);
+        }
+        let stored_mask = matches!(request.source, layer_render::RegionSource::Coverage(_)).then(|| layer.and_then(|id| r.layer_masks.definitions.get(&id)).cloned()).flatten();
         if stored_mask.is_some() {
             let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
             r.layer_masks.prepare(&r.device, encoder, (&frame.layers, &[]), r.document_extent, false, &mut r.selection_clip)?;
@@ -235,7 +268,7 @@ impl RawRegions {
             }) };
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
         let tiles: Vec<_> = page_coordinates(PixelRect::full([w, h])).collect();
-        let batches: Vec<_> = std::iter::once(std::slice::from_ref(&seed_tile))
+        let batches: Vec<_> = (tone.is_none()).then_some(std::slice::from_ref(&seed_tile)).into_iter()
             .chain(tiles.chunks(if layer.is_some() { BATCH_TILES } else { 1 }))
             .collect();
         let stride =
@@ -368,6 +401,8 @@ impl RawRegions {
                         binding: 18,
                         resource: mask.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {binding:20,resource:self.tonal_parameters.as_entire_binding()},
+                    wgpu::BindGroupEntry {binding:21,resource:self.tonal_statistics.as_entire_binding()},
                     wgpu::BindGroupEntry {
                         binding: 19,
                         resource: selection.as_entire_binding(),
@@ -389,11 +424,11 @@ impl RawRegions {
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, &binding.group, &[(i as u32) * stride]);
-            if i == 0 {
+            if i == 0 && tone.is_none() {
                 pass.set_pipeline(&self.seed_pipeline);
                 pass.dispatch_workgroups(1, 1, 1);
             } else {
-                pass.set_pipeline(&self.tile_pipeline);
+                pass.set_pipeline(if tone.is_some() { &self.tonal_pipeline } else { &self.tile_pipeline });
                 pass.dispatch_workgroups(
                     (PAGE_SIZE / if coverage {4} else {32} * PAGE_SIZE).div_ceil(64),
                     1,

@@ -10,7 +10,7 @@ pub(super) fn capture_selection<T: Send + 'static>(
     byte_coverage: bool,
     request_id: u64,
     tx: mpsc::Sender<Result<T, GpuRasterError>>,
-    convert: impl FnOnce(RegionResult, bool) -> T + Send + 'static,
+    convert: impl FnOnce(RegionResult, bool, &[u8]) -> T + Send + 'static,
 ) {
     let ready = readback.clone();
     readback
@@ -45,9 +45,11 @@ pub(super) fn capture_selection<T: Send + 'static>(
                     Ok(convert(
                         RegionResult {
                             request_id,
+                            tonal_sample: None,
                             pixels: std::sync::Arc::new(pixels),
                         },
                         read(coverage_size as usize + 20) != 0,
+                        &bytes[coverage_size as usize+32..],
                     ))
                 });
             ready.unmap();
