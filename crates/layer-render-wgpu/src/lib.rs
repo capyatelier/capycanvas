@@ -80,6 +80,9 @@ mod region_sources;
 mod scene;
 mod selection_clip;
 mod selection_refine;
+mod selection_paint;
+mod selection_previews;
+mod selection_readback;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
@@ -121,7 +124,7 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
             .find_map(|l| l.target_operations(b.layer_id))
             .and_then(|operations| operations.get(index as usize))
             .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-    }) || packet.layers.iter().any(|l| {
+    }) || packet.layers.iter().filter(|l| l.is_artwork()).any(|l| {
         l.mask.is_some()
             || l.source.is_some()
             || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
@@ -863,6 +866,11 @@ pub struct WgpuRasterizer {
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
     display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
+    selection_painter: Option<selection_paint::SelectionPainter>,
+    selection_overlay: Option<layer_render::SelectionOverlay>,
+    selection_previews: selection_previews::SelectionPreviews,
+    selection_paint_revision: u64,
+    selection_paint_damage: PixelRect,
     regions: Option<region_requests::RegionRequests>,
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
@@ -1239,6 +1247,11 @@ impl WgpuRasterizer {
             layer_masks,
             selection_clip,
             display_selection: None,
+            selection_painter: None,
+            selection_overlay: None,
+            selection_previews: Default::default(),
+            selection_paint_revision: 0,
+            selection_paint_damage: PixelRect::EMPTY,
             regions: None,
             unclipped,
             scene: None,
@@ -2216,6 +2229,8 @@ impl WgpuRasterizer {
             .saturating_add(material_surface_pages.saturating_mul(scalar_bytes))
             .saturating_add(u64::from(RESERVOIR_SIZE * RESERVOIR_SIZE) * pixel_bytes * 2)
             .saturating_add(self.selection_clip.storage_bytes())
+            .saturating_add(self.selection_painter.as_ref().map_or(0, |p| p.storage_bytes()))
+            .saturating_add(self.selection_previews.buffer.as_ref().map_or(0, |b|b.size()*2))
             .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
@@ -3379,6 +3394,7 @@ impl CanvasRenderer for WgpuRasterizer {
         &mut self,
         selection: Option<&layer_core::Selection>,
     ) -> Result<(), Self::Error> {
+        if self.selection_painter.as_ref().is_some_and(|p| p.active.is_some()) { return Ok(()); }
         if let Some(selection) = selection
             && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
         {
@@ -3400,11 +3416,42 @@ impl CanvasRenderer for WgpuRasterizer {
                 let buffer = self.selection_clip.pixel_buffer(&self.device, pixels);
                 self.display_selection = Some((selection.clone(), buffer));
             }
+        } else if let Some(selection) = selection.filter(|_| self.selection_overlay.is_some_and(|o|o.active)) {
+            if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
+                if let Some(startup) = &self.startup {
+                    startup.compiler.check()?;
+                    let mut ready = true;
+                    for pipeline in [&self.selection_clip.crossings, &self.selection_clip.fill] {
+                        startup.compiler.pipeline(pipeline, startup::BRUSH);
+                        ready &= pipeline.ready();
+                    }
+                    if !ready { return Ok(()); }
+                }
+                let mut encoder = crate::submission::CommandEncoder::new(&self.device,
+                    &wgpu::CommandEncoderDescriptor { label: Some("selection overlay") });
+                self.selection_clip.prepare(&self.device, &mut encoder, self.document_extent, &Arc::new(selection.clone()))?;
+                let input = self.selection_clip.buffer.as_ref().unwrap();
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("retained selection overlay"), size: input.size(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                });
+                encoder.copy_buffer_to_buffer(input,0,&buffer,0,input.size());
+                encoder.submit(&self.queue);
+                self.display_selection = Some((selection.clone(),buffer));
+            }
         } else {
             self.display_selection = None;
         }
         Ok(())
     }
+    fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> { self.update_selection_paint(update) }
+    fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> { self.poll_selection_paint() }
+    fn cancel_selection_paint(&mut self) { self.selection_painter = None; self.display_selection = None; }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if let Some(selection) = selection { self.selection_previews.definitions.insert(LayerId(0), selection.clone()); }
+        else { self.selection_previews.definitions.remove(&LayerId(0)); }
+    }
+    fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) { self.selection_overlay = overlay; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
     }
@@ -3683,6 +3730,7 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
+        self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
             let end = start.checked_add(batch.dab_count as usize)
@@ -4953,7 +5001,12 @@ impl StyleGpu {
     }
 
     fn brush(extent: [u32; 2], batch: &DabBatch) -> Self {
-        let style = &batch.style;
+        let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count);
+        style.canvas_opacity[3] = f32::from(batch.stroke_start);
+        style
+    }
+
+    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32) -> Self {
         let plan = BrushPassPlan::for_style(style);
         let grain = style.grain.as_ref();
         let dual = style.dual.as_deref();
@@ -5029,8 +5082,8 @@ impl StyleGpu {
             style.wet_mix.wetness_jitter,
         ];
         result.operation = [
-            batch.first_dab,
-            batch.dab_count,
+            first,
+            count,
             plan.material as u32,
             u32::from(style.mode == DabMode::Erase),
         ];
@@ -5078,7 +5131,6 @@ impl StyleGpu {
         }
         // This lane is unused by dry and composite shaders and avoids growing
         // every style upload solely for one material-stage lifecycle bit.
-        result.canvas_opacity[3] = f32::from(batch.stroke_start);
         result.color[3] = f32::from(style.alpha_locked);
         result
     }
@@ -5748,6 +5800,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer dry brush shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("analytic_coverage.wgsl"),
                     include_str!("brush.wgsl"),
                     include_str!("brush_geometry.wgsl"),
                     include_str!("selection_clip.wgsl"),
@@ -5767,7 +5820,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     include_str!("advanced_brush.wgsl"),
                     include_str!("brush_geometry.wgsl"),
-                    include_str!("brush_coverage.wgsl"),
+                    include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
                     include_str!("contact.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),

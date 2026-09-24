@@ -60,7 +60,7 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     model.onchange = () => query({...view.draft, change_model: model.value});
     form.onsubmit = e => { e.preventDefault(); apply.click(); };
     root.addEventListener('close', () => { root.remove(); resolve(result); }, {once: true});
-    const panel=app.color_panel();query({color,document_depth:app.document_color().depth, document_space: app.state().colors.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??null):null,rendition:panel.rendition});
+    const panel=app.color_panel();query({color,document_depth:(app.state().layer_tools.mask_editing?.colors??app.state().colors).hdr_depth, document_space: panel.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??null):null,rendition:panel.rendition});
     root.showModal(); fields[0].input.focus();
   });
 }

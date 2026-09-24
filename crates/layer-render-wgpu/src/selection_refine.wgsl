@@ -1,12 +1,12 @@
 // Feather only the incoming mask, then combine it with the previous selection.
 // Intermediates retain float precision; the durable result uses 8-bit coverage.
-struct Params { extent: vec2<u32>, mode: u32, antialias: u32, inverse: vec4<f32>, offset_radius: vec4<f32> }
+struct Params { extent: vec2<u32>, mode: u32, antialias: u32, inverse: vec4<f32>, offset_radius: vec4<f32>, resize_level: vec4<u32> }
 struct Packed { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 struct Output { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> incoming: Packed;
 @group(0) @binding(2) var<storage, read> previous: Packed;
-@group(0) @binding(3) var<storage, read_write> horizontal: array<f32>;
+@group(0) @binding(3) var<storage, read_write> horizontal: array<u32>;
 @group(0) @binding(4) var<storage, read_write> output: Output;
 
 fn incoming_at(p: vec2<i32>) -> f32 {
@@ -45,6 +45,59 @@ fn weight(d: i32) -> f32 {
     let sigma = max(params.offset_radius.z*.5,.001);
     return exp(-.5*f32(d*d)/(sigma*sigma));
 }
+fn mask_at(p: vec2<i32>) -> f32 {
+    if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(params.extent)) { return 0.; }
+    return sample_incoming(vec2<f32>(p)+vec2(.5));
+}
+fn extremum(a: f32, b: f32) -> f32 {
+    return select(min(a,b),max(a,b),params.offset_radius.w > 0.);
+}
+// Packed horizontal range extrema (powers of two). Each disk row is queried
+// with two overlapping ranges, so soft masks cost O(radius), not O(radius²).
+// Rounding commutes with min/max; byte intermediates preserve the final result.
+fn range_at(p: vec2<i32>, level: u32) -> f32 {
+    if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(params.extent)) { return 0.; }
+    if level == 0u { return round(mask_at(p)*255.)/255.; }
+    let stride = (params.extent.x+3u)/4u;
+    let index = (level-1u)*stride*params.extent.y+u32(p.y)*stride+u32(p.x)/4u;
+    return f32((horizontal[index] >> ((u32(p.x)%4u)*8u)) & 255u)/255.;
+}
+@compute @workgroup_size(64)
+fn resize_h(@builtin(global_invocation_id) id: vec3<u32>) {
+    let stride = (params.extent.x+3u)/4u;
+    if id.x >= stride || id.y >= params.extent.y { return; }
+    let level = params.resize_level.x;
+    let offset = i32(1u << (level-1u));
+    var packed = 0u;
+    for (var i = 0u; i < 4u; i++) {
+        let x = id.x*4u+i;
+        if x >= params.extent.x { break; }
+        let p = vec2<i32>(i32(x),i32(id.y));
+        let value = extremum(range_at(p,level-1u),range_at(p+vec2(offset,0),level-1u));
+        packed |= u32(round(value*255.)) << (i*8u);
+    }
+    horizontal[(level-1u)*stride*params.extent.y+id.y*stride+id.x] = packed;
+}
+fn resize_at(p: vec2<i32>) -> f32 {
+    let radius = i32(abs(params.offset_radius.w));
+    var value = range_at(p,0u);
+    for (var dy = -radius; dy <= radius; dy++) {
+        let span = i32(floor(sqrt(f32(radius*radius-dy*dy))));
+        let left = max(0,p.x-span);
+        let right = min(i32(params.extent.x)-1,p.x+span);
+        var row = 0.;
+        let outside = p.y+dy < 0 || p.y+dy >= i32(params.extent.y)
+            || (params.offset_radius.w < 0. && (p.x-span < 0 || p.x+span >= i32(params.extent.x)));
+        if !outside {
+            let level = 31u-countLeadingZeros(u32(right-left+1));
+            let width = i32(1u << level);
+            row = extremum(range_at(vec2(left,p.y+dy),level),range_at(vec2(right-width+1,p.y+dy),level));
+        }
+        value = extremum(value,row);
+        if value == select(0.,1.,params.offset_radius.w > 0.) { break; }
+    }
+    return value;
+}
 @compute @workgroup_size(8,8)
 fn feather_h(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= params.extent) { return; }
@@ -57,7 +110,7 @@ fn feather_h(@builtin(global_invocation_id) id: vec3<u32>) {
         let x = clamp(i32(id.x)+d,0,i32(params.extent.x)-1);
         value += w*sample_incoming(vec2<f32>(f32(x)+.5,f32(id.y)+.5)); total += w;
     }
-    horizontal[id.y*params.extent.x+id.x] = value/total;
+    horizontal[id.y*params.extent.x+id.x] = bitcast<u32>(value/total);
 }
 @compute @workgroup_size(64)
 fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -71,14 +124,16 @@ fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
         let x = id.x*4u+i;
         if x >= params.extent.x { break; }
         var value = 0.;
-        if radius == 0 {
+        if params.offset_radius.w != 0. {
+            value = resize_at(vec2<i32>(i32(x),i32(id.y)));
+        } else if radius == 0 {
             value = sample_incoming(vec2<f32>(f32(x)+.5,f32(id.y)+.5));
         } else {
             var total = 0.;
             for(var d = -radius; d <= radius; d++) {
                 let w = weight(d);
                 let y = u32(clamp(i32(id.y)+d,0,i32(params.extent.y)-1));
-                value += w*horizontal[y*params.extent.x+x]; total += w;
+                value += w*bitcast<f32>(horizontal[y*params.extent.x+x]); total += w;
             }
             value /= total;
         }

@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionRefiner {
     layout: wgpu::BindGroupLayout,
-    pipelines: [Deferred<wgpu::ComputePipeline>; 2],
+    pipelines: [Deferred<wgpu::ComputePipeline>; 3],
     empty: wgpu::Buffer,
 }
 impl SelectionRefiner {
@@ -41,7 +41,7 @@ impl SelectionRefiner {
             label: Some("selection feather and modes"),
             source: wgpu::ShaderSource::Wgsl(include_str!("selection_refine.wgsl").into()),
         });
-        let pipelines = ["feather_h", "combine"].map(|entry| {
+        let pipelines = ["feather_h", "combine", "resize_h"].map(|entry| {
             let (device, layout, shader) =
                 (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
@@ -70,9 +70,12 @@ impl SelectionRefiner {
             empty,
         }
     }
-    pub fn prepare(&self, compiler: &startup::Compiler) -> bool {
+    pub fn prepare(&self, compiler: &startup::Compiler, options: &SelectionRefinement) -> bool {
         let mut ready = true;
-        for pipeline in &self.pipelines {
+        for (index, pipeline) in self.pipelines.iter().enumerate() {
+            if (index == 0 && options.feather == 0.) || (index == 2 && options.resize == 0) {
+                continue;
+            }
             compiler.pipeline(pipeline, startup::BRUSH);
             ready &= pipeline.ready();
         }
@@ -92,7 +95,10 @@ impl SelectionRefiner {
         }
         let [w, h] = extent;
         let bounds_offset = 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4;
-        let scratch_size = if options.feather > 0. {
+        let resize_levels = (options.resize.unsigned_abs() * 2 + 1).ilog2();
+        let scratch_size = if resize_levels > 0 {
+            u64::from(w.div_ceil(4)) * u64::from(h) * 4 * u64::from(resize_levels)
+        } else if options.feather > 0. {
             u64::from(w) * u64::from(h) * 4
         } else {
             4
@@ -112,21 +118,15 @@ impl SelectionRefiner {
             SelectionMode::Subtract => 2,
             SelectionMode::Intersect => 3,
         };
-        let data: Vec<_> = [w, h, mode, u32::from(options.antialias)]
+        let data: Vec<u32> = [w, h, mode, u32::from(options.antialias)]
             .into_iter()
             .chain(
                 inverse
                     .into_iter()
-                    .chain([options.feather, 0.])
+                    .chain([options.feather, options.resize as f32])
                     .map(f32::to_bits),
             )
-            .flat_map(u32::to_ne_bytes)
             .collect();
-        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("selection options"),
-            contents: &data,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
         let coverage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("8-bit selection history"),
             size,
@@ -147,36 +147,56 @@ impl SelectionRefiner {
         encoder.copy_buffer_to_buffer(&header, 0, &coverage, 0, 32);
         encoder.copy_buffer_to_buffer(&header, 32, &coverage, bounds_offset, 32);
         let scratch = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("selection feather intermediate"),
+            label: Some("selection refinement intermediate"),
             size: scratch_size,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let buffers = [
-            &params,
-            incoming,
-            previous.unwrap_or(&self.empty),
-            &scratch,
-            &coverage,
-        ];
-        let entries: Vec<_> = buffers
-            .iter()
-            .enumerate()
-            .map(|(i, b)| wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: b.as_entire_binding(),
+        let binding = |level| {
+            let data: Vec<_> = data
+                .iter()
+                .copied()
+                .chain([level, 0, 0, 0])
+                .flat_map(u32::to_ne_bytes)
+                .collect();
+            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("selection options"),
+                contents: &data,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let buffers = [
+                &params,
+                incoming,
+                previous.unwrap_or(&self.empty),
+                &scratch,
+                &coverage,
+            ];
+            let entries: Vec<_> = buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect();
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("selection options"),
+                layout: &self.layout,
+                entries: &entries,
             })
-            .collect();
-        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("selection options"),
-            layout: &self.layout,
-            entries: &entries,
-        });
+        };
+        let final_binding = binding(0);
+        let resize_bindings: Vec<_> = (1..=resize_levels).map(binding).collect();
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("feather and combine selection"),
             timestamp_writes: None,
         });
-        pass.set_bind_group(0, &binding, &[]);
+        for binding in &resize_bindings {
+            pass.set_bind_group(0, binding, &[]);
+            pass.set_pipeline(&self.pipelines[2]);
+            pass.dispatch_workgroups(w.div_ceil(256), h, 1);
+        }
+        pass.set_bind_group(0, &final_binding, &[]);
         if options.feather > 0. {
             pass.set_pipeline(&self.pipelines[0]);
             pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);

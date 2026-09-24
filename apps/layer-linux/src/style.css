@@ -296,5 +296,8 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 .document-tab.drop-before { box-shadow: inset 2px 0 var(--accent-color); }
 .document-tab.drop-after { box-shadow: inset -2px 0 var(--accent-color); }
 
+.selection-modes > button { border-radius: 0; margin: 0; }
+.selection-modes > button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.selection-modes > button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
 .brush-preview > contents { padding: 0; border-radius: 10px; background: var(--panel-bg); }
 .brush-preview button { min-width: 0; min-height: 0; padding: 6px; }

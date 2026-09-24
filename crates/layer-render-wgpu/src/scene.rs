@@ -1035,7 +1035,7 @@ impl Scene {
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background)
+            .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
             .filter(|(i, _)| checkpoint.is_none_or(|(cut, _)| *i < cut))
             .peekable();
         while let Some((i, layer)) = siblings.next() {
@@ -1541,7 +1541,7 @@ impl Scene {
         // Copy only the changed region; clipping uses the same final path.
         if r.live_display.is_none() && self.cached_composition()
             && let Some(top) = packet.layers.iter().find(|l| {
-                l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background
+                l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background && l.is_artwork()
             })
             && top
                 .effect
@@ -2354,7 +2354,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
         let mut siblings = layers
             .iter()
             .rev()
-            .filter(|l| l.properties.parent == parent && l.kind != LayerKind::Background)
+            .filter(|l| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
             .peekable();
         while let Some(layer) = siblings.next() {
             if !layer.visible

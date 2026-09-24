@@ -24,12 +24,24 @@ fn receive(
     feather: f32,
     antialias: bool,
 ) -> Arc<SelectionPixels> {
+    receive_with_resize(r, incoming, previous, mode, feather, antialias, 0)
+}
+fn receive_with_resize(
+    r: &mut WgpuRasterizer,
+    incoming: Selection,
+    previous: Option<Selection>,
+    mode: SelectionMode,
+    feather: f32,
+    antialias: bool,
+    resize: i32,
+) -> Arc<SelectionPixels> {
     assert!(
         r.request_region(RegionRequest {
             request_id: 42,
             source: RegionSource::Selection(Arc::new(incoming)),
             contiguous: false,
             selection: Some(SelectionRefinement {
+                resize,
                 mode,
                 antialias,
                 feather,
@@ -246,5 +258,118 @@ fn byte_selection_restores_and_transforms_in_brush_fill_and_mask() {
                 .zip(&filled)
                 .all(|(a, b)| a.abs_diff(*b) <= 1)
         );
+    }
+}
+
+#[test]
+fn selection_resize_uses_circular_extrema_preserves_soft_values_and_clips_edges() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    submit(
+        &mut r,
+        &[Layer::paint(LayerId(1), "resize")],
+        &[],
+        &[],
+        true,
+    );
+    // Independent CPU reference for a soft rectangle, including document edges.
+    let mut bytes = vec![0u8; 128 * 128];
+    for y in 0..75 {
+        for x in 0..60 {
+            bytes[y * 128 + x] = if x < 55 { 180 } else { 80 };
+        }
+    }
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    let input = Selection::pixels(Arc::new(
+        SelectionPixels::bytes([128, 128], [0, 0, 60, 75], words).unwrap(),
+    ));
+    for radius in [5i32, -5] {
+        let start = std::time::Instant::now();
+        let p = receive_with_resize(
+            &mut r,
+            input.clone(),
+            None,
+            SelectionMode::New,
+            0.,
+            true,
+            radius,
+        );
+        eprintln!("selection resize {radius}px 128²: {:?}", start.elapsed());
+        for y in 0i32..128 {
+            for x in 0i32..128 {
+                let mut expected = if radius > 0 { 0 } else { 255 };
+                for dy in -5i32..=5 {
+                    for dx in -5i32..=5 {
+                        if dx * dx + dy * dy > 25 {
+                            continue;
+                        }
+                        let (xx, yy) = (x + dx, y + dy);
+                        let value = if (0..128).contains(&xx) && (0..128).contains(&yy) {
+                            bytes[(yy * 128 + xx) as usize]
+                        } else {
+                            0
+                        };
+                        expected = if radius > 0 {
+                            expected.max(value)
+                        } else {
+                            expected.min(value)
+                        };
+                    }
+                }
+                assert_eq!(
+                    coverage(&p, x as u32, y as u32),
+                    expected,
+                    "radius={radius} {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "hardware completed-selection refinement benchmark; run serially"]
+fn selection_resize_latency() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    submit(
+        &mut r,
+        &[Layer::paint(LayerId(1), "resize timing")],
+        &[],
+        &[],
+        true,
+    );
+    r.document_extent = [2048, 2048];
+    let bytes: Vec<u8> = (0..2048 * 2048)
+        .map(|i| (20 + (i % 2048 * 13 + i / 2048 * 7) % 200) as u8)
+        .collect();
+    let words: Vec<_> = bytes
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    let input = Selection::pixels(Arc::new(
+        SelectionPixels::bytes([2048, 2048], [0, 0, 2048, 2048], words).unwrap(),
+    ));
+    for radius in [5, 32, 128, -128] {
+        let start = std::time::Instant::now();
+        let result = receive_with_resize(
+            &mut r,
+            input.clone(),
+            None,
+            SelectionMode::New,
+            0.,
+            true,
+            radius,
+        );
+        eprintln!(
+            "soft selection 2048² resize {radius}px GPU plus capture: {:.3}ms",
+            start.elapsed().as_secs_f64() * 1000.
+        );
+        if radius.abs() == 128 {
+            assert_eq!(
+                coverage(&result, 1024, 1024),
+                if radius > 0 { 219 } else { 20 }
+            );
+        }
     }
 }

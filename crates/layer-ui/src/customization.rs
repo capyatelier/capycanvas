@@ -526,11 +526,12 @@ impl ContextMenuItem {
         Self::command(label, UiAction::Customize { action })
     }
     pub(crate) fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
+        let sections: Vec<_> = sections.into_iter().filter(|s| !s.is_empty()).collect();
         Self {
             label: label.into(),
             selected: None,
             action: None,
-            enabled: sections.iter().any(|s| !s.is_empty()),
+            enabled: !sections.is_empty(),
             hint: String::new(),
             bindings: Vec::new(),
             sections,
@@ -963,6 +964,9 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Liquify => "Push and twist existing paint",
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Select => "Choose a selection tool",
+                CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
+                CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
+                CommandId::SelectionBrushPressure => "Use pen pressure to vary Paint selection size",
                 CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",
                 CommandId::EllipseSelect => "Drag an elliptical selection; Shift constrains a circle, Alt draws from center",
                 CommandId::PolygonSelect => "Click corners; click the first point or press Enter to finish, Backspace removes a point",

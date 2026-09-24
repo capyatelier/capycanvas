@@ -84,6 +84,10 @@ enum Command {
     ),
     FinishStartupCache,
     Selection(Option<layer_core::Selection>),
+    SelectionPaint(u64, layer_render::SelectionPaint),
+    CancelSelectionPaint(u64),
+    SelectionOverlay(Option<layer_render::SelectionOverlay>),
+    QuickMaskThumbnail(Option<layer_core::Selection>),
     Region(layer_render::RegionRequest),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
@@ -109,6 +113,8 @@ enum Reply {
         HashMap<AssetId, BrushSource>,
     ),
     Region(Result<layer_render::RegionResult, String>),
+    SelectionPaintAck(u64, Result<bool, String>),
+    SelectionPaint(u64, Result<layer_render::SelectionPaintResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
     ColorSample(Result<layer_render::ColorSample, String>),
@@ -148,6 +154,12 @@ pub struct RenderWorker {
     selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
+    selection_generation: u64,
+    selection_update_pending: bool,
+    selection_ack: Option<Result<bool, String>>,
+    selection_paint: Option<Result<layer_render::SelectionPaintResult, String>>,
+    selection_overlay: Option<layer_render::SelectionOverlay>,
+    quick_thumbnail: Option<layer_core::Selection>,
     pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
     telemetry_enabled: bool,
@@ -306,6 +318,12 @@ impl RenderWorker {
             selection: None,
             region: None,
             region_pending: false,
+            selection_generation: 0,
+            selection_update_pending: false,
+            selection_ack: None,
+            selection_paint: None,
+            selection_overlay: None,
+            quick_thumbnail: None,
             clock,
             stroke_target: None,
             telemetry,
@@ -421,6 +439,14 @@ impl RenderWorker {
                         self.brush_sources = brush_sources;
                     }
                 }
+                Reply::SelectionPaintAck(generation, result) => {
+                    if generation == self.selection_generation {
+                        self.selection_update_pending = false; self.selection_ack = Some(result);
+                    }
+                }
+                Reply::SelectionPaint(generation, result) => {
+                    if generation == self.selection_generation { self.selection_paint = Some(result); }
+                }
                 Reply::Region(result) => {
                     self.region_pending = false;
                     self.region = Some(result);
@@ -511,6 +537,38 @@ impl CanvasRenderer for RenderWorker {
             self.transform_preview = preview.cloned();
         }
         Ok(())
+    }
+    fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
+        self.ready().map_err(|_| BackendError("Selection worker unavailable"))?;
+        if let Some(ack) = self.selection_ack.take() { return ack.map_err(|message| {
+            eprintln!("Selection paint: {message}"); BackendError("Selection painting failed") }); }
+        if !self.selection_update_pending {
+            self.send(Command::SelectionPaint(self.selection_generation, update.clone()))?;
+            self.selection_update_pending = true;
+        }
+        Ok(false)
+    }
+    fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+        self.ready().ok()?;
+        self.selection_paint.take().map(|r| r.map_err(|_| BackendError("Selection capture failed")))
+    }
+    fn cancel_selection_paint(&mut self) {
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+        self.selection_update_pending = false; self.selection_ack = None; self.selection_paint = None;
+        self.selection = None;
+        let _ = self.send(Command::CancelSelectionPaint(self.selection_generation));
+    }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if self.quick_thumbnail.as_ref() != selection {
+            self.quick_thumbnail = selection.cloned();
+            let _ = self.send(Command::QuickMaskThumbnail(self.quick_thumbnail.clone()));
+        }
+    }
+    fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
+        if self.selection_overlay != overlay {
+            let _ = self.send(Command::SelectionOverlay(overlay));
+            self.selection_overlay = overlay; self.selection = None;
+        }
     }
     fn request_region(
         &mut self,
@@ -797,6 +855,7 @@ impl Worker {
         let mut startup_progress = layer_render_wgpu::StartupProgress::default();
         let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
         let mut deferred = VecDeque::new();
+        let mut selection_generation = 0;
         let mut pending_thumbnails = VecDeque::new();
         let mut last_canvas_frame = std::time::Instant::now();
         let mut filter_preview_generation = 0;
@@ -881,6 +940,9 @@ impl Worker {
                     .send(Reply::ColorSample(color.map_err(error)))
                     .map_err(error)?;
             }
+            if let Some(result) = self.renderer.take_selection_paint() {
+                reply.send(Reply::SelectionPaint(selection_generation, result.map_err(error))).map_err(error)?;
+            }
             if let Some(region) = self.renderer.take_region() {
                 reply
                     .send(Reply::Region(region.map_err(error)))
@@ -913,6 +975,7 @@ impl Worker {
                 || self.renderer.thumbnails_pending()
                 || !pending_thumbnails.is_empty()
                 || self.renderer.color_sample_pending()
+                || self.renderer.selection_paint_pending()
                 || self.renderer.region_pending()
                 || self.child.feedback_pending()
             {
@@ -956,6 +1019,7 @@ impl Worker {
                 && matches!(
                     command,
                     Command::Region(_)
+                        | Command::SelectionPaint(..)
                         | Command::Thumbnail(..)
                         | Command::ColorSample(_)
                         | Command::FilterPreviews(..)
@@ -1016,6 +1080,16 @@ impl Worker {
                     startup_progress = Default::default();
                 }
                 Command::FinishStartupCache => self.renderer.finish_startup_cache(),
+                Command::SelectionPaint(generation, update) => {
+                    if generation != selection_generation { continue; }
+                    let result = self.renderer.paint_selection(&update).map_err(error);
+                    reply.send(Reply::SelectionPaintAck(generation, result)).map_err(error)?;
+                }
+                Command::CancelSelectionPaint(generation) => {
+                    selection_generation = generation; self.renderer.cancel_selection_paint();
+                }
+                Command::QuickMaskThumbnail(selection) => self.renderer.set_quick_mask_thumbnail(selection.as_ref()),
+                Command::SelectionOverlay(overlay) => self.renderer.set_selection_overlay(overlay),
                 Command::Region(request) => {
                     let result = self.renderer.request_region(request);
                     if !matches!(result, Ok(true)) {

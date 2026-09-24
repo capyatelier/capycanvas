@@ -153,25 +153,12 @@ mod imp {
                     gtk::graphene::Rect::new(cx-r, cy-r, r*2., r*2.), r), &[2.;4], &[ink;4]);
             }
             snapshot.append_stroke(&paths.zero, &gtk::gsk::Stroke::new(1.), &ink);
-            // Read-only type follows the lower arc; all numeric editing is in the sheet.
-            let font = (obj.width() as f64 * 0.044).clamp(9., 12.);
+            // Retained text stays below the compact swatch groups.
+            let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(obj.width() as f32)
+                .unwrap().intensity_caption.map(f64::from);
             let text = format!("{:+.2} EV", obj.value());
-            let radius = (g.radius + g.width * 0.5 + 3.) as f64 + font;
-            // Retained glyph nodes share GTK's font atlas. The curved label
-            // must not rasterize/upload a new Cairo surface on every preview.
-            let glyphs: Vec<_> = text.chars().map(|c| {
-                let layout = crate::color_readout::layout(obj.upcast_ref(), font, false, &c.to_string());
-                let width = crate::color_readout::advance(&layout);
-                (layout, width)
-            }).collect();
-            let mut cursor = -glyphs.iter().map(|(_, width)| width).sum::<f64>() * 0.5;
-            for (layout, width) in glyphs {
-                let a = 76f64.to_radians() - (cursor + width * 0.5) / radius;
-                crate::color_readout::append(snapshot, &layout, [
-                    g.center[0] as f64 + radius * a.cos(), g.center[1] as f64 + radius * a.sin(),
-                ], a.to_degrees() - 90., true, ink);
-                cursor += width;
-            }
+            let layout = crate::color_readout::layout(obj.upcast_ref(), font, false, &text);
+            crate::color_readout::append(snapshot, &layout, [x, y], 0., true, ink);
         }
     }
 }

@@ -15,6 +15,8 @@ use layer_core::{
 use std::fmt;
 mod outline;
 mod telemetry;
+mod selection;
+pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
@@ -345,6 +347,8 @@ pub enum RegionSource {
     Composite,
     /// Raw paint, in layer-local coordinates.
     Layer(LayerId),
+    /// Raw content alpha or a visibility mask's stored coverage, before artwork compositing.
+    Coverage(LayerId),
     /// Composition snapshot with original indices and selected visibility.
     Layers(Vec<Layer>),
     /// Rasterize selection geometry without color classification.
@@ -353,6 +357,8 @@ pub enum RegionSource {
 pub use layer_core::SelectionMode;
 #[derive(Clone, Debug)]
 pub struct SelectionRefinement {
+    /// Circular dilation (positive) or erosion (negative), in document pixels.
+    pub resize: i32,
     pub mode: SelectionMode,
     pub antialias: bool,
     pub feather: f32,
@@ -362,8 +368,10 @@ pub struct SelectionRefinement {
 }
 impl SelectionRefinement {
     pub const MAX_FEATHER: f32 = 100.;
+    pub const MAX_RESIZE: u32 = 128;
     pub fn is_valid(&self) -> bool {
-        self.feather.is_finite() && (0.0..=Self::MAX_FEATHER).contains(&self.feather)
+        self.resize.unsigned_abs() <= Self::MAX_RESIZE && (self.resize == 0 || self.feather == 0.)
+            && self.feather.is_finite() && (0.0..=Self::MAX_FEATHER).contains(&self.feather)
             && self.source_to_document.inverse().is_some()
     }
 }
@@ -534,6 +542,13 @@ pub trait CanvasRenderer {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Incremental scalar coverage. False requests a retry while pipelines or
+    /// the prior completed capture are pending; no submitted update is dropped.
+    fn paint_selection(&mut self, _update: &SelectionPaint) -> Result<bool, Self::Error> { Ok(false) }
+    fn take_selection_paint(&mut self) -> Option<Result<SelectionPaintResult, Self::Error>> { None }
+    fn cancel_selection_paint(&mut self) {}
+    fn set_quick_mask_thumbnail(&mut self, _selection: Option<&layer_core::Selection>) {}
+    fn set_selection_overlay(&mut self, _overlay: Option<SelectionOverlay>) {}
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()
@@ -711,8 +726,11 @@ mod tests {
     }
 
     #[test]
-    fn brush_contact_layout_is_a_gpu_friendly_80_bytes() {
-        assert_eq!(std::mem::size_of::<Dab>(), 80);
+    fn brush_contact_layout_includes_swept_pose_and_sensor_values() {
+        assert_eq!(std::mem::size_of::<Dab>(), 128);
         assert_eq!(std::mem::align_of::<Dab>(), 4);
+        assert_eq!(std::mem::offset_of!(Dab, previous), 80);
+        assert_eq!(std::mem::offset_of!(Dab, contact), 96);
+        assert_eq!(std::mem::offset_of!(Dab, previous_contact), 112);
     }
 }

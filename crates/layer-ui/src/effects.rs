@@ -375,10 +375,13 @@ fn float32_program(program: &Arc<layer_core::EffectProgram>, depth: layer_core::
     result
 }
 
-pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
+pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior) -> LayerPropertiesView {
     let Some(layer) = doc.layer(doc.active_layer) else {
         return LayerPropertiesView::default();
     };
+    if layer.kind == LayerKind::Selection {
+        return super::selection_properties::properties(layer.id.0, &layer.name, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id));
+    }
     let mut controls = Vec::new();
     let mut curve_max = None;
     let description = if let Some(effect) = &layer.effect {
@@ -466,6 +469,11 @@ pub(super) struct EffectGesture {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn cancel_effect_gesture(&mut self) -> Result<bool, String> {
+        if let Some((_, old)) = self.selection_masks.quick_property_gesture.take() {
+            self.selection_masks.quick_properties = old;
+            self.refresh_document();
+            return Ok(true);
+        }
         let Some(gesture) = self.effect_gesture.take() else {
             return Ok(false);
         };
@@ -491,6 +499,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             } => (*layer, key.clone()),
             _ => return Err("Not a draggable effect property".into()),
         };
+        if layer == 0 && self.selection_masks.quick() && key.starts_with("mask_") {
+            if phase == ContactPhase::Down {
+                self.require_idle()?;
+                self.selection_masks.quick_property_gesture = Some((key.clone(), self.selection_masks.quick_properties.clone()));
+            } else if !self.selection_masks.quick_property_gesture.as_ref().is_some_and(|(k, _)| *k == key) {
+                return Ok(());
+            }
+            if phase == ContactPhase::Cancel || self.workspace_read_only || self.workspace_transition || self.rendering_suspended {
+                self.cancel_effect_gesture()?;
+                return Ok(());
+            }
+            if let Err(error) = self.effect_action(action) {
+                self.cancel_effect_gesture()?;
+                return Err(error);
+            }
+            if phase == ContactPhase::Up { self.selection_masks.quick_property_gesture = None; }
+            return Ok(());
+        }
         if phase == ContactPhase::Down {
             self.require_idle()?;
             let original = self
@@ -548,6 +574,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
+        if let Some(result) = self.mask_property_action(&action) { return result; }
+        if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err("Return to artwork before applying a filter".into());}
         match action {
             EffectAction::CancelFilter => {
                 let doc = self.engine.document();
@@ -724,7 +752,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 key,
                 operation,
             } => {
-                let view = properties(self.engine.document());
+                let view = properties(self.engine.document(), self.state.settings.selection_painting);
                 if view.layer != Some(layer) {
                     return Err("Select this layer before editing its properties".into());
                 }

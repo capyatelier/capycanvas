@@ -45,6 +45,20 @@ GTK uses Mutter mouse/touch delivery; Web uses Chrome mouse/touch/pen injection.
 Neither replaces physical stylus testing. The `--workspace-motion` mode measures
 steady dragging separately from the intentional hold delay.
 
+Painted selections have focused GPU and native journeys:
+
+```bash
+cargo test --locked -p layer-render-wgpu selection_paint -- --test-threads=1
+bash tools/performance/workspace-motion.sh gtk --native-test=native_selection_brush_input
+bash tools/performance/workspace-motion.sh gtk --tablet --native-test=native_selection_brush_input
+cargo test --locked --release -p layer-render-wgpu selection_paint_latency -- --ignored --test-threads=1 --nocapture
+```
+
+The GTK journey checks opacity, successive contacts, undo/redo, loop interiors,
+and light/dark controls. The ordinary Wayland run also exercises numeric text
+entry; the tablet proxy run isolates tablet contact delivery. The timing case
+reports submission, GPU completion, and final immutable capture separately.
+
 Build the [Linux client](linux.md) before running its ignored interactive tests.
 Run GTK tests individually, with one test thread per process:
 

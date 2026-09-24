@@ -3,7 +3,7 @@
 use crate::{ContactPhase, UiChange};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifiers {
     /// Ctrl on Linux/Windows; Ctrl or Command where supplied by the host.
     pub command: bool,

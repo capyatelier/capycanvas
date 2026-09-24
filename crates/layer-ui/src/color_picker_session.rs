@@ -42,7 +42,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             previous
         });
-        self.eyedropper.picking.original = Some(self.state.colors.definition());
+        self.eyedropper.picking.original = Some(self.state.display_colors().definition());
         self.eyedropper.picking.finishing = false;
         self.eyedropper.picking.touch = None;
         if self.eyedropper.layer && !self.picker_layer_available() {

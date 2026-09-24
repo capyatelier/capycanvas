@@ -33,6 +33,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
+import androidx.compose.ui.input.pointer.isAltPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -114,7 +118,7 @@ internal class LayerSwipe {
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
             val requests = currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
                 listOf(false, true).mapNotNull { mask ->
-                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || (!layer.isNull("content_icon") && layer.isNull("content_icon_color"))) return@mapNotNull null
+                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || (!layer.optBoolean("selection_layer") && !layer.isNull("content_icon") && layer.isNull("content_icon_color"))) return@mapNotNull null
                     val key = "${layer.getLong("id")}:$mask"
                     val revision = layer.getLong(if (mask) "mask_revision" else "paint_revision")
                     if (revisions[key] == revision || pending.values.any { it.key == key }) null
@@ -177,7 +181,7 @@ internal class LayerSwipe {
                     val id=layer.getLong("id")
                     val target=drag?.takeIf { it.target==id }
                     val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
-                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                    LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
                         held={contactHeld=it},
                         cancelContext={menuGeneration++; menu=null},
@@ -198,6 +202,7 @@ internal class LayerSwipe {
             Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { footerHeight = it.height / density.density }.padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                 LayerButton(host,"add-layer","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
                 LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
+                LayerButton(host,"selection-brush","New Selection Layer",action=obj("type" to "invoke","command" to "new_selection_layer"))
                 LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
                 LayerButton(host,"image","Import image as layer", action=obj("type" to "invoke", "command" to "import_image"))
                 LayerButton(host,"delete","Delete selected layers",enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
@@ -267,6 +272,7 @@ internal class LayerSwipe {
             if (!focused) return@pointerInput
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
+                if (currentEvent.keyboardModifiers.isCtrlPressed || currentEvent.keyboardModifiers.isMetaPressed) return@awaitEachGesture
                 longPressed=false
                 contactActive=true
                 holdEligible=true
@@ -338,7 +344,7 @@ internal class LayerSwipe {
         Row(Modifier.fillMaxWidth().heightIn(min=40.dp).offset { IntOffset(-shift.roundToInt(),0) }
             .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
             .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-        LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.getBoolean("visible"))"Hide layer" else "Show layer",
+        LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))"Show or hide selection overlay" else if(layer.getBoolean("visible"))"Hide layer" else "Show layer",
             action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
         LayerButton(host,iconName(layer.getString("selection_icon")),"Select layer without changing drawing target",
             action=obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to id)))
@@ -348,10 +354,29 @@ internal class LayerSwipe {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("editing") && !layer.getBoolean("mask_selected")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
-            val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else "Edit layer content"
+            val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else if(layer.optBoolean("selection_layer")) "Edit selection layer" else "Edit layer content"
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
                 .then(if(group)Modifier else Modifier.background(colors.input,RoundedCornerShape(3.dp)))
+                .then(if(group || preview) Modifier else Modifier.pointerInput(id,mask) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed=false, pass=PointerEventPass.Initial)
+                        val keys = currentEvent.keyboardModifiers
+                        if (!keys.isCtrlPressed && !keys.isMetaPressed) return@awaitEachGesture
+                        down.consume()
+                        var click = true
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.find { it.id == down.id } ?: break
+                            if (change.isConsumed || (change.position-down.position).getDistance() > viewConfiguration.touchSlop) click = false
+                            change.consume()
+                            if (!change.pressed) {
+                                if (click) host.dispatch(obj("type" to "selection", "action" to obj("op" to "load_thumbnail", "id" to id, "mask" to mask, "shift" to keys.isShiftPressed, "alt" to keys.isAltPressed)))
+                                break
+                            }
+                        } while(true)
+                    }
+                })
                 .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()
@@ -363,13 +388,21 @@ internal class LayerSwipe {
                 },contentAlignment=Alignment.Center) {
                 if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open","Expand or collapse group",Modifier.size(28.dp))
                 else {
-                if(mask || layer.isNull("content_icon") || !layer.isNull("content_icon_color")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
-                if(!mask && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=if(layer.isNull("content_icon_color")) colors.text else Color(android.graphics.Color.parseColor(layer.getString("content_icon_color"))))
+                if(mask || layer.optBoolean("selection_layer") || layer.isNull("content_icon") || !layer.isNull("content_icon_color")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=if(layer.isNull("content_icon_color")) colors.text else Color(android.graphics.Color.parseColor(layer.getString("content_icon_color"))))
                 }
             }
             }
         }
         thumb(false)
+        if(layer.optBoolean("selection_layer")) {
+            val load = obj("type" to "selection", "action" to obj("op" to "load_layer", "id" to id, "mode" to "new", "inverted" to false))
+            ActionTip(host,layer.getString("load_selection_tooltip"),load,Modifier.size(30.dp)) {
+                Box(Modifier.fillMaxSize().testTag("selection-load-$id").clickable { host.dispatch(load) }, contentAlignment=Alignment.Center) {
+                    SharedIcon("selection-load", layer.getString("load_selection_tooltip"), Modifier.size(24.dp))
+                }
+            }
+        }
         if(layer.getBoolean("has_mask")) {
             LayerButton(host,"link",if(layer.getBoolean("mask_linked"))"Unlink mask from layer" else "Link mask to layer",
                 Modifier.size(12.dp,24.dp).alpha(if(layer.getBoolean("mask_linked"))1f else .35f),
@@ -385,7 +418,7 @@ internal class LayerSwipe {
                     textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={finish()}))
                 LaunchedEffect(id) { focus.requestFocus() }
                 DisposableEffect(id) { onDispose { host.editingText=false } }
-            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
+            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={if(layer.optBoolean("can_rename"))host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=layer.getString("description")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)

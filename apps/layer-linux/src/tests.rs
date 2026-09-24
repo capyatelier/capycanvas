@@ -8586,9 +8586,14 @@ fn native_menu_sections() {
         popup.activate_action(&action, None).unwrap();
         pump(100);
     };
-    fn check(model: &gtk::gio::MenuModel, sections: &[Vec<ContextMenuItem>]) {
+    fn check(model: &gtk::gio::MenuModel, sections: &[Vec<ContextMenuItem>], drawings: bool) {
         let sections: Vec<_> = sections.iter().filter(|s| !s.is_empty()).collect();
-        assert_eq!(model.n_items() as usize, sections.len());
+        assert_eq!(model.n_items() as usize, sections.len() + usize::from(drawings));
+        if drawings {
+            let section = model.item_link(sections.len() as i32, "section").unwrap();
+            assert_eq!(section.n_items(), 1);
+            assert_eq!(section.item_attribute_value(0, "action", None).unwrap().str(), Some("context.drawings"));
+        }
         for (s, items) in sections.iter().enumerate() {
             let section = model.item_link(s as i32, "section").unwrap();
             assert_eq!(section.n_items() as usize, items.len());
@@ -8600,12 +8605,14 @@ fn native_menu_sections() {
                         .str(),
                     Some(item.label.as_str())
                 );
-                if item.action.is_none() {
+                if item.action.is_none() && item.enabled {
                     check(
                         &section.item_link(i as i32, "submenu").unwrap(),
                         &item.sections,
+                        false,
                     );
                 } else {
+                    assert!(section.item_link(i as i32, "submenu").is_none());
                     assert!(
                         section
                             .item_attribute_value(i as i32, "custom", None)
@@ -8640,7 +8647,15 @@ fn native_menu_sections() {
                 .unwrap()
                 .session
                 .application_menu(id);
-            check(&menu.menu_model().unwrap(), &expected.sections);
+            check(&menu.menu_model().unwrap(), &expected.sections, matches!(id, ApplicationMenu::Primary | ApplicationMenu::Window));
+            if id == ApplicationMenu::Select {
+                for label in ["Load Selection", "Replace Selection Layer from Current Selection"] {
+                    assert!(!find_menu_item(menu.upcast_ref(), label).unwrap().is_sensitive());
+                }
+                assert!(find_menu_item(menu.upcast_ref(), "Modify").is_none());
+                assert!(find_menu_item(menu.upcast_ref(), "Grow…").is_some());
+                assert!(find_menu_item(menu.upcast_ref(), "Shrink…").is_some());
+            }
             if id == ApplicationMenu::View {
                 assert!(
                     menu_action(&menu.menu_model().unwrap(), CommandId::ToggleTheme.label())
@@ -8719,7 +8734,7 @@ fn native_menu_sections() {
             .unwrap()
             .session
             .application_menu(id);
-        check(&menu.menu_model().unwrap(), &expected.sections);
+        check(&menu.menu_model().unwrap(), &expected.sections, matches!(id, ApplicationMenu::Primary | ApplicationMenu::Window));
         menu.popdown();
     }
     w.window.destroy();

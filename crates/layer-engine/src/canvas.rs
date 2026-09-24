@@ -34,7 +34,7 @@ const INPUT_BATCH: usize = 4096;
 // A small wet microbatch amortizes page ping-pong and reservoir passes while
 // keeping exchange far below the eight-sample display-frame cadence that made
 // carried color advance in visible bands.
-const MAX_CONTACT_POINTS: usize = 131_072;
+pub(crate) const MAX_CONTACT_POINTS: usize = 131_072;
 const CORRECTION_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_WET_DABS_PER_BATCH: u32 = 3;
 // Smudge contacts compose into one bounded semi-Lagrangian backtrace. Live
@@ -123,6 +123,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
     transform_preview: Option<layer_render::TransformPreview>,
+    selection_display: Option<Option<layer_core::Selection>>,
     rebuild_all: bool,
     composite_all: bool,
     raster_dirty: bool,
@@ -200,6 +201,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             dabs: Vec::with_capacity(capacity.dabs_per_frame),
             batches: Vec::with_capacity(capacity.batches_per_frame),
             transform_preview: None,
+            selection_display: None,
             rebuild_all: true,
             composite_all: true,
             raster_dirty: false,
@@ -489,8 +491,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(true)
     }
 
+    /// Override only the display mask. Artwork clipping always uses the document selection.
+    pub fn set_selection_display(&mut self, selection: Option<Option<layer_core::Selection>>) {
+        self.selection_display = selection;
+    }
+
     /// Provisional selection placement is view state, never another history edit.
     pub fn display_selection(&self) -> Option<std::borrow::Cow<'_, layer_core::Selection>> {
+        if let Some(selection) = &self.selection_display {
+            return selection.as_ref().map(std::borrow::Cow::Borrowed);
+        }
         if let Some(preview) = &self.transform_preview {
             let selection = preview.selection.as_ref()?;
             let basis = self.document().layer_transform(preview.layer);
@@ -2088,7 +2098,7 @@ fn rect_area(rect: Rect) -> f32 {
     }
 }
 
-fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
+pub(crate) fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
     DabStyle {
         brush_to_layer: layer_core::Affine::IDENTITY,
         alpha_locked: false,

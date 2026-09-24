@@ -1,7 +1,7 @@
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
-export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, dismissContext, contentChanged = () => {} }) {
+export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, contentChanged = () => {} }) {
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
@@ -43,6 +43,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const getAction = () => ({ op: "new", group, clipped: false });
     footer.append(glyphButton(group ? "folder" : "add-layer", group ? "New group" : "New layer", () => send(getAction()), "", getAction));
   }
+  footer.append(glyphButton("selection-brush", "New Selection Layer", () => dispatch({type:"invoke",command:"new_selection_layer"})));
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
   const maskButton = glyphButton("mask", "Add layer mask", () => send(addMask()), "", addMask); footer.append(maskButton);
   footer.append(glyphButton("image", "Import image as layer", () => dispatch({type:"invoke",command:"import_image"})));
@@ -69,7 +70,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       // These are already-rasterized GPU preview bytes. Keep their tiny UI
       // bitmap in host memory rather than invoking another GPU canvas path.
       image.getContext("2d", { willReadFrequently: true });
-      b.replaceChildren(image); return { b, image };
+      b.replaceChildren(image);
+      b.addEventListener('click',e=>{
+        if(!(e.ctrlKey||e.metaKey)||get().group)return;
+        e.preventDefault();e.stopImmediatePropagation();
+        dispatch({type:'selection',action:{op:'load_thumbnail',id:get().id,mask,shift:e.shiftKey,alt:e.altKey}});
+      },{capture:true});
+      return { b, image };
     };
     const content = thumb(false), mask = thumb(true);
     const linkAction = () => ({ op: "link_mask", id: get().id, value: !get().mask_linked });
@@ -77,11 +84,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     thumbnails.append(clipping, content.b, link, mask.b);
     const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
+    const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'selection-layer-load');
+    load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
     row.append(eye, check, thumbnails, text, lock, grip);
     row.onclick = e => { if (!e.target.closest("button,input")) select(false); };
-    name.ondblclick = () => send({ op: "begin_rename", id: get().id });
+    name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
-    Object.assign(record, { eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
+    Object.assign(record, { load, eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
     const remove = button("Delete", e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
     root.append(remove, row);
     let offset = 0, drag, suppressClick;
@@ -212,16 +221,16 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       // widgets, SVGs and text through canvas movement and raster publications.
       if(r.presentation===key)return;
       r.presentation=key;
-      r.row.classList.toggle("selected", layer.selected);
+      r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;r.load.title=layer.load_selection_tooltip;r.load.setAttribute("aria-label",r.load.title);
       if (!layer.can_delete) r.closeSwipe();
-      r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.visible ? "Hide layer" : "Show layer";
+      r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?"Hide selection overlay":"Show selection overlay"):(layer.visible?"Hide layer":"Show layer");
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;
       r.content.b.classList.toggle("editing-target", layer.editing && !layer.mask_selected);
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
       r.content.b.classList.toggle("layer-folder", layer.group);
       if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
-      else if(layer.content_icon) {
+      else if(layer.content_icon && !layer.selection_layer) {
         const glyph = icon(nameIcon(layer.content_icon));
         if (layer.content_icon_color) {
           glyph.style.color = layer.content_icon_color; glyph.classList.add("paper-thumbnail-icon");
@@ -235,10 +244,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
       r.grip.hidden = !layer.can_drop_below;
+      if (view.rename_layer !== layer.id && r.entry) r.closeRename();
       if (view.rename_layer === layer.id && !r.entry) {
         const input = element("input", "layer-name-entry"); input.value = layer.label; input.maxLength = 128; r.entry = input; r.name.hidden = true; r.text.prepend(input);
         let finished = false;
-        const done = cancel => { if (finished) return; finished = true; input.remove(); r.entry = null; r.name.hidden = false;
+        r.closeRename = () => { finished = true; input.remove(); r.entry = null; r.name.hidden = false; };
+        const done = cancel => { if (finished) return; r.closeRename();
           send(cancel || !input.value.trim() ? { op: "cancel_rename" } : { op: "rename", id: layer.id, name: input.value }); };
         input.onblur = () => done(false); input.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(e.key === "Escape"); } };
         input.focus(); input.select();
@@ -246,7 +257,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     });
     // Bitmap revisions do not change row geometry. Native text, hierarchy and
     // controls do, including when this retained panel is currently offscreen.
-    const next = JSON.stringify([view.rename_layer?.toString(), state().layers.map(({paint_revision,mask_revision,...row})=>row)],
+    const next = JSON.stringify([view.quick_mask,current?.selection_layer,view.rename_layer?.toString(), state().layers.map(({paint_revision,mask_revision,...row})=>row)],
       (_,value)=>typeof value==="bigint"?String(value):value);
     if (next !== measurementKey) { measurementKey=next; contentChanged("layers"); }
   }
@@ -269,12 +280,16 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {
-          if (mask ? !r.layer.has_mask : r.layer.group || (r.layer.content_icon && !r.layer.content_icon_color)) continue;
+          if (mask ? !r.layer.has_mask : r.layer.group || (r.layer.content_icon && !r.layer.selection_layer && !r.layer.content_icon_color)) continue;
           const key = `${id}:${mask}`, revision = documentEpoch + ":" + String(mask ? r.layer.mask_revision : r.layer.paint_revision);
           if (revisions.get(key) === revision || pending.size >= 8) continue;
           const token = ++thumbnailRequest;
           if (app.request_layer_thumbnail(token, mask ? r.layer.mask_id : r.layer.id)) {
             owned.add(token);revisions.set(key,revision); pending.set(token,{key,revision,revisions,owned,canvas: (mask ? r.mask : r.content).image});
+          } else if (app.shader_work_pending()) {
+            // A drawer can request its first mask preview while the canvas is
+            // idle. Start deferred compilation without waiting for canvas input.
+            wake();
           }
         }
       }

@@ -89,7 +89,10 @@ class AndroidColorPanelTest {
         waitFor("color panel") { find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-panel") != null }; settle()
     }
     @Before fun ready() {
-        CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "color-panel-tests/${java.util.UUID.randomUUID()}").absolutePath
+        val root = File(instrumentation.targetContext.cacheDir, "color-panel-tests/${java.util.UUID.randomUUID()}")
+        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
+        RecoveryController.directoryForTest = File(root, "recovery")
+        ColorPreferencesStore.directoryForTest = File(root, "color-preferences")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
             activity = it; host = it.host; owner = findOwner(it.window.decorView)!!; density = it.resources.displayMetrics.density
@@ -111,11 +114,16 @@ class AndroidColorPanelTest {
     @After fun cleanup() {
         try {
             if (contact) event(MotionEvent.ACTION_CANCEL)
-            if (::savedSettings.isInitialized) action(obj("type" to "restore_settings", "settings" to savedSettings))
+            if (::savedSettings.isInitialized) {
+                action(obj("type" to "restore_settings", "settings" to savedSettings))
+                action(obj("type" to "set_theme", "theme" to savedSettings.opt("theme")))
+            }
         } finally {
             if (referenceHandle != 0L) Native.destroy(referenceHandle)
             if (::scenario.isInitialized) scenario.close()
             CanvasHost.workspaceDirectoryForTest = null
+            RecoveryController.directoryForTest = null
+            ColorPreferencesStore.directoryForTest = null
         }
     }
     private fun event(action: Int, next: Offset = point) {
@@ -158,11 +166,11 @@ class AndroidColorPanelTest {
                 shape(shape)
                 val stage = bounds("color-panel")
                 val wheel = bounds("color-wheel")
-                assertEquals("One square at $width", stage.width, stage.height, 1f)
-                assertEquals("Full content width at $width", (width - 16) * density, stage.width, 1.5f)
+                assertTrue("Wheel and footer at $width", stage.height >= stage.width)
+                assertTrue("Whole picker fits $width", stage.width <= (width - 16) * density + 1.5f && stage.width >= 128 * density - 1.5f)
                 val layout = JSONObject(Native.colorPanelLayout(stage.width / density))
-                for (slot in listOf("foreground", "background", "transparent", "swap", "wheel")) {
-                    val b = bounds(if (slot in listOf("wheel", "swap")) "color-$slot" else "color-swatch-$slot")
+                for (slot in listOf("foreground", "background", "transparent", "black", "white", "swap", "wheel")) {
+                    val b = bounds(when (slot) { "wheel", "swap" -> "color-$slot"; "black", "white" -> "color-quick-$slot"; else -> "color-swatch-$slot" })
                     val expected = layout.getJSONArray(slot)
                     assertEquals("$slot x", expected.getDouble(0).toFloat() * density, b.left - stage.left, 1.5f)
                     assertEquals("$slot y", expected.getDouble(1).toFloat() * density, b.top - stage.top, 1.5f)
@@ -181,7 +189,7 @@ class AndroidColorPanelTest {
                     val relative = wheel.center - stage.topLeft
                     val pixel = shot.getPixel(relative.x.roundToInt(), relative.y.roundToInt())
                     assertEquals("Opaque center", 255, android.graphics.Color.alpha(pixel))
-                    val expected = expectedPick("field", stage.topLeft + Offset(relative.x.roundToInt() + .5f, relative.y.roundToInt() + .5f)).getJSONArray("foreground")
+                    val expected = expectedPick("field", stage.topLeft + Offset(relative.x.roundToInt() + .5f, relative.y.roundToInt() + .5f)).getJSONObject("foreground").getJSONArray("rgba")
                     val channels = listOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
                     channels.forEachIndexed { i, actual -> assertEquals("$theme $width $shape rendered channel $i", expected.getDouble(i) * 255, actual.toDouble(), 4.0) }
                     // Exercise the retained hue shader after shape/size changes.
@@ -220,7 +228,7 @@ class AndroidColorPanelTest {
     private fun expectedPick(part: String, at: Offset): JSONObject {
         val wheel = bounds("color-wheel")
         val handle = referenceHandle
-        Native.dispatch(handle, obj("type" to "set_color", "rgba" to colors().getJSONArray("foreground")).toString())
+        Native.dispatch(handle, obj("type" to "set_color", "rgba" to colors().getJSONObject("foreground").getJSONArray("rgba")).toString())
         Native.dispatch(handle, obj("type" to "color", "action" to obj("op" to "shape", "shape" to view().getString("shape"))).toString())
         // An achromatic RGB value does not carry its remembered hue.
         val hueMarker = view().getJSONArray("wheel_hue_marker")
@@ -234,7 +242,7 @@ class AndroidColorPanelTest {
     private fun assertPaint(expected: JSONObject, label: String = "pick") {
         try {
             waitFor("shared color acknowledgement", 2_000) {
-                val a = colors().getJSONArray("foreground"); val b = expected.getJSONArray("foreground")
+                val a = colors().getJSONObject("foreground").getJSONArray("rgba"); val b = expected.getJSONObject("foreground").getJSONArray("rgba")
                 (0..3).all { abs(a.getDouble(it) - b.getDouble(it)) < .0001 }
             }
         } catch (failure: AssertionError) {
@@ -278,18 +286,45 @@ class AndroidColorPanelTest {
                 tap(bounds("color-swatch-$slot").center)
                 assertEquals(slot, colors().getString("slot"))
             }
-            val remembered = colors().getJSONArray("foreground").toString()
+            val remembered = colors().getJSONObject("foreground").getJSONArray("rgba").toString()
             val alternative = view().array("other_shapes").getString(0)
             tap(bounds("color-shape-$alternative").center)
             assertEquals(alternative, colors().getString("shape"))
-            assertEquals(remembered, colors().getJSONArray("foreground").toString())
-            val fg = colors().getJSONArray("foreground").toString(); val bg = colors().getJSONArray("background").toString()
+            assertEquals(remembered, colors().getJSONObject("foreground").getJSONArray("rgba").toString())
+            val fg = colors().getJSONObject("foreground").getJSONArray("rgba").toString(); val bg = colors().getJSONObject("background").getJSONArray("rgba").toString()
             tap(bounds("color-swap").center)
-            assertEquals(bg, colors().getJSONArray("foreground").toString())
-            assertEquals(fg, colors().getJSONArray("background").toString())
+            assertEquals(bg, colors().getJSONObject("foreground").getJSONArray("rgba").toString())
+            assertEquals(fg, colors().getJSONObject("background").getJSONArray("rgba").toString())
             color(obj("op" to "select", "slot" to "foreground"))
         }
     }
+    @Test fun neutralShortcutsPreserveRememberedColorsWithTouchPenAndMouse() {
+        resize(280, 340)
+        for (device in tools) {
+            tool = device
+            color(obj("op" to "select", "slot" to "foreground"))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.2, .7, .4, 1))))
+            val foreground = colors().getJSONObject("foreground").toString()
+            val background = colors().getJSONObject("background").toString()
+            tap(bounds("color-swatch-transparent").center)
+            assertEquals("transparent", colors().getString("slot"))
+            for (white in listOf(false, true, false)) {
+                tap(bounds(if (white) "color-quick-white" else "color-quick-black").center)
+                assertEquals("temporary", colors().getString("slot"))
+                assertEquals(foreground, colors().getJSONObject("foreground").toString())
+                assertEquals(background, colors().getJSONObject("background").toString())
+                val rgba = colors().getJSONObject("temporary").getJSONArray("rgba")
+                for (i in 0..2) assertEquals(if (white) 1.0 else 0.0, rgba.getDouble(i), .00001)
+            }
+            tap(bounds("color-swatch-foreground").center)
+            tap(bounds("color-quick-white").center)
+            assertEquals("foreground", colors().getString("slot"))
+            assertEquals(background, colors().getJSONObject("background").toString())
+            assertEquals(1.0, colors().getJSONObject("foreground").getJSONArray("rgba").getDouble(0), .00001)
+        }
+        capture("neutral-shortcuts")
+    }
+
     private fun menuOpen(): Boolean {
         var present = false
         instrumentation.runOnMainSync {
@@ -324,10 +359,10 @@ class AndroidColorPanelTest {
             val wheel = bounds("color-wheel")
             tap(wheel.center + Offset(wheel.width * .1f, -wheel.width * .1f))
             val marker = view().getJSONArray("wheel_marker").toString()
-            val paint = colors().getJSONArray("foreground").toString()
+            val paint = colors().getJSONObject("foreground").getJSONArray("rgba").toString()
             tap(bounds("color-swatch-transparent").center)
             assertEquals(marker, view().getJSONArray("wheel_marker").toString())
-            assertEquals(paint, colors().getJSONArray("foreground").toString())
+            assertEquals(paint, colors().getJSONObject("foreground").getJSONArray("rgba").toString())
             tap(bounds("color-swatch-foreground").center)
             assertEquals(marker, view().getJSONArray("wheel_marker").toString())
         }

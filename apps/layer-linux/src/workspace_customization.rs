@@ -885,7 +885,7 @@ impl Customization {
     pub(super) fn color_pair(&self, w: &Workspace, size: i32) -> gtk::Widget {
         let pair = crate::display_color::ColorPair::new(size);
         if let Some(g) = w.gpu.borrow().as_ref() {
-            let colors = &g.session.state().colors;
+            let colors = g.session.state().display_colors();
             pair.set_colors([colors.foreground, colors.background], w.view_color(), w.picker_headroom());
         }
         let mut retained = self.color_patches.borrow_mut();
@@ -906,7 +906,7 @@ impl Customization {
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
         let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
-            self.refresh_color_palette(&g.session.state().colors, w.view_color(), w.picker_headroom());
+            self.refresh_color_palette(g.session.state().display_colors(), w.view_color(), w.picker_headroom());
             (
                 g.session
                     .state()
@@ -1493,7 +1493,7 @@ impl Workspace {
                 let section = gtk::gio::Menu::new();
                 for (i, item) in items.into_iter().enumerate() {
                     let id = format!("{prefix}-{s}-{i}");
-                    if item.action.is_none() {
+                    if item.action.is_none() && item.enabled {
                         let submenu = model(w, popup, item.sections, &id, actions);
                         section.append_submenu(Some(&item.label), &submenu);
                         continue;
@@ -1517,17 +1517,18 @@ impl Workspace {
                             Some(&native_accelerator(key).to_variant()),
                         );
                     }
-                    let dispatch = item.action.unwrap();
-                    action.connect_activate(glib::clone!(
-                        #[weak]
-                        w,
-                        #[weak]
-                        popup,
-                        move |_, _| {
-                            popup.popdown();
-                            w.dispatch(dispatch.clone());
-                        }
-                    ));
+                    if let Some(dispatch) = item.action {
+                        action.connect_activate(glib::clone!(
+                            #[weak]
+                            w,
+                            #[weak]
+                            popup,
+                            move |_, _| {
+                                popup.popdown();
+                                w.dispatch(dispatch.clone());
+                            }
+                        ));
+                    }
                     actions.add_action(&action);
                     section.append_item(&model);
                 }

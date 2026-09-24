@@ -332,6 +332,15 @@ impl ToolbarControl {
     }
 }
 
+impl ToolbarControl {
+    fn drawer_dismissal(self) -> DrawerDismissal {
+        match self {
+            Self::Color | Self::Panel { panel: Panel::Color | Panel::Layers } => DrawerDismissal::Explicit,
+            _ => DrawerDismissal::OutsideContact,
+        }
+    }
+}
+
 impl ContentDrawer {
     pub(crate) fn for_header(layout: &DockLayout, id: u32) -> Result<Self, String> {
         let HeaderItem::Tool { control } = layout.header.entry(id)?.item else {
@@ -342,7 +351,7 @@ impl ContentDrawer {
             columns: control
                 .drawer_columns()
                 .ok_or("This item has no tool drawer")?,
-            dismissal: DrawerDismissal::OutsideContact,
+            dismissal: control.drawer_dismissal(),
             tabs: None,
             compact: false,
         })
@@ -358,7 +367,7 @@ impl ContentDrawer {
         Ok(Self {
             anchor: anchor.into(),
             columns: control.drawer_columns().ok_or("This tile has no drawer")?,
-            dismissal: DrawerDismissal::OutsideContact,
+            dismissal: control.drawer_dismissal(),
             tabs: None,
             compact: false,
         })

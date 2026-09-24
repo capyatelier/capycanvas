@@ -2,6 +2,24 @@ use super::*;
 use color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
 #[test]
+fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() {
+    let mask = Selection::pixels(Arc::new(SelectionPixels::bytes([1024, 1], [0, 0, 1024, 1], vec![u32::MAX; 256]).unwrap()));
+    let mut document = Document::new("selection budget", 1024, 1);
+    document.selection = Some(mask.clone());
+    let entry = HistoryEntry::new(Edit::SetSelection(Some(mask.clone())), 0);
+    assert!(entry.metadata_bytes < 1024, "coverage is not serialized into history metadata");
+    assert_eq!(Accounting::new(&document).charge(&entry), entry.metadata_bytes);
+    let mut accounting = Accounting::default();
+    assert_eq!(accounting.charge(&entry), entry.metadata_bytes + 1024);
+    assert_eq!(accounting.charge(&entry), entry.metadata_bytes);
+    let mut editor = Editor::new(Document::new("bounded history", 1024, 1));
+    let before = editor.document.clone();
+    assert!(editor.perform_with_history_budget(Edit::SetSelection(Some(mask)), 1023).is_err());
+    assert_eq!(editor.document, before);
+    assert!(!editor.can_undo());
+}
+
+#[test]
 fn admitted_native_output_reservation_is_shared_until_tile_publication() {
     let document = Document::new("pending native output", 256, 256);
     let revision = raster::RasterRevision::pending();

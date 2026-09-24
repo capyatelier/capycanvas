@@ -39,6 +39,15 @@ The [image Open, Import and drop assessment](image-open-import-proposal.md)
 distinguishes upstream photo workflows from local GTK placement work and sets
 out the remaining editing, external-drop, format and native performance gates.
 
+The [paintable-selection specification](paintable-selection-proposal.md) defines
+Paint selection, Quick Mask, and persistent Selection Layer workflows, including
+gestures, soft coverage, display, shared implementation, and acceptance checks.
+The [Selection Layer design](saved-selections-assessment.md) records save/edit/load
+behavior, grouping, persistence, and proposed further Quick Mask capabilities.
+The [selection command inventory](selection-command-inventory.md) maps operations
+to menus, canvas actions, tools, and layer rows, with implementation status and
+recommended delivery priorities.
+
 ## Session, actions and views
 
 [`UiSession`](../../crates/layer-ui/src/session.rs) coordinates the engine and
