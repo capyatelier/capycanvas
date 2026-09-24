@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -152,7 +151,7 @@ import kotlin.math.roundToInt
                         host.catalog.array("layer_commands").values().forEach { id ->
                             state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
                                 Box(Modifier.size(40.dp, 28.dp).alpha(if (command.getBoolean("enabled")) 1f else .36f)
-                                    .clip(RoundedCornerShape(6.dp)).clickable(enabled = command.getBoolean("enabled")) { host.invoke(id.toString()) }, contentAlignment = Alignment.Center) {
+                                    .clip(ControlShape).clickable(enabled = command.getBoolean("enabled")) { host.invoke(id.toString()) }, contentAlignment = Alignment.Center) {
                                     SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(14.dp))
                                 }
                             }
@@ -178,7 +177,7 @@ import kotlin.math.roundToInt
            sizes.forEach { size ->
             val value = (size as Number).toFloat()
             ActionTip(host, "${value.roundToInt()} px", obj("type" to "set_brush_size", "value" to value), Modifier.weight(1f).testTag("size-preset-${value.roundToInt()}")) {
-            Column(Modifier.fillMaxWidth().padding(3.dp).clip(RoundedCornerShape(6.dp))
+            Column(Modifier.fillMaxWidth().padding(3.dp).clip(ControlShape)
                 .background(if (current == value) colors.active else Color.Transparent)
                 .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }.padding(2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -238,9 +237,9 @@ import kotlin.math.roundToInt
         }
         "brush_color" -> {
             val rgba = brush.array("color")
-            Box(Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(6.dp)).background(LocalPalette.current.button)
+            Box(Modifier.fillMaxWidth().height(34.dp).clip(ControlShape).background(LocalPalette.current.button)
                 .clickable { host.customize(obj("type" to "open_control", "control" to "brush_color")) }.padding(6.dp)) {
-                Box(Modifier.fillMaxSize().background(Color(rgba.getDouble(0).toFloat(), rgba.getDouble(1).toFloat(), rgba.getDouble(2).toFloat()), RoundedCornerShape(4.dp)))
+                Box(Modifier.fillMaxSize().background(Color(rgba.getDouble(0).toFloat(), rgba.getDouble(1).toFloat(), rgba.getDouble(2).toFloat()), SquircleShape(4.dp)))
             }
         }
         "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, control)
@@ -249,7 +248,7 @@ import kotlin.math.roundToInt
             val choices = if (control == "brushes") host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() } else state.array("layers").objects()
             val selected = if (control == "brushes") choices.find { it.getInt("id") == brush.getInt("preset") } else choices.find { it.getBoolean("selected") }
             Box {
-                Row(Modifier.fillMaxWidth().heightIn(min = 34.dp).clip(RoundedCornerShape(6.dp)).background(LocalPalette.current.input)
+                Row(Modifier.fillMaxWidth().heightIn(min = 34.dp).clip(ControlShape).background(LocalPalette.current.input)
                     .clickable { open = true }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(selected?.getString("label") ?: "", Modifier.weight(1f)); SharedIcon("chevron-down", null)
                 }
@@ -262,7 +261,7 @@ import kotlin.math.roundToInt
         }
         "size_presets" -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             host.catalog.array("brush_sizes").values().forEach { value ->
-                Box(Modifier.widthIn(min = 52.dp).height(34.dp).clip(RoundedCornerShape(6.dp)).background(LocalPalette.current.button)
+                Box(Modifier.widthIn(min = 52.dp).height(34.dp).clip(ControlShape).background(LocalPalette.current.button)
                     .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }, contentAlignment = Alignment.Center) { Text(value.toString(), fontWeight = FontWeight.Bold) }
             }
         }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -37,12 +38,12 @@ import org.json.JSONObject
         .drawBehind {
             if (dragged && !selected) drawRect(colors.tabs)
             if (selected) {
-                val r = 6.dp.toPx(); val w = size.width; val h = size.height
+                val r = SurfaceRadius.toPx(); val f = 6.dp.toPx(); val w = size.width; val h = size.height
                 val path = Path().apply {
-                    moveTo(r, 0f); lineTo(w-r, 0f); quadraticTo(w, 0f, w, r)
-                    lineTo(w, h-r); quadraticTo(w, h, w+r, h)
-                    lineTo(-r, h); quadraticTo(0f, h, 0f, h-r)
-                    lineTo(0f, r); quadraticTo(0f, 0f, r, 0f); close()
+                    moveTo(r, 0f); lineTo(w-r, 0f); squircleTo(Offset(w-r, r), Offset(0f, -r), Offset(r, 0f))
+                    lineTo(w, h-f); squircleTo(Offset(w+f, h-f), Offset(-f, 0f), Offset(0f, f))
+                    lineTo(-f, h); squircleTo(Offset(-f, h-f), Offset(0f, f), Offset(f, 0f))
+                    lineTo(0f, r); squircleTo(Offset(r, r), Offset(-r, 0f), Offset(0f, -r)); close()
                 }
                 drawPath(path, colors.panel)
             }

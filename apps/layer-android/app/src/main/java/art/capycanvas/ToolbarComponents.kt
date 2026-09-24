@@ -178,7 +178,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                                 option.has("Choice") -> ToolbarChoice(option.getJSONObject("Choice"), vertical, labeled, rect.number("width") < tileWidth * option.getJSONObject("Choice").array("items").length(), panel.getInt("tile_icon_size"), ::edit)
                                 else -> {
                                     val action = option.getJSONObject("Action"); val command = action.getJSONObject("state")
-                                    Box(Modifier.fillMaxSize().testTag("toolbar-action-${command.getString("id")}").clip(RoundedCornerShape(6.dp))
+                                    Box(Modifier.fillMaxSize().testTag("toolbar-action-${command.getString("id")}").clip(TileShape)
                                         .background(if (command.getBoolean("selected")) colors.active else Color.Transparent)
                                         .clickable(enabled = command.getBoolean("enabled")) { edit(obj("type" to "invoke", "command" to command.getString("id"))) }, contentAlignment = Alignment.Center) {
                                         SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(panel.getInt("tile_icon_size").dp))
@@ -210,7 +210,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     val shown = formatted(control, value, style != "small")
     var open by remember { mutableStateOf(false) }
     if (vertical) Box(Modifier.fillMaxSize().testTag("toolbar-setting-$id")) {
-        val face = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).toolbarNumberScrub(control, shown.number("fill"), true,
+        val face = Modifier.fillMaxSize().clip(ControlShape).toolbarNumberScrub(control, shown.number("fill"), true,
             { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "position", "position" to it)).toString())).number("value")) },
             { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "step", "steps" to it)).toString())).number("value")) })
             .clickable { open = true }.padding(horizontal = if (labeled) 8.dp else 2.dp, vertical = if (style == "small") 1.dp else 3.dp)
@@ -262,7 +262,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(iconSize.dp))
             }
         }
-        val modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).selectableGroup().testTag("toolbar-segments-$id")
+        val modifier = Modifier.fillMaxSize().clip(TileShape).selectableGroup().testTag("toolbar-segments-$id")
         if (vertical && stacked) Column(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxWidth().weight(1f)) } }
         else Row(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxHeight().weight(1f)) } }
         return
@@ -270,7 +270,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     var open by remember { mutableStateOf(false) }
     val selected = items.firstOrNull { it.getBoolean("selected") } ?: items.first()
     Box(Modifier.fillMaxSize().testTag("toolbar-choice-$id"), contentAlignment = Alignment.Center) {
-        Row(Modifier.fillMaxWidth().then(if (vertical) Modifier.fillMaxHeight() else Modifier.height(24.dp)).clip(RoundedCornerShape(6.dp))
+        Row(Modifier.fillMaxWidth().then(if (vertical) Modifier.fillMaxHeight() else Modifier.height(24.dp)).clip(ControlShape)
             .background(if (vertical) Color.Transparent else colors.input).clickable { open = true }
             .padding(horizontal = if (vertical && !labeled) 2.dp else 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (vertical && !labeled) Arrangement.Center else Arrangement.spacedBy(6.dp)) {

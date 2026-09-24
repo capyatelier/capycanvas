@@ -183,7 +183,7 @@ An icon-only Zen toggle (a shared, centered capybara SVG, Looking up by default)
 occupies the top-left, followed by caret-free Edit and View menus. Its active
 state uses the subtle grey hover background while controls are visible. When
 the button remains visible alone, its active highlight is suppressed; hover
-still works. Header controls use the standard button radius; only the
+still works. Header controls are [squircle](squircle-corners.md) tiles; only the
 close control is circular, with unchanged shared header-control colors. Its
 circle uses libadwaita's native 16px icon plus 4px padding (24px circle), within
 the larger native click target; we do not enlarge the circle to the entire button.

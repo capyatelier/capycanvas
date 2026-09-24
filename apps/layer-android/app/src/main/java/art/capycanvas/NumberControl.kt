@@ -42,6 +42,7 @@ import org.json.JSONObject
     onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
+    val shape = if (settings) RoundedCornerShape(6.dp) else ControlShape
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
     val ranged = control.getString("kind") == "slider"
@@ -90,7 +91,7 @@ import org.json.JSONObject
     } }
     val step: @Composable (Int, String) -> Unit = { direction, name ->
         val available = enabled && if (direction < 0) shown.number("value") > control.number("min") else shown.number("value") < control.number("max")
-        Box(Modifier.size(height).clip(RoundedCornerShape(6.dp)).alpha(if (available) 1f else .36f)
+        Box(Modifier.size(height).clip(shape).alpha(if (available) 1f else .36f)
             .clickable(enabled = available) { if (finish()) { focus.clearFocus(); apply(obj("type" to "step", "steps" to direction)) } }, contentAlignment = Alignment.Center) {
             SharedIcon(name, "${if (direction < 0) "Decrease" else "Increase"} $label", Modifier.size(16.dp))
         }
@@ -114,11 +115,11 @@ import org.json.JSONObject
             textStyle = LocalTextStyle.current.copy(color = colors.text, textAlign = TextAlign.End),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (finish()) focus.clearFocus() }),
-            decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, RoundedCornerShape(6.dp)).padding(horizontal = valuePadding), contentAlignment = Alignment.CenterEnd) { input() } })
+            decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, shape).padding(horizontal = valuePadding), contentAlignment = Alignment.CenterEnd) { input() } })
     }
     val valueControl: @Composable () -> Unit = {
         if (editing) field()
-        else Box(Modifier.then(if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(RoundedCornerShape(6.dp))
+        else Box(Modifier.then(if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(shape)
             .then(if (toolbar) Modifier.toolbarNumberScrub(control, shown.number("fill"), enabled,
                 { finish(true); apply(obj("type" to "position", "position" to it)) },
                 { finish(true); apply(obj("type" to "step", "steps" to it)) }) else Modifier)
@@ -140,7 +141,7 @@ import org.json.JSONObject
                 Text(label, color = if (enabled) colors.text else colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (description.isNotEmpty()) Text(description, color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
             }
-            if (!ranged) Row(Modifier.clip(RoundedCornerShape(6.dp)).background(colors.input), verticalAlignment = Alignment.CenterVertically) { field(); step(-1, "minus"); step(1, "plus") }
+            if (!ranged) Row(Modifier.clip(shape).background(colors.input), verticalAlignment = Alignment.CenterVertically) { field(); step(-1, "minus"); step(1, "plus") }
             else valueControl()
         }
         if (ranged) Row(Modifier.fillMaxWidth().padding(top = if (settings) 3.dp else 0.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -150,7 +149,7 @@ internal class LayerSwipe {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     var blendOpen by remember { mutableStateOf(false) }
                     Box(Modifier.weight(1f)) {
-                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,RoundedCornerShape(6.dp))
+                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape)
                             .clickable(enabled = controls.getBoolean("blend")) { blendOpen = true }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(active?.getString("blend_label") ?: "Normal",Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
                             SharedIcon("chevron-down", "Layer blend mode",Modifier.size(12.dp))
@@ -224,7 +223,7 @@ internal class LayerSwipe {
     action:JSONObject?=null,onClick:()->Unit={action?.let { host.dispatch(it) }}) {
     val colors=LocalPalette.current
     val content: @Composable () -> Unit = {
-    Box(Modifier.size(24.dp).clip(RoundedCornerShape(4.dp)).alpha(if(enabled)1f else .4f)
+    Box(Modifier.size(24.dp).clip(ControlShape).alpha(if(enabled)1f else .4f)
         .background(if(selected) { if(subtle) colors.text.copy(alpha=.12f) else colors.active } else Color.Transparent)
         .clickable(enabled=enabled,onClick=onClick),contentAlignment=Alignment.Center) { SharedIcon(icon,label,Modifier.size(16.dp)) }
     }
@@ -349,7 +348,7 @@ internal class LayerSwipe {
         LayerButton(host,iconName(layer.getString("selection_icon")),"Select layer without changing drawing target",
             action=obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to id)))
         Spacer(Modifier.width((layer.getInt("depth")*8).coerceAtMost(24).dp))
-        Box(Modifier.width(3.dp).height(28.dp).alpha(if(layer.getBoolean("clipped"))1f else 0f).background(Color(0xffe999a5),RoundedCornerShape(1.dp)))
+        Box(Modifier.width(3.dp).height(28.dp).alpha(if(layer.getBoolean("clipped"))1f else 0f).background(Color(0xffe999a5),SquircleShape(1.dp)))
         @Composable fun thumb(mask:Boolean) {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("editing") && !layer.getBoolean("mask_selected")
@@ -357,7 +356,7 @@ internal class LayerSwipe {
             val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else if(layer.optBoolean("selection_layer")) "Edit selection layer" else "Edit layer content"
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
-                .then(if(group)Modifier else Modifier.background(colors.input,RoundedCornerShape(3.dp)))
+                .then(if(group)Modifier else Modifier.background(colors.input,SquircleShape(3.dp)))
                 .then(if(group || preview) Modifier else Modifier.pointerInput(id,mask) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed=false, pass=PointerEventPass.Initial)

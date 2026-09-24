@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -78,14 +77,14 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             if (search == null) SharedIcon(categories.firstOrNull { it.optString("id") == picker.optString("category") }?.getString("icon") ?: "adjustments", null)
             Box(Modifier.weight(1f)) {
                 if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
-                    Modifier.fillMaxWidth().focusRequester(focus).testTag("filter-search"), height = 34.dp, maxLength = 120,
+                    Modifier.fillMaxWidth().focusRequester(focus).testTag("filter-search"), height = 34.dp, maxLength = 120, shape = ControlShape,
                     placeholder = { Text(picker.getString("search_label"), maxLines = 1) })
                 else PropertyChoice("Category", categories.map { it.getString("label") },
                     categories.indexOfFirst { it.optString("id") == picker.optString("category") }.coerceAtLeast(0)) {
                     send(obj("op" to "category", "category" to categories[it].get("id")))
                 }
             }
-            Box(Modifier.size(48.dp,34.dp).clip(RoundedCornerShape(6.dp)).testTag("filter-search-toggle")
+            Box(Modifier.size(48.dp,34.dp).clip(ControlShape).testTag("filter-search-toggle")
                 .clickable { send(obj("op" to "toggle_search")) }, contentAlignment = Alignment.Center) {
                 SharedIcon("search", picker.getString("search_label"))
             }
@@ -106,7 +105,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 }
                 item(id) {
                     HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth().onSizeChanged { rowHeight = it.height / density }) {
-                        Column(Modifier.fillMaxWidth().testTag("adjustment-$id").clip(RoundedCornerShape(6.dp))
+                        Column(Modifier.fillMaxWidth().testTag("adjustment-$id").clip(ControlShape)
                             .background(if(picker.optString("selected")==id) colors.active else Color.Transparent)
                             .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
                             val image = cache.images[id]?.image
@@ -149,7 +148,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
 @Composable private fun PropertyChoice(label: String, options: List<String>, selected: Int, enabled: Boolean = true, select: (Int) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).clip(RoundedCornerShape(6.dp))
+        Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).clip(ControlShape)
             .background(LocalPalette.current.input).clickable(enabled = enabled) { open = true }.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(options.getOrNull(selected) ?: label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             SharedIcon("chevron-down", label)
@@ -244,7 +243,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     val current by rememberUpdatedState(control)
     val key = control.getString("key")
     var selected by remember(layer, key) { mutableStateOf<Int?>(null) }
-    Canvas(Modifier.fillMaxWidth().aspectRatio(1f).testTag("effect-curve").clip(RoundedCornerShape(6.dp)).background(colors.input)
+    Canvas(Modifier.fillMaxWidth().aspectRatio(1f).testTag("effect-curve").clip(ControlShape).background(colors.input)
         .pointerInput(layer, control.getString("key"), enabled) {
             if(!enabled)return@pointerInput
             awaitEachGesture {

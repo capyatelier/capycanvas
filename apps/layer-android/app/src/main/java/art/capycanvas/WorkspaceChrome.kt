@@ -24,7 +24,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
@@ -53,7 +53,7 @@ import org.json.JSONObject
             tiles[pair.getInt(0)]?.let { projectedTiles.put(it); bounds.put(pair.getJSONObject(1)) }
         }
         val projected = JSONObject(panel.toString()).put("tiles", projectedTiles).put("tile_style", section.getString("style"))
-        val shape = dock.drawerContainerShape(section.getJSONObject("bounds"), radius = 6f)
+        val shape = dock.drawerContainerShape(section.getJSONObject("bounds"), radius = panel.number("tile_corner_radius"))
         key(id, index) {
             ToolRibbon(host, projected, obj("tiles" to bounds), dock,
                 Modifier.placed(section.getJSONObject("bounds"), dock.density).zIndex(150f)
@@ -67,15 +67,14 @@ import org.json.JSONObject
 private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
     .put("x", number("x") - parent.number("x")).put("y", number("y") - parent.number("y"))
 
-internal fun drawerButtonShape(direction: String?) = RoundedCornerShape(
-    topStart = if (direction == "top" || direction == "left") 0.dp else 6.dp,
-    topEnd = if (direction == "top" || direction == "right") 0.dp else 6.dp,
-    bottomEnd = if (direction == "bottom" || direction == "right") 0.dp else 6.dp,
-    bottomStart = if (direction == "bottom" || direction == "left") 0.dp else 6.dp)
+internal fun drawerButtonShape(direction: String?): SquircleShape {
+    fun corner(vararg joined: String) = CornerSize(if (direction in joined) 0 else 50)
+    return SquircleShape(corner("top", "left"), corner("top", "right"), corner("bottom", "right"), corner("bottom", "left"))
+}
 
-/** Ancestor clipping must preserve the connected source corners. */
-internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Float = 8f, joined: JSONArray? = null,
-    sources: Collection<DockInteraction.DrawerSource> = drawerSources.values): RoundedCornerShape {
+/** Ancestor clipping must preserve the connected source corners, including those its rounding reaches. */
+internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Float = SurfaceRadius.value, joined: JSONArray? = null,
+    sources: Collection<DockInteraction.DrawerSource> = drawerSources.values): SquircleShape {
     val b = bounds.rect()
     val corners = listOf(b.topLeft, b.topRight, b.bottomRight, b.bottomLeft)
     val square = corners.mapIndexed { index, point ->
@@ -83,11 +82,12 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             val facing = when (source.direction) {
                 "top" -> listOf(0, 1); "right" -> listOf(1, 2); "bottom" -> listOf(2, 3); else -> listOf(0, 3)
             }
-            index in facing && point.x >= source.bounds.left - .5f && point.x <= source.bounds.right + .5f &&
-                point.y >= source.bounds.top - .5f && point.y <= source.bounds.bottom + .5f
+            val (reachX, reachY) = if (source.direction == "top" || source.direction == "bottom") radius to .5f else .5f to radius
+            index in facing && point.x >= source.bounds.left - reachX && point.x <= source.bounds.right + reachX &&
+                point.y >= source.bounds.top - reachY && point.y <= source.bounds.bottom + reachY
         }
     }
-    return RoundedCornerShape(topStart = if (square[0]) 0.dp else radius.dp,
+    return SquircleShape(topStart = if (square[0]) 0.dp else radius.dp,
         topEnd = if (square[1]) 0.dp else radius.dp, bottomEnd = if (square[2]) 0.dp else radius.dp,
         bottomStart = if (square[3]) 0.dp else radius.dp)
 }
@@ -330,11 +330,10 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         val path = Path()
         fun move(x: Float, y: Float) { val p = point(x,y); path.moveTo(p.x,p.y) }
         fun line(x: Float, y: Float) { val p = point(x,y); path.lineTo(p.x,p.y) }
-        fun curve(x1: Float,y1: Float,x2: Float,y2: Float,x3: Float,y3: Float) { val a=point(x1,y1); val b=point(x2,y2); val c=point(x3,y3); path.cubicTo(a.x,a.y,b.x,b.y,c.x,c.y) }
-        val k = .5522848f
+        fun corner(center: Offset, start: Offset, end: Offset) = squircleCorner(center, start, end).forEach { line(it.x, it.y) }
         move(0f,0f); line(length,0f); line(length,depth-r1)
-        curve(length,depth-r1+r1*k,length+r1-r1*k,depth,length+r1,depth)
-        line(-r0,depth); curve(-r0+r0*k,depth,0f,depth-r0+r0*k,0f,depth-r0)
+        corner(Offset(length+r1,depth-r1), Offset(-r1,0f), Offset(0f,r1))
+        line(-r0,depth); corner(Offset(-r0,depth-r0), Offset(0f,r0), Offset(r0,0f))
         path.close(); drawPath(path,color)
     }
 }

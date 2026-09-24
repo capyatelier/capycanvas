@@ -48,8 +48,10 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.graphics.lerp
@@ -121,7 +123,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
         }
         override fun ContentDrawScope.draw() {
             drawContent()
-            if (focused) drawRoundRect(color, cornerRadius = CornerRadius(6.dp.toPx()), style = Stroke(2.dp.toPx()))
+            if (focused) drawOutline(ControlShape.createOutline(size, layoutDirection, this), color, style = Stroke(2.dp.toPx()))
         }
     }
 }
@@ -134,7 +136,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     placeholder: (@Composable () -> Unit)? = null, leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
     height: Dp = 36.dp, enabled: Boolean = true, focusRequest: Long = 0,
-    textStyle: TextStyle = LocalTextStyle.current,
+    textStyle: TextStyle = LocalTextStyle.current, shape: Shape = RoundedCornerShape(6.dp),
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
     maxLength: Int = Int.MAX_VALUE, onCommit: ((String) -> Unit)? = null) {
     var text by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
@@ -153,7 +155,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     }
     DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
     val colors = LocalPalette.current
-    Column(modifier.background(colors.input, RoundedCornerShape(6.dp))) {
+    Column(modifier.background(colors.input, shape)) {
         label?.let { Box(Modifier.padding(start = 10.dp, top = 6.dp)) { it() } }
         BasicTextField(text, { next ->
             val changed = next.text != text.text
@@ -225,8 +227,8 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     val colors = LocalPalette.current
     Box(modifier.size(22.dp, 28.dp).toggleable(checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChange)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-        Box(Modifier.size(16.dp).clip(RoundedCornerShape(4.dp))
-            .then(if (checked) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.text.copy(alpha = .35f), RoundedCornerShape(4.dp)))) {
+        Box(Modifier.size(16.dp).clip(SquircleShape(4.dp))
+            .then(if (checked) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.text.copy(alpha = .35f), SquircleShape(4.dp)))) {
             if (checked) SharedIcon("check", null, tint = Color.White)
         }
     }
@@ -296,7 +298,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
     enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, selectedColor: Color? = null, onClick: () -> Unit) {
     val colors = LocalPalette.current
     HoverTip(label, modifier) {
-    Box(Modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, RoundedCornerShape(6.dp))
+    Box(Modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, TileShape)
         .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label, modifier = Modifier.size(iconSize), fill = fill)
     }
@@ -331,7 +333,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
 /** Compact GTK panel choice: input surface, ellipsized value and trailing arrow. */
 @Composable internal fun PanelChoiceButton(label:String,modifier:Modifier=Modifier,enabled:Boolean=true,onClick:()->Unit) {
     val colors=LocalPalette.current
-    Row(modifier.fillMaxWidth().heightIn(min=24.dp).clip(RoundedCornerShape(6.dp)).background(colors.input)
+    Row(modifier.fillMaxWidth().heightIn(min=24.dp).clip(ControlShape).background(colors.input)
         .clickable(enabled=enabled,role=Role.Button,onClick=onClick).padding(horizontal=6.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
         Text(label,Modifier.weight(1f),color=colors.text.copy(alpha=if(enabled)1f else .5f),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)

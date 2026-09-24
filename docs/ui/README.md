@@ -80,6 +80,10 @@ serialize and restore the workspace; automatic storage depends on the host.
 The detailed [panel contract](panel-customization.md) covers drag targets, menus,
 resize behavior and configuration.
 
+The drawing interface uses [squircle corners](squircle-corners.md): tiles,
+toolbars, panels, tabs and drawers share one radius scale on every host, while
+settings, menus and popovers keep native styling.
+
 GTK [toolbar components](toolbar-components.md) provide inline brush size/opacity
 sliders and a contextual Tool Options bar, with shared sizing, overflow and
 workspace behavior.

@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -185,7 +184,7 @@ internal class ProofController(private val host: CanvasHost) {
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                 (listOf("off" to "Off")+(if(model?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to "Print")).forEach{(value,label)->
                     val selected=mode==value
-                    Box(Modifier.weight(1f).heightIn(min=34.dp).clip(RoundedCornerShape(6.dp))
+                    Box(Modifier.weight(1f).heightIn(min=34.dp).clip(ControlShape)
                         .background(if(selected)colors.text.copy(alpha=.12f)else Color.Transparent)
                         .selectable(selected,enabled=model!=null&&!controller.committing,role=Role.RadioButton){controller.cancel();controller.action(obj("type" to "mode","mode" to value))}
                         .testTag("proof-mode-$value"),contentAlignment=Alignment.Center){Text(label,color=colors.text)}

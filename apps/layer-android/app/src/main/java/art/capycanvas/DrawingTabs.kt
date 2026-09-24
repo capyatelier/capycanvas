@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -142,9 +141,9 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
         @Composable fun row(item:JSONObject,entry:Modifier) {
             val id=item.getLong("id");val selected=controller.selected==id
             Row(entry.drawingBounds(drag.rows,id).testTag("drawing-tab-$id")
-                .clip(RoundedCornerShape(8.dp))
+                .clip(if(vertical)ControlShape else TileShape)
                 .background(if(selected)colors.accent.copy(alpha=.16f)else Color.Transparent)
-                .then(if(drag.active==id)Modifier.border(2.dp,colors.accent,RoundedCornerShape(8.dp))else Modifier)
+                .then(if(drag.active==id)Modifier.border(2.dp,colors.accent,if(vertical)ControlShape else TileShape)else Modifier)
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
                 .semantics{contentDescription="${item.getString("title")}${if(item.getBoolean("modified"))", modified"else ""}, ${item.getString("location")}"},verticalAlignment=Alignment.CenterVertically) {

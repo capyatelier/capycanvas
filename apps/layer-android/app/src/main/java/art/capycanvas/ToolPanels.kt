@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -57,7 +56,7 @@ import org.json.JSONObject
     val action = item.getJSONObject("action")
     val preview = item.opt("preview").takeIf { it is Number } as? Number
     ActionTip(host, label, action, modifier) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+        Column(Modifier.fillMaxWidth().clip(ControlShape)
             .background(if (item.optBoolean("selected")) colors.active else colors.panel)
             .clickable { host.dispatch(action) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
             if (preview != null) {
@@ -84,7 +83,7 @@ import org.json.JSONObject
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").objects().associateBy { it.getString("id") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).border(1.dp, LocalPalette.current.divider, RoundedCornerShape(6.dp)).selectableGroup().testTag("selection-mode-row")) {
+        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().clip(ControlShape).border(1.dp, LocalPalette.current.divider, ControlShape).selectableGroup().testTag("selection-mode-row")) {
             actions.filter { it.getString("command") in modes }.forEach { action ->
                 val id = action.getString("command")
                 val command = commands.getValue(id)

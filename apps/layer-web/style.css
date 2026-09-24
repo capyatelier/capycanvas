@@ -904,7 +904,7 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .selection-menu-button svg { width:12px; height:12px; }
 .selection-layer-load { flex:none; width:30px; height:30px; min-width:30px; min-height:30px; padding:3px; }
 .selection-layer-load svg { width:24px; height:24px; }
-.selection-modes { gap:0; border-radius:6px; overflow:hidden; border:1px solid color-mix(in srgb,var(--text) 20%,transparent); }
+.selection-modes { gap:0; border-radius:var(--control-radius); overflow:hidden; border:1px solid color-mix(in srgb,var(--text) 20%,transparent); }
 .selection-modes > button { height:44px; border-radius:0; border:0; }
 .selection-modes > button + button { border-left:1px solid color-mix(in srgb,var(--text) 20%,transparent); }
 /* Toolbar controls share panel typography and the Rust tile allocation. */

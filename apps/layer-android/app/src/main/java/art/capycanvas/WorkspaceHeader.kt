@@ -123,8 +123,8 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
             val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
-            Box(Modifier.placed(zone, density).border(1.dp, colors.divider, RoundedCornerShape(6.dp))
-                .background(if (active) colors.accent.copy(alpha = .08f) else Color.Transparent, RoundedCornerShape(6.dp)))
+            Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
+                .background(if (active) colors.accent.copy(alpha = .08f) else Color.Transparent, ControlShape))
         }
         entries.forEach { entry ->
             val id = entry.getInt("id")
@@ -186,8 +186,8 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         if (editing) HeaderBank(host, view, state, input, Modifier.offset(6.dp, (height + 6f).dp).width((width - 12f).coerceAtLeast(1f).dp)
             .onSizeChanged { bankHeight = it.height / density })
         if (heldId == null) input.held?.let { source -> input.preview?.objectOrNull("held")?.let { bounds ->
-            Row(Modifier.placed(bounds, density).zIndex(40f).alpha(.9f).background(colors.panel, RoundedCornerShape(6.dp))
-                .border(1.dp, colors.accent, RoundedCornerShape(6.dp)).testTag("header-drag-ghost"), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.placed(bounds, density).zIndex(40f).alpha(.9f).background(colors.panel, TileShape)
+                .border(1.dp, colors.accent, TileShape).testTag("header-drag-ghost"), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.width(20.dp)) { PanelGrip("Move ${source.label}") }
                 Text(source.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -237,7 +237,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         it.optString("kind") == "header" && it.optInt("id") == id
     } == true
     Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)
-        .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, RoundedCornerShape(6.dp))
+        .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, TileShape)
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
@@ -245,7 +245,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         // the translucent fallback rather than a blur of the foreground text.
         Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
-                Modifier.background(colors.headerSurface, RoundedCornerShape(6.dp)) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
+                Modifier.background(colors.headerSurface, TileShape) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
                 "capy" -> snapshot.getJSONObject("state").array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon")
                 "settings" -> "settings"
@@ -253,7 +253,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, RoundedCornerShape(6.dp)), verticalAlignment = Alignment.CenterVertically) {
+                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, TileShape), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
                             val menuId = application.getString("id")
@@ -317,8 +317,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val colors = LocalPalette.current
     val entries = view.getJSONObject("model").headerEntries()
     val components = listOf(obj("item" to obj("kind" to "tools"), "label" to "Add Tools…")) + view.array("components").objects()
-    Layout(modifier = modifier.heightIn(max = 230.dp).zIndex(20f).shadow(6.dp, RoundedCornerShape(8.dp))
-        .background(colors.panel, RoundedCornerShape(8.dp)).chromeRegion(input.dock).verticalScroll(rememberScrollState())
+    Layout(modifier = modifier.heightIn(max = 230.dp).zIndex(20f).shadow(6.dp, SurfaceShape)
+        .background(colors.panel, SurfaceShape).chromeRegion(input.dock).verticalScroll(rememberScrollState())
         .padding(6.dp).testTag("header-editor"), content = {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             components.filter { component -> !component.optBoolean("singleton") || entries.none { it.getJSONObject("item").toString() == component.getJSONObject("item").toString() } }.forEach { component ->
@@ -326,7 +326,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 val label = component.getString("label")
                 val source = if (kind == "tools") obj("kind" to "tools") else obj("kind" to "component", "value" to component.getJSONObject("item"))
                 key(kind) {
-                    Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))
+                    Row(Modifier.height(36.dp).background(colors.button, ControlShape)
                         .headerSource(input, source, label, 1).testTag("header-component-$kind").semantics { contentDescription = label }
                         .padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
@@ -336,11 +336,11 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             }
         }
         FlowRow(Modifier.testTag("header-editor-actions"), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))) {
+            Row(Modifier.height(36.dp).background(colors.button, ControlShape)) {
                 view.array("sizes").objects().forEach { size ->
                     val selected = size.getString("id") == view.getJSONObject("model").getString("size")
                     TextButton({ host.headerEdit(obj("type" to "set_size", "size" to size.getString("id"))) },
-                        Modifier.height(36.dp).testTag("header-size-${size.getString("id")}").background(if (selected) colors.active else Color.Transparent, RoundedCornerShape(6.dp)), contentPadding = PaddingValues(horizontal = 8.dp)) { Text(size.getString("label")) }
+                        Modifier.height(36.dp).testTag("header-size-${size.getString("id")}").background(if (selected) colors.active else Color.Transparent, ControlShape), contentPadding = PaddingValues(horizontal = 8.dp)) { Text(size.getString("label")) }
                 }
             }
             val footer = state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")

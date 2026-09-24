@@ -254,7 +254,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             Box(Modifier.fillMaxSize().background(colors.surround).testTag("canvas-placeholder"))
         }
         if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
-            Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
+            Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = SurfaceShape, tonalElevation = 3.dp) {
                 Text(if (snapshot.optBoolean("canvas_ready")) "Preparing brush…" else "Preparing canvas…", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
@@ -305,7 +305,9 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging, host, group.getInt("id")) else base
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
-                        ?.let { expandedShape(it, density) } ?: dock.drawerContainerShape(bounds)
+                        ?.let { expandedShape(it, density) } ?: dock.drawerContainerShape(bounds,
+                            radius = if (group.objectOrNull("tiles") != null && !group.getBoolean("tabs_visible"))
+                                panels[group.getString("active")]?.number("tile_corner_radius") ?: SurfaceRadius.value else SurfaceRadius.value)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
@@ -355,12 +357,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Bottom) {
                     if(host.hdr.status.isNotEmpty()) DisplayStatus(host)
-                    if(host.proof.status.isNotEmpty()) Surface(color=colors.surround,shape=RoundedCornerShape(20.dp)) {
+                    if(host.proof.status.isNotEmpty()) Surface(color=colors.surround,shape=TileShape) {
                         Text(host.proof.status,Modifier.testTag("proof-status").clickable {host.invoke("soft_proof_setup")}
                             .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     }
                 }
-                Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
+                Surface(color = colors.surround, shape = TileShape) {
                     CameraStatus(host)
                 }
             }
@@ -406,7 +408,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 
 @Composable private fun DisplayStatus(host: CanvasHost) {
     var open by remember { mutableStateOf(false) }
-    Surface(color=LocalPalette.current.surround,shape=RoundedCornerShape(20.dp)) {
+    Surface(color=LocalPalette.current.surround,shape=TileShape) {
         Text(host.hdr.status,Modifier.testTag("hdr-status").clickable {open=true}
             .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
@@ -429,18 +431,24 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val left = preview.number("x") * density
     val right = left + preview.number("width") * density
     val top = configuration.number("y") * density
-    val radius = minOf(8 * density, size.height / 2, size.width / 2)
+    val radius = minOf(SurfaceRadius.value * density, size.height / 2, size.width / 2)
+    val join = minOf(8 * density, radius)
     moveTo(left + radius, 0f)
-    lineTo(right - radius, 0f); quadraticTo(right, 0f, right, radius)
-    if (right < size.width) { lineTo(right, top); lineTo(size.width - radius, top); quadraticTo(size.width, top, size.width, top + radius) }
-    lineTo(size.width, size.height - radius); quadraticTo(size.width, size.height, size.width - radius, size.height)
-    lineTo(radius, size.height); quadraticTo(0f, size.height, 0f, size.height - radius)
-    if (left > 0f) {
-        lineTo(0f, top + radius); quadraticTo(0f, top, radius, top)
-        if (expansion.optBoolean("concave_join")) { lineTo(left - radius, top); quadraticTo(left, top, left, top - radius) }
-        else lineTo(left, top)
+    lineTo(right - radius, 0f); squircleTo(Offset(right - radius, radius), Offset(0f, -radius), Offset(radius, 0f))
+    if (right < size.width) {
+        lineTo(right, top); lineTo(size.width - radius, top)
+        squircleTo(Offset(size.width - radius, top + radius), Offset(0f, -radius), Offset(radius, 0f))
     }
-    lineTo(left, radius); quadraticTo(left, 0f, left + radius, 0f); close()
+    lineTo(size.width, size.height - radius)
+    squircleTo(Offset(size.width - radius, size.height - radius), Offset(radius, 0f), Offset(0f, radius))
+    lineTo(radius, size.height); squircleTo(Offset(radius, size.height - radius), Offset(0f, radius), Offset(-radius, 0f))
+    if (left > 0f) {
+        lineTo(0f, top + radius); squircleTo(Offset(radius, top + radius), Offset(-radius, 0f), Offset(0f, -radius))
+        if (expansion.optBoolean("concave_join")) {
+            lineTo(left - join, top); squircleTo(Offset(left - join, top - join), Offset(0f, join), Offset(join, 0f))
+        } else lineTo(left, top)
+    }
+    lineTo(left, radius); squircleTo(Offset(left + radius, radius), Offset(-radius, 0f), Offset(0f, -radius)); close()
 }
 
 @Composable private fun ZenButton(host: CanvasHost, state: JSONObject, dock: DockInteraction, hidden: Boolean) {
@@ -451,7 +459,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor); dock.zenButton = null; dock.refresh() } }
     IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
         modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
-            .background(colors.surround, RoundedCornerShape(6.dp))
+            .background(colors.surround, TileShape)
             .onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
                 dock.anchors[anchor] = bounds
