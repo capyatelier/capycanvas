@@ -1519,7 +1519,7 @@ impl Workspace {
                 let section = gtk::gio::Menu::new();
                 for (i, item) in items.into_iter().enumerate() {
                     let id = format!("{prefix}-{s}-{i}");
-                    if item.action.is_none() {
+                    if item.action.is_none() && item.enabled {
                         let submenu = model(w, popup, item.sections, &id, actions);
                         section.append_submenu(Some(&item.label), &submenu);
                         continue;
@@ -1543,17 +1543,18 @@ impl Workspace {
                             Some(&native_accelerator(key).to_variant()),
                         );
                     }
-                    let dispatch = item.action.unwrap();
-                    action.connect_activate(glib::clone!(
-                        #[weak]
-                        w,
-                        #[weak]
-                        popup,
-                        move |_, _| {
-                            popup.popdown();
-                            w.dispatch(dispatch.clone());
-                        }
-                    ));
+                    if let Some(dispatch) = item.action {
+                        action.connect_activate(glib::clone!(
+                            #[weak]
+                            w,
+                            #[weak]
+                            popup,
+                            move |_, _| {
+                                popup.popdown();
+                                w.dispatch(dispatch.clone());
+                            }
+                        ));
+                    }
                     actions.add_action(&action);
                     section.append_item(&model);
                 }

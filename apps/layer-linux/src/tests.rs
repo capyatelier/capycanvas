@@ -8600,12 +8600,13 @@ fn native_menu_sections() {
                         .str(),
                     Some(item.label.as_str())
                 );
-                if item.action.is_none() {
+                if item.action.is_none() && item.enabled {
                     check(
                         &section.item_link(i as i32, "submenu").unwrap(),
                         &item.sections,
                     );
                 } else {
+                    assert!(section.item_link(i as i32, "submenu").is_none());
                     assert!(
                         section
                             .item_attribute_value(i as i32, "custom", None)
@@ -8641,6 +8642,14 @@ fn native_menu_sections() {
                 .session
                 .application_menu(id);
             check(&menu.menu_model().unwrap(), &expected.sections);
+            if id == ApplicationMenu::Select {
+                for label in ["Load Selection", "Replace Selection Layer from Current Selection"] {
+                    assert!(!find_menu_item(menu.upcast_ref(), label).unwrap().is_sensitive());
+                }
+                assert!(find_menu_item(menu.upcast_ref(), "Modify").is_none());
+                assert!(find_menu_item(menu.upcast_ref(), "Grow…").is_some());
+                assert!(find_menu_item(menu.upcast_ref(), "Shrink…").is_some());
+            }
             if id == ApplicationMenu::View {
                 assert!(
                     menu_action(&menu.menu_model().unwrap(), CommandId::ToggleTheme.label())

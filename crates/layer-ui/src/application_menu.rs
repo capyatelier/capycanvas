@@ -93,7 +93,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Select => ContextMenu { title: menu.label().into(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
-                vec![ContextMenuItem::submenu("Modify", vec![self.selection_resize_items(None)])],
+                self.selection_resize_items(None),
                 self.selection_source_menu_items(),
                 vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
                 vec![command(CommandId::SelectionOutline)],

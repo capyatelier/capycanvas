@@ -400,6 +400,17 @@ class AndroidTitleBarTest {
                     val popup = screenBounds("workspace-menu")
                     assertEquals("Menu starts under its own label", anchor.left, popup.left, 2 * density)
                     assertTrue("Menu is below its label", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    if (menu.getString("id") == "select") instrumentation.runOnMainSync {
+                        fun row(label: String): SemanticsNode? {
+                            fun find(n: SemanticsNode): SemanticsNode? =
+                                if (n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) n
+                                else n.children.firstNotNullOfOrNull(::find)
+                            return find(checkNotNull(node("workspace-menu")).first.semanticsOwner.rootSemanticsNode)
+                        }
+                        for (label in listOf("Load Selection", "Replace Selection Layer from Current Selection"))
+                            assertTrue("$label is unavailable without saved layers", checkNotNull(row(label)).config.contains(SemanticsProperties.Disabled))
+                        assertNotNull(row("Grow…")); assertNotNull(row("Shrink…")); assertNull(row("Modify"))
+                    }
                     shot("anchored-${menu.getString("id")}")
                     key(KeyEvent.KEYCODE_BACK)
                     waitFor("menu dismissed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }

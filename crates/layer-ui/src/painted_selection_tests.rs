@@ -5,6 +5,13 @@ mod painted_selection_checks {
         use layer_core::SelectionTarget;
         let mut s = session(); s.set_platform(Platform::Gtk);
         let art = s.engine.document().active_layer;
+        let saved_menus = |s: &UiSession<Recorder>| {
+            s.application_menu(ApplicationMenu::Select).sections.into_iter().flatten()
+                .filter(|i| matches!(i.label.as_str(), "Load Selection" | "Replace Selection Layer from Current Selection"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(saved_menus(&s).len(), 2);
+        assert!(saved_menus(&s).iter().all(|i| !i.enabled && i.sections.is_empty()));
         invoke(&mut s, CommandId::SelectAll);
         let coverage = s.engine.document().selection.clone().unwrap();
         invoke(&mut s, CommandId::QuickMask);
@@ -15,6 +22,7 @@ mod painted_selection_checks {
         assert!(!s.state.layer_tools.quick_mask);
         assert!(!s.state.layers.iter().any(|l| l.quick_mask));
         assert_eq!(s.engine.document().saved_selection(first).unwrap(), coverage);
+        assert!(saved_menus(&s).iter().all(|i| i.enabled && i.sections[0].len() == 1));
         invoke(&mut s, CommandId::NewSelectionLayer);
         let second = s.engine.document().active_layer;
         assert!(!s.engine.document().layer(first).unwrap().visible);

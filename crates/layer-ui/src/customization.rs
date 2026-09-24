@@ -518,11 +518,12 @@ impl ContextMenuItem {
         Self::command(label, UiAction::Customize { action })
     }
     pub(crate) fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
+        let sections: Vec<_> = sections.into_iter().filter(|s| !s.is_empty()).collect();
         Self {
             label: label.into(),
             selected: None,
             action: None,
-            enabled: sections.iter().any(|s| !s.is_empty()),
+            enabled: !sections.is_empty(),
             hint: String::new(),
             bindings: Vec::new(),
             sections,

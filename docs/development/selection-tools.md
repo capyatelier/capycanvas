@@ -151,7 +151,9 @@ ordinary brush's distance simplifier. Masks have no disposable artwork tail
 preview. Completed end-taper replay uses the same endpoint sampling so live and
 finished geometry agree. Stamp-brush spacing is unchanged.
 
-Select → Modify and mask row → Modify provide Grow/Shrink with an integer
+Select exposes Grow/Shrink directly; mask rows keep them under Modify. The
+saved-selection menus stay disabled without saved layers, with no empty submenu
+to open. Grow/Shrink use an integer
 1–128 image-pixel distance. Apply queues one asynchronous GPU circular
 maximum/minimum operation; Cancel leaves coverage untouched. Soft coverage is
 preserved, values beyond the canvas are zero, and the result is one undo step.
@@ -215,7 +217,7 @@ or toolbar drawer replaces them; their existing close/toggle actions still work.
 Photo's secondary panel strip opens individual panels by default. Default
 upgrades preserve customized workspace layouts.
 
-The color wheel mirrors the foreground circle with a same-size transparency
+The color wheel mirrors the foreground circle with a compact transparency
 circle. Black and white shortcuts trail below and left of transparency. They
 replace the selected foreground/background paint; from transparency they select
 an independent paint, preserving both remembered colors. Wheel edits continue
@@ -233,7 +235,7 @@ readout clear of both shortcuts. Web caches the fitted geometry across color
 changes.
 
 The transparency circle matches the secondary color's diameter, with its top
-aligned to the primary color at the opposite edge. Smaller black and white
+aligned to the primary color at the opposite edge. Equally sized, smaller black and white
 circles overlap along the wheel's curve with the same edge clearance as
 transparency. White stays above the opposite footer's bottom edge, allowing
 about one pixel of clearance variation at compact widths. HDR

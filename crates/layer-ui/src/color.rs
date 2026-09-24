@@ -1247,8 +1247,7 @@ impl ColorPanelLayout {
         let c = size * 0.5;
         let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
         let transparent = [size - bg, foreground[1], bg, bg];
-        let black_size = (bg * 0.90).round();
-        let white_size = (bg * 0.80).round().max(20.);
+        let neutral_size = (bg * 0.80).round().max(20.);
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
@@ -1257,8 +1256,8 @@ impl ColorPanelLayout {
             foreground,
             background,
             transparent,
-            black: [0., 0., black_size, black_size],
-            white: [0., 0., white_size, white_size],
+            black: [0., 0., neutral_size, neutral_size],
+            white: [0., 0., neutral_size, neutral_size],
             edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
@@ -1735,7 +1734,7 @@ mod tests {
             assert_eq!(l.foreground[1], l.transparent[1]);
             assert_eq!(l.transparent[0], size as f32 - l.transparent[2]);
             assert!(l.black[2] < l.background[2]);
-            assert!(l.white[2] < l.black[2]);
+            assert_eq!(l.white[2], l.black[2]);
             assert!(l.foreground[2] > l.background[2]);
         }
     }

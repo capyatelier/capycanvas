@@ -46,6 +46,15 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await invoke('select'); await contact(header('select'));
     if(!await evaluate('!!layerApp.state().customization.drawer'))await contact(header('select'));
     assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
+    await contact('.content-drawer .selection-menu-button');
+    const menuRows = await evaluate(`Array.from(document.querySelectorAll('.panel-context-menu:popover-open [role="menuitem"]'), b=>({label:b.querySelector('.menu-label').textContent,disabled:b.disabled,arrow:!!b.querySelector('.submenu-arrow')}))`);
+    for(const label of ['Load Selection','Replace Selection Layer from Current Selection']) {
+      const row=menuRows.find(r=>r.label===label);
+      assert.ok(row?.disabled && !row.arrow,`${label} cannot open an empty submenu`);
+    }
+    assert.ok(menuRows.some(r=>r.label==='Grow…') && menuRows.some(r=>r.label==='Shrink…'));
+    assert.ok(!menuRows.some(r=>r.label==='Modify'));
+    await evaluate(`document.querySelector('.panel-context-menu:popover-open').hidePopover()`);await settle();
     const choices = await evaluate('layerApp.state().tool_set.subtools');
     assert.equal(choices.length,7);
     await evaluate('window.selectionDrawer=document.querySelector(".content-drawer")');
