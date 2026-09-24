@@ -338,30 +338,20 @@ fn native_toolbar_components_input() {
         d.key(0xff54);
         d.key(0xff0d);
         let view = state(&d.w);
-        let selected: Vec<_> = view
-            .tool_set
-            .subtools
-            .iter()
-            .filter(|i| i.selected)
-            .collect();
-        assert_eq!(selected.len(), 2, "sample source and size are independent");
-        assert!(
-            selected
-                .iter()
-                .any(|i| matches!(i.action, UiAction::SetColorSampleSize { width: 3 }))
+        assert_eq!(
+            (view.color_picker.layer, view.color_picker.sample_width),
+            (false, 5),
+            "sample source and size are independent"
         );
         d.click_name("toolbar-choice-variant");
         d.key(0xff54);
         d.key(0xff0d);
         let view = state(&d.w);
         assert_eq!(view.layer_tools.tool, LayerCanvasTool::PickLayer);
-        assert!(
-            view.tool_set.subtools.iter().any(
-                |i| i.selected && matches!(i.action, UiAction::SetColorSampleSize { width: 3 })
-            )
-        );
+        assert_eq!(view.color_picker.sample_width, 5);
         d.click_name("toolbar-choice-variant");
         d.capture_canvas(&format!("eyedropper-menu-{theme:?}.png"));
+        d.key(0xff1b);
         d.key(0xff1b);
 
         // Actual canvas content enables a transform. Completion actions stay

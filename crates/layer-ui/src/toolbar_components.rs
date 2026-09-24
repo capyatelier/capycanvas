@@ -226,12 +226,16 @@ impl UiState {
             {
                 true
             }
-            _ => self
-                .tool_set
-                .groups
-                .iter()
-                .chain(&self.tool_set.subtools)
-                .any(|i| i.action == *action),
+            _ => {
+                self.tool_set
+                    .groups
+                    .iter()
+                    .chain(&self.tool_set.subtools)
+                    .any(|i| i.action == *action)
+                    || self.tool_options().iter().any(|option| {
+                        matches!(option, ToolOption::Choice { items, .. } if items.iter().any(|i| i.action == *action))
+                    })
+            }
         }
     }
     pub fn tool_options(&self) -> Vec<ToolOption> {

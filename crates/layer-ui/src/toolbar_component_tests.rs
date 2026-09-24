@@ -459,6 +459,25 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
         };
         assert_eq!(items.iter().filter(|i| i.selected).count(), 1);
     }
+    for id in ["variant", "sample-size"] {
+        let choice = |state: &UiState| {
+            state.tool_options().into_iter().find_map(|o| match o {
+                ToolOption::Choice { id: key, items, .. } if key == id => Some(items),
+                _ => None,
+            })
+        };
+        let item = choice(s.state()).unwrap().into_iter().find(|i| !i.selected).unwrap();
+        let context = s.state().toolbar_context();
+        s.dispatch(UiAction::ToolbarEdit {
+            context,
+            action: Box::new(item.action.clone()),
+        })
+        .unwrap();
+        assert!(
+            choice(s.state()).unwrap().iter().any(|i| i.selected && i.action == item.action),
+            "published {id} choices are accepted toolbar edits"
+        );
+    }
     assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_none());
     let context = s.state().toolbar_context();
     assert!(
