@@ -173,6 +173,7 @@ impl TileStrip {
         self.queue_allocate();
     }
     pub fn set_style(&self, style: TileStyle) {
+        set_size_class(self, style, "tiles");
         if self.imp().style.replace(style) != style {
             self.queue_resize();
         }

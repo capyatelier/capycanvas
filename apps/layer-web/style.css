@@ -1,14 +1,14 @@
 /* Compact libadwaita color roles, native DOM controls over a full-window canvas. */
 :root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --text: #fafafb; --accent: #3584e4; --selected: color-mix(in srgb, var(--accent) 22%, transparent); --button: #ffffff0d; --thumb: #d3d3d3; --settings: #333333; --sidebar: #2e2e32; }
 body { --popover: var(--panel); }
-:is(#workspace, #status, .image-placement-controls) { --corner-fit: .55; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
+:is(#workspace, #status, .image-placement-controls) { --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
 #header, .header-editor, .header-drag-preview { --header-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); }
-:is(#workspace, #status, .image-placement-controls) :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .toolbar-brush-preview) { --control-radius: 6px; }
+:is(#workspace, #status, .image-placement-controls) :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover) { --control-radius: 6px; }
 @supports (corner-shape: squircle) {
   :is(#workspace, #status, .image-placement-controls) { --corner-fit: 1; }
-  :is(#workspace, #status, .image-placement-controls), :is(#workspace, #status, .image-placement-controls) * { corner-shape: squircle; }
-  #workspace :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .toolbar-brush-preview, .size-dot, .option-radio, .gradient-stops button, .battery-shell),
-  #workspace :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .toolbar-brush-preview, .color-wheel-control) * { corner-shape: round; }
+  :where(#workspace, #status, .image-placement-controls), :where(#workspace, #status, .image-placement-controls) * { corner-shape: squircle; }
+  :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .size-dot, .option-radio, .gradient-stops button, .battery-shell),
+  :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .color-wheel-control) * { corner-shape: round; }
 }
 /* Match Adwaita's native tooltip: readable text, quiet dark surface, no arrow. */
 .hover-tooltip { position:fixed; inset:auto; width:max-content; margin:0; padding:6px 10px; border:1px solid rgb(255 255 255 / 10%); border-radius:9px; background:rgb(0 0 6 / 80%); color:white; box-shadow:none; font:inherit; font-weight:400; line-height:normal; white-space:pre-wrap; overflow-wrap:anywhere; pointer-events:none; user-select:none; }
@@ -967,7 +967,7 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .vertical-component .toolbar-slider input.number-slider::-moz-range-thumb { width: 28px; height: 10px; }
 .vertical-component .toolbar-slider-thumb { left: 0; top: calc((100% - 10px) * (1 - var(--position))); width: 28px; height: 10px; }
 .vertical-component .toolbar-slider-mark { left: 7px; top: calc(5px + (100% - 10px) * (1 - var(--position))); width: 14px; height: 2px; transform: translateY(-50%); }
-.toolbar-brush-preview { position: fixed; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); color: var(--text); box-shadow: 0 4px 16px #0003; }
+.toolbar-brush-preview { position: fixed; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--surface-radius); overflow: hidden; background: var(--panel); color: var(--text); box-shadow: 0 4px 16px #0003; }
 .toolbar-preview-caption { position: absolute; left: 12px; top: 10px; font: inherit; white-space: nowrap; }
 .toolbar-preview-bookmark { position: absolute; right: 5px; top: 4px; width: 28px; height: 28px; padding: 6px; background: transparent; }
 .toolbar-preview-stamp { position: absolute; inset: 0; width: 100%; height: 100%; }

@@ -5,7 +5,7 @@ window.background.capy-workspace.native-canvas-background { background: transpar
 /* Pen fallback for GTK's mouse-position tooltip query; match native Adwaita. */
 popover.pen-tooltip { padding:0; margin:0; }
 popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }
-window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --surface-radius: 18px; --control-radius: 12px; }
+window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
@@ -16,12 +16,15 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar popover image, .window-bar .header-editor image { -gtk-icon-shadow: none; }
 .window-bar popover label, .window-bar .header-editor label, .window-bar .workspace-switcher label { text-shadow: none; }
 .window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control, .window-bar .document-title { background: transparent; box-shadow: none; padding: 0; }
-.window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: 999px; }
-.window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: 999px; }
+.window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: var(--header-radius); }
+.window-bar { --header-radius: calc(18px * var(--corner-fit)); }
+.window-bar.header-medium { --header-radius: calc(24px * var(--corner-fit)); }
+.window-bar.header-large { --header-radius: calc(30px * var(--corner-fit)); }
+.window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: var(--header-radius); }
 .window-bar .header-tool.capy-button { padding: 0; }
 .window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
 .window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
-.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open { background: var(--panel-bg); }
+.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
@@ -30,7 +33,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .header-editor .header-component { border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .06); }
 .header-editor .header-component-body { min-height: 24px; padding: 4px 6px; }
 .header-editor .header-component-grip { min-width: 16px; min-height: 24px; padding: 0 2px; }
-.window-bar .header-item.editing-selection { outline: 1px solid alpha(var(--window-fg-color), .45); outline-offset: -1px; border-radius: 999px; }
+.window-bar .header-item.editing-selection { outline: 1px solid alpha(var(--window-fg-color), .45); outline-offset: -1px; border-radius: var(--header-radius); }
 .header-editor .linked > button { border-radius: 0; }
 .header-editor .linked > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .header-editor .linked > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
@@ -50,7 +53,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .light-theme .window-bar .header-menu-labels,
 .light-theme .window-bar .header-readout { background: var(--header-control-bg); }
 .light-theme .window-bar .header-menu-labels,
-.light-theme .window-bar .header-readout { border-radius: 999px; }
+.light-theme .window-bar .header-readout { border-radius: var(--header-radius); }
 .light-theme .window-bar .header-readout { min-height: 36px; }
 .light-theme .window-bar .document-title { padding: 6px; }
 /* Keep the labels' existing button padding, with one fill behind the whole row. */
@@ -63,8 +66,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .light-theme .window-bar menubutton.chrome-control > button:checked { background-image: linear-gradient(alpha(var(--window-fg-color), .16), alpha(var(--window-fg-color), .16)); }
 /* Open neutral tiles, their connectors and drawers share one opaque surface. */
 .light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
-.workspace-switcher { background: var(--tabbar-bg); border: 0; border-radius: 999px; padding: 4px; }
-.workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: 999px; background: transparent; box-shadow: none; font-weight: 500; }
+.workspace-switcher { background: var(--tabbar-bg); border: 0; border-radius: calc(17px * var(--corner-fit)); padding: 4px; }
+.workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
 .workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: mix(var(--window-bg-color), var(--accent-bg-color), .28); color: var(--window-fg-color); }
 .workspace-switcher button:checked:hover { background: mix(var(--window-bg-color), var(--accent-bg-color), .36); }
@@ -77,21 +80,21 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .workspace-notice { background: var(--window-bg-color); padding: 6px 12px; border-radius: var(--surface-radius); }
 .workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
-.status-bubble { background: var(--window-bg-color); border-radius: 999px; padding: 3px 10px; }
+.status-bubble { background: var(--window-bg-color); border-radius: calc(12px * var(--corner-fit)); padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: var(--surface-radius); box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .collapsed-column { border-radius: var(--surface-radius); }
 .content-drawer { box-shadow: none; }
 .drawer-shadow { background: transparent; border-radius: var(--surface-radius); box-shadow: 0 8px 24px alpha(black, .4); }
 .drawer-connection { color: var(--panel-bg); }
 .toolbar-controls.drawer-source { background: mix(var(--panel-bg), black, .08); }
-.tool-strip.medium-tiles { --surface-radius: 27px; }
-.tool-strip.large-tiles { --surface-radius: 36px; }
-.toolbar-controls button.tile-button, .collapsed-column .tile-button { border-radius: 999px; }
+.medium-tiles { --tile-radius: 27px; }
+.large-tiles { --tile-radius: 36px; }
+.tool-strip { --surface-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-controls button.tile-button, .collapsed-column .tile-button { border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .dock-panel.join-nw { border-top-left-radius: 0; }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }
 .dock-panel.join-sw { border-bottom-left-radius: 0; }
-.toolbar-controls button.drawer-open { border-radius: 0; }
 .toolbar-controls button.drawer-origin-top, .collapsed-column button.drawer-origin-top { border-top-left-radius: 0; border-top-right-radius: 0; }
 .toolbar-controls button.drawer-origin-bottom, .collapsed-column button.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .toolbar-controls button.drawer-origin-left, .collapsed-column button.drawer-origin-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
@@ -198,12 +201,12 @@ window, label, text { font-size: var(--ui-text-size); }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
 .toolbar-component { padding: 0; }
-.toolbar-component .option-action button, .toolbar-component > box > button { padding: 0; min-width: 0; min-height: 0; border-radius: 999px; }
+.toolbar-component .option-action button, .toolbar-component > box > button { padding: 0; min-width: 0; min-height: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component .option-segments > button { border-radius: 0; }
-.toolbar-component .option-segments.horizontal > button:first-child { border-top-left-radius: 999px; border-bottom-left-radius: 999px; }
-.toolbar-component .option-segments.horizontal > button:last-child { border-top-right-radius: 999px; border-bottom-right-radius: 999px; }
-.toolbar-component .option-segments.vertical > button:first-child { border-top-left-radius: 999px; border-top-right-radius: 999px; }
-.toolbar-component .option-segments.vertical > button:last-child { border-bottom-left-radius: 999px; border-bottom-right-radius: 999px; }
+.toolbar-component .option-segments.horizontal > button:first-child { border-top-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-left-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-component .option-segments.horizontal > button:last-child { border-top-right-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-component .option-segments.vertical > button:first-child { border-top-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-top-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-component .option-segments.vertical > button:last-child { border-bottom-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component dropdown { margin: 0; }
 .toolbar-component.vertical-component dropdown > button { padding: 2px; background: transparent; }
 .toolbar-component.vertical-component.labeled-component dropdown > button { padding-left: 8px; padding-right: 6px; }
@@ -222,7 +225,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
-.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: 999px; }
+.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: calc(18px * var(--corner-fit)); }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */
@@ -277,7 +280,7 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */
 .document-tabs { border-spacing: 0; }
-.document-tab { min-height: 26px; padding: 4px; border-radius: 999px; background: transparent; transition: background-color 150ms ease-in-out; }
+.document-tab { min-height: 26px; padding: 4px; border-radius: calc(17px * var(--corner-fit)); background: transparent; transition: background-color 150ms ease-in-out; }
 .document-tab:hover { background-color: alpha(currentColor, .07); }
 .document-tab:active { background-color: alpha(currentColor, .16); }
 .document-tab.selected { background-color: alpha(currentColor, .10); }
@@ -286,8 +289,8 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 /* Only adjacent idle tabs need a divider; selection/hover supplies the edge. */
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active) { background-image: image(color-mix(in srgb, currentColor var(--border-opacity), transparent)); background-size: 1px 80%; background-position: left center; background-repeat: no-repeat; }
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active):dir(rtl) { background-position: right center; }
-.document-tab button.document-tab-select { min-width: 0; min-height: 26px; padding: 0 4px; border-radius: 999px; background: transparent; box-shadow: none; font-weight: normal; outline: none; }
-.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; margin: 0; padding: 0; border-radius: 99px; }
+.document-tab button.document-tab-select { min-width: 0; min-height: 26px; padding: 0 4px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: normal; outline: none; }
+.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; margin: 0; padding: 0; border-radius: calc(12px * var(--corner-fit)); }
 .document-tab:focus-within:focus-visible { outline: 2px solid alpha(var(--accent-color), .5); outline-offset: -2px; }
 @media (prefers-contrast: more) {
   .document-tab:hover, .document-tab:active, .document-tab.selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor var(--border-opacity), transparent); }
@@ -299,5 +302,5 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 .selection-modes > button { border-radius: 0; margin: 0; }
 .selection-modes > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .selection-modes > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
-.brush-preview > contents { padding: 0; border-radius: 10px; background: var(--panel-bg); }
-.brush-preview button { min-width: 0; min-height: 0; padding: 6px; }
+.brush-preview > contents { padding: 0; border-radius: var(--surface-radius); background: var(--panel-bg); }
+.brush-preview button { min-width: 0; min-height: 0; padding: 6px; border-radius: var(--control-radius); }

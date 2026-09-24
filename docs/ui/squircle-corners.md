@@ -19,54 +19,66 @@ the former 8–10px circular corners.
   ends exactly. `TileStyle::corner_radius` is published per panel as
   `tile_corner_radius`.
 - **Surfaces** (panels, tab tops, drawers, collapsed columns, the title-bar
-  editor and notices) use `SURFACE_RADIUS`, 18px or half a small tile.
+  editor, notices and the brush-size preview) use `SURFACE_RADIUS`, 18px or
+  half a small tile.
 - **Panel controls** (buttons, entries, dropdowns, segmented choices and list
   highlights) use 12px, concentric with surfaces at the standard 6px inset.
   Controls 24px tall or shorter become capsules.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
 - Checkboxes, thumbnails, slider thumbs and other small details keep their
-  radii with squircle corners.
+  former visual rounding with squircle corners.
 
-A drawer's source container flattens facing corners within `SURFACE_RADIUS` of
-the opening tile (`DrawerPlacement::source_corners`), so a padded container's
-larger rounding never clips the square join.
+A drawer's source tile squares only the corners facing its drawer and keeps
+its selected blue; an unselected source turns panel grey. Its container
+flattens facing corners within `SURFACE_RADIUS` of the tile
+(`DrawerPlacement::source_corners`), so a padded container's larger rounding
+never clips the square join.
 
 ## Scope
 
 Squircles cover the workspace: the title bar, toolbars, panels, tabs, drawers,
-collapsed columns, status notices and the controls inside them. Settings,
-dialogs, menus, tooltips and popovers, including the brush-size preview, keep
+collapsed columns, status notices, the brush-size preview and the controls
+inside them. Settings, dialogs, menus, tooltips and other popovers keep
 platform styling. True circles stay round: color swatches and wheel buttons,
 wheel markers, dials, radio indicators, gradient stops and native window
 controls.
 
-## Hosts
+## Corner fit
 
-- **GTK** CSS has no `corner-shape`. `squircle::Squircles` wraps the workspace
-  window content and converts circular rounded clips, uniform borders and
-  outlines, and crisp inset rings into alpha masks. Each mask is rasterized
-  once per device-pixel geometry and reused as a GPU texture; unchanged render
-  nodes are reused between frames. Blurred shadows keep GTK's circular
-  approximation. Subtrees that must stay round are drawn through
-  `squircle::append_round`, and libadwaita dialogs and popovers sit outside the
-  wrapper. GTK CSS radii therefore mean the same as the Web values.
-- **Web** scopes `corner-shape: squircle` to `#workspace`, `#status` and
-  `.image-placement-controls`; popups and circles opt back to `round`. Browsers
-  without `corner-shape` scale radii by `--corner-fit` (0.55), keeping tiles as
-  rounded squares rather than circles.
-- **Android** uses `SquircleShape`, a Compose `CornerBasedShape`, through
-  `TileShape`, `SurfaceShape` and `ControlShape`; custom paths share
-  `squircleCorner`.
+A circle with 0.54 of a squircle's radius contains that squircle; the two meet
+at 45°. Web uses this `--corner-fit` only when `corner-shape` is unsupported,
+keeping tiles as rounded squares rather than circles.
+
+GTK CSS has no `corner-shape`, so its stylesheet always declares the fitted
+circular radius (design radius × `--corner-fit`). GTK's own hit testing,
+overflow picking and blurred shadows therefore cover every painted pixel.
+`squircle::Squircles` wraps the workspace window content and redraws each
+circular rounded clip, uniform border or outline, and crisp shadow ring as a
+squircle with the circle radius divided by the fit. Undesigned toolkit radii
+keep their former visual rounding the same way. Masks are rasterized once per
+device-pixel geometry and reused as GPU textures; unchanged render nodes,
+including shadow-wrapped subtrees, are reused between frames.
+`squircle::Popover` applies the same conversion to the brush-size preview.
+Subtrees that must stay round are drawn through `squircle::append_round`.
+Rust-drawn rounded rectangles in the workspace multiply design radii by
+`squircle::CORNER_FIT`.
+
+Android uses `SquircleShape`, a Compose `CornerBasedShape`, through
+`TileShape`, `SurfaceShape` and `ControlShape`; custom paths share
+`squircleCorner`. Compose pointer input already uses whole bounds.
 
 ## Validation
 
 - GTK: `tools/performance/workspace-motion.sh gtk` with
-  `--native-test=native_toolbar_visual_audit_input` and `--drawer-style`.
-  `--workspace-motion` presentation rate is unchanged by the conversion.
+  `--native-test=native_squircle_corners` (corner picks reach tiles and
+  shadowed subtrees convert), `--native-test=native_toolbar_visual_audit_input`,
+  `--drawer-style` and `--drag-pickup`. `--workspace-motion` presentation rate
+  is unchanged by the conversion.
 - Web: `apps/layer-web/test.mjs` with `--drawer-style`, `--toolbar-components`,
-  `--compact-workspaces` and `--title-bar-state`.
+  `--compact-workspaces`, `--tab-styles` and `--title-bar-state`.
 - Android: `AndroidInteractionTest` `drawerButtonsAndBridgesKeepTheirColors`,
   `drawerTabsKeepActiveColorsAndPadding`,
   `collapsedIconsKeepTheirSourceWhenDrawerTabsAreVisible` and
-  `toolbarComponentsAcrossDevicesAndLayouts`.
+  `toolbarComponentsAcrossDevicesAndLayouts`, plus `AndroidTitleBarTest` in
+  the landscape orientation recorded by its acceptance.

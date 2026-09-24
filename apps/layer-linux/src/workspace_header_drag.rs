@@ -360,7 +360,7 @@ impl Header {
         let b = drag.preview.held;
         let shape = gtk::gsk::RoundedRect::from_rect(
             gtk::graphene::Rect::new(b.x, b.y, b.width, b.height),
-            6.,
+            b.width.min(b.height) / 2. * crate::squircle::CORNER_FIT,
         );
         snapshot.push_rounded_clip(&shape);
         snapshot.append_color(&drag.background, &shape.bounds());

@@ -685,7 +685,7 @@ impl Component {
             let overlay = gtk::Overlay::new();
             overlay.set_child(Some(&area));
             overlay.add_overlay(&header);
-            let popover = gtk::Popover::new();
+            let popover: gtk::Popover = crate::squircle::Popover::new().upcast();
             popover.set_has_arrow(false);
             popover.set_autohide(false);
             popover.add_css_class("brush-preview");
@@ -734,17 +734,10 @@ impl Component {
                     let b = layout.stamp;
                     let ink = area.color();
                     let _ = cr.save();
-                    let side = layout.side as f64;
-                    let quarter = std::f64::consts::FRAC_PI_2;
-                    for (x, y, angle) in [
-                        (side - 10., 10., -quarter),
-                        (side - 10., side - 10., 0.),
-                        (10., side - 10., quarter),
-                        (10., 10., 2. * quarter),
-                    ] {
-                        cr.arc(x, y, 10., angle, angle + quarter);
-                    }
-                    cr.close_path();
+                    crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(
+                        gtk::graphene::Rect::new(0., 0., layout.side, layout.side),
+                        SURFACE_RADIUS,
+                    ));
                     cr.clip();
                     let _ = cr.save();
                     let viewport = layout.viewport;
@@ -780,7 +773,7 @@ impl Component {
                         fade.add_color_stop_rgba(0., r, g, b, 0.65);
                         fade.add_color_stop_rgba(1., r, g, b, 0.);
                         let _ = cr.set_source(&fade);
-                        cr.rectangle(0., 0., side, layout.header_fade as f64);
+                        cr.rectangle(0., 0., f64::from(layout.side), f64::from(layout.header_fade));
                         let _ = cr.fill();
                     }
                     let _ = cr.restore();

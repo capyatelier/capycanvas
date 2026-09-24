@@ -253,7 +253,10 @@ fn snapshot_tab(
     .0;
     let color = gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.);
     let snapshot = gtk::Snapshot::new();
-    snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(rect, 6.));
+    let radius = SURFACE_RADIUS * crate::squircle::CORNER_FIT;
+    let top = gtk::graphene::Size::new(radius, radius);
+    let square = gtk::graphene::Size::new(0., 0.);
+    snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(rect, top, top, square, square));
     snapshot.append_color(&color, &rect);
     snapshot.pop();
     snapshot.save();

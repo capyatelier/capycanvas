@@ -7,6 +7,7 @@ use std::f64::consts::FRAC_PI_2;
 const KEEP_ROUND: &str = "capy-keep-round";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
+pub const CORNER_FIT: f32 = 0.54;
 
 pub fn append_round(snapshot: &gtk::Snapshot, round: gtk::Snapshot) {
     if let Some(node) = round.to_node() {
@@ -33,7 +34,7 @@ pub fn concave_foot(cr: &cairo::Context, x: f64, y: f64, radius: f64, direction:
     cr.close_path();
 }
 
-fn rounded_rect(cr: &cairo::Context, rect: &gsk::RoundedRect) {
+pub fn rounded_rect(cr: &cairo::Context, rect: &gsk::RoundedRect) {
     let bounds = rect.bounds();
     let [left, top] = [f64::from(bounds.x()), f64::from(bounds.y())];
     let [right, bottom] = [left + f64::from(bounds.width()), top + f64::from(bounds.height())];
@@ -54,6 +55,15 @@ fn rounded_rect(cr: &cairo::Context, rect: &gsk::RoundedRect) {
     cr.line_to(left, top + top_left[1]);
     corner(cr, [left + top_left[0], top + top_left[1]], [-top_left[0], 0.], [0., -top_left[1]]);
     cr.close_path();
+}
+
+fn squircle_rect(circular: &gsk::RoundedRect) -> gsk::RoundedRect {
+    let [top_left, top_right, bottom_right, bottom_left] = circular
+        .corner()
+        .map(|size| graphene::Size::new(size.width() / CORNER_FIT, size.height() / CORNER_FIT));
+    let mut rect = gsk::RoundedRect::new(*circular.bounds(), top_left, top_right, bottom_right, bottom_left);
+    rect.normalize();
+    rect
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -194,6 +204,10 @@ impl Converter {
                 gsk::IsolationNode::new(child, isolations).upcast()
             });
         }
+        if let Some(shadow) = node.downcast_ref::<gsk::ShadowNode>() {
+            let shadows: Vec<_> = (0..shadow.n_shadows()).map(|i| shadow.shadow(i)).collect();
+            return self.rebuild(node, &shadow.child(), |child| gsk::ShadowNode::new(child, &shadows).upcast());
+        }
         if let Some(debug) = node.downcast_ref::<gsk::DebugNode>() {
             let message = debug.message();
             if message == KEEP_ROUND {
@@ -209,7 +223,7 @@ impl Converter {
                 });
             }
             let child = self.convert(&rounded.child());
-            return gsk::MaskNode::new(child, self.mask(&clip, None), gsk::MaskMode::Alpha).upcast();
+            return gsk::MaskNode::new(child, self.mask(&squircle_rect(&clip), None), gsk::MaskMode::Alpha).upcast();
         }
         if let Some(border) = node.downcast_ref::<gsk::BorderNode>() {
             let outline = border.outline();
@@ -218,9 +232,22 @@ impl Converter {
                 return node.clone();
             }
             let [top, right, bottom, left] = *border.widths();
-            let mut inner = outline;
+            let outer = squircle_rect(&outline);
+            let mut inner = outer;
             inner.shrink(top, right, bottom, left);
-            return self.ring(&outline, &inner, &colors[0]);
+            return self.ring(&outer, &inner, &colors[0]);
+        }
+        if let Some(shadow) = node.downcast_ref::<gsk::OutsetShadowNode>() {
+            let outline = shadow.outline();
+            if shadow.blur_radius() > 0. || outline.is_rectilinear() {
+                return node.clone();
+            }
+            let spread = shadow.spread();
+            let inner = squircle_rect(&outline);
+            let mut outer = inner;
+            outer.offset(shadow.dx(), shadow.dy());
+            outer.shrink(-spread, -spread, -spread, -spread);
+            return self.ring(&outer, &inner, &shadow.color());
         }
         if let Some(shadow) = node.downcast_ref::<gsk::InsetShadowNode>() {
             let outline = shadow.outline();
@@ -228,10 +255,11 @@ impl Converter {
                 return node.clone();
             }
             let spread = shadow.spread();
-            let mut inner = outline;
+            let outer = squircle_rect(&outline);
+            let mut inner = outer;
             inner.offset(shadow.dx(), shadow.dy());
             inner.shrink(spread, spread, spread, spread);
-            return self.ring(&outline, &inner, &shadow.color());
+            return self.ring(&outer, &inner, &shadow.color());
         }
         node.clone()
     }
@@ -261,6 +289,22 @@ impl Converter {
         );
         gsk::TextureNode::new(&texture, &area).upcast()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn converted(node: &gsk::RenderNode) -> gsk::RenderNode {
+    Converter::default().frame(node, 1.)
+}
+
+fn append_converted(widget: &gtk::Widget, converter: &RefCell<Converter>, content: gtk::Snapshot, snapshot: &gtk::Snapshot) {
+    let Some(node) = content.to_node() else {
+        return;
+    };
+    let scale = widget
+        .native()
+        .and_then(|native| native.surface())
+        .map_or_else(|| f64::from(widget.scale_factor()), |surface| surface.scale());
+    snapshot.append_node(converter.borrow_mut().frame(&node, scale));
 }
 
 mod imp {
@@ -298,16 +342,33 @@ mod imp {
             };
             let content = gtk::Snapshot::new();
             obj.snapshot_child(&child, &content);
-            let Some(node) = content.to_node() else {
-                return;
-            };
-            let scale = obj
-                .native()
-                .and_then(|native| native.surface())
-                .map_or_else(|| f64::from(obj.scale_factor()), |surface| surface.scale());
-            snapshot.append_node(self.converter.borrow_mut().frame(&node, scale));
+            append_converted(obj.upcast_ref(), &self.converter, content, snapshot);
         }
     }
+
+    #[derive(Default)]
+    pub struct Popover {
+        pub(super) converter: RefCell<Converter>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Popover {
+        const NAME: &'static str = "CapySquirclePopover";
+        type Type = super::Popover;
+        type ParentType = gtk::Popover;
+    }
+
+    impl ObjectImpl for Popover {}
+
+    impl WidgetImpl for Popover {
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let content = gtk::Snapshot::new();
+            self.parent_snapshot(&content);
+            append_converted(self.obj().upcast_ref(), &self.converter, content, snapshot);
+        }
+    }
+
+    impl PopoverImpl for Popover {}
 }
 
 glib::wrapper! {
@@ -320,5 +381,16 @@ impl Squircles {
         let this: Self = glib::Object::new();
         child.set_parent(&this);
         this
+    }
+}
+
+glib::wrapper! {
+    pub struct Popover(ObjectSubclass<imp::Popover>) @extends gtk::Popover, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Native, gtk::ShortcutManager;
+}
+
+impl Popover {
+    pub fn new() -> Self {
+        glib::Object::new()
     }
 }

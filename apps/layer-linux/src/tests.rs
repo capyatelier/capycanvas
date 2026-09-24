@@ -41,6 +41,8 @@ mod column_drop;
 mod column_stack_tests;
 #[path = "contact_brush_tests.rs"]
 mod contact_brush;
+#[path = "squircle_tests.rs"]
+mod squircle_tests;
 #[path = "workspace_layout_drop_tests.rs"]
 mod workspace_layout_drop;
 #[path = "drag_pickup_tests.rs"]

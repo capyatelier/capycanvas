@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -362,7 +361,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         }
     } }
     Popup(provider, onDismissRequest = dismiss, properties = PopupProperties(focusable = false)) {
-        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = RoundedCornerShape(10.dp),
+        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = SurfaceShape,
             color = colors.panel, shadowElevation = 6.dp, border = androidx.compose.foundation.BorderStroke(1.dp, colors.divider)) {
             Box {
                 Canvas(Modifier.fillMaxSize()) {
@@ -380,7 +379,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 }
                 Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)
-                    Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
+                    Box(Modifier.size(28.dp).clip(ControlShape).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
                         SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(16.dp))
                     }
                 }
