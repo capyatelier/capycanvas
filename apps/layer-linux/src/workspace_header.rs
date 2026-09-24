@@ -65,6 +65,13 @@ impl BarSurface {
             .borrow_mut()
             .push(child.as_ref().clone());
     }
+    fn add_behind(&self, child: &impl IsA<gtk::Widget>, index: usize) {
+        child.set_parent(self);
+        self.imp()
+            .children
+            .borrow_mut()
+            .insert(index, child.as_ref().clone());
+    }
     fn remove(&self, child: &impl IsA<gtk::Widget>) {
         self.imp()
             .children
@@ -94,6 +101,7 @@ pub(super) struct Header {
     handle: gtk::WindowHandle,
     native: [gtk::WindowControls; 2],
     items: RefCell<Vec<Item>>,
+    bars: RefCell<Vec<gtk::Box>>,
     overflow: [gtk::MenuButton; 3],
     recovery: gtk::MenuButton,
     editor: editor::Editor,
@@ -160,6 +168,7 @@ impl Header {
             recovery,
             editor,
             items: RefCell::new(Vec::new()),
+            bars: RefCell::new(Vec::new()),
             model: RefCell::new(None),
             editing: Cell::new(false),
             geometry: RefCell::new(HeaderGeometry::default()),
@@ -950,7 +959,45 @@ impl Header {
                 w.workspace_drag_input(ContactPhase::Cancel, pending.point, pending.sequence);
             }
         }
+        let mut bars = self.bars.borrow_mut();
+        while bars.len() < geometry.bars.len() {
+            let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            bar.add_css_class("header-bar");
+            bar.set_can_target(false);
+            self.root.add_behind(&bar, 1);
+            bars.push(bar);
+        }
+        for (i, bar) in bars.iter().enumerate() {
+            let bounds = geometry.bars.get(i).map(|b| b.bounds);
+            bar.set_child_visible(bounds.is_some());
+            if let Some(b) = bounds {
+                allocate_at(bar.upcast_ref(), b);
+            }
+        }
+        drop(bars);
+        let in_bar = |widget: &gtk::Widget, joined: bool| {
+            if widget.has_css_class("in-bar") != joined {
+                if joined {
+                    widget.add_css_class("in-bar");
+                } else {
+                    widget.remove_css_class("in-bar");
+                }
+            }
+        };
+        for (i, button) in self.overflow.iter().enumerate() {
+            in_bar(
+                button.upcast_ref(),
+                geometry.bars.iter().any(|b| b.overflow == Some(i)),
+            );
+        }
         for item in self.items.borrow().iter() {
+            in_bar(
+                item.root.upcast_ref(),
+                geometry
+                    .bars
+                    .iter()
+                    .any(|b| b.items.contains(&item.entry.id)),
+            );
             let allocation = geometry.items.iter().find(|m| m.id == item.entry.id);
             if allocation.is_none()
                 && self.editing.get()

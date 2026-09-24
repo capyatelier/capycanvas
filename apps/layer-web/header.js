@@ -16,7 +16,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   customization.target(root, {kind:'header', id:null});
   const bank = element('div', 'header-editor chrome'); bank.id = 'header-editor'; bank.hidden = true;
   bank.setAttribute('aria-label', 'Customize Title Bar'); workspace.append(bank);
-  const records = new Map(), chips = new Map();
+  const records = new Map(), chips = new Map(), bars = [];
   const zones = ['left','center','right'].map(zone => {
     const node = element('div', 'header-zone'); node.dataset.zone = zone; root.append(node); return node;
   });
@@ -273,6 +273,11 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       r.root.style.visibility=dragging&&contact.source.kind==='item'&&contact.source.value===id?'hidden':'';
     }
     g.zones.forEach((b,i)=>{zones[i].hidden=!editing;place(zones[i],b);});
+    while(bars.length<g.bars.length){const bar=element('div','header-bar');bar.setAttribute('aria-hidden','true');root.prepend(bar);bars.push(bar);}
+    bars.forEach((bar,i)=>{bar.hidden=!g.bars[i];if(g.bars[i])place(bar,g.bars[i].bounds);});
+    const joined=new Set(g.bars.flatMap(b=>b.items));
+    for(const [id,r] of records)r.root.classList.toggle('in-bar',joined.has(id));
+    overflow.forEach((node,i)=>node.classList.toggle('in-bar',g.bars.some(b=>b.overflow===i)));
     g.overflow.forEach((b,i)=>{
       if(!b){overflow[i].open=false;if(overflow[i].contains(document.activeElement))focus=view.model.zones[i].map(e=>records.get(e.id)).find(r=>!r.root.hidden)?.content.querySelector('summary,button')||root;}
       overflow[i].hidden=!b;if(b)place(overflow[i],b);

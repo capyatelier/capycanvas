@@ -717,7 +717,7 @@ body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 
 .header-item-content > :is(button,details) { flex:1; min-width:0; }
 .header-item-content > [inert] { pointer-events:none; }
 #header .header-tool, .header-drag-preview .header-tool, #header .header-menu > summary {
-  position:static; display:flex; align-items:center; justify-content:center; min-height:0; height:var(--header-tile); padding:0 6px; border-radius:var(--header-radius); background:var(--header-control-bg,var(--bg));
+  position:static; display:flex; align-items:center; justify-content:center; min-height:0; height:var(--header-tile); padding:0 6px; border-radius:var(--header-radius); background-color:var(--header-control-bg,var(--bg));
 }
 #header .header-tool, .header-drag-preview .header-tool { width:100%; }
 #header .header-tool > svg, #header .header-menu > summary > svg, .header-drag-preview .header-tool > svg { width:var(--header-icon); height:var(--header-icon); }
@@ -737,13 +737,18 @@ body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 
 #header[data-size="medium"] #system-battery { transform:scale(1.2); margin:0 4px; }
 #header[data-size="large"] #system-battery { transform:scale(1.4); margin:0 8px; }
 #header .header-status-placeholder { padding:0 8px; white-space:nowrap; }
-:where(:root:not([data-touch])) #header :is(.header-tool,.header-menu > summary):hover:not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background:color-mix(in srgb,var(--text) 10%,var(--header-feedback-bg)); }
-#header .header-tool[data-drawer-facing]:not([aria-pressed="true"]) { background:var(--panel); }
-#header :is(.header-tool,.header-menu > summary):is(:active,[data-header-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg)); }
-#header .header-tool[aria-pressed="true"] { background:color-mix(in srgb,var(--accent) 22%,var(--header-feedback-bg)); }
+:where(:root:not([data-touch])) #header :is(.header-tool,.header-menu > summary):hover:not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background-color:color-mix(in srgb,var(--text) 10%,var(--header-feedback-bg)); }
+#header .header-tool[data-drawer-facing]:not([aria-pressed="true"]) { background-color:var(--panel); }
+#header :is(.header-tool,.header-menu > summary):is(:active,[data-header-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing]) { background-color:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg)); }
+#header .header-tool[aria-pressed="true"] { background-color:color-mix(in srgb,var(--accent) 22%,var(--header-feedback-bg)); }
 :where(:root:not([data-touch])) #header .workspace-switcher button:hover:not(:disabled) { background:color-mix(in srgb,var(--bg),var(--text) 8%); }
 :where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 36%,var(--bg)); }
 #header .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
+.header-bar { position:absolute; border-radius:999px; background:var(--tabbar); pointer-events:none; }
+#header :is(.header-item,.header-overflow).in-bar { --header-control-bg:transparent; --header-feedback-bg:transparent; }
+#header :is(.header-item.in-bar :is(.header-tool,.header-menu > summary),.header-overflow.in-bar > summary) { width:100%; padding:0; border:5px solid transparent; border-radius:999px; background-clip:padding-box; -webkit-backdrop-filter:none; backdrop-filter:none; }
+#header .header-item.in-bar .header-tool[data-drawer-facing] { border-width:0; border-radius:var(--header-radius); }
+#header .header-item.in-bar .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 /* Browsers that lack backdrop-filter still retain the 50% background fill. */
 body[data-theme="light"] #header :where(.header-tool,.header-menu > summary,#document-title,#system-clock,.system-status-tile,.header-status-placeholder) { -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
 body[data-theme="light"] #header .header-menu-labels summary { -webkit-backdrop-filter:none; backdrop-filter:none; }

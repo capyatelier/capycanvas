@@ -65,7 +65,13 @@ designer or opening shortcut.
   is one ordinary workspace-history change, separate from drawing history.
   Drag motion itself never mutates the session or saves intermediate layouts.
 
-Tool tiles have 6px gaps; drawer origins have square bottom corners while open.
+Adjacent icon controls (tools, Main Menu, Settings, Full Screen and a region's
+More button) join one capsule bar on the tab-bar surface, inset 1px so a Small
+bar matches the workspace switcher's 34px. Tiles inside a bar abut, keep
+whole-tile targets and show inset capsule feedback. Capy, menu labels, the
+switcher, the document title or tabs, clock, battery and Space stay separate
+with 6px gaps, and customization shows every item separately. Drawer origins
+fill their whole tile with square bottom corners while open.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;
 native keyboard-focus indication remains independent of both states. The same

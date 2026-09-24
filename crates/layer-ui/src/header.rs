@@ -119,6 +119,12 @@ impl HeaderItem {
     pub fn singleton(self) -> bool {
         !matches!(self, Self::Tool { .. } | Self::Space)
     }
+    pub fn joins_bar(self) -> bool {
+        matches!(
+            self,
+            Self::Menu | Self::Settings | Self::Fullscreen | Self::Tool { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,6 +469,14 @@ pub struct HeaderGeometry {
     pub zones: [Bounds; 3],
     pub overflow: [Option<Bounds>; 3],
     pub hidden: [Vec<u32>; 3],
+    #[serde(default)]
+    pub bars: Vec<HeaderBar>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeaderBar {
+    pub bounds: Bounds,
+    pub items: Vec<u32>,
+    pub overflow: Option<usize>,
 }
 
 impl HeaderGeometry {
@@ -475,16 +489,22 @@ impl HeaderGeometry {
             .collect();
         slots.sort_by(|a, b| a.2.x.total_cmp(&b.2.x));
         let Some(index) = slots.iter().position(|s| s.0 == Some(id)) else { return; };
+        let bar = |slot: &(Option<u32>, Option<usize>, Bounds)| self.bars.iter().position(|b| {
+            slot.0.is_some_and(|id| b.items.contains(&id)) || slot.1.is_some() && b.overflow == slot.1
+        });
+        let gaps: Vec<_> = slots.windows(2)
+            .map(|p| if bar(&p[0]).is_some() && bar(&p[0]) == bar(&p[1]) { 0. } else { 6. })
+            .collect();
         let mut left = insets[0] + 6.;
         let mut right = width - insets[1] - 6.;
-        for slot in &mut slots[..index] {
+        for (i, slot) in slots[..index].iter_mut().enumerate() {
             slot.2.x = left;
-            left += slot.2.width + 6.;
+            left += slot.2.width + gaps[i];
         }
-        for slot in slots[index + 1..].iter_mut().rev() {
+        for (i, slot) in slots.iter_mut().enumerate().skip(index + 1).rev() {
             right -= slot.2.width;
             slot.2.x = right;
-            right -= 6.;
+            right -= gaps[i - 1];
         }
         let left = left + if index == 0 { 12. } else { 6. };
         let right = right - if index + 1 == slots.len() { 12. } else { 6. };
@@ -497,6 +517,30 @@ impl HeaderGeometry {
             } else if let Some(index) = overflow {
                 self.overflow[index] = Some(bounds);
             }
+        }
+        for i in 0..self.bars.len() {
+            self.bars[i].bounds = self.bar_bounds(&self.bars[i]);
+        }
+    }
+    fn bar_bounds(&self, bar: &HeaderBar) -> Bounds {
+        let members = self
+            .items
+            .iter()
+            .filter(|i| bar.items.contains(&i.id))
+            .map(|i| i.bounds)
+            .chain(bar.overflow.and_then(|zone| self.overflow[zone]));
+        let (mut left, mut right, mut top, mut bottom) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        for b in members {
+            left = left.min(b.x);
+            right = right.max(b.x + b.width);
+            top = top.min(b.y);
+            bottom = bottom.max(b.y + b.height);
+        }
+        Bounds {
+            x: left,
+            y: top + 1.,
+            width: right - left,
+            height: bottom - top - 2.,
         }
     }
 }
@@ -624,7 +668,9 @@ impl HeaderLayout {
         let mid = width / 2.;
         let gap = 12.; // At least 24 logical px of window-drag space around center.
         let item_gap = 6.;
-        let gaps = |count: usize| count.saturating_sub(1) as f32 * item_gap;
+        let joins = |e: &HeaderEntry| !editing && e.item.joins_bar();
+        let spacing =
+            |a: &HeaderEntry, b: &HeaderEntry| if joins(a) && joins(b) { 0. } else { item_gap };
         // Zero-width native metrics denote unavailable informational items
         // (e.g. a desktop without a battery), not overflowed interactive items.
         let visible = |e: &&HeaderEntry| !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
@@ -638,26 +684,17 @@ impl HeaderLayout {
                 width.clamp(1., 4096.)
             }
         };
-        let compact = |zone: usize| {
-            self.zones[zone]
-                .iter()
-                .filter(visible)
-                .map(|e| metric(e, true))
-                .sum::<f32>()
-                + gaps(self.zones[zone].iter().filter(visible).count())
+        let span = |zone: usize, compact: bool| {
+            let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
+            entries.iter().map(|e| metric(e, compact)).sum::<f32>()
+                + entries.windows(2).map(|p| spacing(p[0], p[1])).sum::<f32>()
         };
         let center_limit = ((right - left) / 3.)
             .min(2. * (mid - left).min(right - mid))
             .max(0.);
-        let center_natural: f32 = self.zones[1]
-            .iter()
-            .filter(visible)
-            .map(|e| metric(e, false))
-            .sum::<f32>()
-            + gaps(self.zones[1].iter().filter(visible).count());
-        let center_width = center_natural
+        let center_width = span(1, false)
             .min(center_limit)
-            .max(compact(1).min(center_limit));
+            .max(span(1, true).min(center_limit));
         let center_left = (mid - center_width / 2.).max(left);
         let center_right = (mid + center_width / 2.).min(right);
         let y = 6.;
@@ -705,11 +742,9 @@ impl HeaderLayout {
         for zone in 0..3 {
             let bounds = result.zones[zone];
             let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
-            let total: f32 =
-                entries.iter().map(|e| metric(e, false)).sum::<f32>() + gaps(entries.len());
-            let compacting = total > bounds.width;
+            let compacting = span(zone, false) > bounds.width;
             let widths: Vec<_> = entries.iter().map(|e| metric(e, compacting)).collect();
-            let overflow = widths.iter().sum::<f32>() + gaps(widths.len()) > bounds.width;
+            let overflow = span(zone, compacting) > bounds.width;
             let overflow_width = tile.min(bounds.width);
             let available = (bounds.width
                 - if overflow {
@@ -719,21 +754,26 @@ impl HeaderLayout {
                 })
             .max(0.);
             let mut used = 0.;
-            let mut shown = Vec::new();
+            let mut shown: Vec<(&HeaderEntry, f32, f32)> = Vec::new();
             let mut full = false;
             for (entry, w) in entries.into_iter().zip(widths) {
-                let spacing = if shown.is_empty() { 0. } else { item_gap };
-                if full || used + spacing + w > available + 0.01 {
+                let gap = shown.last().map_or(0., |p| spacing(p.0, entry));
+                if full || used + gap + w > available + 0.01 {
                     full = true;
                     result.hidden[zone].push(entry.id);
                 } else {
-                    shown.push((entry.id, w));
-                    used += spacing + w;
+                    shown.push((entry, w, gap));
+                    used += gap + w;
                 }
             }
+            let overflow_gap = match shown.last() {
+                None => 0.,
+                Some(p) if joins(p.0) => 0.,
+                Some(_) => item_gap,
+            };
             let total = used
                 + if overflow {
-                    overflow_width + if shown.is_empty() { 0. } else { item_gap }
+                    overflow_width + overflow_gap
                 } else {
                     0.
                 };
@@ -743,9 +783,11 @@ impl HeaderLayout {
                     2 => bounds.width - total,
                     _ => 0.,
                 };
-            for (id, w) in shown {
+            let mut bar: Option<HeaderBar> = None;
+            for (entry, w, gap) in shown {
+                x += gap;
                 result.items.push(HeaderItemBounds {
-                    id,
+                    id: entry.id,
                     bounds: Bounds {
                         x,
                         y,
@@ -753,16 +795,33 @@ impl HeaderLayout {
                         height: tile,
                     },
                 });
-                x += w + item_gap;
+                x += w;
+                if !joins(entry) || gap > 0. {
+                    result.bars.extend(bar.take());
+                }
+                if joins(entry) {
+                    bar.get_or_insert_default().items.push(entry.id);
+                }
             }
             if overflow && overflow_width > 0. {
+                x += overflow_gap;
                 result.overflow[zone] = Some(Bounds {
                     x,
                     y,
                     width: overflow_width,
                     height: tile,
                 });
+                if !editing {
+                    if overflow_gap > 0. {
+                        result.bars.extend(bar.take());
+                    }
+                    bar.get_or_insert_default().overflow = Some(zone);
+                }
             }
+            result.bars.extend(bar);
+        }
+        for i in 0..result.bars.len() {
+            result.bars[i].bounds = result.bar_bounds(&result.bars[i]);
         }
         result
     }
@@ -1125,6 +1184,109 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn adjacent_icon_controls_share_bars_outside_customization() {
+        use HeaderItem::*;
+        let tool = |command| Tool {
+            control: ToolbarControl::Command { command },
+        };
+        let h = HeaderLayout::from_items(
+            HeaderSize::Small,
+            [
+                vec![
+                    Capy,
+                    Menu,
+                    tool(CommandId::Lasso),
+                    Space,
+                    tool(CommandId::ScaleRotate),
+                ],
+                vec![DocumentTitle],
+                vec![
+                    tool(CommandId::DrawingBrush),
+                    tool(CommandId::Eraser),
+                    Workspaces,
+                    Settings,
+                ],
+            ],
+        );
+        let id = |zone: usize, i: usize| h.zones[zone][i].id;
+        let at = |g: &HeaderGeometry, id| g.items.iter().find(|i| i.id == id).unwrap().bounds;
+        let contiguous = |g: &HeaderGeometry| {
+            for bar in &g.bars {
+                let mut members: Vec<_> = bar
+                    .items
+                    .iter()
+                    .map(|id| at(g, *id))
+                    .chain(bar.overflow.and_then(|zone| g.overflow[zone]))
+                    .collect();
+                members.sort_by(|a, b| a.x.total_cmp(&b.x));
+                for pair in members.windows(2) {
+                    assert_eq!(pair[0].x + pair[0].width, pair[1].x, "{bar:?}");
+                }
+                let (first, last) = (members[0], members[members.len() - 1]);
+                assert_eq!(
+                    bar.bounds,
+                    Bounds {
+                        x: first.x,
+                        y: first.y + 1.,
+                        width: last.x + last.width - first.x,
+                        height: first.height - 2.,
+                    }
+                );
+            }
+        };
+        let g = h.resolve(1600., [0.; 2], &[], false);
+        assert_eq!(
+            g.bars.iter().map(|b| b.items.clone()).collect::<Vec<_>>(),
+            vec![
+                vec![id(0, 1), id(0, 2)],
+                vec![id(0, 4)],
+                vec![id(2, 0), id(2, 1)],
+                vec![id(2, 3)]
+            ]
+        );
+        assert_eq!(
+            g.bars[0].bounds.height, 34.,
+            "matches the workspace switcher"
+        );
+        assert_eq!(
+            at(&g, id(0, 1)).x,
+            at(&g, id(0, 0)).x + 42.,
+            "Capy stays separate"
+        );
+        assert_eq!(
+            at(&g, id(0, 3)).x,
+            at(&g, id(0, 2)).x + 42.,
+            "Space separates bars"
+        );
+        contiguous(&g);
+        contiguous(&h.resolve_documents(1600., [0.; 2], &[], false, 3));
+
+        let editing = h.resolve(1600., [0.; 2], &[], true);
+        assert!(editing.bars.is_empty());
+        assert_eq!(at(&editing, id(0, 2)).x, at(&editing, id(0, 1)).x + 42.);
+
+        let mut joined = false;
+        for width in (300..900).step_by(12) {
+            let g = h.resolve(width as f32, [0.; 2], &[], false);
+            contiguous(&g);
+            if let Some(overflow) = g.overflow[2] {
+                let bar = g
+                    .bars
+                    .iter()
+                    .find(|b| b.overflow == Some(2))
+                    .expect("overflow joins a bar");
+                if let Some(last) = bar.items.last() {
+                    joined = true;
+                    assert_eq!(at(&g, *last).x + at(&g, *last).width, overflow.x);
+                }
+            }
+        }
+        assert!(
+            joined,
+            "a partly hidden tool bar ends with its overflow button"
+        );
     }
     #[test]
     fn empty_center_drop_target_scales_with_width_without_covering_native_controls() {

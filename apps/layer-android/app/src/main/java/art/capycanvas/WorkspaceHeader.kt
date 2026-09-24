@@ -122,6 +122,9 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         val geometry = input.preview?.objectOrNull("geometry") ?: resolved ?: input.geometry
         val heldId = input.held?.source?.takeIf { it.optString("kind") == "item" }?.getInt("value")
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
+        val bars = geometry?.optJSONArray("bars")?.objects() ?: emptyList()
+        val joined = bars.flatMap { bar -> bar.array("items").values().map { (it as Number).toInt() } }.toSet()
+        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.tabs, SquircleShape(50))) }
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
             val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
             Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
@@ -136,7 +139,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                     val x by animateFloatAsState(bounds.number("x"), tween(if (heldBounds != null) 0 else 120), label = "header-x")
                     val natural = metrics.objects().first { it.getInt("id") == id }.number("width")
                     HeaderItem(host, snapshot, input, entry, specs.getValue(id), size, title,
-                        compact = bounds.number("width") < natural - .5f,
+                        compact = bounds.number("width") < natural - .5f, inBar = id in joined,
                         modifier = Modifier.offset { IntOffset((x * density).roundToInt(), (bounds.number("y") * density).roundToInt()) }
                             .size(bounds.number("width").dp, bounds.number("height").dp).zIndex(if (heldBounds == null) 0f else 10f),
                         editing = editing)
@@ -151,7 +154,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
             Box(Modifier.placed(bounds, density).testTag("header-overflow-$zone")
                 .then(if (editing && single != null) Modifier.headerSource(input, obj("kind" to "item", "value" to single, "overflow_zone" to zone), specs.getValue(single).getString("label"), 1) else Modifier)) {
                 HeaderButton("More title bar items", false, true, false, Modifier.fillMaxSize(),
-                    onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", "More title bar items", Modifier.size(size.number("icon").dp)) }
+                    inBar = bars.any { it.optInt("overflow", -1) == zone }, onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", "More title bar items", Modifier.size(size.number("icon").dp)) }
             }
         }
         // Overflow rows remain inside the stable capture owner. A native popup
@@ -214,7 +217,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 }
 
 @Composable private fun HeaderItem(host: CanvasHost, snapshot: JSONObject, input: HeaderInteraction, entry: JSONObject,
-    spec: JSONObject, size: JSONObject, title: String, compact: Boolean, modifier: Modifier, editing: Boolean) {
+    spec: JSONObject, size: JSONObject, title: String, compact: Boolean, inBar: Boolean, modifier: Modifier, editing: Boolean) {
     val id = entry.getInt("id")
     val item = entry.getJSONObject("item")
     val kind = item.getString("kind")
@@ -277,7 +280,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)
                 else -> HeaderButton(label, spec.optBoolean("selected") && kind != "capy", !editing && spec.optBoolean("enabled"), open,
                     Modifier.fillMaxSize().testTag(if (kind == "menu_labels") "header-menu-labels-compact" else "header-control-$id"),
-                    onClick = {
+                    inBar = inBar, onClick = {
                         when (kind) {
                             "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
                             "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
@@ -297,21 +300,24 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
     modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
-    onClick: () -> Unit, content: @Composable () -> Unit) {
+    inBar: Boolean = false, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
+    val click = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(),
+        enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+    val inset = inBar && !open
     HoverTip(label, modifier) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
-        .background(if (surface) colors.headerSurface else Color.Transparent).background(when {
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight())
+        .then(if (inset) click.padding(5.dp).clip(SquircleShape(50)) else Modifier.clip(shape))
+        .background(if (surface && !inBar) colors.headerSurface else Color.Transparent).background(when {
         selected -> colors.active
         open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)
         enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
-    }).hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(), enabled = enabled,
-        role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }
+    }).then(if (inset) Modifier else click), contentAlignment = Alignment.Center) { content() }
     }
 }
 

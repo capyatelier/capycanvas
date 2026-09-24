@@ -27,6 +27,13 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
+.window-bar .header-bar { background: var(--tabbar-bg); border-radius: var(--header-radius); }
+.window-bar .header-item.in-bar .header-tool,
+.window-bar .header-item.in-bar menubutton > button,
+.window-bar menubutton.chrome-control.in-bar > button { min-width: 0; min-height: 0; padding: 0; border: 5px solid transparent; border-radius: 999px; background-clip: padding-box; }
+.window-bar .header-item.in-bar .header-tool.drawer-open { border-width: 0; border-radius: var(--header-radius); }
+.window-bar .header-item.in-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.window-bar .in-bar image { -gtk-icon-shadow: none; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
 .header-editor-content { padding: 8px 12px; }
 .header-editor button { min-height: 24px; padding: 4px 8px; border-radius: var(--control-radius); }
@@ -54,7 +61,10 @@ window, label, text { font-size: var(--ui-text-size); }
 .light-theme .window-bar .header-readout { border-radius: var(--header-radius); }
 .light-theme .window-bar .header-readout { min-height: 36px; }
 .light-theme .window-bar .document-title { padding: 6px; }
-.light-theme .window-bar .header-menu-labels menubutton.chrome-control > button { background-color: transparent; }
+.light-theme .window-bar .header-menu-labels menubutton.chrome-control > button,
+.light-theme .window-bar .header-item.in-bar .header-tool:not(.drawer-open),
+.light-theme .window-bar .header-item.in-bar menubutton > button,
+.light-theme .window-bar menubutton.chrome-control.in-bar > button { background-color: transparent; }
 .light-theme .window-bar .header-tool:hover,
 .light-theme .window-bar menubutton.chrome-control > button:hover { background-image: linear-gradient(alpha(var(--window-fg-color), .10), alpha(var(--window-fg-color), .10)); }
 .light-theme .window-bar .header-tool.selected-tool { background-image: linear-gradient(alpha(var(--accent-bg-color), .22), alpha(var(--accent-bg-color), .22)); }

@@ -1103,8 +1103,13 @@ fn native_header_spacing_visual() {
                     .named(&format!("header-item-{}", pair[1].id))
                     .compute_bounds(&d.w.surface)
                     .unwrap();
+                let gap = if pair[0].item.joins_bar() && pair[1].item.joins_bar() {
+                    0.
+                } else {
+                    6.
+                };
                 assert!(
-                    (b.x() - a.x() - a.width() - 6.).abs() < 1.,
+                    (b.x() - a.x() - a.width() - gap).abs() < 1.,
                     "tile gap {a:?} {b:?}"
                 );
             }

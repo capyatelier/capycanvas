@@ -204,7 +204,7 @@ class AndroidTitleBarTest {
         instrumentation.runOnMainSync {
             val (root, node) = checkNotNull(node(tag))
             val screen = IntArray(2); root.view.getLocationOnScreen(screen)
-            position = Offset(screen[0] + node.boundsInRoot.left + 3 * density, screen[1] + node.boundsInRoot.center.y)
+            position = Offset(screen[0] + node.boundsInRoot.left + 8 * density, screen[1] + node.boundsInRoot.center.y)
         }
         val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
         return try { bitmap.getPixel(position.x.toInt(), position.y.toInt()) } finally { bitmap.recycle() }
