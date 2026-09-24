@@ -86,7 +86,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
     const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'selection-layer-load');
     load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
-    load.title='Load a copy as the current selection';load.setAttribute('aria-label',load.title);
     row.append(eye, check, thumbnails, text, lock, grip);
     row.onclick = e => { if (!e.target.closest("button,input")) select(false); };
     name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
@@ -222,7 +221,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       // widgets, SVGs and text through canvas movement and raster publications.
       if(r.presentation===key)return;
       r.presentation=key;
-      r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;
+      r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;r.load.title=layer.load_selection_tooltip;r.load.setAttribute("aria-label",r.load.title);
       if (!layer.can_delete) r.closeSwipe();
       r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?"Hide selection overlay":"Show selection overlay"):(layer.visible?"Hide layer":"Show layer");
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));

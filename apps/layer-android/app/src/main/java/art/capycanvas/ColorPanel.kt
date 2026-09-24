@@ -58,7 +58,7 @@ private fun JSONArray.point(scale: Float) = Offset(getDouble(0).toFloat() * scal
 private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat().dp, rect.getDouble(1).toFloat().dp)
     .size(rect.getDouble(2).toFloat().dp, rect.getDouble(3).toFloat().dp)
 
-/** One square, including the corner controls. Rust owns all layout and color math. */
+/** Shared wheel and footer geometry; Rust owns layout and color math. */
 @Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
     val view = host.panelContent?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
@@ -95,6 +95,19 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
                 if(hdr)ColorIntensityArc(view,Modifier.matchParentSize(),::color)
                 ColorWheel(host,view, Modifier.place(layout.array("wheel")), ::color)
+                for (white in listOf(true, false)) {
+                    val preset = view.array("quick_colors").objects().first { it.getBoolean("white") == white }
+                    val key = if (white) "white" else "black"
+                    ColorButton(preset.getString("label"), Modifier.place(layout.array(key)).testTag("color-quick-$key")
+                        .semantics { selected = preset.getBoolean("selected") },
+                        onClick = { color(obj("op" to "quick_color", "white" to white)) }) { _, hovered ->
+                        Canvas(Modifier.matchParentSize()) {
+                            drawCircle(preset.array("rgba").color())
+                            val stroke = (if (preset.getBoolean("selected") || hovered) 2.dp else 1.dp).toPx()
+                            drawCircle(colors.text.copy(alpha = if (preset.getBoolean("selected") || hovered) 1f else .25f), size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
+                        }
+                    }
+                }
                 // Foreground paints/hits above background in their shared overlap.
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
@@ -126,7 +139,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     }
     if(edit) {
         val state=host.panelContent!!.getJSONObject("state").displayColors()
-        val slot=if(state.getString("slot")=="background")"background" else "foreground"
+        val slot=state.getString("slot")
         var intensity:Float?=null
         ColorEditorDialog(host,state.getJSONObject(slot),{edit=false},initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) {selected->
             edit=false;color(if(intensity!=null)obj("op" to "set_slot_intensity","slot" to slot,"color" to selected,"stops" to intensity)else obj("op" to "set_slot","slot" to slot,"color" to selected))
@@ -224,7 +237,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             }), onClick = { select() }) { _, hovered ->
         Canvas(Modifier.fillMaxSize()) {
             val radius = size.minDimension / 2
-            val padding = (if (slot == "foreground") 3.dp else 1.dp).toPx()
+            val padding = (if (slot == "background") 1.dp else 3.dp).toPx()
             drawCircle(colors.panel)
             val field = Path().apply { addOval(Rect(center - Offset(radius - padding, radius - padding), Size((radius - padding) * 2, (radius - padding) * 2))) }
             clipPath(field) {

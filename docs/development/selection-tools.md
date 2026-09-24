@@ -229,3 +229,13 @@ replace the selected foreground/background paint; from transparency they select
 an independent paint, preserving both remembered colors. Wheel edits continue
 on that independent paint until a remembered slot is selected. The extra paint
 and its SDR/HDR picker coordinates survive workspace saves.
+
+Regression checks for these controls include `device.test.mjs --color-panel`
+and `--selection-tools` against Huion Chrome, and Android's
+`neutralShortcutsPreserveRememberedColorsWithTouchPenAndMouse`,
+`compactGeometryAndRastersInBothThemes`, and `paintableSelectionsOnDevice`.
+The native GTK color-panel, HDR-picker, and Quick Mask input tests cover the
+same shared model. Color-panel fixtures retain recoverable drawings and use
+isolated workspaces. Compact hosts fit the full footer and leave the HDR
+readout clear of both shortcuts. Web caches the fitted geometry across color
+changes.

@@ -87,10 +87,12 @@ mod painted_selection_checks {
         s.layer_action(LayerAction::Select { id: second.0, mask: false }).unwrap();
         assert_eq!(s.mask_properties().color, cyan);
         assert_eq!(s.mask_properties().opacity, 0.5);
+        s.dispatch(set(second.0, "mask_mode", EffectValue::Choice(1))).unwrap();
+        let saved = serde_json::to_string(&s.state.settings).unwrap();
         let mut restored = session(); restored.set_platform(Platform::Gtk);
-        restored.dispatch(UiAction::RestoreSettings { settings: s.state.settings.clone() }).unwrap();
+        restored.dispatch(UiAction::RestoreSettings { settings: serde_json::from_str(&saved).unwrap() }).unwrap();
         invoke(&mut restored, CommandId::QuickMask);
-        assert_eq!(restored.state.layer_properties.controls[0].value, EffectValue::Choice(0));
+        assert_eq!(restored.state.layer_properties.controls[0].value, EffectValue::Choice(1));
     }
 
     fn send(s: &mut UiSession<Recorder>, phase: PenPhase, x: f32) {

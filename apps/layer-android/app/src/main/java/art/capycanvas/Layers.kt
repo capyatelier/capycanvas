@@ -397,9 +397,9 @@ internal class LayerSwipe {
         thumb(false)
         if(layer.optBoolean("selection_layer")) {
             val load = obj("type" to "selection", "action" to obj("op" to "load_layer", "id" to id, "mode" to "new", "inverted" to false))
-            ActionTip(host,"Load selection",load,Modifier.size(30.dp)) {
+            ActionTip(host,layer.getString("load_selection_tooltip"),load,Modifier.size(30.dp)) {
                 Box(Modifier.fillMaxSize().testTag("selection-load-$id").clickable { host.dispatch(load) }, contentAlignment=Alignment.Center) {
-                    SharedIcon("selection-load", "Load selection", Modifier.size(24.dp))
+                    SharedIcon("selection-load", layer.getString("load_selection_tooltip"), Modifier.size(24.dp))
                 }
             }
         }

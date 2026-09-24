@@ -22,6 +22,8 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await toggleLayers();
   await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;const poll=()=>{if(document.querySelector('.content-drawer .layer-row[data-layer="0"] canvas')?.dataset.previewRevision)resolve(true);else if(performance.now()>end)reject(Error('Quick Mask thumbnail'));else setTimeout(poll,50);};poll();})`);
 
+  await point(at(-45,0));
+  assert.ok(await evaluate('layerApp.state().customization.drawer?.columns.flat().includes("layers")'),'Layers drawer stays open while painting');
   await toggleLayers();
   await point(at(-45,0));
   const maskPixels=async()=>{
@@ -53,9 +55,11 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await toggleLayers();
   await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:true}});
   await evaluate(`if(!document.querySelector('.effect-properties')?.getBoundingClientRect().height)document.querySelector('.dock-tab[data-panel="properties"],.column-tab[data-panel="properties"]')?.click()`);await settle();
-  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Selection paint');n.value='1';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
+  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Paint selection');n.value='1';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
   assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_mode").value.value'),1);
-  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Selection paint');n.value='0';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
+  await send({type:'set_color',rgba:[.1,.6,.9,1]});
+  assert.ok(await evaluate('layerApp.state().layer_tools.mask_editing.colors.foreground.rgba.every((v,i)=>Math.abs(v-[.1,.6,.9,1][i])<1e-6)'), 'Grayscale mask preserves full-color picking');
+  await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Paint selection');n.value='0';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
   const propertiesShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/quick-mask-properties.png`,Buffer.from(propertiesShot.data,'base64'));
   const propertyMaskPixels=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${propertiesShot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const p=g.getImageData(0,100,c.width*.75,c.height-100).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
   assert.ok(propertyMaskPixels>100,'Changing painting convention preserves the visible mask');

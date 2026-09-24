@@ -1,3 +1,4 @@
+import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
@@ -81,15 +82,22 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
+  if (process.argv.some(flag=>['--selection-tools','--color-panel'].includes(flag))) {
+    // Recovery discovery can finish after startup and workspace switching.
+    // Keep drawings available without letting a late prompt swallow test input.
+    await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
+  }
   if (process.argv.includes('--ui-speed') || process.argv.includes('--editor'))
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Start with a clean fixture without recovery or other dialogs');
-  if (['--ui-speed','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
+  if (['--ui-speed','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
     const capture=await evaluate('layerApp.app.workspace_capture()');
+    const theme=await evaluate('layerApp.state().settings.theme ?? null');
+    if(process.argv.includes('--color-panel')){await workspaceInput({type:'switch',id:'builtin:workspace:photographer'});await workspaceIdle();}
     await workspaceInput({type:'form',kind:'new'});
     await workspaceInput({type:'submit',name:`Tablet regression ${Date.now()}`});
     const created=(await workspaceIdle()).id; assert.notEqual(created,original);
-    workspaceIsolation={original,created,capture};
+    workspaceIsolation={original,created,capture,theme};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
   if (process.argv.includes("--filter-drawer")) {
@@ -149,6 +157,9 @@ try {
   } else if (process.argv.includes("--drawer-style")) {
     await checkDrawerStyling({call,evaluate,settle});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-panel")) {
+    await checkColorPanel({call,evaluate,settle,inputOnly:process.argv.includes("--color-input")});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--selection-tools")) {
     await checkSelectionTools({call,evaluate,settle});
     assert.deepEqual(errors,[]);
@@ -196,10 +207,11 @@ try {
 } finally {
   try { if(workspaceIsolation) {
     await workspaceInput({type:'cancel'}); await workspaceInput({type:'cancel'});
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(workspaceIsolation.theme)}})`);
     await workspaceInput({type:'switch',id:workspaceIsolation.original}); await workspaceIdle();
     await workspaceInput({type:'form',kind:'delete',id:workspaceIsolation.created});
     await workspaceInput({type:'submit',name:''}); await workspaceIdle();
     const normalize=text=>JSON.stringify(JSON.parse(text),(key,value)=>key==='timestamp_ms'?'date':value);
     assert.equal(normalize(await evaluate('layerApp.app.workspace_capture()')),normalize(workspaceIsolation.capture),'The original workspace and its history remain intact');
-  } } finally { socket.close();for(const p of pending.values())clearTimeout(p.timer); }
+  } } finally { await evaluate("window.deviceRecoveryWatcher?.disconnect();delete window.deviceRecoveryWatcher").catch(()=>{});socket.close();for(const p of pending.values())clearTimeout(p.timer); }
 }

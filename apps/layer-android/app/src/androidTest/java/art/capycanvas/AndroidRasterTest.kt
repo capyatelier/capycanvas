@@ -351,11 +351,11 @@ class AndroidRasterTest {
             val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "properties" in it.array("panels").values() }.getInt("id")
             send(obj("type" to "select_panel_tab", "group" to group, "panel" to "properties"))
         }
-        compose.onNodeWithText("Selection paint").performClick()
+        compose.onNodeWithText("Paint selection").performClick()
         compose.onNodeWithText("Grayscale mask").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value")==1 }
         compose.onNodeWithText("Grayscale mask").performClick()
-        compose.onNodeWithText("Selection paint").performClick()
+        compose.onNodeWithText("Paint selection").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value")==0 }
         compose.waitForIdle()
         automation.takeScreenshot()?.let { image -> try { File(activity.getExternalFilesDir(null),"quick-mask-properties.png").outputStream().use {image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)} } finally {image.recycle()} }
