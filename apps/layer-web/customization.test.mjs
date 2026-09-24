@@ -140,7 +140,7 @@ export async function checkTabStyles({ call, evaluate, settle }) {
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.textContent===${JSON.stringify(label)}).click()`);
       for (const active of ['brushes','sizes','layers']) {
         await evaluate(`document.querySelector('.dock-tab[data-panel="${active}"]').click()`); await settle();
-        const tabs = await evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({panel:n.dataset.panel,icon:!!n.querySelector('svg'),name:n.textContent.length>0,title:n.title,height:n.getBoundingClientRect().height}))`);
+        const tabs = await evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({panel:n.dataset.panel,icon:!!n.querySelector('svg'),name:n.textContent.trim().length>0,title:n.title,height:n.getBoundingClientRect().height}))`);
         assert.equal(tabs.length, 3);
         for (const tab of tabs) {
           assert.equal(tab.icon, style !== 'name');
@@ -154,7 +154,7 @@ export async function checkTabStyles({ call, evaluate, settle }) {
     }
     await send({type:'customize',action:{type:'set_tab_style',group,style:'automatic'}});
     await send({type:'move_panel',panel:'layers',target:{kind:'float',position:[850,200]}});
-    const names = () => evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({icon:!!n.querySelector('svg'),name:n.textContent.length>0}))`);
+    const names = () => evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({icon:!!n.querySelector('svg'),name:n.textContent.trim().length>0}))`);
     assert.deepEqual(await names(), [{icon:true,name:true},{icon:true,name:true}], 'Automatic expands both names when the third tab leaves');
     const shot = await call('Page.captureScreenshot', {format:'png'});
     await writeFile(`${dir}/web-${theme}-automatic-two-tabs.png`, Buffer.from(shot.data, 'base64'));

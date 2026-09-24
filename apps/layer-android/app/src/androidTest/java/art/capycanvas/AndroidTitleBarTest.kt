@@ -517,7 +517,7 @@ class AndroidTitleBarTest {
         SystemClock.sleep(250)
         drag("header-component-tools", center())
         waitFor("picker") { node("tool-picker-search") != null }
-        action(obj("type" to "customize", "action" to obj("type" to "picker_search", "query" to "Color")))
+        action(obj("type" to "customize", "action" to obj("type" to "picker_search", "query" to "Brush color")))
         waitFor("Color choice") { node("tool-picker-choice-Brush color") != null }
         tap("tool-picker-choice-Brush color"); tap("tool-picker-confirm")
         val color = entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("kind") == "color" }.getInt("id")
@@ -579,10 +579,14 @@ class AndroidTitleBarTest {
             tool = device
             for (panel in listOf("brushes", "tool_settings", "sizes", "navigator")) {
                 tap("column-icon-$panel")
-                waitFor("secondary $panel opens") { node("panel-body-$panel") != null }
-                assertTrue(bounds("group-6").right < bounds("collapsed-column-4").left)
+                waitFor("secondary $panel drawer opens") {
+                    node("column-drawer-4") != null && state().getJSONObject("customization").array("column_drawers").objects()
+                        .any { it.getJSONObject("anchor").optString("origin") == panel }
+                }
+                assertTrue(bounds("column-drawer-4").right < bounds("collapsed-column-4").left)
                 assertNotNull(bounds("panel-body-color"))
                 tap("column-icon-$panel")
+                waitFor("secondary $panel drawer closes") { node("column-drawer-4") == null }
                 checkColumns()
             }
         }
@@ -606,7 +610,13 @@ class AndroidTitleBarTest {
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         waitFor("Sketch") { view().optString("id") == "builtin:workspace:painter" && node("workspace-switcher") != null }
         val workspace = state().getJSONObject("workspace")
-        assertEquals("Sketch has no painter toolbars", 0, workspace.getJSONObject("layout").array("bands").length())
+        val bands = workspace.getJSONObject("layout").array("bands").objects()
+        assertEquals("Sketch docks only its compact brush toolbar", listOf(listOf("left", "center", 1)),
+            bands.map { listOf(it.getString("edge"), it.optString("alignment"), it.getJSONObject("root").array("panels").length()) })
+        val sliders = workspace.getJSONObject("layout").array("panels").objects()
+            .first { it.getString("id") == bands[0].getJSONObject("root").array("panels").getString(0) }
+            .getJSONObject("content").array("tiles").objects().map { it.getJSONObject("control").getString("kind") }
+        assertTrue("Compact brush sliders: $sliders", "brush_size_slider" in sliders && "brush_opacity_slider" in sliders)
         assertFalse(workspace.getJSONObject("layout").getJSONObject("canvas_info").getBoolean("visible"))
         val tools = entries().filter { it.getJSONObject("item").getString("kind") == "tool" }
         assertEquals(8, tools.size)
@@ -622,10 +632,15 @@ class AndroidTitleBarTest {
             shot("sketch-drawer-$id")
             // Unused bar space dismisses the drawer without activating a tool.
             // Center is the switcher, so use the free gap beside the first region.
+            val explicit = state().getJSONObject("customization").getJSONObject("drawer").getString("dismissal") == "explicit"
             instrumentation.runOnMainSync { pressed = node("title-bar")!!.first }
             val last = model().array("zones").getJSONArray(0).objects().last().getInt("id")
             val gap = Offset(bounds("header-item-$last").right + 12 * density, center().y)
             event(MotionEvent.ACTION_DOWN, gap); event(MotionEvent.ACTION_UP)
+            if (explicit) {
+                idle(); assertNotNull("Explicit drawer $id ignores the bar gap", node("tool-drawer"))
+                tap("header-control-$id")
+            }
             waitFor("bar gap dismisses drawer") { node("tool-drawer") == null }
         }
         val brush = tools.first { it.getJSONObject("item").getJSONObject("control").optString("command") == "drawing_brush" }.getInt("id")

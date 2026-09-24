@@ -285,7 +285,7 @@ fn native_header_managed_input() {
     d.click_name("workspace-switch-painter");
     Driver::wait_ready(&d.w);
     pump(400);
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert_eq!(
         d.w.workspaces
             .manager
@@ -545,7 +545,7 @@ fn native_default_workspace_recovery_input() {
     d.click_name("workspace-switch-painter");
     Driver::wait_ready(&d.w);
     pump(400);
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
     assert_eq!(
         sql(
@@ -582,7 +582,7 @@ fn native_default_workspace_recovery_input() {
             .as_deref(),
         Some("Sketch")
     );
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert!(d.w.area.is_mapped());
     assert_eq!(
         sql(
@@ -617,7 +617,7 @@ fn native_default_workspace_recovery_input() {
     let cancel = find_button(d.w.workspaces.ui.dialog.upcast_ref(), "Cancel").unwrap();
     d.click(cancel.upcast_ref());
     pump(250);
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     for name in ["illustrator", "photographer", "painter"] {
         d.click_name(&format!("workspace-switch-{name}"));
         Driver::wait_ready(&d.w);
@@ -2053,7 +2053,7 @@ fn native_header_editor_controls_input() {
     assert!(d.w.resolved().status.y > d.w.surface.height() as f32 / 2.);
     assert_eq!(d.w.view_info.halign(), gtk::Align::End);
     d.click_name("header-edit-cancel");
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     d.edit();
     // Removing every editable navigation item cannot strand touch users.
     let ids = state(&d.w)

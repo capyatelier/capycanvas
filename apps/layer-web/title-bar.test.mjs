@@ -54,7 +54,10 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     await shot('startup');
     await selectWorkspace('Sketch');
     const original=await model();
-    assert.deepEqual(await evaluate('layerApp.state().workspace.layout.bands'),[],'Sketch has no duplicate docked toolbars');
+    const bands=await evaluate('layerApp.state().workspace.layout.bands');
+    assert.deepEqual(bands.map(b=>[b.edge,b.alignment,b.root.panels.length]),[['left','center',1]],'Sketch docks only its compact brush toolbar');
+    const sliders=await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id===${JSON.stringify(bands[0].root.panels[0])}).content.tiles.map(t=>t.control.kind)`);
+    assert.ok(sliders.includes('brush_size_slider')&&sliders.includes('brush_opacity_slider'),`compact brush sliders: ${sliders}`);
     assert.equal(original.size,'medium');
     assert.deepEqual(original.zones[0].map(e=>e.item.kind),['capy','menu','tool','tool','tool']);
     assert.deepEqual(original.zones[1].map(e=>e.item.kind),['workspaces']);
@@ -184,7 +187,9 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
         await wait("!!document.querySelector('.content-drawer:not([inert])')");await pause(200);
         assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).borderBottomLeftRadius`),'0px');
         await shot(`drawer-${control.panel||control.kind}`);
+        const explicit=await evaluate("layerApp.state().customization.drawer.dismissal==='explicit'");
         await pointer('down',{x:720,y:2});await pointer('up');await settle();
+        if(explicit){assert.ok(await evaluate('!!layerApp.state().customization.drawer'),`${control.panel||control.kind}: explicit drawers ignore outside contact`);await click(selector);}
         await wait('!layerApp.state().customization.drawer');
       }
     }
@@ -212,7 +217,7 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     // Title-bar tool families preserve toolbar activation and drawer switching.
     for(const pointerType of ['mouse','touch','pen']) {
       device=pointerType;
-      for(const command of ['drawing_brush','sculpt','eraser','lasso','scale_rotate']) {
+      for(const command of ['drawing_brush','sculpt','eraser','select','scale_rotate']) {
         const entry=original.zones.flat().find(e=>e.item.control?.command===command),selector=`[data-header-item="${entry.id}"] .header-tool`;
         if(await evaluate(`document.querySelector(${JSON.stringify(selector)}).disabled`))continue;
         await click(selector);if(!await evaluate('!!layerApp.state().customization.drawer'))await click(selector);
@@ -222,10 +227,11 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
       }
       const color=original.zones.flat().find(e=>e.item.control?.kind==='color');
       await click(`[data-header-item="${color.id}"] .header-tool`);await pause(180);
-      const before=await evaluate('layerApp.state().colors');await click('.content-drawer .color-swap');
-      assert.deepEqual(await evaluate('layerApp.state().colors.foreground'),before.background);
-      await pointer('down',{x:720,y:2});await pointer('up');await wait('!layerApp.state().customization.drawer');
-      results.push(`${pointerType}: Brush/Sculpt/Eraser/Lasso/Transform drawer activation and selected feedback; Color swap and title-space dismissal`);
+      const background=await evaluate('JSON.stringify(layerApp.state().colors.background)');await click('.content-drawer .color-swap');
+      assert.equal(await evaluate('JSON.stringify(layerApp.state().colors.foreground)'),background);
+      await pointer('down',{x:720,y:2});await pointer('up');await settle();assert.ok(await evaluate('!!layerApp.state().customization.drawer'),'Color drawer ignores title-space contact');
+      await click(`[data-header-item="${color.id}"] .header-tool`);await wait('!layerApp.state().customization.drawer');
+      results.push(`${pointerType}: Brush/Sculpt/Eraser/Select/Transform drawer activation and selected feedback; Color swap and explicit close`);
     }
     device='mouse';await begin();await drop('#header-component-tools',{x:720,y:25});await wait("document.querySelector('#tool-picker').open");
     await click('#tool-search');await call('Input.insertText',{text:'Zoom In'});await settle();await click('.tool-choice input');await click('#confirm-tools');await click('#header-edit-done');
