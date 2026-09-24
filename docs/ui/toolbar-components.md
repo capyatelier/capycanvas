@@ -25,16 +25,22 @@ They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s size and opacity settings and disable when unavailable.
 Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values; opacity tracks show transparency over
-a checkerboard. Values remain horizontal in both orientations.
+a checkerboard. The tracks have no persistent numeric readout. Dragging opens a
+rounded floating stamp preview beside the slider, updates it continuously, and
+closes it on release or cancellation. A tap keeps the preview open until an
+outside tap or context change. Its header shows the value and units. Size uses
+the current tip at its document-pixel diameter, clipped for oversized tips;
+opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,
+grain and dual-tip texture come from the configured brush.
 
-Click the value to edit an expression inline. Drag a number up/down with touch
-or pen along its slider's mapping, or scroll over it with a mouse. Size is
-logarithmic, 0.5–2048 px, and
-snaps to whole pixels above 32. Compact readouts omit decimals at three digits
-and above; exact entry retains the shared numeric precision. Horizontal
-readouts show units. Standalone vertical sliders omit units at every size.
-Opacity sliders use whole percentages. Short allocations reduce the track before the value editor.
-Tool, document and workspace changes cancel unfinished text. Numeric edits do not create workspace-layout history entries.
+The preview's plus button bookmarks the value for that brush preset; the minus
+button removes an existing mark. Marks are short lines perpendicular to the
+track, placed inside the wider handle when selected. Tapping near a mark
+recalls its exact value; dragging retains the full range without magnetic
+snapping. Bookmarks persist in application settings and appear in every copy
+of that slider. Size uses the shared logarithmic mapping and snaps to whole
+pixels above 32. Opacity uses whole percentages. Changes to brush values or
+bookmarks do not create workspace-layout history entries.
 
 ## Contextual options
 
@@ -97,12 +103,17 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   queries to Wasm/JNI; pointer timing/capture and font measurement stay native.
   Editors retain their original context token, and measurements are cached across
   value-only updates. The standalone slider uses the same shared cap/track geometry.
+- `toolbar_preview.rs` owns bookmark validation, hit policy, and stamp geometry.
+  A small raster is requested only when opening the popup, from immutable CPU
+  tip assets through `CanvasRenderer::tip_mask`; dragging only scales and fades it.
+  GTK hands reference-counted brush sources across its render-worker boundary
+  alongside cursor outlines, including startup and document-color adoption.
 - Numeric values, native measurements and overflow visibility are not saved in
   toolbar configuration. Typed component kinds, horizontal text/icon mode, slider visibility, and ordinary
   tile IDs persist. Preferences participate in workspace undo/redo.
 
 Slider tracks and option controls respond immediately to mouse, touch and pen.
-Press, hold, then drag the slider value cap or the options More button to
+Press, hold, then drag the slider’s empty leading cap or the options More button to
 reorder the component. A quick cap drag never reorders. Holding a track remains
 a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
 empty Tool Options space with touch or pen opens its display menu; mouse uses
@@ -117,22 +128,24 @@ GTK native-input regressions run through
 `tools/performance/workspace-motion.sh gtk` on a private Mutter display:
 
 - `--native-test=native_toolbar_components_input`: mouse/touch editing and
-  hold-to-reorder caps, exact expressions and errors, context changes, full-width
-  values, inline sliders, vertical/floating placement, independent eyedropper
+  hold-to-reorder caps, stamp preview lifetime and bookmarks, context changes,
+  inline sliders, vertical/floating placement, independent eyedropper
   choices, Apply/Cancel, and light/dark screenshots.
 - `--native-test=native_toolbar_components_pen_input --tablet`: the same slider
-  and reorder gestures with GDK tablet events in both themes.
+  and reorder gestures with GDK tablet events in both themes. The proxy targets
+  the main surface only, so popup buttons are activated through GTK in that
+  journey; native popup hits are covered by mouse/touch and the Wacom hosts.
 - `--native-test=native_toolbar_components_narrow_input` with
   `LAYER_MOTION_VIEWPORT=680x500`: overflow and full options at small widths.
 - `--native-test=native_toolbar_components_drawer_input`: retained toolbar
-  drawer sliders, inline exact values, and cleanup on close.
+  drawer sliders and cleanup on close.
 - `--native-test=native_toolbar_options_presentation_input`: display preferences,
   tile action dimensions, dropdown alignment, and four-digit values in every style.
 - `--native-test=native_toolbar_visual_audit_input`: both themes, all tile sizes,
   both orientations, label/value alignment and clipping, separate horizontal
   icons, inline editing and outside-tap dismissal, and drawer appearance.
-- `--native-test=native_toolbar_value_controls_input`: mapped touch number
-  drags, label resets, and vertical slider popovers.
+- `--native-test=native_toolbar_value_controls_input`: slider previews and bookmarks,
+  label resets, and vertical option popovers.
 - `--native-test=native_toolbar_visible_edges_input`: compact docking at all
   twelve anchors when the visible toolbar reaches an edge before its handle.
 

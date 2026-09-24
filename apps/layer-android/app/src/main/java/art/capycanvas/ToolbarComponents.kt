@@ -21,15 +21,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.*
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
@@ -95,26 +101,32 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val value = field?.number("value") ?: spec.number("min")
             val label = field?.getString("label") ?: tile.getString("label")
             val setting = field?.getString("id") ?: if (opacity) "opacity" else "size"
-            val shown = formatted(spec, value, !vertical)
-            val measurer = rememberTextMeasurer()
-            val textStyle = LocalTextStyle.current
-            val samples = remember(spec.toString(), vertical) { toolbarUi(obj("type" to "numeric_info", "id" to setting,
-                "control" to spec, "compact" to true, "units" to !vertical)).array("samples") }
-            val cap = if (vertical) 36f else (0 until samples.length()).maxOf { measurer.measure(samples.getString(it), textStyle).size.width / density } + 12f
-            val geometry = remember(width, height, vertical, cap) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
-                "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "cap" to cap).toString())) }
-            fun change(next: Float) = edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next))
-            Box(modifier.clip(RoundedCornerShape(6.dp))) {
+            val shown = formatted(spec, value)
+            val marks = model.array("bookmarks").objects()
+            val geometry = remember(width, height, vertical) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
+                "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "cap" to 16).toString())) }
+            var preview by remember { mutableStateOf(false) }
+            var stamp by remember { mutableStateOf<JSONObject?>(null) }
+            DisposableEffect(preview) {
+                var active = true
+                if (preview) host.query(obj("type" to "toolbar_stamp", "context" to context)) { if (active) stamp = it as? JSONObject }
+                else stamp = null
+                onDispose { active = false }
+            }
+            Box(modifier) {
                 Box(Modifier.placed(geometry.getJSONObject(0), density).dragSource(dock, item, holdToDrag = true)
-                    .padding(top = if (vertical) 6.dp else 0.dp), contentAlignment = Alignment.Center) {
-                    NumericSetting(label, value, spec, enabled = field != null, id = "toolbar-$setting-$id", inline = true,
-                        toolbar = true, showUnits = !vertical, showSlider = false, onChange = ::change)
+                    .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"))
+                ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
+                    Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id"),
+                    contact = { down, moved -> preview = down || !moved }) { fill, snap, tolerance ->
+                    val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
+                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "tolerance" to tolerance).toString())).nextValue() as Number
+                    else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString())).number("value")
+                    edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
                 }
-                ToolbarSlider(shown.number("fill"), opacity, vertical, field != null, label,
-                    Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id")) { fill ->
-                    val next = JSONObject(Native.number(obj("control" to spec, "value" to value,
-                        "operation" to obj("type" to "position", "position" to fill)).toString()))
-                    change(next.number("value"))
+                if (preview && field != null) stamp?.let { brush ->
+                    BrushSliderPreview(brush, control, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
+                        dismiss = { preview = false }, bookmark = { edit(obj("type" to "toggle_slider_bookmark", "control" to control)) })
                 }
             }
         } else {
@@ -273,25 +285,34 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     }
 }
 
-@Composable private fun ToolbarSlider(fill: Float, opacity: Boolean, vertical: Boolean, enabled: Boolean,
-    label: String, modifier: Modifier, change: (Float) -> Unit) {
+@Composable private fun ToolbarSlider(fill: Float, marks: List<JSONObject>, opacity: Boolean, vertical: Boolean, enabled: Boolean,
+    label: String, modifier: Modifier, contact: (Boolean, Boolean) -> Unit, change: (Float, Boolean, Float) -> Unit) {
     val onChange by rememberUpdatedState(change)
+    val onContact by rememberUpdatedState(contact)
     val colors = LocalPalette.current
     Canvas(modifier.padding(if (vertical) PaddingValues(horizontal = 5.dp, vertical = 8.dp) else PaddingValues(horizontal = 8.dp, vertical = 5.dp))
         .alpha(if (enabled) 1f else .4f).semantics {
             contentDescription = label; progressBarRangeInfo = ProgressBarRangeInfo(fill, 0f..1f)
-            if (enabled) setProgress { onChange(it); true } else disabled()
+            if (enabled) setProgress { onChange(it, false, 0f); onContact(false, false); true } else disabled()
         }.pointerInput(vertical, enabled) {
             if (!enabled) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown(); down.consume()
-                fun pick(p: Offset) = onChange((if (vertical) 1f - p.y / size.height else p.x / size.width).coerceIn(0f, 1f))
-                pick(down.position)
-                while (true) {
-                    val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                    if (!c.pressed) break
-                    c.consume(); pick(c.position)
+                var moved = false; var finished = false
+                fun pick(p: Offset, snap: Boolean) {
+                    val half = 5.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
+                    if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, 7.dp.toPx()/length)
                 }
+                onContact(true, false); pick(down.position, true)
+                try {
+                    while (true) {
+                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!c.pressed) { finished = true; c.consume(); break }
+                        if (!moved && (c.position - down.position).getDistance() < 3.dp.toPx()) continue
+                        moved = true; c.consume(); pick(c.position, false)
+                    }
+                } finally { onContact(false, moved || !finished) }
+
             }
         }) {
         val thick = 20.dp.toPx().coerceAtMost(if (vertical) size.width else size.height)
@@ -308,8 +329,57 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 drawRect(if (vertical) Brush.verticalGradient(listOf(Color(0xff222222), Color.Transparent)) else Brush.horizontalGradient(listOf(Color.Transparent, Color(0xff222222))))
             } else drawRect(colors.text.copy(alpha = .4f))
         }
-        val marker = 6.dp.toPx()
-        if (vertical) drawRoundRect(colors.thumb, Offset(x - 2.dp.toPx(), (size.height - marker) * (1f - fill)), Size(thick + 4.dp.toPx(), marker), CornerRadius(marker / 2))
-        else drawRoundRect(colors.thumb, Offset((size.width - marker) * fill, y - 2.dp.toPx()), Size(marker, thick + 4.dp.toPx()), CornerRadius(marker / 2))
+        val marker = 10.dp.toPx()
+        if (vertical) drawRoundRect(colors.thumb, Offset(x - 4.dp.toPx(), (size.height - marker) * (1f - fill)), Size(thick + 8.dp.toPx(), marker), CornerRadius(marker / 2))
+        else drawRoundRect(colors.thumb, Offset((size.width - marker) * fill, y - 4.dp.toPx()), Size(marker, thick + 8.dp.toPx()), CornerRadius(marker / 2))
+        for (mark in marks) {
+            val position = mark.number("fill")
+            val center = if (vertical) Offset(size.width / 2, marker / 2 + (size.height-marker)*(1f-position))
+                else Offset(marker / 2 + (size.width-marker)*position, size.height / 2)
+            val delta = if (vertical) Offset(7.dp.toPx(), 0f) else Offset(0f, 7.dp.toPx())
+            drawLine(if (mark.getBoolean("selected")) colors.panel else colors.text, center-delta, center+delta, 2.dp.toPx())
+        }
+
+    }
+}
+
+
+@Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, value: Float, length: Float,
+    vertical: Boolean, selected: Boolean, dismiss: () -> Unit, bookmark: () -> Unit) {
+    val density = LocalDensity.current.density
+    val colors = LocalPalette.current
+    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "value" to value, "length" to length, "extent" to stamp.number("extent")))
+    val bitmap = remember(stamp) {
+        val alpha = stamp.array("alpha"); val size = stamp.getInt("size")
+        android.graphics.Bitmap.createBitmap(IntArray(alpha.length()) { (alpha.getInt(it) shl 24) or 0x00ffffff }, size, size, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+    val provider = remember(vertical, density) { object : PopupPositionProvider {
+        override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+            val gap = (8*density).toInt(); val p = popupContentSize; val a = anchorBounds
+            val x = if (vertical) { if (a.right+p.width+gap <= windowSize.width) a.right+gap else a.left-p.width-gap } else a.left
+            val y = if (vertical) a.top+(a.height-p.height)/2 else { if (a.bottom+p.height+gap <= windowSize.height) a.bottom+gap else a.top-p.height-gap }
+            return IntOffset(x.coerceIn(gap, maxOf(gap,windowSize.width-p.width-gap)), y.coerceIn(gap,maxOf(gap,windowSize.height-p.height-gap)))
+        }
+    } }
+    Popup(provider, onDismissRequest = dismiss, properties = PopupProperties(focusable = false)) {
+        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = RoundedCornerShape(10.dp),
+            color = colors.panel, shadowElevation = 6.dp, border = androidx.compose.foundation.BorderStroke(1.dp, colors.divider)) {
+            Box {
+                Canvas(Modifier.fillMaxSize()) {
+                    val b = layout.getJSONObject("stamp")
+                    clipRect(8.dp.toPx(),36.dp.toPx(),size.width-8.dp.toPx(),size.height-8.dp.toPx()) {
+                        drawImage(bitmap, dstOffset = IntOffset((b.number("x")*density).toInt(),(b.number("y")*density).toInt()),
+                            dstSize = IntSize(maxOf(1,(b.number("width")*density).toInt()),maxOf(1,(b.number("height")*density).toInt())),
+                            alpha = layout.number("opacity"), colorFilter = ColorFilter.tint(colors.text))
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)
+                    Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
+                        SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
     }
 }

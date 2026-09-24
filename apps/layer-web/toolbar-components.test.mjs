@@ -34,6 +34,7 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
       await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...b, button: 'left', buttons: 0, clickCount: 1, pointerType: device });
     }
     await settle();
+    assert.equal(await evaluate(`!!document.querySelector('.toolbar-brush-preview:popover-open')`), false, `${device}: drag lift dismisses preview`);
   }
   const capture = async name => { const shot = await call('Page.captureScreenshot', { format: 'png' }); await writeFile(`${dir}/${name}.png`, Buffer.from(shot.data, 'base64')); };
   await workspace('painter'); await invoke('brush');
@@ -52,8 +53,9 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   const centered = await evaluate(`(()=>{const r=document.querySelector('[data-toolbar-component=brush_size_slider]').getBoundingClientRect(),track=document.querySelector('[data-toolbar-component=brush_size_slider] .number-track').getBoundingClientRect();return {root:r.toJSON(),track:track.toJSON()}})()`);
   assert.ok(Math.abs(centered.root.x+centered.root.width/2-centered.track.x-centered.track.width/2)<2, JSON.stringify(centered));
   await capture('sketch-sliders');
+  await checkSliderBookmarks({ call, evaluate, settle, click, capture, send, slider });
   for (const device of ['mouse', 'touch', 'pen']) {
-    const cap = await rect('[data-toolbar-component=brush_size_slider] .number-value');
+    const cap = await rect('[data-toolbar-component=brush_size_slider] .toolbar-slider-cap');
     const opacity = await rect('[data-toolbar-component=brush_opacity_slider]');
     const before = await evaluate('layerApp.state().brush.diameter');
     async function contact(type, p) {
@@ -153,4 +155,36 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await send({ type: 'customize', action: { type: 'close_expanded' } });
 
   console.log('Toolbar sliders/options: fixed values, segmented choices, contexts and compact placements passed');
+}
+
+async function checkSliderBookmarks({ call, evaluate, settle, click, capture, send, slider }) {
+  const preview = '.toolbar-brush-preview:popover-open';
+  assert.equal(await evaluate(`document.querySelectorAll('[data-toolbar-component=brush_size_slider] .number-value').length`), 0);
+  for (const device of ['mouse', 'touch', 'pen']) {
+    await click(slider, device);
+    assert.ok(await evaluate(`!!document.querySelector('${preview}')`), `${device}: tap retains preview`);
+    const value = await evaluate('layerApp.state().brush.diameter');
+    assert.ok(await evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v>0)})()`), 'preview paints the actual tip');
+    await click(`${preview} .toolbar-preview-bookmark`, device);
+    assert.equal(await evaluate(`document.querySelector('${preview} .toolbar-preview-bookmark').getAttribute('aria-label')`), 'Remove bookmark');
+    await capture(`preview-${device}`);
+    await send({ type: 'set_tool_setting', id: 'size', value: 3 });
+    assert.equal(await evaluate(`document.querySelector('${preview} .toolbar-preview-bookmark').getAttribute('aria-label')`), 'Bookmark this value');
+    await click('[data-toolbar-component=brush_size_slider] .toolbar-slider-mark', device);
+    assert.equal(await evaluate('layerApp.state().brush.diameter'), value, `${device}: exact bookmark recall`);
+    await click(`${preview} .toolbar-preview-bookmark`, device);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-toolbar-component=brush_size_slider] .toolbar-slider-mark').length`), 0);
+    for (const type of ['mousePressed','mouseReleased']) await call('Input.dispatchMouseEvent',{type,x:700,y:150,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    await settle();
+    assert.equal(await evaluate(`!!document.querySelector('${preview}')`), false, `${device}: outside dismiss`);
+  }
+  await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');
+  const alpha = () => evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.reduce((n,v,i)=>n+(i%4===3?v:0),0)})()`);
+  await send({type:'set_tool_setting',id:'opacity',value:1}); const full = await alpha();
+  await send({type:'set_tool_setting',id:'opacity',value:.5}); const half = await alpha();
+  assert.ok(half/full > .48 && half/full < .52, 'preview opacity follows the value once');
+  await capture('opacity-preview');
+  await send({type:'invoke', command:'eraser'});
+  assert.equal(await evaluate(`!!document.querySelector('${preview}')`), false, 'tool switch closes old preview');
+  await send({type:'invoke', command:'brush'});
 }

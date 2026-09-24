@@ -960,3 +960,140 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
             .any(|p| p.iter().all(|t| t.control == ToolbarControl::Divider))
     );
 }
+
+#[test]
+fn slider_bookmarks_round_trip_follow_presets_and_reject_stale_editors() {
+    let mut s = session();
+    let control = ToolbarControl::BrushSizeSlider;
+    let context = s.state().toolbar_context();
+    s.dispatch(UiAction::SetToolSetting {
+        id: "size".into(),
+        value: 64.,
+    })
+    .unwrap();
+    let toggle = UiAction::ToolbarEdit {
+        context,
+        action: Box::new(UiAction::ToggleSliderBookmark { control }),
+    };
+    s.dispatch(toggle.clone()).unwrap();
+    let view = s.state().toolbar_component(control).unwrap();
+    assert_eq!(view.bookmarks.len(), 1);
+    assert_eq!(view.bookmarks[0].value, 64.);
+    assert!(view.bookmarks[0].selected);
+    let saved = serde_json::to_string(&s.state().settings).unwrap();
+    let settings: Settings = serde_json::from_str(&saved).unwrap();
+    settings.validate().unwrap();
+    assert_eq!(
+        settings.slider_bookmarks,
+        s.state().settings.slider_bookmarks
+    );
+    assert!(
+        s.state()
+            .requests
+            .iter()
+            .any(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. }))
+    );
+    s.dispatch(UiAction::SetToolSetting {
+        id: "size".into(),
+        value: 65.,
+    })
+    .unwrap();
+    assert!(!s.state().toolbar_component(control).unwrap().bookmarks[0].selected);
+    let mark = &view.bookmarks[0];
+    assert_eq!(
+        slider_bookmark_value(control, &[64.], mark.fill + 0.01, 0.02).unwrap(),
+        64.
+    );
+    assert_ne!(
+        slider_bookmark_value(control, &[64.], mark.fill + 0.03, 0.02).unwrap(),
+        64.
+    );
+    s.dispatch(UiAction::SetToolSetting {
+        id: "size".into(),
+        value: 64.,
+    })
+    .unwrap();
+    s.dispatch(toggle.clone()).unwrap();
+    assert!(
+        s.state()
+            .toolbar_component(control)
+            .unwrap()
+            .bookmarks
+            .is_empty()
+    );
+    s.dispatch(UiAction::SelectBrush { id: 2 }).unwrap();
+    assert!(s.dispatch(toggle).is_err());
+    assert!(
+        s.state()
+            .toolbar_component(control)
+            .unwrap()
+            .bookmarks
+            .is_empty()
+    );
+}
+
+#[test]
+fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
+    let s = session();
+    let stamp = s.toolbar_stamp(s.state().toolbar_context()).unwrap();
+    assert_eq!(stamp.alpha.len(), (stamp.size * stamp.size) as usize);
+    assert!(stamp.alpha.iter().any(|&a| a > 0));
+    assert_eq!(stamp.alpha[0], 0);
+    let size = slider_preview_layout(ToolbarControl::BrushSizeSlider, 64., 180., 1.).unwrap();
+    assert_eq!(size.stamp.width, 64.);
+    assert_eq!(size.opacity, 1.);
+    assert_eq!(size.text, "Size: 64 px");
+    let opacity =
+        slider_preview_layout(ToolbarControl::BrushOpacitySlider, 0.42, 180., 1.).unwrap();
+    assert_eq!(opacity.text, "Opacity: 42 %");
+    assert_eq!(opacity.opacity, 0.42);
+    assert_eq!(
+        opacity.stamp,
+        slider_preview_layout(ToolbarControl::BrushOpacitySlider, 1., 180., 1.)
+            .unwrap()
+            .stamp
+    );
+    assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 0.1).is_err());
+    assert!(
+        slider_preview_layout(ToolbarControl::BrushSizeSlider, f32::INFINITY, 180., 1.).is_err()
+    );
+    let invalid = r#"{"size":[64,32],"opacity":[]}"#;
+    assert!(
+        serde_json::from_str::<SliderBookmarks>(invalid)
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+}
+
+#[test]
+fn slider_stamp_preserves_mask_holes_and_brush_grain() {
+    let mut s = session();
+    let mut brush = layer_core::BrushSnapshot::default();
+    brush.aspect = 1.;
+    brush.angle_radians = 0.;
+    s.engine.set_brush(brush.clone()).unwrap();
+    let context = s.state().toolbar_context();
+    let plain = s.toolbar_stamp(context).unwrap();
+    let center = (plain.size * plain.size / 2 + plain.size / 2) as usize;
+    assert_eq!(plain.alpha[center], 255);
+    brush.tip = layer_core::BrushTip::Mask(AssetId::from("preview-test"));
+    s.engine.set_brush(brush.clone()).unwrap();
+    let mask = s.toolbar_stamp(context).unwrap();
+    assert_eq!(mask.alpha[center], 0, "the tip's hole survives the preview");
+    assert!(mask.alpha.iter().any(|&a| a > 0));
+    brush.tip = layer_core::BrushTip::AnalyticEllipse;
+    brush.grain = Some(layer_core::BrushGrain {
+        asset: AssetId::from("preview-test"),
+        behavior: layer_core::BrushGrainBehavior::Moving,
+        scale: 1.,
+        depth: 1.,
+        rotation_radians: 0.,
+        offset_jitter: 0.,
+    });
+    s.engine.set_brush(brush).unwrap();
+    let grain = s.toolbar_stamp(context).unwrap();
+    assert_eq!(grain.alpha[center], 0);
+    assert!(grain.alpha.iter().any(|&a| a > 0));
+    assert_ne!(grain.alpha, plain.alpha);
+}

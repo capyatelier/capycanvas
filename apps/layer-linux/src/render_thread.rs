@@ -4,7 +4,7 @@ use crate::wayland::{Child, Geometry, Parent};
 use gtk::prelude::WidgetExt;
 use layer_core::{AssetId, Layer};
 use layer_render::{
-    BackendError, CanvasRenderer, CursorSegment, Dab, DabBatch, FramePacket, HostImage,
+    BackendError, BrushSource, CanvasRenderer, CursorSegment, Dab, DabBatch, FramePacket, HostImage,
     PixelFormat, ReadbackImage, TipOutline, ViewState,
 };
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
@@ -100,12 +100,12 @@ enum Command {
     FailNextFrame,
 }
 enum Reply {
-    ColorAdopted(u64, HashMap<AssetId, TipOutline>, layer_render_wgpu::snapshot::SnapshotGpu),
+    ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu),
     Initialized(crate::display_color::ViewColor, layer_render_wgpu::snapshot::SnapshotGpu),
     Startup(
         u64,
         layer_render_wgpu::StartupProgress,
-        HashMap<AssetId, TipOutline>,
+        HashMap<AssetId, BrushSource>,
     ),
     Region(Result<layer_render::RegionResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
@@ -159,7 +159,7 @@ pub struct RenderWorker {
     next_color_request: u64,
     pending_color: Option<color::Pending>,
     awaiting_color_adoption: Option<u64>,
-    outlines: HashMap<AssetId, TipOutline>,
+    brush_sources: HashMap<AssetId, BrushSource>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
     color_sample: Option<Result<layer_render::ColorSample, String>>,
@@ -317,7 +317,7 @@ impl RenderWorker {
             next_color_request: 0,
             pending_color: None,
             awaiting_color_adoption: None,
-            outlines: HashMap::new(),
+            brush_sources: HashMap::new(),
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
             color_sample: None,
@@ -392,11 +392,11 @@ impl RenderWorker {
         while let Ok(reply) = self.replies.try_recv() {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {
-                    Reply::ColorAdopted(current, outlines, gpu) if current == id => {
+                    Reply::ColorAdopted(current, brush_sources, gpu) if current == id => {
                         // Keep the new renderer's pipeline/cache context. Exact
                         // source samples remain shared with existing file jobs.
                         self.awaiting_color_adoption = None;
-                        self.outlines = outlines;
+                        self.brush_sources = brush_sources;
                         self.snapshot_gpu = Some(gpu);
                     }
                     Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
@@ -412,10 +412,10 @@ impl RenderWorker {
                     self.view_color = color;
                     self.snapshot_gpu = Some(gpu);
                 },
-                Reply::Startup(generation, progress, outlines) => {
+                Reply::Startup(generation, progress, brush_sources) => {
                     if generation == self.startup_generation {
                         self.startup = progress;
-                        self.outlines = outlines;
+                        self.brush_sources = brush_sources;
                     }
                 }
                 Reply::Region(result) => {
@@ -482,7 +482,7 @@ impl RenderWorker {
         self.color_sample = None;
         self.region = None;
         self.selection = None;
-        self.outlines.clear();
+        self.brush_sources.clear();
         self.startup_key = None;
     }
 }
@@ -620,7 +620,12 @@ impl CanvasRenderer for RenderWorker {
     }
     type Error = BackendError;
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
-        self.outlines.get(asset)
+        self.brush_sources.get(asset).map(|source| &source.outline)
+    }
+    fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
+        let source = &self.brush_sources.get(asset)?.image;
+        Some(HostImage { width: source.extent[0], height: source.extent[1],
+            stride: source.extent[0], format: source.format, bytes: &source.bytes })
     }
     fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> {
         Ok(())
@@ -642,15 +647,15 @@ impl CanvasRenderer for RenderWorker {
     ) -> Result<(), Self::Error> {
         let [width, height] = asset.extent;
         if asset.format == PixelFormat::R8Unorm {
-            self.outlines.insert(
+            self.brush_sources.insert(
                 id.clone(),
-                layer_render::mask_outline(width, height, width, &asset.bytes),
+                BrushSource { image: asset.clone(), outline: layer_render::mask_outline(width, height, width, &asset.bytes) },
             );
         }
         self.send(Command::Asset(id.clone(), asset.clone()))
     }
     fn release_asset(&mut self, asset: &AssetId) {
-        self.outlines.remove(asset);
+        self.brush_sources.remove(asset);
         let _ = self.send(Command::Release(asset.clone()));
     }
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
@@ -824,7 +829,7 @@ impl Worker {
                         .send(Reply::Startup(
                             *generation,
                             progress,
-                            self.renderer.cursor_outlines(),
+                            self.renderer.brush_sources(),
                         ))
                         .map_err(error)?;
                 }
@@ -988,7 +993,7 @@ impl Worker {
                     startup_input = None;
                     startup_progress = color::complete();
                     document_drawn = true;
-                    reply.send(Reply::ColorAdopted(id, self.renderer.cursor_outlines(), self.renderer.snapshot_gpu())).map_err(error)?;
+                    reply.send(Reply::ColorAdopted(id, self.renderer.brush_sources(), self.renderer.snapshot_gpu())).map_err(error)?;
                 }
                 Command::DiscardColor(id, reply) => {
                     self.discard_color(id);

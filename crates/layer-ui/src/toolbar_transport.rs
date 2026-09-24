@@ -6,6 +6,18 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolbarUiRequest {
+    SliderPreview {
+        control: ToolbarControl,
+        value: f32,
+        length: f32,
+        extent: f32,
+    },
+    SliderBookmarkValue {
+        control: ToolbarControl,
+        values: Vec<f32>,
+        position: f64,
+        tolerance: f64,
+    },
     OptionsLayout {
         width: f32,
         height: f32,
@@ -42,6 +54,20 @@ pub enum ToolbarUiRequest {
 pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match request {
+        ToolbarUiRequest::SliderPreview {
+            control,
+            value,
+            length,
+            extent,
+        } => json!(slider_preview_layout(control, value, length, extent)?),
+        ToolbarUiRequest::SliderBookmarkValue {
+            control,
+            values,
+            position,
+            tolerance,
+        } => json!(slider_bookmark_value(
+            control, &values, position, tolerance
+        )?),
         ToolbarUiRequest::OptionsLayout {
             width,
             height,

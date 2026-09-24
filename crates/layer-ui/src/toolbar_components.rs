@@ -68,6 +68,7 @@ pub struct ToolbarComponentView {
     pub context: ToolbarContext,
     pub numeric: Option<ToolSetting>,
     pub options: Vec<ToolOption>,
+    pub bookmarks: Vec<SliderBookmark>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -177,6 +178,11 @@ impl UiState {
         control.is_component().then(|| ToolbarComponentView {
             context: self.toolbar_context(),
             numeric: control.slider().and_then(|binding| binding.field(self)),
+            bookmarks: control.slider().map_or_else(Vec::new, |binding| {
+                let current = binding.field(self).map(|f| f.value);
+                self.settings.slider_bookmarks.get(&self.brush.preset.to_string())
+                    .map_or_else(Vec::new, |marks| marks.view(&binding, current))
+            }),
             options: if control.options_style().is_some() {
                 self.tool_options()
             } else {
@@ -204,6 +210,8 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
+            UiAction::ToggleSliderBookmark { control } => control.slider()
+                .is_some_and(|binding| binding.field(self).is_some()),
             UiAction::SetBrushSize { .. } => {
                 self.layer_tools.tool == LayerCanvasTool::Paint && !self.toolbar_context().operation
             }

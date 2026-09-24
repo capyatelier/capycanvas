@@ -111,6 +111,8 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
     /// Any typed UiAction can be registered, including parameterized controls.
     pub custom_actions: Vec<ShortcutDefinition>,
+    /// Per-preset slider values, shared by every placement of that slider.
+    pub slider_bookmarks: BTreeMap<String, SliderBookmarks>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -137,6 +139,7 @@ impl Default for Settings {
             tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
             custom_actions: Vec::new(),
+            slider_bookmarks: BTreeMap::new(),
         }
     }
 }
@@ -167,6 +170,9 @@ impl Settings {
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
     pub fn validate(&self) -> Result<(), String> {
+        for marks in self.slider_bookmarks.values() {
+            marks.validate()?;
+        }
         self.new_document.validate()?;
         if self.version != 1 {
             return Err("Unsupported settings version".into());

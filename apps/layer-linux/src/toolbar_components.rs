@@ -93,6 +93,8 @@ mod imp {
         pub vertical: Cell<bool>,
         pub slider: Cell<bool>,
         pub opacity: Cell<bool>,
+        pub bookmarks: RefCell<Vec<SliderBookmark>>,
+        pub bookmark_selected: Cell<[u8; 3]>,
         pub style: Cell<TileStyle>,
         pub options: Cell<ToolOptionsStyle>,
     }
@@ -155,16 +157,7 @@ mod imp {
                     width as f32,
                     height as f32,
                     axis,
-                    children[0]
-                        .measure(
-                            if axis == Axis::Vertical {
-                                gtk::Orientation::Vertical
-                            } else {
-                                gtk::Orientation::Horizontal
-                            },
-                            -1,
-                        )
-                        .1 as f32,
+                    16.,
                 )) {
                     allocate(child, b);
                 }
@@ -259,6 +252,9 @@ mod imp {
             {
                 self.obj().snapshot_child(child, snapshot);
             }
+            if self.slider.get() {
+                paint_bookmarks(&self.obj(), snapshot, &self.bookmarks.borrow());
+            }
         }
     }
 }
@@ -295,16 +291,6 @@ impl ComponentBody {
             self.remove_css_class("vertical-component");
         }
         if self.imp().slider.get() {
-            if let Some(number) = self
-                .imp()
-                .children
-                .borrow()
-                .first()
-                .and_then(|cap| cap.first_child())
-                .and_downcast::<NumberControl>()
-            {
-                number.set_face(false, "", vertical, 0, false);
-            }
             if let Some(scale) = self
                 .imp()
                 .children
@@ -396,6 +382,14 @@ impl ComponentBody {
     }
 }
 
+struct BrushPreview {
+    popover: gtk::Popover,
+    area: gtk::DrawingArea,
+    label: gtk::Label,
+    bookmark: gtk::Button,
+    selected: Cell<Option<bool>>,
+}
+
 enum Field {
     Numeric(NumberControl),
     Choice(gtk::DropDown),
@@ -410,7 +404,10 @@ pub(super) struct Component {
     contact_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
     slider: Option<gtk::Scale>,
-    editor: Option<NumberControl>,
+    preview: RefCell<Option<BrushPreview>>,
+    outside: RefCell<Option<(gtk::Window, gtk::EventControllerLegacy)>>,
+    bookmarks: RefCell<Vec<SliderBookmark>>,
+    value: Cell<f32>,
     schema: RefCell<Vec<ToolOption>>,
     fields: RefCell<Vec<Field>>,
 }
@@ -425,28 +422,14 @@ impl Component {
             &tool_choice(tile.control).label,
         )]);
         let binding = tile.control.slider();
-        let editor = binding.as_ref().map(|binding| {
-            let spec = binding.numeric();
-            let editor = NumberControl::compact(spec, &tool_choice(tile.control).label);
-            editor.set_slider_visible(false);
-            editor.set_widget_name(&format!("component-value-{}", tile.id));
-            editor.add_css_class("slider-readout");
-            editor
-        });
-        let button = editor
-            .as_ref()
-            .map_or_else(gtk::Button::new, NumberControl::value_button);
+        let button = gtk::Button::new();
         button.set_hexpand(true);
         button.set_vexpand(true);
         button.add_css_class("flat");
         button.set_widget_name(&format!("tile-{}", tile.id));
         button.set_tooltip_text(Some(&tool_choice(tile.control).label));
         let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        if let Some(editor) = &editor {
-            cap.append(editor);
-        } else {
-            cap.append(&button);
-        }
+        cap.append(&button);
         let target = ContextTarget::Tile {
             panel,
             tile: tile.id,
@@ -494,12 +477,15 @@ impl Component {
             contact_context: Cell::new(None),
             updating: Cell::new(false),
             slider,
-            editor,
+            preview: RefCell::default(),
+            outside: RefCell::default(),
+            bookmarks: RefCell::default(),
+            value: Cell::new(0.),
             schema: RefCell::default(),
             fields: RefCell::default(),
         });
         let id = tile.id;
-        if component.editor.is_none() {
+        if component.slider.is_none() {
             component.button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -509,32 +495,7 @@ impl Component {
             ));
         }
         if let Some(scale) = &component.slider {
-            let events = gtk::EventControllerLegacy::new();
-            events.set_propagation_phase(gtk::PropagationPhase::Capture);
-            events.connect_event(glib::clone!(
-                #[weak]
-                component,
-                #[upgrade_or]
-                glib::Propagation::Proceed,
-                move |_, event| {
-                    use gdk::EventType as E;
-                    match event.event_type() {
-                        E::ButtonPress | E::TouchBegin => {
-                            component.contact_context.set(component.context.get())
-                        }
-                        E::ButtonRelease | E::TouchEnd | E::TouchCancel => {
-                            glib::idle_add_local_once(glib::clone!(
-                                #[weak]
-                                component,
-                                move || component.contact_context.set(None)
-                            ));
-                        }
-                        _ => (),
-                    }
-                    glib::Propagation::Proceed
-                }
-            ));
-            scale.add_controller(events);
+            component.install_slider_input(w);
             scale.connect_value_changed(glib::clone!(
                 #[weak]
                 component,
@@ -583,50 +544,12 @@ impl Component {
                     }
                 }
             ));
-            component
-                .editor
-                .as_ref()
-                .unwrap()
-                .connect_interaction(glib::clone!(
-                    #[weak]
-                    component,
-                    move |_, phase| {
-                        match phase {
-                            ContactPhase::Down => {
-                                component.contact_context.set(component.context.get())
-                            }
-                            _ => component.contact_context.set(None),
-                        }
-                    }
-                ));
-            component
-                .editor
-                .as_ref()
-                .unwrap()
-                .connect_value_changed(glib::clone!(
-                    #[weak]
-                    component,
-                    #[weak]
-                    w,
-                    move |editor| {
-                        if !component.updating.get()
-                            && let Some(context) =
-                                component.contact_context.get().or(component.context.get())
-                        {
-                            w.dispatch(UiAction::ToolbarEdit {
-                                context,
-                                action: Box::new(
-                                    component
-                                        .control
-                                        .slider()
-                                        .unwrap()
-                                        .action(editor.value() as f32),
-                                ),
-                            });
-                        }
-                    }
-                ));
         }
+        component.root.connect_unrealize(glib::clone!(
+            #[weak]
+            component,
+            move |_| component.close_preview()
+        ));
         component
     }
 
@@ -639,13 +562,23 @@ impl Component {
             self.slider.as_ref().unwrap().set_sensitive(enabled);
             self.button.set_sensitive(enabled);
             if changed_context {
-                self.editor.as_ref().unwrap().cancel_edit();
+                self.close_preview();
             }
             let Some(field) = &state.numeric else {
                 self.updating.set(false);
                 return;
             };
-            self.editor.as_ref().unwrap().set_value(field.value as f64);
+            self.value.set(field.value);
+            self.bookmarks.replace(state.bookmarks.clone());
+            self.root.imp().bookmarks.replace(state.bookmarks.clone());
+            if let Some(gpu) = w.gpu.borrow().as_ref() {
+                self.root
+                    .imp()
+                    .bookmark_selected
+                    .set(gpu.session.state().palette.panel.0);
+            }
+            self.root.queue_draw();
+            self.update_preview();
             let value = field
                 .numeric
                 .resolve(field.value as f64, NumericOperation::Format)
@@ -709,6 +642,337 @@ impl Component {
             self.schema.borrow_mut().clone_from(options);
         }
         self.updating.set(false);
+    }
+
+    fn close_preview(&self) {
+        if let Some(preview) = self.preview.borrow_mut().take() {
+            preview.popover.popdown();
+            preview.popover.unparent();
+        }
+    }
+    fn show_preview(self: &Rc<Self>, w: &Rc<Workspace>) {
+        if self.preview.borrow().is_none() {
+            let Some(context) = self.context.get() else {
+                return;
+            };
+            let stamp = w
+                .gpu
+                .borrow()
+                .as_ref()
+                .and_then(|g| g.session.toolbar_stamp(context).ok());
+            let Some(stamp) = stamp else {
+                return;
+            };
+            let pixels: Vec<u8> = stamp.alpha.iter().flat_map(|&a| [a, a, a, a]).collect();
+            let Ok(image) = gtk::cairo::ImageSurface::create_for_data(
+                pixels,
+                gtk::cairo::Format::ARgb32,
+                stamp.size as i32,
+                stamp.size as i32,
+                stamp.size as i32 * 4,
+            ) else {
+                return;
+            };
+            let area = gtk::DrawingArea::new();
+            let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            header.set_margin_start(12);
+            header.set_margin_end(5);
+            header.set_margin_top(4);
+            header.set_valign(gtk::Align::Start);
+            let label = gtk::Label::new(None);
+            label.set_widget_name("slider-preview-label");
+            label.set_xalign(0.);
+            label.set_hexpand(true);
+            let bookmark = gtk::Button::new();
+            bookmark.add_css_class("flat");
+            bookmark.set_size_request(28, 28);
+            bookmark.set_widget_name("slider-bookmark");
+            header.append(&label);
+            header.append(&bookmark);
+            let overlay = gtk::Overlay::new();
+            overlay.set_child(Some(&area));
+            overlay.add_overlay(&header);
+            let popover = gtk::Popover::new();
+            popover.set_has_arrow(false);
+            popover.set_autohide(false);
+            popover.add_css_class("brush-preview");
+            popover.set_widget_name("brush-slider-preview");
+            popover.set_parent(self.slider.as_ref().unwrap());
+            popover.set_child(Some(&overlay));
+            let vertical = self.root.imp().vertical.get();
+            popover.set_position(if vertical {
+                gtk::PositionType::Right
+            } else {
+                gtk::PositionType::Bottom
+            });
+            popover.set_offset(if vertical { 8 } else { 0 }, if vertical { 0 } else { 8 });
+            area.set_draw_func(glib::clone!(
+                #[weak(rename_to=component)]
+                self,
+                move |area, cr, _, _| {
+                    let Ok(layout) = component.preview_layout(stamp.extent) else {
+                        return;
+                    };
+                    let b = layout.stamp;
+                    let ink = area.color();
+                    let _ = cr.save();
+                    cr.rectangle(
+                        8.,
+                        36.,
+                        (layout.side - 16.) as f64,
+                        (layout.side - 44.) as f64,
+                    );
+                    cr.clip();
+                    cr.translate(b.x as f64, b.y as f64);
+                    cr.scale(
+                        b.width as f64 / stamp.size as f64,
+                        b.height as f64 / stamp.size as f64,
+                    );
+                    cr.set_source_rgba(
+                        ink.red() as f64,
+                        ink.green() as f64,
+                        ink.blue() as f64,
+                        layout.opacity as f64,
+                    );
+                    let _ = cr.mask_surface(&image, 0., 0.);
+                    let _ = cr.restore();
+                }
+            ));
+            bookmark.connect_clicked(glib::clone!(
+                #[weak(rename_to=component)]
+                self,
+                #[weak]
+                w,
+                move |_| {
+                    w.dispatch(UiAction::ToolbarEdit {
+                        context,
+                        action: Box::new(UiAction::ToggleSliderBookmark {
+                            control: component.control,
+                        }),
+                    });
+                }
+            ));
+            self.preview.replace(Some(BrushPreview {
+                popover,
+                area,
+                label,
+                bookmark,
+                selected: Cell::new(None),
+            }));
+        }
+        self.update_preview();
+        if let Some(preview) = self.preview.borrow().as_ref() {
+            preview.popover.popup();
+            preview.popover.present();
+        }
+    }
+    fn preview_layout(&self, extent: f32) -> Result<SliderPreviewLayout, String> {
+        slider_preview_layout(
+            self.control,
+            self.value.get(),
+            self.root.width().max(self.root.height()) as f32,
+            extent,
+        )
+    }
+    fn update_preview(&self) {
+        let preview = self.preview.borrow();
+        let Some(preview) = preview.as_ref() else {
+            return;
+        };
+        let Ok(layout) = self.preview_layout(1.) else {
+            return;
+        };
+        preview.area.set_content_width(layout.side as i32);
+        preview.area.set_content_height(layout.side as i32);
+        preview.label.set_text(&layout.text);
+        let selected = self.bookmarks.borrow().iter().any(|b| b.selected);
+        if preview.selected.replace(Some(selected)) != Some(selected) {
+            preview
+                .bookmark
+                .set_child(Some(&crate::icons::image(if selected {
+                    "layer-minus-symbolic"
+                } else {
+                    "layer-plus-symbolic"
+                })));
+            preview.bookmark.set_tooltip_text(Some(if selected {
+                "Remove bookmark"
+            } else {
+                "Bookmark this value"
+            }));
+        }
+        preview.area.queue_draw();
+    }
+    fn install_slider_input(self: &Rc<Self>, w: &Rc<Workspace>) {
+        let outside = gtk::EventControllerLegacy::new();
+        outside.set_propagation_phase(gtk::PropagationPhase::Capture);
+        outside.connect_event(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[weak]
+            w,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, event| {
+                let own_popup = component
+                    .preview
+                    .borrow()
+                    .as_ref()
+                    .and_then(|p| p.popover.surface());
+                if own_popup.is_none() || event.surface() != own_popup {
+                    match event.event_type() {
+                        gdk::EventType::ButtonPress | gdk::EventType::TouchBegin => {
+                            if let Some((x, y)) = event.position() {
+                                let inside =
+                                    component.root.compute_bounds(&w.window).is_some_and(|b| {
+                                        b.contains_point(&gtk::graphene::Point::new(
+                                            x as f32, y as f32,
+                                        ))
+                                    });
+                                if event.surface() != w.window.surface() || !inside {
+                                    component.close_preview();
+                                }
+                            }
+                        }
+                        gdk::EventType::KeyPress => {
+                            if event
+                                .downcast_ref::<gdk::KeyEvent>()
+                                .is_some_and(|e| e.keyval() == gdk::Key::Escape)
+                            {
+                                component.close_preview();
+                            }
+                        }
+                        gdk::EventType::FocusChange => {
+                            // Let GTK finish transferring focus to popup surfaces.
+                            glib::idle_add_local_once(glib::clone!(
+                                #[weak]
+                                component,
+                                #[weak]
+                                w,
+                                move || {
+                                    if !w.window.is_active() {
+                                        component.close_preview();
+                                    }
+                                }
+                            ));
+                        }
+                        _ => (),
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        w.window.add_controller(outside.clone());
+        self.outside
+            .replace(Some((w.window.clone().upcast(), outside)));
+        let scale = self.slider.as_ref().unwrap();
+        let gesture = gtk::GestureDrag::new();
+        gesture.set_button(1);
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let origin = Rc::new(Cell::new([0., 0.]));
+        let moved = Rc::new(Cell::new(false));
+        gesture.connect_drag_begin(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[weak]
+            w,
+            #[strong]
+            origin,
+            #[strong]
+            moved,
+            move |g, x, y| {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                origin.set([x, y]);
+                moved.set(false);
+                component.contact_context.set(component.context.get());
+                component.pick_slider([x, y], true);
+                component.show_preview(&w);
+            }
+        ));
+        gesture.connect_drag_update(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[strong]
+            origin,
+            #[strong]
+            moved,
+            move |_, x, y| {
+                if !moved.get() && x.hypot(y) < 3. {
+                    return;
+                }
+                moved.set(true);
+                component.pick_slider([origin.get()[0] + x, origin.get()[1] + y], false);
+            }
+        ));
+        gesture.connect_drag_end(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[weak]
+            w,
+            #[strong]
+            moved,
+            move |_, _, _| {
+                component.contact_context.set(None);
+                if moved.get() {
+                    component.close_preview();
+                } else {
+                    component.show_preview(&w);
+                }
+            }
+        ));
+        gesture.connect_cancel(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            move |_, _| {
+                component.contact_context.set(None);
+                component.close_preview();
+            }
+        ));
+        scale.add_controller(gesture);
+        self.button.connect_clicked(glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[weak]
+            w,
+            move |_| component.show_preview(&w)
+        ));
+    }
+    fn pick_slider(&self, point: [f64; 2], snap: bool) {
+        let scale = self.slider.as_ref().unwrap();
+        let vertical = self.root.imp().vertical.get();
+        let range = scale.range_rect();
+        let (start, end) = scale.slider_range();
+        let half = (end - start) as f64 / 2.;
+        let length = if vertical {
+            range.height()
+        } else {
+            range.width()
+        } as f64
+            - half * 2.;
+        if length <= 0. {
+            return;
+        }
+        let p = if vertical {
+            point[1] - range.y() as f64
+        } else {
+            point[0] - range.x() as f64
+        };
+        let position = ((p - half) / length).clamp(0., 1.);
+        let position = if vertical { 1. - position } else { position };
+        let values: Vec<_> = if snap {
+            self.bookmarks.borrow().iter().map(|m| m.value).collect()
+        } else {
+            Vec::new()
+        };
+        if let Ok(value) = slider_bookmark_value(self.control, &values, position, 7. / length) {
+            let number = self
+                .control
+                .slider()
+                .unwrap()
+                .numeric()
+                .resolve(value, NumericOperation::Format)
+                .unwrap();
+            scale.set_value(number.fill);
+        }
     }
 
     fn add_option(
@@ -1053,4 +1317,60 @@ fn paint_track(
         );
     }
     let _ = cr.paint();
+}
+
+fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[SliderBookmark]) {
+    let children = root.imp().children.borrow();
+    let Some(scale) = children.get(1).and_then(|w| w.downcast_ref::<gtk::Scale>()) else {
+        return;
+    };
+    let Some(b) = scale.compute_bounds(root) else {
+        return;
+    };
+    let range = scale.range_rect();
+    let (start, end) = scale.slider_range();
+    let half = (end - start) as f32 / 2.;
+    let vertical = root.imp().vertical.get();
+    let travel = if vertical {
+        range.height()
+    } else {
+        range.width()
+    } as f32
+        - half * 2.;
+    let color = root.color();
+    for mark in bookmarks {
+        let position = half
+            + travel
+                * if vertical {
+                    1. - mark.fill as f32
+                } else {
+                    mark.fill as f32
+                };
+        let rect = if vertical {
+            gtk::graphene::Rect::new(
+                b.x() + range.x() as f32 + range.width() as f32 / 2. - 7.,
+                b.y() + range.y() as f32 + position - 1.,
+                14.,
+                2.,
+            )
+        } else {
+            gtk::graphene::Rect::new(
+                b.x() + range.x() as f32 + position - 1.,
+                b.y() + range.y() as f32 + range.height() as f32 / 2. - 7.,
+                2.,
+                14.,
+            )
+        };
+        let [r, g, b] = root.imp().bookmark_selected.get();
+        let selected = gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.);
+        snapshot.append_color(if mark.selected { &selected } else { &color }, &rect);
+    }
+}
+impl Drop for Component {
+    fn drop(&mut self) {
+        self.close_preview();
+        if let Some((window, controller)) = self.outside.take() {
+            window.remove_controller(&controller);
+        }
+    }
 }

@@ -201,6 +201,10 @@ impl CanvasRenderer for WebRenderer {
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
         self.0.as_ref()?.renderer.tip_outline(asset)
     }
+    fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
+        self.0.as_ref()?.renderer.tip_mask(asset)
+    }
+
     fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
         if let Some(gpu) = &mut self.0 {
             gpu.renderer.resize_surface(width, height)?;
@@ -832,6 +836,10 @@ impl WebApp {
     pub fn toolbar_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
         serialize(&layer_ui::toolbar_ui(request).map_err(js)?)
+    }
+    pub fn toolbar_stamp(&self, context: JsValue) -> Result<JsValue, JsValue> {
+        let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
+        serialize(&self.session.toolbar_stamp(context).map_err(js)?)
     }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())

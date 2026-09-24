@@ -210,14 +210,11 @@ window, label, text { font-size: var(--ui-text-size); }
 .toolbar-component.vertical-component .number-compact .number-value { min-width: 0; min-height: 0; padding: 3px 4px; background: transparent; }
 .toolbar-component.vertical-component.small-component .number-compact .number-value { padding: 1px 2px; }
 .toolbar-component.vertical-component.large-component .number-compact .number-value { padding: 4px 6px; }
-.toolbar-component .slider-readout .number-value { min-width: 0; padding: 0 4px; background: transparent; }
-.toolbar-component.vertical-component .slider-readout { padding-top: 6px; }
-.toolbar-component.vertical-component .slider-readout .number-value { padding: 2px; background: transparent; }
 .brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 2px; }
 .vertical-component .brush-track { margin: 2px 0; }
 .brush-track trough, .brush-track highlight { min-height: 16px; min-width: 16px; border: none; background: transparent; box-shadow: none; }
-.brush-track slider { min-width: 7px; min-height: 22px; margin: -3px 0; border-radius: 3px; background: var(--window-bg-color); border: 1px solid alpha(currentColor, .6); box-shadow: none; }
-.vertical-component .brush-track slider { min-width: 22px; min-height: 7px; margin: 0 -3px; }
+.brush-track slider { min-width: 10px; min-height: 26px; margin: -5px 0; border-radius: 4px; background: var(--capy-thumb); border: 1px solid alpha(currentColor, .6); box-shadow: none; }
+.vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
 .zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: 6px; }
@@ -293,3 +290,6 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 }
 .document-tab.drop-before { box-shadow: inset 2px 0 var(--accent-color); }
 .document-tab.drop-after { box-shadow: inset -2px 0 var(--accent-color); }
+
+.brush-preview > contents { padding: 0; border-radius: 10px; background: var(--panel-bg); }
+.brush-preview button { min-width: 0; min-height: 0; padding: 6px; }
