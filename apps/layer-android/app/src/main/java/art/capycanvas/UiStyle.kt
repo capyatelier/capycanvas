@@ -85,7 +85,7 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val secondary = text.copy(alpha = .55f)
     val accent = Color(0xff3584e4)
     val sliderFill = lerp(panel, text, .5f)
-    val active = accent.copy(alpha = .22f)
+    val active = accent.copy(alpha = if (dark) .28f else .36f)
     val activeSolid = active.compositeOver(panel)
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")

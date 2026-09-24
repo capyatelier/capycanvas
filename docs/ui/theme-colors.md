@@ -21,12 +21,12 @@ in the table is transformed per channel using the same rule as a grey.
 
 | Color role and consumers | Dark default / relationship | Light default / relationship | Treatment |
 | --- | --- | --- | --- |
-| Canvas surround, header button/title backgrounds, status numbers, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
+| Canvas surround, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
 | Panel bodies, selected tabs and concave joins, tool ribbons, expanded drawers, popovers/menus | `#414141` = mix(B,W,14/204) | `#ededed` = mix(B,W,53/71) | Regenerate |
 | Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
 | Workspace switcher well | Inactive tab bar at 75% opacity | Same | Translucent over artwork |
-| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy | B at 75% opacity | B at 75% opacity | Translucent over artwork |
-| Selected workspace and title-bar tool | Accent at 22% over the panel body, opaque | Same | Matches panel selection |
+| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy, footer zoom/HDR/proof status | B at 75% opacity | B at 75% opacity | Translucent over artwork |
+| Selected workspace and title-bar tool | Selection over the panel body, opaque | Same | Matches panel selection |
 | Selected drawing tab | Panel body, opaque | Same | Matches selected panel tabs |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
 | Native GTK view background | `#2b2b2b` = mix(B,K,8/51) | `#e4e4e4` = mix(B,W,44/71) | Regenerate |
@@ -49,7 +49,7 @@ in the table is transformed per channel using the same rule as a grey.
 | Checkbox/radio outlines, separators, scroll thumbs, disabled controls | Foreground overlays, usually 10–35%; disabled opacity 36–50% | Same pattern | Keep opacity, recomposite |
 | Web preference row divider | `#80808026` | Same | Keep translucent neutral |
 | Settings slider inactive track / inactive switch | Text at 12% / 20% | Same | Keep overlay |
-| Accent, selection, focus, links, checked controls, drop indicators | Web/Android `#3584e4`; GTK native accent (drop hint currently separate blue) | Same | Do not tint; selection remains accent at 22% |
+| Accent, selection, focus, links, checked controls, drop indicators | Web/Android `#3584e4`; GTK native accent (drop hint currently separate blue) | Same | Do not tint; selection is accent at 28% in dark and 36% in light |
 | Error / warning text, invalid numeric border | Web `#ff7b63` / `#e5a50a`, border `#ee5555`; native semantic roles | Web `#c01c28` / `#9c5700`, same border; native semantic roles | Fixed semantic colors per mode |
 | Shadows, inset shades, modal dimming | Black with existing opacities; panel 16%, expanded drawer 40%, web modal 8/15 | Same shadows; web modal 2/15 | Keep; already blends over new surfaces |
 | Cursor outline, marker and dash contrast | Black + white | Black + white | Unchanged: must contrast against artwork, not UI |
