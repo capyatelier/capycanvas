@@ -255,18 +255,20 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     root.classList.toggle('vertical-component', vertical); root.dataset.tileStyle = view.tile_style;
     fields.forEach(f => f.orient?.());
     if (standalone) return;
+    const fieldHeight = 24;
     const sizes = fields.map(f => {
-      if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, style.size[1]];
+      if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, fieldHeight];
       if (vertical || f.action) return style.size;
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
-      return [f.row.scrollWidth, Math.max(24, f.row.scrollHeight)];
+      return [f.row.scrollWidth, Math.max(fieldHeight, f.row.scrollHeight)];
     });
     const geometry = app.toolbar_ui({ type: 'options_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', sizes, button: style.size, gap: vertical ? 2 : 10 });
     place(more, geometry.more);
     fields.forEach((f, i) => {
       const bounds = geometry.fields[i];
       if (!bounds && f.row.contains(document.activeElement)) more.focus();
-      f.row.hidden = !bounds; if (bounds) place(f.row, bounds);
+      f.row.hidden = !bounds;
+      if (bounds) place(f.row, f.segmented && !vertical ? { ...bounds, y: bounds.y + (bounds.height - fieldHeight) / 2, height: fieldHeight } : bounds);
     });
   }
   root.updateComponent = next => {

@@ -317,16 +317,11 @@ impl ComponentBody {
             return;
         }
         for row in self.imp().children.borrow().iter().skip(1) {
-            row.set_valign(
-                if vertical
-                    || row.has_css_class("option-action")
-                    || row.has_css_class("option-segments")
-                {
-                    gtk::Align::Fill
-                } else {
-                    gtk::Align::Center
-                },
-            );
+            row.set_valign(if vertical || row.has_css_class("option-action") {
+                gtk::Align::Fill
+            } else {
+                gtk::Align::Center
+            });
             let mut child = row.first_child();
             while let Some(w) = child {
                 if w.has_css_class("option-label") {
@@ -365,7 +360,11 @@ impl ComponentBody {
                         .and_then(|b| b.child())
                         .and_downcast::<gtk::Image>()
                     {
-                        image.set_pixel_size(self.imp().style.get().icon_size() as i32);
+                        image.set_pixel_size(if vertical || row.has_css_class("option-action") {
+                            self.imp().style.get().icon_size() as i32
+                        } else {
+                            16
+                        });
                     }
                 }
                 child = w.next_sibling();

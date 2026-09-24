@@ -146,7 +146,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                         option.has("Choice") && option.getJSONObject("Choice").getBoolean("segmented") -> {
                             val count = option.getJSONObject("Choice").array("items").length()
                             if (vertical) listOf(width, tileHeight * if (width < tileWidth * count) count else 1)
-                            else listOf(tileWidth * count, tileHeight)
+                            else listOf(tileWidth * count, 24f)
                         }
                         vertical || option.has("Action") -> listOf(tileWidth, tileHeight)
                         option.has("Choice") -> listOf(168f, 24f)
@@ -258,10 +258,11 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
             Box(modifier.testTag("toolbar-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) }, contentAlignment = Alignment.Center) {
-                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(iconSize.dp))
+                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical) iconSize.dp else 16.dp))
             }
         }
-        val modifier = Modifier.fillMaxSize().clip(TileShape).selectableGroup().testTag("toolbar-segments-$id")
+        val modifier = (if (vertical) Modifier.fillMaxSize().clip(TileShape) else Modifier.fillMaxWidth().height(24.dp).clip(ControlShape))
+            .selectableGroup().testTag("toolbar-segments-$id")
         if (vertical && stacked) Column(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxWidth().weight(1f)) } }
         else Row(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxHeight().weight(1f)) } }
         return

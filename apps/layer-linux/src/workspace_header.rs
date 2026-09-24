@@ -662,7 +662,7 @@ impl Header {
                 menu.upcast()
             }
             HeaderItem::MenuLabels => {
-                let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 row.add_css_class("header-menu-labels");
                 for id in ApplicationMenu::ALL {
                     row.append(&w.chrome_menu(id));

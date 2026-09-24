@@ -124,6 +124,8 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   }
   await capture('photo-options');
   await invoke('rectangle_select');
+  const segments = await rect('[data-toolbar-choice=selection-mode]'), dropdown = await rect('[data-toolbar-choice=variant] > button');
+  assert.deepEqual([segments.y, segments.height], [dropdown.y, dropdown.height], 'segments match the dropdown height');
   for (const [i, device] of ['mouse', 'touch', 'pen'].entries()) {
     await click(`[data-toolbar-segment=selection-mode-${i + 1}]`, device);
     assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(['selection_add', 'selection_subtract', 'selection_intersect'][i])}).selected`));

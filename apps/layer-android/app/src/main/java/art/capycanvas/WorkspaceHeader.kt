@@ -26,6 +26,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
@@ -60,13 +61,13 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     // document title and clock too, so every publication does not evict them.
     val text = rememberTextMeasurer(cacheSize = 64)
     val textStyle = LocalTextStyle.current
-    fun measure(label: String, bold: Boolean = false): Float = text.measure(label,
-        style = textStyle.copy(fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal), maxLines = 1).size.width / density
+    fun measure(label: String): Float = text.measure(label,
+        style = textStyle.copy(fontWeight = FontWeight.Normal), maxLines = 1).size.width / density
     val menus = snapshot.array("application_menus").objects()
     // Compose rounds each side's padding separately. Summing logical widths
     // first loses pixels at fractional scale and clips the final menu label.
-    val menuPadding = (6f * density).roundToInt()
-    val menuWidth = menus.sumOf { (measure(it.getString("label"), true) * density).roundToInt() + 2 * menuPadding } / density
+    val menuPadding = (8f * density).roundToInt()
+    val menuWidth = menus.sumOf { (measure(it.getString("label")) * density).roundToInt() + 2 * menuPadding } / density + 8f + 2f * (menus.size - 1)
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
@@ -254,15 +255,16 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, TileShape), verticalAlignment = Alignment.CenterVertically) {
+                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.tabs, SquircleShape(50)).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
-                                Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
-                                fillWidth = false, surface = false,
+                                Modifier.height(26.dp).testTag("application-menu-${application.getString("id")}"),
+                                fillWidth = false, surface = false, shape = SquircleShape(50),
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
-                                Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text(application.getString("label"), Modifier.padding(horizontal = 8.dp), maxLines = 1)
                             }
                             if (menuLabel == menuId) menu?.let { WorkspaceMenu(host, it) { menu = null } }
                         }
@@ -294,12 +296,12 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
-    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
+    onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    val shape = drawerButtonShape(if (open) "bottom" else null)
     HoverTip(label, modifier) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
         .background(if (surface) colors.headerSurface else Color.Transparent).background(when {

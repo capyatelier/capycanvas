@@ -83,6 +83,8 @@ atomic; child fields are never independent drop destinations.
 
 Segmented choices retain connected icon buttons (for example New/Add/Subtract/
 Intersect selection); list choices such as selection source remain dropdowns.
+Horizontal bars keep one tile of width per choice but match the dropdown's 24px
+height, control corner radius (a capsule at that height) and 16px icons.
 The bar stacks on narrow side toolbars and moves into overflow as a whole.
 
 ## Ownership and implementation

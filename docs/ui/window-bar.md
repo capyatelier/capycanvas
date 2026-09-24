@@ -70,8 +70,10 @@ An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;
 native keyboard-focus indication remains independent of both states. The same
 distinction applies to toolbar tiles, including those inside another drawer.
-Text menus retain their original 36px outer button height and 6px padding,
-centered in larger bars. The workspace selector keeps its pill background.
+Menu labels use the workspace selector's capsule: one continuous 34px bar with
+a 4px inset and 26px capsule items, centered in larger bars. Menu labels use
+8px side padding so the full menu still fits beside a centered title in a
+1200px-wide window.
 Native window-control targets grow equally in both axes, with 6px outer clearance.
 
 At narrow widths, each region overflows whole items into a More menu. Tools
