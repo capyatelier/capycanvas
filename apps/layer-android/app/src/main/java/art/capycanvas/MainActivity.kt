@@ -2,9 +2,7 @@ package art.capycanvas
 
 import android.annotation.SuppressLint
 import android.content.res.Configuration
-import android.app.ActivityManager
 import androidx.activity.OnBackPressedCallback
-import java.lang.ref.WeakReference
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -17,26 +15,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
-    companion object {
-        private val windows = mutableListOf<WeakReference<MainActivity>>()
-        internal fun workspaceSwitcherChanged(source: CanvasHost) {
-            windows.removeAll { it.get() == null }
-            windows.mapNotNull { it.get()?.host }.distinct().filter { it !== source }.forEach {
-                it.workspaceInput(obj("type" to "refresh_switcher"))
-            }
-        }
-        internal fun focusWorkspace(id: String): Boolean {
-            windows.removeAll { it.get() == null }
-            val activity = windows.firstNotNullOfOrNull { it.get()?.takeIf { a -> a.host.workspaceManager?.optString("id") == id } } ?: return false
-            activity.getSystemService(ActivityManager::class.java).appTasks.firstOrNull { it.taskInfo?.taskId == activity.taskId }?.moveToFront()
-            activity.window.decorView.requestFocus()
-            return true
-        }
-    }
     val host: CanvasHost by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        windows.add(WeakReference(this))
         host.attachWindow(this)
         if(isFinishing)return
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -94,7 +75,6 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         host.detachWindow(this)
-        windows.removeAll { it.get() == null || it.get() === this }
         super.onDestroy()
     }
     // This is Activity's public Window.Callback override. AndroidX's internal

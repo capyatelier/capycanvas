@@ -38,7 +38,7 @@ import org.json.JSONArray
     val busy = view.optBoolean("busy")
     val rowInteraction = remember { WorkspaceRowInteraction() }
     val focusWindow = view.optString("focus_window").takeUnless { it == "null" || it.isEmpty() }
-    LaunchedEffect(focusWindow) { if (focusWindow != null && !MainActivity.focusWorkspace(focusWindow)) host.reportActionError("This workspace is open in another window. Switch to that window to continue.") }
+    LaunchedEffect(focusWindow) { if (focusWindow != null) host.reportActionError("This workspace is open in another window. Switch to that window to continue.") }
     val colors = LocalPalette.current
     fun send(type: String) = host.workspaceInput(obj("type" to type))
     val cancel = { send("cancel") }

@@ -21,7 +21,8 @@ Test mouse, touch/pen where supported, keyboard, cancellation, and restart.
 - Shared controller: `controller.rs` in that directory; `WorkspaceInput::EditSwitcher`
   and `RefreshSwitcher`, plus `WorkspaceView.switcher_display` for header choices,
   `switcher` for pin controls, `order`, and `switcher_busy`.
-  Refresh on focus and notify other windows after `switcher_revision` changes.
+  Refresh on focus. Hosts with several editor windows (GTK and Web) notify the
+  others after `switcher_revision` changes; Android has a single editor window.
 - GTK reference: `apps/layer-linux/src/workspace_switcher_dialog.rs`.
 - Web reference/tests: `apps/layer-web/workspace-switcher.js` and `workspace-switcher.test.mjs`.
 - Interaction rules: [drag-and-reorder.md](drag-and-reorder.md).

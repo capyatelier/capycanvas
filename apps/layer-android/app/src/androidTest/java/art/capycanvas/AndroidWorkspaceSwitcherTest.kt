@@ -313,39 +313,4 @@ class AndroidWorkspaceSwitcherTest {
         tap("workspace-switch-$target")
         assertEquals(target, view().getString("id"))
     }
-
-    @Test fun switcherPreferencesRefreshAcrossNativeWindows() {
-        val before = capture(); val initial = order(); val a = initial.first(); val first = host
-        val other = ActivityScenario.launch<MainActivity>(android.content.Intent(instrumentation.targetContext, MainActivity::class.java)
-            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT or android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
-        try {
-            lateinit var secondActivity: MainActivity
-            other.onActivity { secondActivity = it; host = it.host }
-            assertNotSame(first, host)
-            waitFor("second window ready", 60000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") && !it.optBoolean("switcher_busy") && !it.optBoolean("dirty") } == true }
-            // Each editing window owns a different workspace. Preference
-            // synchronization must not depend on sharing a workspace claim.
-            send(obj("type" to "switch", "id" to initial[2]))
-            open(); options(a, "pin")
-            waitFor("pin updates the other native window") {
-                first.workspaceManager!!.array("switcher").objects().none { it.getString("id") == a }
-            }
-            options(a, "down")
-            waitFor("row order updates the other native window") { first.workspaceManager!!.array("order").getString(1) == a }
-            tap("workspace-cancel")
-            // Use the app's close path, which releases its workspace claim
-            // before the other Activity resumes. Scenario.close bypasses it.
-            instrumentation.runOnMainSync { secondActivity.onBackPressedDispatcher.onBackPressed() }
-            waitFor("second window closes") { secondActivity.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.DESTROYED }
-        } finally { host = first; other.close() }
-        waitFor("original window preferences settle") { !view().optBoolean("busy") && !view().optBoolean("switcher_busy") }
-        assertTrue(view().toString(), view().isNull("switcher_error"))
-        // Android can restore the second Activity into the first workspace
-        // before we switch it. Shared ownership policy then protects the first
-        // window's memory on resume instead of silently adopting newer data.
-        if (!view().isNull("error")) assertTrue(view().toString(),
-            view().getString("error").startsWith("This workspace changed while the window was suspended.") ||
-                view().getString("error").startsWith("This workspace is open in another window."))
-        assertFalse(a in ids("switcher")); assertEquals(a, order()[1]); assertEquals(before, capture())
-    }
 }

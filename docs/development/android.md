@@ -66,6 +66,8 @@ wrapper supplies Gradle and builds the Rust library through `cargo-ndk`.
 
 ## How the host works
 
+Android runs a single editor window: `MainActivity` is `singleTop` and does not
+opt into multi-instance system UI, and drawing tabs hold multiple documents.
 Compose renders shared tool and workspace models. Android collects `MotionEvent`
 history and available predictions, while a dedicated render owner handles the
 session and Vulkan work. `Choreographer` supplies frame timing. Surface recreation,
