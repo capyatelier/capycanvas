@@ -67,7 +67,10 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     // Compose rounds each side's padding separately. Summing logical widths
     // first loses pixels at fractional scale and clips the final menu label.
     val menuPadding = (8f * density).roundToInt()
-    val menuWidth = menus.sumOf { (measure(it.getString("label")) * density).roundToInt() + 2 * menuPadding } / density + 8f + 2f * (menus.size - 1)
+    val menuGap = (2f * density).roundToInt()
+    val menuInset = (4f * density).roundToInt()
+    val menuWidth = (menus.sumOf { (measure(it.getString("label")) * density).roundToInt() + 2 * menuPadding } +
+        2 * menuInset + menuGap * (menus.size - 1)) / density
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
@@ -312,7 +315,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight())
         .then(if (inset) click.padding(vertical = 1.dp).clip(TileShape) else Modifier.clip(shape))
         .background(if (surface && !inBar) colors.headerSurface else Color.Transparent).background(when {
-        selected && inBar -> colors.activeSolid
+        selected && inBar -> colors.headerActive
         selected -> colors.active
         open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)

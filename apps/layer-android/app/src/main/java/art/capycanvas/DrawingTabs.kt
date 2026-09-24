@@ -157,7 +157,7 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             }
         }
         if(vertical)Column(Modifier.fillMaxWidth().verticalScroll(scroll)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.fillMaxWidth().height(64.dp))}}}
-        else Row(Modifier.fillMaxSize().padding(vertical=1.dp).background(colors.headerSurface,TileShape)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
+        else Row(Modifier.fillMaxSize().padding(vertical=1.dp).background(colors.headerSurface,TileShape),horizontalArrangement=Arrangement.spacedBy(6.dp)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
         if(drag.active!=null&&drag.valid) {
             val target=drag.before?.let{drag.rows[it]}?:order.lastOrNull()?.let{drag.rows[it]}
             if(target!=null){val at=if(vertical){(if(drag.before==null)target.bottom else target.top)-drag.area.top}else{(if(drag.before==null)target.right else target.left)-drag.area.left}

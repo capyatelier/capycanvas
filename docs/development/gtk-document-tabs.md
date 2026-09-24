@@ -20,7 +20,7 @@ plain title and dimensions at the normal title width, with native window draggin
 tab styling, the close button, and the dropdown appear only for multiple drawings.
 
 Tabs keep GNOME Web's full-height [AdwTabBar shape](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/src/stylesheet/widgets/_tab-view.scss)
-without an accent underline. Tabs abut in one full-height strip on the title
+without an accent underline. Tabs sit 6px apart in one full-height strip on the title
 bar's translucent canvas surround; the selected tab uses the opaque panel
 grey, with full-tab hover/pressed overlays, separators only between adjacent idle tabs, and 24px
 circular close controls. Keyboard focus outlines the whole tab; high contrast
