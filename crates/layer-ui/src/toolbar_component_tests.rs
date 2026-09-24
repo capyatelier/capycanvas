@@ -1038,12 +1038,12 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
         let mark = fill(value as f64);
         for travel in [140., 200., 400.] {
             for sign in [-1., 1.] {
-                let near = mark + sign * 10. / travel;
+                let near = mark + sign * 16. / travel;
                 assert_eq!(
                     slider_bookmark_value(control, &[value], near, travel).unwrap(),
                     value as f64
                 );
-                let far = mark + sign * 16. / travel;
+                let far = mark + sign * 24. / travel;
                 assert_ne!(
                     slider_bookmark_value(control, &[value], far, travel).unwrap(),
                     value as f64
@@ -1066,8 +1066,12 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
             neighbor as f64
         );
         // A very short track must not turn most of its range into a tap target.
+        assert_eq!(
+            slider_bookmark_value(control, &[value], mark + 0.14, 40.).unwrap(),
+            value as f64
+        );
         assert_ne!(
-            slider_bookmark_value(control, &[value], mark + 0.11, 40.).unwrap(),
+            slider_bookmark_value(control, &[value], mark + 0.16, 40.).unwrap(),
             value as f64
         );
         for travel in [0., -1., f64::NAN, f64::INFINITY] {

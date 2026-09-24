@@ -697,7 +697,8 @@ impl Component {
             popover.set_autohide(false);
             popover.add_css_class("brush-preview");
             popover.set_widget_name("brush-slider-preview");
-            popover.set_parent(self.slider.as_ref().unwrap());
+            let slider = self.slider.as_ref().unwrap();
+            popover.set_parent(slider);
             popover.set_child(Some(&overlay));
             let vertical = self.root.imp().vertical.get();
             popover.set_position(if vertical {
@@ -705,7 +706,31 @@ impl Component {
             } else {
                 gtk::PositionType::Bottom
             });
-            popover.set_offset(if vertical { 8 } else { 0 }, if vertical { 0 } else { 8 });
+            if let Some(component) = self.root.compute_bounds(slider) {
+                let toolbar = self.root
+                    .parent()
+                    .and_then(|p| p.compute_bounds(slider))
+                    .unwrap_or(component);
+                // Grow the anchor on both sides. A directional offset points
+                // back into the toolbar when GTK flips a bottom/right popup.
+                let (x, y, width, height) = if vertical {
+                    (
+                        toolbar.x() - 8., component.y(),
+                        toolbar.width() + 16., component.height(),
+                    )
+                } else {
+                    (
+                        component.x(), toolbar.y() - 8.,
+                        component.width(), toolbar.height() + 16.,
+                    )
+                };
+                popover.set_pointing_to(Some(&gdk::Rectangle::new(
+                    x.floor() as i32,
+                    y.floor() as i32,
+                    width.ceil() as i32,
+                    height.ceil() as i32,
+                )));
+            }
             area.set_draw_func(glib::clone!(
                 #[weak(rename_to=component)]
                 self,

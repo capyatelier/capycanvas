@@ -1731,8 +1731,8 @@ class AndroidInteractionTest {
             tool = device
             val slider = bounds("component-slider-${size.second}")
             val mark = slider.center - Offset(0f, 23*density)
-            val near = mark + Offset(0f, 10*density)
-            val far = mark + Offset(0f, 16*density)
+            val near = mark + Offset(0f, 16*density)
+            val far = mark + Offset(0f, 24*density)
             tap(mark)
             waitFor("tap retains stamp $device") { exists("brush-slider-preview") }
             val saved = state().getJSONObject("brush").number("diameter")
@@ -1766,6 +1766,29 @@ class AndroidInteractionTest {
             event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
             assertEquals("Held cap reorders without editing", value, state().getJSONObject("brush").number("diameter"), .01f)
             event(MotionEvent.ACTION_CANCEL); settle()
+        }
+
+        for (edge in listOf("left", "right", "top", "bottom")) {
+            action(obj("type" to "move_panel", "panel" to size.first, "viewport" to viewport,
+                "target" to obj("kind" to "compact_edge", "edge" to edge, "alignment" to "center")))
+            settle()
+            for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = device
+                tap(bounds("component-slider-${size.second}").center)
+                waitFor("edge preview $edge/$device") { exists("brush-slider-preview") }; settle()
+                val toolbar = bounds("panel-body-${size.first}")
+                val preview = bounds("brush-slider-preview")
+                val gap = when (edge) {
+                    "left" -> preview.left-toolbar.right
+                    "right" -> toolbar.left-preview.right
+                    "top" -> preview.top-toolbar.bottom
+                    else -> toolbar.top-preview.bottom
+                } / density
+                assertTrue("Preview clears toolbar $edge/$device: $gap", gap >= 7f && gap <= 16f)
+                captureToolbar("preview-$edge-$device")
+                tap(bounds("workspace").center)
+                waitFor("edge preview dismissed") { !exists("brush-slider-preview") }
+            }
         }
 
     }

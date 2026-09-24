@@ -423,6 +423,7 @@ fn native_toolbar_components_pen_input() {
         restore(&d, WorkspacePreset::Painter);
         slider_gestures(&mut d, &["pen"]);
         slider_preview_gestures(&mut d, &["pen"]);
+        slider_preview_placement(&mut d, &["pen"]);
     }
     d.finish();
 }
@@ -922,6 +923,7 @@ fn native_toolbar_value_controls_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarValues");
     restore(&d, WorkspacePreset::Painter);
     slider_preview_gestures(&mut d, &["mouse", "touch"]);
+    slider_preview_placement(&mut d, &["mouse", "touch"]);
     restore(&d, WorkspacePreset::Photographer);
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::Brush,
@@ -1539,6 +1541,68 @@ fn native_toolbar_segments_pen_input() {
     d.finish();
 }
 
+fn slider_preview_placement(d: &mut Driver, devices: &[&str]) {
+    let id = component_id(d, ToolbarControl::BrushSizeSlider);
+    for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+        d.w.dispatch(UiAction::MovePanel {
+            panel: brush_panel(d),
+            target: DockTarget::CompactEdge {
+                edge,
+                alignment: EdgeAlignment::Center,
+            },
+            viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32],
+        });
+        pump(150);
+        for &device in devices {
+            let scale = d.named(&format!("component-slider-{id}"));
+            let toolbar = scale
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .compute_bounds(&d.w.window)
+                .unwrap();
+            let p = d.point(&scale);
+            drag(d, device, p, p, false);
+            pump(100);
+            let popup = d
+                .named("brush-slider-preview")
+                .downcast::<gtk::Popover>()
+                .unwrap();
+            let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+            let content = popup.child().unwrap().compute_bounds(&popup).unwrap();
+            let (dx, dy) = popup.surface_transform();
+            let x = surface.position_x() as f32 - dx as f32 + content.x();
+            let y = surface.position_y() as f32 - dy as f32 + content.y();
+            let gap = match edge {
+                Edge::Left => x - toolbar.x() - toolbar.width(),
+                Edge::Right => toolbar.x() - x - content.width(),
+                Edge::Top => y - toolbar.y() - toolbar.height(),
+                Edge::Bottom => toolbar.y() - y - content.height(),
+            };
+            assert!(
+                (7. ..=16.).contains(&gap),
+                "{device}/{edge:?}: preview clears the toolbar, gap={gap}"
+            );
+            capture_popover(
+                &popup,
+                d.dir
+                    .join(format!("slider-placement-{edge:?}-{device}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            // A real drag dismisses the nonmodal preview, including with pen.
+            let end = if matches!(edge, Edge::Left | Edge::Right) {
+                [p[0], p[1] + 24.]
+            } else {
+                [p[0] + 24., p[1]]
+            };
+            drag(d, device, p, end, false);
+            assert!(!popup.is_mapped());
+        }
+    }
+}
+
 fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
     let id = component_id(d, ToolbarControl::BrushSizeSlider);
     for &device in devices {
@@ -1610,8 +1674,8 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
         );
         d.w.dispatch(UiAction::SetBrushSize { value: 3. });
         pump(50);
-        let near = [p[0], p[1] + 10.];
-        let far = [p[0], p[1] + 16.];
+        let near = [p[0], p[1] + 16.];
+        let far = [p[0], p[1] + 24.];
         drag(d, device, far, far, false);
         assert_ne!(
             state(&d.w).brush.diameter,

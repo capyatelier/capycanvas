@@ -91,7 +91,7 @@ impl SliderBookmarks {
     }
 }
 
-/// Only taps snap to nearby marks, within 12 logical pixels (at most 10% of
+/// Only taps snap to nearby marks, within 18 logical pixels (at most 15% of
 /// travel). Hosts supply measured thumb travel; drags pass no bookmarks.
 pub fn slider_bookmark_value(
     control: ToolbarControl,
@@ -103,7 +103,7 @@ pub fn slider_bookmark_value(
     if !position.is_finite() || !travel.is_finite() || travel <= 0. {
         return Err("Invalid slider position".into());
     }
-    let tolerance = (12. / travel).min(0.1);
+    let tolerance = (18. / travel).min(0.15);
     let nearest = values
         .iter()
         .filter_map(|&value| {

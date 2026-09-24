@@ -102,6 +102,16 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
     await invoke('undo_workspace');
     assert.ok(await evaluate('layerApp.state().workspace.layout.floating.length>0'));
     await invoke('redo_workspace');
+    if (alignment === 'center') {
+      await click(slider, device);
+      const toolbar = await rect(`.toolbar-controls[data-panel="${panel}"]`);
+      const preview = await rect('.toolbar-brush-preview:popover-open');
+      const gap = edge === 'left' ? preview.x-toolbar.x-toolbar.width
+        : edge === 'right' ? toolbar.x-preview.x-preview.width
+        : edge === 'top' ? preview.y-toolbar.y-toolbar.height : toolbar.y-preview.y-preview.height;
+      assert.ok(gap >= 7 && gap <= 16, `${device}/${edge}: preview clears toolbar, gap=${gap}`);
+      for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    }
   }
 
   await workspace('photographer'); await invoke('brush');
@@ -175,15 +185,15 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, re
     await send({ type: 'set_tool_setting', id: 'size', value: 3 });
     assert.equal(await evaluate(`document.querySelector('${preview} .toolbar-preview-bookmark').getAttribute('aria-label')`), 'Bookmark this value');
     const mark = '[data-toolbar-component=brush_size_slider] .toolbar-slider-mark';
-    await click(mark, device, { x: 0, y: 16 });
+    await click(mark, device, { x: 0, y: 24 });
     assert.notEqual(await evaluate('layerApp.state().brush.diameter'), value, `${device}: distant tap does not snap`);
-    await click(mark, device, { x: 0, y: 10 });
+    await click(mark, device, { x: 0, y: 16 });
     assert.equal(await evaluate('layerApp.state().brush.diameter'), value, `${device}: nearby tap recalls exact bookmark`);
     assert.ok(await evaluate(`(()=>{const m=document.querySelector('${mark}.selected').getBoundingClientRect(),h=document.querySelector('[data-toolbar-component=brush_size_slider] .toolbar-slider-thumb').getBoundingClientRect();return Math.abs(m.y+m.height/2-h.y-h.height/2)<.1&&Math.abs(m.x+m.width/2-h.x-h.width/2)<.1})()`), 'selected bookmark is centered inside handle');
     const m = await rect(mark), x = m.x + m.width / 2, y = m.y + m.height / 2;
-    await gesture({x, y: y+16}, {x, y: y+10}, device);
+    await gesture({x, y: y+24}, {x, y: y+16}, device);
     assert.notEqual(await evaluate('layerApp.state().brush.diameter'), value, `${device}: dragging near bookmark does not snap`);
-    await click(mark, device, {x:0, y:10});
+    await click(mark, device, {x:0, y:16});
     assert.equal(await evaluate('layerApp.state().brush.diameter'), value);
     await click(`${preview} .toolbar-preview-bookmark`, device);
     assert.equal(await evaluate(`document.querySelectorAll('[data-toolbar-component=brush_size_slider] .toolbar-slider-mark').length`), 0);
