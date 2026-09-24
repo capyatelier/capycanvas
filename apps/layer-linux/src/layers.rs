@@ -489,7 +489,6 @@ impl LayerPanel {
                 let load_selection = button("layer-selection-load-symbolic", "Load selection");
                 load_selection.add_css_class("layer-thumbnail");
                 load_selection.set_valign(gtk::Align::Center);
-                load_selection.set_tooltip_text(Some("Load a copy as the current selection"));
                 thumbnails.insert_child_after(&load_selection, Some(&content));
                 let lock = gtk::Image::new();
                 lock.set_pixel_size(12);
@@ -1434,6 +1433,7 @@ impl Row {
         self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
         crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
         self.load_selection.set_visible(s.selection_layer);
+        self.load_selection.set_tooltip_text(Some(s.load_selection_tooltip));
         self.load_selection.set_widget_name(&format!("selection-load-{}", s.id));
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));

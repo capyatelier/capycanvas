@@ -92,6 +92,8 @@ pub struct Settings {
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
+    /// Shared by Quick Mask and every saved selection, across documents.
+    pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub hide_cursor_while_drawing: bool,
@@ -120,6 +122,7 @@ impl Default for Settings {
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
+            selection_painting: Default::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             hide_cursor_while_drawing: true,

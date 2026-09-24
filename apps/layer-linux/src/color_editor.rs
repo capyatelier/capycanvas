@@ -104,6 +104,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
     let definition = match slot {
         ColorSlot::Foreground => colors.foreground,
         ColorSlot::Background => colors.background,
+        ColorSlot::Temporary => colors.temporary,
         ColorSlot::Transparent => return,
     };
     let mut selected = colors.clone();

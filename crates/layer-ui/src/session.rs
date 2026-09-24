@@ -1967,7 +1967,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selected = (id == CommandId::QuickMask && self.selection_masks.quick())
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
-            || (id == CommandId::MaskOverlayProtected && self.mask_properties().protected())
+            || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
             || (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
             || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
@@ -2173,6 +2173,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace::description::item_name(&self.state.workspace.layout, item)
             )
         });
+        let previous_mask_mode = self.state.settings.selection_painting;
+        let restores_settings = matches!(&action, UiAction::RestoreSettings { .. });
         let mut save_settings = matches!(
             &action,
             UiAction::SetTheme { .. }
@@ -3149,6 +3151,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if was_expanded && !self.state.customization.has_drawer() && was_zen {
             self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
+        }
+        if previous_mask_mode != self.state.settings.selection_painting {
+            changed |= SETTINGS | DOCUMENT | BRUSH;
+            save_settings |= !restores_settings;
         }
         if save_settings {
             self.request(HostRequestKind::SaveSettings {
@@ -4195,7 +4201,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             gamma: settings.pressure_gamma,
             ..Default::default()
         });
+        let mask_mode_changed = self.state.settings.selection_painting != settings.selection_painting;
         self.state.settings = settings;
+        if mask_mode_changed { self.refresh_document(); }
         self.refresh_shortcuts();
         Ok(())
     }
@@ -4559,6 +4567,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             visible: l.visible,
             opacity: l.opacity,
             selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&l.id),
+            load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
             selection_icon: if self.layer_interaction.selected.contains(&l.id)
                 && (self.layer_interaction.selected.len() > 1 || l.id != doc.active_layer)
             {
@@ -4622,7 +4631,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| m.id.0),
         };
         self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
-        self.state.layer_properties = effects::properties(doc);
+        self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting);
         self.state.layer_tools.controls = doc
             .layer(doc.active_layer)
             .map(|l| art_layers::LayerControls::for_layer(doc, l))
@@ -4637,6 +4646,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut temporary = layer_core::Layer::selection(LayerId(0), "Quick Mask", self.current_selection().unwrap_or_else(layer_core::Selection::empty));
             temporary.visible = self.selection_masks.quick_visible;
             let mut row = layer_state(&temporary);
+            row.load_selection_tooltip = "Finish Quick Mask and use it as the current selection";
             row.quick_mask = true; row.can_rename = false; row.can_delete = true;
             row.paint_revision = self.selection_masks.preview_revision(LayerId(0));
             row.can_drop_below = false; row.editing = true; row.drawing = true; row.selected = true;
@@ -4644,7 +4654,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
             self.state.layer_tools.controls = LayerControls::default();
-            self.state.layer_properties = selection_properties::properties(0, "Quick Mask", &self.selection_masks.quick_properties, true);
+            self.state.layer_properties = selection_properties::properties(0, "Quick Mask", &self.selection_masks.quick_properties, self.state.settings.selection_painting, true);
         }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
@@ -15390,11 +15400,30 @@ mod tests {
     }
 
     #[test]
+    fn sketch_color_and_layers_drawers_survive_canvas_contacts_and_replace_each_other() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session(); s.set_platform(platform);
+            s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+            for control in [ToolbarControl::Color, ToolbarControl::Panel { panel: Panel::Layers }] {
+                let id = s.state.workspace.layout.header.zones.iter().flatten().find(|e|
+                    e.item == HeaderItem::Tool { control }).unwrap().id;
+                s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }] }).unwrap();
+                s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+                let drawer = s.state.customization.drawer.clone().unwrap();
+                assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
+                let reply = chrome(&mut s, ChromeEvent::Contact { position: [700., 500.], canvas: true }, ChromeFacts::default());
+                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
+                assert!(!reply.handled, "canvas input continues with the drawer open");
+            }
+        }
+    }
+
+    #[test]
     fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
             s.set_platform(platform);
-            let color = s
+            let brush = s
                 .state
                 .workspace
                 .layout
@@ -15402,9 +15431,10 @@ mod tests {
                 .unwrap()
                 .tiles()
                 .iter()
-                .find(|t| t.control == ToolbarControl::Color)
+                .find(|t| t.control == ToolbarControl::Command { command: CommandId::Brush })
                 .unwrap()
                 .id;
+            invoke(&mut s, CommandId::Brush);
             for (position, canvas) in [
                 ([500., 15.], false),
                 ([1000., 850.], false),
@@ -15412,16 +15442,16 @@ mod tests {
             ] {
                 s.dispatch(UiAction::ActivateTile {
                     panel: Panel::Toolbar,
-                    tile: color,
+                    tile: brush,
                 })
                 .unwrap();
                 assert!(s.state.customization.drawer.is_some());
                 assert!(
-                    !s.panel_view(Panel::Toolbar)
+                    s.panel_view(Panel::Toolbar)
                         .unwrap()
                         .tiles
                         .iter()
-                        .find(|t| t.id == color)
+                        .find(|t| t.id == brush)
                         .unwrap()
                         .choice
                         .selected
@@ -15555,12 +15585,9 @@ mod tests {
             },
             ChromeFacts::default(),
         );
-        assert!(reply.handled && !reply.paint);
-        assert!(s.state.customization.drawer.is_none());
-        // Explicit policy is for persistent column drawers: outside does not
-        // dismiss, without a per-platform special case.
-        activate(&mut s, 6);
-        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
+        assert!(!reply.handled);
+        assert!(s.state.customization.drawer.is_some());
+        // Color remains open until toggled or replaced.
         chrome(
             &mut s,
             ChromeEvent::Contact {

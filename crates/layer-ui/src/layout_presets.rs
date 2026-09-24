@@ -34,6 +34,15 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_photo_column_layout(platform);
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
+        layout
+    }
+
+    /// Last defaults before Photo opened its secondary panels individually.
+    pub fn legacy_photo_column_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_selection_layout(platform);
         if crate::CommandId::Select.available_on(platform) {
             if self == Self::Painter {
@@ -488,11 +497,12 @@ mod tests {
                 layout
                     .column_stacks
                     .iter()
-                    .all(|s| !s.drawers)
+                    .all(|s| s.drawers == (s.column == 4))
             );
             assert_eq!(layout.collapsed.len(), 1);
             assert!(layout.is_collapsed(4) && !layout.is_collapsed(12));
-            assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
+            assert!(layout.column_stacks.iter().all(|s| !s.auto_hide));
+            assert!(layout.column_stack(4).drawers);
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
@@ -612,6 +622,7 @@ mod tests {
                     let DockNode::Tabs {panels,..}=previous.node_mut(group).unwrap() else {panic!()};
                     panels.insert(1,Panel::Proof);
                 }
+                if preset == WorkspacePreset::Photographer { previous.column_stack_mut(4).drawers = true; }
                 assert_eq!(current,previous);
             }
             assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);

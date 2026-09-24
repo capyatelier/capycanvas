@@ -316,6 +316,7 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
         editing: None,
         color: [1., 0., 0., 0.5],
         protected: false,
+        saved_protected: false,
     }));
     let target = r.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("selection overlay reference"),
@@ -446,6 +447,7 @@ fn selection_paint_retained_preview_repaints_strokes_without_artwork_or_cursor_d
         editing: None,
         color: [1., 0., 0., 0.5],
         protected: false,
+        saved_protected: false,
     }));
     let mut paint = request(1, Selection::empty(), SelectionPaintMode::Add, 0.5);
     for x in [25., 65., 105.] {
@@ -500,6 +502,7 @@ fn selection_paint_saved_previews_color_visibility_thumbnails_and_export_isolati
         editing: None,
         color: [1., 0., 0., 0.5],
         protected: false,
+        saved_protected: false,
     }));
     submit(&mut r, &layers, &[], &[], false);
     let first = r.selection_previews.buffer.clone().unwrap();
@@ -548,6 +551,16 @@ fn selection_paint_saved_previews_color_visibility_thumbnails_and_export_isolati
         let p = &pixels[(50 * 128 + x) * 4..][..4];
         assert!(p[0] > p[1] + 40, "{p:?}");
     }
+    let ordinary = r.selection_overlay.unwrap();
+    r.set_selection_overlay(Some(layer_render::SelectionOverlay { saved_protected: true, ..ordinary }));
+    submit(&mut r, &layers, &[], &[], false);
+    assert_ne!(r.selection_previews.buffer.as_ref(), Some(&first), "global mode invalidates cached saved overlays");
+    let protected = render(&r, &mut presenter);
+    let outside = &protected[(50 * 128 + 60) * 4..][..4];
+    assert!(outside[0] > outside[1] + 40, "protected regions follow the global mode: {outside:?}");
+    r.set_selection_overlay(Some(ordinary));
+    submit(&mut r, &layers, &[], &[], false);
+    assert_eq!(render(&r, &mut presenter), pixels);
     layers[2].properties.selection_mask = Some(layer_core::SelectionMaskProperties { color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap(), ..Default::default() });
     submit(&mut r, &layers, &[], &[], false);
     let pixels = render(&r, &mut presenter);

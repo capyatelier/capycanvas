@@ -129,12 +129,14 @@ Quick Mask has no separate editing strip or popup. Its temporary row remains
 outside groups and cannot be renamed/reordered; exiting removes it.
 
 `selection_properties.rs` publishes three controls for both mask kinds: Mode,
-Overlay color, and Overlay opacity. Selection paint (default) paints selected
+Overlay color, and Overlay opacity. Paint selection (default) paints selected
 coverage with color, removes it with transparency/erasers, and overlays selected
 areas. Grayscale mask uses black to protect, white to select, gray for partial
 coverage, and transparency/erasers to select; its overlay shows protected areas.
 Both blend with ordinary paint opacity. Overlay polarity derives from the mode,
-including for old files that stored a separate `protected` field. The color
+with the mode stored in application settings and shared by all masks. Old layer
+`painting` and `protected` fields are ignored. Colors remain unrestricted;
+grayscale coverage is computed from display-encoded sRGB luminance while painting. The color
 bucket copies the displayed mask painting color, independent of artwork colors.
 
 Entry without a selection provides an empty working mask; leaving it untouched
@@ -215,3 +217,15 @@ Additional reproducible checks:
   binary early-outs. On the workstation above, GPU completion plus capture took
   80 ms on first use and 28–30 ms for 32/128-pixel Grow/Shrink. These measure a
   completed operation, not brush latency; tablet timings depend on its GPU.
+
+Layers and Color drawers stay open during canvas input. Opening another header
+or toolbar drawer replaces them; their existing close/toggle actions still work.
+Photo's secondary panel strip opens individual panels by default. Default
+upgrades preserve customized workspace layouts.
+
+The color wheel mirrors the foreground circle with a same-size transparency
+circle. Black and white shortcuts trail below and left of transparency. They
+replace the selected foreground/background paint; from transparency they select
+an independent paint, preserving both remembered colors. Wheel edits continue
+on that independent paint until a remembered slot is selected. The extra paint
+and its SDR/HDR picker coordinates survive workspace saves.

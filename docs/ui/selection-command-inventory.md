@@ -173,7 +173,7 @@ All persistent modes must remain selectable without a keyboard.
 
 The row uses ordinary layer presentation, is pinned and selected while editing,
 and is removed on exit. A compact Load icon ends editing.
-Mode (Selection paint / Grayscale mask) and overlay color/opacity stay
+Mode (Paint selection / Grayscale mask) and overlay color/opacity stay
 in Properties; the eye controls visibility. Its context menu is short and
 target-specific:
 

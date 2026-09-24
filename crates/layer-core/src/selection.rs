@@ -13,25 +13,18 @@ pub enum SelectionPaintBehavior {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SelectionMaskProperties {
-    pub painting: SelectionPaintBehavior,
     pub color: color::RgbColor,
     pub opacity: f32,
 }
 impl Default for SelectionMaskProperties {
     fn default() -> Self {
         Self {
-            painting: SelectionPaintBehavior::default(),
             color: color::RgbColor::new(color::RgbSpace::Srgb, [1., 0., 0., 1.]).unwrap(),
             opacity: 0.5,
         }
     }
 }
 impl SelectionMaskProperties {
-    /// The convention couples painting and overlay polarity. Old project files
-    /// may contain an independent `protected` field; serde ignores that field.
-    pub fn protected(&self) -> bool {
-        self.painting == SelectionPaintBehavior::BlackWhite
-    }
     pub fn validate(&self) -> Result<(), DocumentError> {
         if self.color.validate_working_spaces().is_err()
             || !self.opacity.is_finite()
@@ -347,11 +340,12 @@ mod selection_tests {
     use super::*;
 
     #[test]
-    fn legacy_mask_side_is_replaced_by_the_painting_convention() {
+    fn legacy_layer_mode_is_ignored_in_favor_of_global_preferences() {
         let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"color_transparency","protected":true}"#).unwrap();
-        assert!(!p.protected());
+        assert_eq!(p, SelectionMaskProperties::default());
         let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"black_white","protected":false}"#).unwrap();
-        assert!(p.protected());
+        assert_eq!(p, SelectionMaskProperties::default());
+        assert!(!serde_json::to_string(&p).unwrap().contains("painting"));
         assert!(!serde_json::to_string(&p).unwrap().contains("protected"));
     }
 
@@ -368,7 +362,6 @@ mod selection_tests {
         let original = soft_mask();
         let mut layer = Layer::selection(id, "Hair", original.clone());
         let properties = SelectionMaskProperties {
-            painting: SelectionPaintBehavior::BlackWhite,
             opacity: 0.35,
             ..Default::default()
         };

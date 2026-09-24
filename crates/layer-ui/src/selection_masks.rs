@@ -2,7 +2,7 @@
 //! document layer; stored masks use ordinary tree identity and shared history.
 use super::*;
 use layer_core::{
-    Edit, Layer, Selection, SelectionMaskProperties, SelectionPaintBehavior, SelectionTarget,
+    Edit, Layer, Selection, SelectionMaskProperties, SelectionTarget,
 };
 use std::sync::Arc;
 
@@ -153,6 +153,12 @@ impl Default for SelectionMasks {
         }
     }
 }
+/// Mask coverage uses display-encoded luminance; the picker retains the color.
+fn mask_gray(color: layer_core::color::RgbColor) -> f32 {
+    let c = color.encoded_in(layer_core::color::RgbSpace::Srgb).expect("validated mask color");
+    (c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722).clamp(0., 1.)
+}
+
 impl SelectionMasks {
     pub fn preview_revision(&self, id: LayerId) -> u64 {
         self.previews.get(&id).map_or(0, |(_, revision)| *revision)
@@ -203,10 +209,10 @@ impl SelectionMasks {
         self.target() == Some(SelectionTarget::Current)
     }
     pub fn gray(&self) -> f32 {
-        self.colors.definition().rgba[0]
+        mask_gray(self.colors.definition())
     }
     pub fn background(&self) -> f32 {
-        self.colors.background.rgba[0]
+        mask_gray(self.colors.background)
     }
     pub fn erases(&self) -> bool {
         self.colors.transparent()
@@ -651,9 +657,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             artwork,
             tool,
         });
-        if self.mask_properties().painting == SelectionPaintBehavior::BlackWhite {
-            self.selection_masks.colors.constrain_grayscale()?;
-        }
         if let SelectionTarget::Saved(id) = target {
             self.engine.set_active_layer(id).map_err(error)?;
             self.layer_interaction.selected = std::collections::BTreeSet::from([id]);
@@ -761,7 +764,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     layer,
                     key: "mask_mode".into(),
                     value: layer_core::EffectValue::Choice(u32::from(
-                        !self.mask_properties().protected(),
+                        !self.grayscale_masks(),
                     )),
                 })?;
             }
@@ -1103,9 +1106,6 @@ impl UiState {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn mask_color_action(&mut self, action: ColorAction) -> Result<(), String> {
         self.selection_masks.colors.apply(action)?;
-        if self.mask_properties().painting == SelectionPaintBehavior::BlackWhite {
-            self.selection_masks.colors.constrain_grayscale()?;
-        }
         self.refresh_tools();
         Ok(())
     }

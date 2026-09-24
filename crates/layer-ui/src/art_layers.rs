@@ -1900,7 +1900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         if let Some(target) = self.selection_masks.target() {
             return self.queue_mask_gradient(target, layer_render::SelectionGradient {
-                start, end, radial, transparent, background: if self.mask_properties().painting == layer_core::SelectionPaintBehavior::ColorTransparency { 1. } else { self.selection_masks.background() },
+                start, end, radial, transparent, background: if !self.grayscale_masks() { 1. } else { self.selection_masks.background() },
             });
         }
         let doc = self.engine.document();

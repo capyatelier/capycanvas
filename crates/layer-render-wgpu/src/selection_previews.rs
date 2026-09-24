@@ -10,6 +10,7 @@ pub(super) struct SelectionPreviews {
     key: Option<(
         Vec<(Selection, layer_core::SelectionMaskProperties)>,
         [u32; 2],
+        bool,
     )>,
     pub buffer: Option<wgpu::Buffer>,
     pub texture: Option<wgpu::TextureView>,
@@ -231,7 +232,7 @@ impl WgpuRasterizer {
                 previews.texture = None;
                 return Ok(());
             }
-            let key = (masks, self.document_extent);
+            let key = (masks, self.document_extent, options.saved_protected);
             if previews.key.as_ref() == Some(&key) {
                 return Ok(());
             }
@@ -284,7 +285,7 @@ impl WgpuRasterizer {
                 let bind = gpu.bind(
                     self,
                     self.document_extent,
-                    properties.protected(),
+                    options.saved_protected,
                     {
                         let mut color = properties
                             .color

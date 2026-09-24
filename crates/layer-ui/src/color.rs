@@ -9,6 +9,9 @@ mod gamut;
 mod okhsv;
 mod editor;
 mod hdr_picker;
+mod quick_colors;
+use quick_colors::{deserialize_slots, deserialize_hdr_slots};
+pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;
 pub use hdr_arc::HdrIntensityArc;
@@ -65,6 +68,8 @@ pub enum ColorSlot {
     Foreground,
     Background,
     Transparent,
+    /// Paint chosen without replacing either remembered color.
+    Temporary,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +80,7 @@ pub enum ColorWheelPart {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ColorAction {
+    QuickColor { white: bool },
     Brightness { stops: f32 },
     /// Multiply the bounded picker color in linear light, retaining its coordinates.
     HdrIntensity { stops: f32 },
@@ -125,6 +131,8 @@ pub struct ColorState {
     pub library: ColorLibrary,
     pub foreground: RgbColor,
     pub background: RgbColor,
+    #[serde(default = "quick_colors::black")]
+    pub temporary: RgbColor,
     /// Coordinate system of the picker, independent of each paint definition.
     rgb_space: RgbSpace,
     pub slot: ColorSlot,
@@ -134,13 +142,14 @@ pub struct ColorState {
     #[serde(default)]
     pub readout: ColorReadout,
     paint_slot: ColorSlot,
-    hues: [f32; 2],
+    #[serde(deserialize_with = "deserialize_slots")]
+    hues: [f32; 3],
     // RGB cannot identify a unique point at black, white, or an achromatic hue.
     // Retain both projections, independently for each paint, including across saves.
-    #[serde(default)]
-    coordinates: [Option<ColorCoordinates>; 2],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    hdr_picker: Option<[HdrPaint; 2]>,
+    #[serde(default, deserialize_with = "deserialize_slots")]
+    coordinates: [Option<ColorCoordinates>; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_hdr_slots")]
+    hdr_picker: Option<[HdrPaint; 3]>,
     #[serde(default = "default_hdr_depth")]
     hdr_depth: layer_core::color::SampleDepth,
 }
@@ -192,6 +201,7 @@ pub struct ColorPanelView {
     pub marker_color: [f32; 3],
     pub components: [ColorComponentView; 3],
     pub swatches: [ColorSwatchView; 3],
+    pub quick_colors: [QuickColorView; 2],
 }
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorHueStop {
@@ -223,36 +233,25 @@ impl Default for ColorState {
                 rgba: [0.075, 0.075, 0.07, 1.],
             },
             background: RgbColor::WHITE,
+            temporary: RgbColor::BLACK,
             rgb_space: RgbSpace::Srgb,
             slot: ColorSlot::Foreground,
             space: ColorSpace::Hsv,
             shape: ColorShape::Circle,
             readout: ColorReadout::Shape,
             paint_slot: ColorSlot::Foreground,
-            hues: [60., 0.],
-            coordinates: [None; 2],
+            hues: [60., 0., 0.],
+            coordinates: [None; 3],
             hdr_picker: None,
             hdr_depth: layer_core::color::SampleDepth::F16,
         }
     }
 }
 impl ColorState {
-    /// Scalar-mask colors are display-encoded gray, independent of artwork
-    /// transfer curves. Preserve the active paint slot while updating the pair.
-    pub(crate) fn constrain_grayscale(&mut self) -> Result<(), String> {
-        let selected = self.paint_slot;
-        for (slot, color) in [(ColorSlot::Foreground,self.foreground),(ColorSlot::Background,self.background)] {
-            let rgba = color.encoded_in(RgbSpace::Srgb)?;
-            let gray = (rgba[0]*0.2126 + rgba[1]*0.7152 + rgba[2]*0.0722).clamp(0.,1.);
-            self.apply(ColorAction::SetSlot {slot,color:RgbColor::new(RgbSpace::Srgb,[gray,gray,gray,1.])?})?;
-        }
-        self.paint_slot = selected;
-        Ok(())
-    }
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.library.validate()?;
         self.validate_hdr_picker()?;
-        for color in [self.foreground, self.background] {
+        for color in [self.foreground, self.background, self.temporary] {
             Self::validate_definition(color)?;
         }
         if self
@@ -345,6 +344,7 @@ impl ColorState {
                 value: components[i],
                 numeric: Self::component_control(i).unwrap(),
             }),
+            quick_colors: self.quick_colors(),
             swatches: [
                 (
                     ColorSlot::Foreground,
@@ -367,10 +367,10 @@ impl ColorState {
         }
     }
     pub fn definition(&self) -> RgbColor {
-        if self.paint_slot == ColorSlot::Background {
-            self.background
-        } else {
-            self.foreground
+        match self.paint_slot {
+            ColorSlot::Background => self.background,
+            ColorSlot::Temporary => self.temporary,
+            _ => self.foreground,
         }
     }
     pub fn rgb_space(&self) -> RgbSpace {
@@ -381,7 +381,7 @@ impl ColorState {
         self.validate()?;
         if space != self.rgb_space {
             self.rgb_space = space;
-            self.coordinates = [None; 2];
+            self.coordinates = [None; 3];
         }
         Ok(())
     }
@@ -424,7 +424,7 @@ impl ColorState {
         self.slot == ColorSlot::Transparent
     }
     fn index(&self) -> usize {
-        usize::from(self.paint_slot == ColorSlot::Background)
+        match self.paint_slot { ColorSlot::Background => 1, ColorSlot::Temporary => 2, _ => 0 }
     }
     pub fn components(&self) -> [f32; 3] {
         self.components_in(self.space)
@@ -597,10 +597,10 @@ impl ColorState {
             hls,
             okhsv: Some(okhsv),
         });
-        if self.paint_slot == ColorSlot::Background {
-            self.background = color;
-        } else {
-            self.foreground = color;
+        match self.paint_slot {
+            ColorSlot::Background => self.background = color,
+            ColorSlot::Temporary => self.temporary = color,
+            _ => self.foreground = color,
         }
         self.slot = self.paint_slot;
         if let (Some(paints), Some(paint)) = (&mut self.hdr_picker, paint) { paints[index] = paint; }
@@ -642,6 +642,12 @@ impl ColorState {
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
         match action {
+            ColorAction::QuickColor { white } => {
+                if matches!(self.slot, ColorSlot::Transparent | ColorSlot::Temporary) {
+                    self.paint_slot = ColorSlot::Temporary;
+                }
+                self.set_color(if white { RgbColor::WHITE } else { RgbColor::BLACK })?;
+            }
             ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev_at_depth(self.rgb_space, stops, self.hdr_depth)?)?,
             ColorAction::HdrIntensity { stops } => self.set_hdr_intensity(stops)?,
             ColorAction::SetSlotIntensity { slot, color, stops } => {
@@ -1156,14 +1162,16 @@ fn render_okhsv_disc_in(
     true
 }
 
-/// A square color panel, down to four tiles (128px after content insets).
-/// Arrays are x/y/width/height in host logical pixels. Only the paint pair overlaps.
+/// A color wheel and compact footer, down to four tiles (128px after insets).
+/// Arrays are x/y/width/height in host logical pixels. Swatch groups overlap.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorPanelLayout {
     pub wheel: [f32; 4],
     pub foreground: [f32; 4],
     pub background: [f32; 4],
     pub transparent: [f32; 4],
+    pub black: [f32; 4],
+    pub white: [f32; 4],
     pub swap: [f32; 4],
     pub edit: [f32; 4],
     pub shapes: [[f32; 4]; 2],
@@ -1179,18 +1187,22 @@ impl ColorPanelLayout {
         let arc = HdrIntensityArc::new(size)?;
         let expansion = arc.radius + arc.width * 0.5 - wheel.outer;
         let old_background_y = layout.background[1];
-        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent] {
+        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent, &mut layout.black, &mut layout.white] {
             let dx = b[0] + b[2] * 0.5 - arc.center[0];
             let dy = b[1] + b[3] * 0.5 - arc.center[1];
             let distance = dx.hypot(dy) + expansion;
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
+        // Leave the EV readout visible above the neutral shortcut circles.
+        let shortcut_drop = (size * 0.044).clamp(9., 12.) + 2.;
+        layout.black[1] += shortcut_drop;
+        layout.white[1] += shortcut_drop;
         Some(layout)
     }
     /// HDR footer height follows the swatches instead of a fixed vertical offset.
     pub fn height(&self) -> f32 {
-        [self.foreground, self.background, self.transparent, self.swap]
+        [self.foreground, self.background, self.transparent, self.black, self.white, self.swap]
             .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
     }
     pub fn new(size: f32) -> Option<Self> {
@@ -1204,16 +1216,21 @@ impl ColorPanelLayout {
         let bg = (fg * 0.8).round();
         let background = [(fg * 0.54).round(), size - bg, bg, bg];
         let c = size * 0.5;
-        let distance = (background[0] + bg * 0.5 - c).hypot(background[1] + bg * 0.5 - c);
-        let transparent = c + distance / std::f32::consts::SQRT_2 - bg * 0.5;
+        let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
+        let transparent = [size - fg, foreground[1], fg, fg];
+        let black = [size - background[0] - bg, background[1], bg, bg];
+        let white_size = (bg * 0.88).round();
+        let white = [black[0] - bg * 0.60, black[1] + bg * 0.40, white_size, white_size];
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
         Some(Self {
             wheel,
-            foreground: [0., (size - fg - bg * 0.26).round(), fg, fg],
+            foreground,
             background,
-            transparent: [transparent.round(), transparent.round(), bg, bg],
+            transparent,
+            black,
+            white,
             edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
@@ -1665,6 +1682,8 @@ mod tests {
                 l.foreground,
                 l.background,
                 l.transparent,
+                l.black,
+                l.white,
                 l.swap,
                 l.shapes[0],
                 l.shapes[1],
@@ -1673,7 +1692,7 @@ mod tests {
                     b[0] >= 0.
                         && b[1] >= 0.
                         && b[0] + b[2] <= size as f32
-                        && b[1] + b[3] <= size as f32,
+                        && b[1] + b[3] <= l.height(),
                     "{size}: {b:?}"
                 );
                 let d = (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c);
@@ -1681,7 +1700,11 @@ mod tests {
             }
             let [a, b] = l.shapes;
             assert!((a[0] - b[0]).hypot(a[1] - b[1]) >= a[2] - 0.5);
-            assert_eq!(l.background[2], l.transparent[2]);
+            assert_eq!(l.foreground[2], l.transparent[2]);
+            assert_eq!(l.foreground[1], l.transparent[1]);
+            assert_eq!(l.transparent[0], size as f32 - l.foreground[2]);
+            assert_eq!(l.background[2], l.black[2]);
+            assert!(l.white[2] < l.black[2]);
             assert!(l.foreground[2] > l.background[2]);
         }
     }

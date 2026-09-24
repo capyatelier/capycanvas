@@ -581,7 +581,7 @@ mod wheel {
             if orientation == gtk::Orientation::Vertical {
                 let height = |size: i32| if self.hdr.get() {
                     ColorPanelLayout::with_hdr(size as f32).unwrap().height().ceil() as i32
-                } else { size };
+                } else { ColorPanelLayout::new(size as f32).unwrap().height().ceil() as i32 };
                 (height(128), height(if for_size < 0 { 226 } else { for_size.max(128) }), -1, -1)
             } else {
                 (128, 226, -1, -1)
@@ -593,6 +593,8 @@ mod wheel {
                 return;
             };
             let boxes = [
+                layout.white,
+                layout.black,
                 layout.background,
                 layout.foreground,
                 layout.transparent,
@@ -606,7 +608,7 @@ mod wheel {
                 .corners
                 .borrow()
                 .iter()
-                .skip(3)
+                .skip(5)
                 .zip(layout.shape_rotations)
             {
                 button.imp().rotation.set(rotation);
@@ -723,17 +725,18 @@ impl ColorWheel {
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
         let mut size = self.width().min(self.height()).max(0);
         let mut footer = 0.;
-        if self.imp().hdr.get() {
+        {
+            let layout_for = |side| if self.imp().hdr.get() { ColorPanelLayout::with_hdr(side) } else { ColorPanelLayout::new(side) };
             // Fit the shared, width-dependent footer when a short panel constrains height.
             let (mut low, mut high) = (128, size);
             size = 0;
             while low <= high {
                 let candidate = low + (high - low) / 2;
-                let height = ColorPanelLayout::with_hdr(candidate as f32).unwrap().height().ceil() as i32;
+                let height = layout_for(candidate as f32).unwrap().height().ceil() as i32;
                 if height <= self.height() { size = candidate; low = candidate + 1; }
                 else { high = candidate - 1; }
             }
-            if let Some(layout) = ColorPanelLayout::with_hdr(size as f32) {
+            if let Some(layout) = layout_for(size as f32) {
                 footer = layout.height().ceil() - size as f32;
             }
         }
@@ -759,6 +762,7 @@ pub struct ColorPanel {
     initialized: Cell<bool>,
     wheel: ColorWheel,
     swatches: Vec<(ColorSlot, WheelButton, ColorPatch)>,
+    quick_colors: Vec<(bool, WheelButton, ColorPatch)>,
     shape_buttons: [WheelButton; 2],
     readout: WheelButton,
     readout_drawing: gtk::DrawingArea,
@@ -789,6 +793,21 @@ impl ColorPanel {
         edit_color.add_css_class("color-utility");
         edit_color.add_css_class("color-swap");
         edit_color.set_widget_name("color-edit-button");
+        let mut quick_colors = Vec::new();
+        for preset in ColorState::default().quick_colors().into_iter().rev() {
+            let button: WheelButton = glib::Object::new();
+            button.add_css_class("flat");
+            button.add_css_class("color-swatch");
+            button.set_tooltip_text(Some(preset.label));
+            button.update_property(&[gtk::accessible::Property::Label(preset.label)]);
+            button.set_widget_name(if preset.white { "color-White" } else { "color-Black" });
+            let sample = ColorPatch::new(true);
+            sample.set_size_request(12, 12);
+            button.set_child(Some(&sample));
+            button.set_parent(&wheel);
+            wheel.imp().corners.borrow_mut().push(button.clone());
+            quick_colors.push((preset.white, button, sample));
+        }
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Background, "Background color"),
@@ -889,6 +908,7 @@ impl ColorPanel {
             wheel,
             initialized: Cell::new(false),
             swatches,
+            quick_colors,
             shape_buttons,
             readout,
             readout_drawing,
@@ -914,6 +934,12 @@ impl ColorPanel {
             if let Some(slot) = slot { crate::color_editor::show(&workspace, slot); }
         }));
         workspace.watch_popover(self.wheel.imp().menu.borrow().as_ref().unwrap());
+        for (white, button, _) in &self.quick_colors {
+            let white = *white;
+            button.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
+                workspace.dispatch(UiAction::Color { action: ColorAction::QuickColor { white } });
+            }));
+        }
         for (slot, button, _) in &self.swatches {
             let slot = *slot;
             button.connect_clicked(glib::clone!(
@@ -1159,13 +1185,18 @@ impl ColorPanel {
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout_drawing.queue_draw();
+        for (white, button, sample) in &self.quick_colors {
+            let preset = &state.quick_colors()[usize::from(*white)];
+            selected(button, preset.selected);
+            sample.set_display_color(if *white { layer_core::color::RgbColor::WHITE } else { layer_core::color::RgbColor::BLACK }, ViewColor::Srgb, 1.);
+        }
         for (slot, button, sample) in &self.swatches {
             if *slot == state.slot {
                 button.add_css_class("selected-tool");
             } else {
                 button.remove_css_class("selected-tool");
             }
-            let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Transparent => layer_core::color::RgbColor { linear_rgb: None, space: state.rgb_space(), rgba: [0.; 4] } };
+            let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Temporary => state.temporary, ColorSlot::Transparent => layer_core::color::RgbColor { linear_rgb: None, space: state.rgb_space(), rgba: [0.; 4] } };
             sample.set_display_color(color, view, headroom);
         }
     }

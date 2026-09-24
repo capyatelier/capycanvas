@@ -195,17 +195,19 @@ popup, strip, Done, or Swap property. The overlay picker and current-color bucke
 work like Paper color; the bucket copies the displayed mask painting color.
 Layer visibility controls the overlay.
 
-Default **Selection paint** mode tints selected areas: any color adds selected
+Default **Paint selection** mode tints selected areas: any color adds selected
 coverage; transparent color and erasers remove it. **Grayscale mask** mode tints
 protected areas: black protects, white selects, and gray gives partial coverage.
 Transparent color and erasers remove protection, selecting those pixels.
 Changing mode couples painting meaning and overlay polarity without changing
-stored coverage. Mask colors remain independent of artwork colors and are
-constrained to gray when appropriate. Ordinary color-panel swap/reset actions
+stored coverage. Mode is one application preference for every mask, including
+new masks and other documents. Overlay color and opacity stay per layer. Mask
+colors remain independent of artwork colors and the wheel stays unrestricted;
+painting converts their display-encoded sRGB luminance to coverage. Ordinary color-panel swap/reset actions
 and shortcuts remain available.
 
 For paint target G and effective brush alpha A, blend as `S * (1 - A) + G * A`.
-In Selection paint, G is 1 for paint and 0 for erasing. In Grayscale mask, G is
+In Paint selection, G is 1 for paint and 0 for erasing. In Grayscale mask, G is
 the chosen gray, or 1 for erasing. Brush opacity, pressure, and tip shape determine
 A. Physical pen erasers follow the same convention. Ordinary mask strokes do
 not use Paint selection's automatic loop fill. Swept nibs publish every real

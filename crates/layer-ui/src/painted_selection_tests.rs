@@ -44,10 +44,10 @@ mod painted_selection_checks {
         s.effect_action(EffectAction::UseCurrentColor { layer: 0, key: "mask_color".into() }).unwrap();
         assert_eq!(s.mask_properties().color, color);
         assert_eq!(s.state.colors, artwork);
-        assert!(!s.mask_properties().protected());
+        assert!(!s.grayscale_masks());
         assert_eq!((s.mask_paint_value(false),s.mask_paint_value(true)),(1.,0.));
         s.effect_action(EffectAction::Set { layer: 0, key: "mask_mode".into(), value: EffectValue::Choice(1) }).unwrap();
-        assert!(s.mask_properties().protected());
+        assert!(s.grayscale_masks());
         assert_eq!(s.mask_paint_value(true),1.);
         invoke(&mut s, CommandId::ResetMaskColors);
         assert_eq!(s.mask_paint_value(false),0.);
@@ -58,6 +58,41 @@ mod painted_selection_checks {
         assert!(!menu.sections.iter().flatten().any(|i| matches!(i.action, Some(UiAction::Invoke { command: CommandId::RectangleSelect | CommandId::SelectionBrush | CommandId::Lasso }))));
         assert_eq!(CommandId::SelectionBrush.label(), "Paint selection");
     }
+    #[test]
+    fn mask_mode_is_global_persisted_and_preserves_colors_and_layer_properties() {
+        use layer_core::{EffectValue, color::{RgbColor, RgbSpace}};
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        let set = |layer, key: &str, value| UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } };
+        invoke(&mut s, CommandId::QuickMask);
+        let cyan = RgbColor::new(RgbSpace::Srgb, [0., 0.5, 1., 1.]).unwrap();
+        s.mask_color_action(ColorAction::SetSlot { slot: ColorSlot::Foreground, color: cyan }).unwrap();
+        s.dispatch(set(0, "mask_mode", EffectValue::Choice(1))).unwrap();
+        assert_eq!(s.selection_masks.colors.definition(), cyan);
+        assert!((s.mask_paint_value(false) - 0.4298).abs() < 1e-5);
+        assert!(s.state.requests.iter().any(|r| matches!(&r.kind, HostRequestKind::SaveSettings { settings } if settings.selection_painting == layer_core::SelectionPaintBehavior::BlackWhite)));
+        assert!(!s.engine.can_undo());
+        s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();
+        invoke(&mut s, CommandId::SaveSelectionLayer);
+        let first = s.engine.document().active_layer;
+        invoke(&mut s, CommandId::NewSelectionLayer);
+        let second = s.engine.document().active_layer;
+        s.dispatch(set(second.0, "mask_color", EffectValue::Color(cyan))).unwrap();
+        let before = s.engine.document().clone();
+        s.dispatch(set(second.0, "mask_mode", EffectValue::Choice(0))).unwrap();
+        assert_eq!(*s.engine.document(), before, "mode changes do not edit any layer or history");
+        s.layer_action(LayerAction::Select { id: first.0, mask: false }).unwrap();
+        assert_eq!(s.state.layer_properties.controls[0].value, EffectValue::Choice(0));
+        assert_eq!(s.mask_properties().opacity, 0.3);
+        assert_ne!(s.mask_properties().color, cyan);
+        s.layer_action(LayerAction::Select { id: second.0, mask: false }).unwrap();
+        assert_eq!(s.mask_properties().color, cyan);
+        assert_eq!(s.mask_properties().opacity, 0.5);
+        let mut restored = session(); restored.set_platform(Platform::Gtk);
+        restored.dispatch(UiAction::RestoreSettings { settings: s.state.settings.clone() }).unwrap();
+        invoke(&mut restored, CommandId::QuickMask);
+        assert_eq!(restored.state.layer_properties.controls[0].value, EffectValue::Choice(0));
+    }
+
     fn send(s: &mut UiSession<Recorder>, phase: PenPhase, x: f32) {
         let mut e = event(s, 1, phase, 1.);
         e.surface_position = Point { x, y: 100. };
@@ -156,7 +191,7 @@ mod painted_selection_checks {
         assert_eq!(s.engine.document().layers, layers);
     }
     #[test]
-    fn quick_mask_colors_are_independent_grayscale_and_swap_the_paint_slot() {
+    fn quick_mask_colors_remain_unrestricted_and_swap_the_paint_slot() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let artwork = s.state.colors.clone();
@@ -172,9 +207,8 @@ mod painted_selection_checks {
         })
         .unwrap();
         let color = s.state.display_colors().definition().rgba;
-        assert!((color[0] - 0.2126).abs() < 0.0001);
-        assert_eq!(color[0], color[1]);
-        assert_eq!(color[1], color[2]);
+        assert_eq!(color, [1., 0., 0., 1.]);
+        assert!((s.selection_masks.gray() - 0.2126).abs() < 0.0001);
         invoke(&mut s, CommandId::SwapMaskColors);
         assert_eq!(s.selection_masks.gray(), 1.);
         invoke(&mut s, CommandId::ResetMaskColors);
@@ -466,7 +500,7 @@ mod painted_selection_checks {
         assert!(s.require_idle().is_ok());
         let set = |layer, key: &str, value| UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } };
         s.dispatch(set(0, "mask_mode", EffectValue::Choice(1))).unwrap();
-        assert_eq!(s.mask_properties().painting, SelectionPaintBehavior::BlackWhite);
+        assert_eq!(s.state.settings.selection_painting, SelectionPaintBehavior::BlackWhite);
         assert_eq!(s.mask_paint_value(false), s.selection_masks.gray());
         s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();
         assert!(!s.engine.can_undo(), "temporary properties are not artwork history");

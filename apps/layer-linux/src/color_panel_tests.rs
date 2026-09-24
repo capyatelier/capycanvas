@@ -163,8 +163,8 @@ fn native_color_panel_input() {
                     "Entire square remains visible"
                 );
                 assert!(
-                    (wheel.width() - wheel.height()).abs() <= 1,
-                    "square wheel {} x {}",
+                    wheel.height() >= wheel.width(),
+                    "wheel and footer {} x {}",
                     wheel.width(),
                     wheel.height()
                 );
@@ -172,6 +172,8 @@ fn native_color_panel_input() {
                     "color-Foreground",
                     "color-Background",
                     "color-Transparent",
+                    "color-Black",
+                    "color-White",
                     "color-shape-0",
                     "color-shape-1",
                     "color-swap",
@@ -225,7 +227,7 @@ fn native_color_panel_input() {
                     fg.x() + fg.width() > bg.x() && fg.y() + fg.height() > bg.y(),
                     "intentional paint overlap"
                 );
-                assert_eq!(bg.width(), transparent.width());
+                assert_eq!(fg.width(), transparent.width());
                 let wheel = wheel.downcast::<crate::tool_panels::ColorWheel>().unwrap();
                 let (size, origin) = wheel.drawing_bounds();
                 let g = layer_ui::ColorWheelGeometry::new(size).unwrap();
@@ -413,6 +415,16 @@ fn native_color_panel_input() {
             locate("color-wheel", 0.55, 0.45),
         );
         assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
+        let remembered = state(&w).colors;
+        let p = locate("color-Transparent", 0.5, 0.5); gesture(p, p);
+        for (name, rgba) in [("color-Black", [0.,0.,0.,1.]), ("color-White", [1.;4])] {
+            let p = locate(name, 0.5, 0.5); gesture(p, p);
+            let colors = state(&w).colors;
+            assert_eq!(colors.slot, layer_ui::ColorSlot::Temporary);
+            assert_eq!(colors.definition().rgba, rgba);
+            assert_eq!((colors.foreground, colors.background), (remembered.foreground, remembered.background));
+        }
+        let p = locate("color-Background", 0.5, 0.5); gesture(p, p);
         for expected in [
             layer_ui::ColorShape::Circle,
             layer_ui::ColorShape::Square,

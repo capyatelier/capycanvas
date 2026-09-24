@@ -6,6 +6,7 @@ pub(super) fn properties(
     id: u64,
     title: &str,
     p: &SelectionMaskProperties,
+    painting: SelectionPaintBehavior,
     enabled: bool,
 ) -> LayerPropertiesView {
     let defaults = SelectionMaskProperties::default();
@@ -26,11 +27,11 @@ pub(super) fn properties(
         "mask_mode",
         "Mode",
         PropertyKind::Choice {
-            options: ["Selection paint", "Grayscale mask"]
+            options: ["Paint selection", "Grayscale mask"]
                 .map(std::sync::Arc::from)
                 .into(),
         },
-        EffectValue::Choice(u32::from(p.painting == SelectionPaintBehavior::BlackWhite)),
+        EffectValue::Choice(u32::from(painting == SelectionPaintBehavior::BlackWhite)),
         EffectValue::Choice(0),
     );
     add(
@@ -77,8 +78,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => self.selection_masks.quick_properties.clone(),
         }
     }
+    pub(super) fn grayscale_masks(&self) -> bool {
+        self.state.settings.selection_painting == SelectionPaintBehavior::BlackWhite
+    }
     pub(super) fn mask_paint_value(&self, eraser: bool) -> f32 {
-        let grayscale = self.mask_properties().protected();
+        let grayscale = self.grayscale_masks();
         if eraser || self.selection_masks.erases() {
             if grayscale { 1. } else { 0. }
         } else if !grayscale {
@@ -115,7 +119,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("Select this mask before editing its properties".into());
             }
             let mut p = self.mask_properties();
-            let view = properties(id, "", &p, true);
+            let view = properties(id, "", &p, self.state.settings.selection_painting, true);
             let field = view
                 .controls
                 .iter()
@@ -141,18 +145,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             };
             match (key.as_str(), value) {
                 ("mask_mode", EffectValue::Choice(v @ 0..=1)) => {
-                    p.painting = if v == 0 {
+                    self.state.settings.selection_painting = if v == 0 {
                         SelectionPaintBehavior::ColorTransparency
                     } else {
                         SelectionPaintBehavior::BlackWhite
-                    }
+                    };
+                    self.refresh_document();
+                    return Ok(());
                 }
                 ("mask_color", EffectValue::Color(c)) => p.color = c,
                 ("mask_opacity", EffectValue::Number(v)) => p.opacity = v,
                 _ => return Err("Invalid mask property".into()),
             }
             p.validate().map_err(error)?;
-            let grayscale = p.painting == SelectionPaintBehavior::BlackWhite;
             if id == 0 {
                 self.selection_masks.quick_properties = p;
             } else {
@@ -168,9 +173,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     self.layer_edit(edit)?;
                 }
-            }
-            if grayscale {
-                self.selection_masks.colors.constrain_grayscale()?;
             }
             self.refresh_document();
             Ok(())

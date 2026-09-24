@@ -259,7 +259,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut color = properties.color.encoded_in(layer_core::color::RgbSpace::Srgb).unwrap_or(properties.color.rgba);
                 color[3] *= properties.opacity; color
             } else { display.color },
-            protected: target.is_some() && properties.protected(),
+            protected: target.is_some() && self.grayscale_masks(),
+            saved_protected: self.grayscale_masks(),
         });
         let selection = if let Some(target) = target {
             Some(if display.overlay && active {

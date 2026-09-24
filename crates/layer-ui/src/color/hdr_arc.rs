@@ -94,6 +94,8 @@ mod tests {
                     layout.foreground,
                     layout.background,
                     layout.transparent,
+                    layout.black,
+                    layout.white,
                     layout.swap,
                 ] {
                     let distance = (p[0] - b[0] - b[2] / 2.).hypot(p[1] - b[1] - b[3] / 2.);

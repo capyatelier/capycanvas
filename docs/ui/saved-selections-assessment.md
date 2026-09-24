@@ -135,7 +135,7 @@ character-local regions with their artwork.
 | Action | Required behavior |
 | --- | --- |
 | Save as Selection Layer… | Create a named snapshot of the current coverage, including a completed Quick Mask result. Exit Quick Mask and activate the new saved layer. |
-| New Selection Layer… | Create an empty saved mask, select it for editing, using Selection paint by default. Default to the root unless invoked explicitly for a group. |
+| New Selection Layer… | Create an empty saved mask, select it for editing, using the current global mode (initially Paint selection). Default to the root unless invoked explicitly for a group. |
 | Select row | Make that saved mask the editing target. Drawing changes the stored Selection Layer directly; show its name in the editing-target indicator. |
 | Load Selection | Copy the stored coverage into the current selection and restore the most recent valid artwork editing target. |
 | Add / Subtract / Intersect | Combine a saved mask with the current selection using the existing selection Boolean operations, then return to artwork editing. |

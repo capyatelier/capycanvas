@@ -1090,6 +1090,7 @@ pub struct LayerState {
     pub mask_selected: bool,
     /// Checked-selection precedence is shared across native hosts.
     pub selection_icon: &'static str,
+    pub load_selection_tooltip: &'static str,
     /// Content/mask target, independent of the selected row set.
     pub editing: bool,
     pub drawing: bool,

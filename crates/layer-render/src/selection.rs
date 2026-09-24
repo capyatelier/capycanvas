@@ -81,6 +81,8 @@ pub struct SelectionOverlay {
     /// Display-encoded color; independent of artwork space and mask strength.
     pub color: [f32; 4],
     pub protected: bool,
+    /// Global polarity for saved masks, including those outside the editing target.
+    pub saved_protected: bool,
 }
 
 #[derive(Clone, Debug)]
