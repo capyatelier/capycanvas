@@ -124,7 +124,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
         val bars = geometry?.optJSONArray("bars")?.objects() ?: emptyList()
         val joined = bars.flatMap { bar -> bar.array("items").values().map { (it as Number).toInt() } }.toSet()
-        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.headerBar, TileShape)) }
+        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.headerSurface, TileShape)) }
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
             val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
             Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
@@ -258,7 +258,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.headerBar, SquircleShape(50)).padding(4.dp),
+                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.headerSurface, SquircleShape(50)).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {

@@ -23,10 +23,11 @@ in the table is transformed per channel using the same rule as a grey.
 | --- | --- | --- | --- |
 | Canvas surround, header button/title backgrounds, status numbers, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
 | Panel bodies, selected tabs and concave joins, tool ribbons, expanded drawers, popovers/menus | `#414141` = mix(B,W,14/204) | `#ededed` = mix(B,W,53/71) | Regenerate |
-| Inactive tab bar, workspace switcher well | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
-| Title-bar menu labels, tool bars, Capy and drawing-tab strip | B at 75% opacity | B at 75% opacity | Translucent over artwork |
+| Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
+| Workspace switcher well | Inactive tab bar at 75% opacity | Same | Translucent over artwork |
+| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy | B at 75% opacity | B at 75% opacity | Translucent over artwork |
 | Selected workspace and title-bar tool | Accent at 22% over the panel body, opaque | Same | Matches panel selection |
-| Selected drawing tab | mix(B,text,10%), opaque | Same | Matches GNOME's window close button |
+| Selected drawing tab | Panel body, opaque | Same | Matches selected panel tabs |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
 | Native GTK view background | `#2b2b2b` = mix(B,K,8/51) | `#e4e4e4` = mix(B,W,44/71) | Regenerate |
 | Preferences and web dialog background | `#333333` = B | `#fafafb`: white mix 66/71 for R,G, 67/71 for B | Regenerate |

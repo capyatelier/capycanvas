@@ -118,7 +118,7 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(SquircleShape(50)).background(colors.tabs)
+    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(SquircleShape(50)).background(colors.tabs.copy(alpha = .75f))
         .horizontalScroll(scroll).padding(4.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         choices.forEach { row ->
             val id = row.getString("id")

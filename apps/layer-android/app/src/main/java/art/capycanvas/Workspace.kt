@@ -459,7 +459,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor); dock.zenButton = null; dock.refresh() } }
     IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
         modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
-            .background(colors.surround, TileShape)
+            .background(colors.headerSurface, TileShape)
             .onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
                 dock.anchors[anchor] = bounds

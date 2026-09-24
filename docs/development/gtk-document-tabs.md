@@ -21,8 +21,8 @@ tab styling, the close button, and the dropdown appear only for multiple drawing
 
 Tabs keep GNOME Web's full-height [AdwTabBar shape](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/src/stylesheet/widgets/_tab-view.scss)
 without an accent underline. Tabs abut in one full-height strip on the title
-bar's translucent canvas surround; the selected tab uses an opaque grey
-matching GNOME's window close button, with full-tab hover/pressed overlays, separators only between adjacent idle tabs, and 24px
+bar's translucent canvas surround; the selected tab uses the opaque panel
+grey, with full-tab hover/pressed overlays, separators only between adjacent idle tabs, and 24px
 circular close controls. Keyboard focus outlines the whole tab; high contrast
 adds the native inset border. Titles stay centered across the full tab width.
 The application CSS provider follows Adwaita's high-contrast preference, including

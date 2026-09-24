@@ -9,32 +9,49 @@ window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: va
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
-/* Dark-mode plain controls keep their halo over artwork. Light mode uses
-   translucent surfaces below; the opaque workspace pill never needs a halo. */
-.window-bar image { -gtk-icon-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color), 0 0 2px var(--window-bg-color); }
-.window-bar label { text-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color); }
-.window-bar popover image, .window-bar .header-editor image { -gtk-icon-shadow: none; }
-.window-bar popover label, .window-bar .header-editor label, .window-bar .workspace-switcher label, .window-bar .header-menu-labels label { text-shadow: none; }
-.window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control, .window-bar .document-title { background: transparent; box-shadow: none; padding: 0; }
+.window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control { background: transparent; box-shadow: none; padding: 0; }
 .window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: var(--header-radius); }
-.window-bar { --header-radius: calc(18px * var(--corner-fit)); --header-bar-bg: alpha(var(--window-bg-color), .75); --header-active: mix(var(--panel-bg), var(--accent-bg-color), .22); --header-tab-active: mix(var(--window-bg-color), var(--window-fg-color), .10); }
+.window-bar { --header-radius: calc(18px * var(--corner-fit)); --header-control-bg: alpha(var(--window-bg-color), .75); --header-active: mix(var(--panel-bg), var(--accent-bg-color), .22); }
 .window-bar.header-medium { --header-radius: calc(24px * var(--corner-fit)); }
 .window-bar.header-large { --header-radius: calc(30px * var(--corner-fit)); }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: var(--header-radius); }
 .window-bar .header-tool.capy-button { padding: 0; }
-.window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
-.window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
+/* The live canvas is an app-owned Wayland subsurface, outside GTK's render
+   tree. Use translucent fills: a GTK backdrop-filter cannot sample that canvas. */
+.window-bar .header-tool,
+.window-bar menubutton.chrome-control > button,
+.window-bar .header-readout,
+.window-bar #document-selector > button,
+.window-bar windowcontrols > button > image { background-color: var(--header-control-bg); }
+.window-bar .header-readout { border-radius: var(--header-radius); min-height: 36px; }
+.window-bar #document-selector > button { border-radius: var(--header-radius); }
+.window-bar .document-title { padding: 6px; }
+.window-bar .header-tool:hover,
+.window-bar menubutton.chrome-control > button:hover,
+.window-bar #document-selector > button:hover,
+.window-bar windowcontrols > button:hover > image { background-image: image(alpha(var(--window-fg-color), .10)); }
+.window-bar .header-tool:active,
+.window-bar menubutton.chrome-control > button:active,
+.window-bar menubutton.chrome-control > button:checked,
+.window-bar #document-selector > button:active,
+.window-bar #document-selector > button:checked,
+.window-bar windowcontrols > button:active > image { background-image: image(alpha(var(--window-fg-color), .16)); }
+.window-bar .header-tool.selected-tool { background-image: image(alpha(var(--accent-bg-color), .22)); }
+/* Open neutral tiles, their connectors and drawers share one opaque surface. */
 .window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
-.window-bar .header-bar { background: var(--header-bar-bg); border-radius: var(--header-radius); }
+.window-bar .header-bar { background: var(--header-control-bg); border-radius: var(--header-radius); }
+.window-bar .header-menu-labels menubutton.chrome-control > button,
+.window-bar .header-item.in-bar .header-tool:not(.drawer-open):not(.selected-tool),
+.window-bar .header-item.in-bar menubutton > button,
+.window-bar menubutton.chrome-control.in-bar > button { background-color: transparent; }
 .window-bar .header-item.in-bar .header-tool,
 .window-bar .header-item.in-bar menubutton > button,
 .window-bar menubutton.chrome-control.in-bar > button { min-width: 0; min-height: 0; padding: 0; border-style: solid; border-color: transparent; border-width: 1px 0; border-radius: var(--header-radius); background-clip: padding-box; }
 .window-bar .header-item.in-bar .header-tool.selected-tool { background-color: var(--header-active); background-image: none; }
 .window-bar .header-item.in-bar .header-tool.drawer-open { border-width: 0; }
 .window-bar .header-item.in-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.window-bar .in-bar image { -gtk-icon-shadow: none; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
 .header-editor-content { padding: 8px 12px; }
 .header-editor button { min-height: 24px; padding: 4px 8px; border-radius: var(--control-radius); }
@@ -51,35 +68,12 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
 .document-title { font-weight: 600; min-height: 24px; padding: 6px; }
 .header-clock { min-height: 36px; padding: 0 6px; }
-/* The live canvas is an app-owned Wayland subsurface, outside GTK's render
-   tree. Use translucent fills: a GTK backdrop-filter cannot sample that canvas. */
-.light-theme .window-bar { --header-control-bg: alpha(var(--window-bg-color), .5); }
-.light-theme .window-bar label { text-shadow: none; }
-.light-theme .window-bar image { -gtk-icon-shadow: none; }
-.light-theme .window-bar .header-tool,
-.light-theme .window-bar menubutton.chrome-control > button,
-.light-theme .window-bar .header-readout { background: var(--header-control-bg); }
-.light-theme .window-bar .header-readout { border-radius: var(--header-radius); }
-.light-theme .window-bar .header-readout { min-height: 36px; }
-.light-theme .window-bar .document-title { padding: 6px; }
-.light-theme .window-bar .header-menu-labels menubutton.chrome-control > button,
-.light-theme .window-bar .header-item.in-bar .header-tool:not(.drawer-open):not(.selected-tool),
-.light-theme .window-bar .header-item.in-bar menubutton > button,
-.light-theme .window-bar menubutton.chrome-control.in-bar > button { background-color: transparent; }
-.light-theme .window-bar .header-tool:hover,
-.light-theme .window-bar menubutton.chrome-control > button:hover { background-image: linear-gradient(alpha(var(--window-fg-color), .10), alpha(var(--window-fg-color), .10)); }
-.light-theme .window-bar .header-tool.selected-tool { background-image: linear-gradient(alpha(var(--accent-bg-color), .22), alpha(var(--accent-bg-color), .22)); }
-.light-theme .window-bar .header-tool:active,
-.light-theme .window-bar menubutton.chrome-control > button:active,
-.light-theme .window-bar menubutton.chrome-control > button:checked { background-image: linear-gradient(alpha(var(--window-fg-color), .16), alpha(var(--window-fg-color), .16)); }
-/* Open neutral tiles, their connectors and drawers share one opaque surface. */
-.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
-.window-bar .workspace-switcher { background: var(--tabbar-bg); }
-.window-bar .header-menu-labels { background: var(--header-bar-bg); }
+.window-bar .workspace-switcher { background: alpha(var(--tabbar-bg), .75); }
+.window-bar .header-menu-labels { background: var(--header-control-bg); }
 .window-bar .workspace-switcher, .window-bar .header-menu-labels { border: 0; border-radius: calc(17px * var(--corner-fit)); padding: 4px; }
 .workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
 .window-bar .header-menu-labels menubutton.chrome-control > button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); font-weight: 500; }
-.workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
+.workspace-switcher button:hover { background: alpha(var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: var(--header-active); color: var(--window-fg-color); }
 .workspace-switcher button:checked:hover { background: mix(var(--panel-bg), var(--accent-bg-color), .30); }
 .workspace-manager-row > box.header:dir(ltr) { margin-left: 6px; }
@@ -239,7 +233,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
-.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: calc(18px * var(--corner-fit)); }
+.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: alpha(var(--window-bg-color), .75); border-radius: calc(18px * var(--corner-fit)); }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */
@@ -293,11 +287,11 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */
-.document-tabs { border-spacing: 0; margin: 1px 0; border-radius: var(--header-radius); background-color: var(--header-bar-bg); }
+.document-tabs { border-spacing: 0; margin: 1px 0; border-radius: var(--header-radius); background-color: var(--header-control-bg); }
 .document-tab { min-height: 26px; padding: 4px; border-radius: calc(17px * var(--corner-fit)); background-color: transparent; transition: background-color 150ms ease-in-out; }
 .document-tab:hover { background-image: image(alpha(currentColor, .07)); }
 .document-tab:active { background-image: image(alpha(currentColor, .16)); }
-.document-tab.selected { background-color: var(--header-tab-active); }
+.document-tab.selected { background-color: var(--panel-bg); }
 .document-tab.selected:hover { background-image: image(alpha(currentColor, .03)); }
 .document-tab.selected:active { background-image: image(alpha(currentColor, .09)); }
 /* Only adjacent idle tabs need a divider; selection/hover supplies the edge. */

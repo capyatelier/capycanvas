@@ -69,12 +69,14 @@ Adjacent icon controls (tools, Main Menu, Settings, Full Screen and a region's
 More button) join one bar, inset 1px so a Small bar matches the workspace
 switcher's 34px. Tiles inside a bar abut, keep whole-tile targets and fill the
 bar's full height with toolbar-style feedback. Capy gets its own single-tile
-bar. Multiple drawing tabs form one full-height strip in the same way. Bars,
-menu labels and the tab strip use the canvas surround at 75% opacity, so
-artwork behind them stays partly visible; the workspace switcher keeps the
-inactive-tab well. The selected workspace and tool use the panels' opaque
-selection blue; the selected drawing tab uses an opaque grey like GNOME's
-window close button. Capy, menu labels, the switcher, the document title or
+bar. Multiple drawing tabs form one full-height strip in the same way. Every
+title-bar surface (bars, menu labels, the tab strip, the document title, clock,
+battery, compact menus, the native close button and the Zen Capy) uses the
+canvas surround at 75% opacity in both themes, so artwork behind it stays
+partly visible; the workspace switcher's well is the inactive-tab grey at 75%.
+Hover and press add overlays to that surface. The selected workspace and tool
+use the panels' opaque selection blue, and the selected drawing tab the opaque
+panel grey. Capy, menu labels, the switcher, the document title or
 tabs, clock, battery and Space stay separate with 6px gaps, and customization
 shows every item separately. Drawer origins
 fill their whole tile with square bottom corners while open.
