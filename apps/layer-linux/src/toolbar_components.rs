@@ -759,8 +759,7 @@ impl Component {
                             .map(|c| c as f64 / 255.);
                         let fade =
                             gtk::cairo::LinearGradient::new(0., 0., 0., layout.header_fade as f64);
-                        fade.add_color_stop_rgba(0., r, g, b, 0.92);
-                        fade.add_color_stop_rgba(0.55, r, g, b, 0.92);
+                        fade.add_color_stop_rgba(0., r, g, b, 0.65);
                         fade.add_color_stop_rgba(1., r, g, b, 0.);
                         let _ = cr.set_source(&fade);
                         cr.rectangle(0., 0., side, layout.header_fade as f64);
@@ -994,7 +993,7 @@ impl Component {
         } else {
             Vec::new()
         };
-        if let Ok(value) = slider_bookmark_value(self.control, &values, position, 7. / length) {
+        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length) {
             let number = self
                 .control
                 .slider()
@@ -1370,13 +1369,18 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
         - half * 2.;
     let color = root.color();
     for mark in bookmarks {
-        let position = half
-            + travel
+        // GTK rounds its thumb allocation. Use that actual center for a selected
+        // mark so the line stays centered at every value and display scale.
+        let position = if mark.selected {
+            (start + end) as f32 / 2. - if vertical { range.y() } else { range.x() } as f32
+        } else {
+            half + travel
                 * if vertical {
                     1. - mark.fill as f32
                 } else {
                     mark.fill as f32
-                };
+                }
+        };
         let rect = if vertical {
             gtk::graphene::Rect::new(
                 b.x() + range.x() as f32 + range.width() as f32 / 2. - 7.,
@@ -1397,6 +1401,7 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
         snapshot.append_color(if mark.selected { &selected } else { &color }, &rect);
     }
 }
+
 impl Drop for Component {
     fn drop(&mut self) {
         self.close_preview();

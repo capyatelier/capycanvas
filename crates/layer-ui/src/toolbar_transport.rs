@@ -16,7 +16,7 @@ pub enum ToolbarUiRequest {
         control: ToolbarControl,
         values: Vec<f32>,
         position: f64,
-        tolerance: f64,
+        travel: f64,
     },
     OptionsLayout {
         width: f32,
@@ -63,9 +63,9 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             control,
             values,
             position,
-            tolerance,
+            travel,
         } => json!(slider_bookmark_value(
-            control, &values, position, tolerance
+            control, &values, position, travel
         )?),
         ToolbarUiRequest::OptionsLayout {
             width,

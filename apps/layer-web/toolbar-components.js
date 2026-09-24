@@ -41,7 +41,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     function pick(e, snap) {
       const positionValue = position(e);
-      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control: tile.control, values: model.bookmarks.map(m => m.value), position: positionValue, tolerance: 7 / Math.max(1, vertical ? slider.clientHeight : slider.clientWidth) })
+      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control: tile.control, values: model.bookmarks.map(m => m.value), position: positionValue, travel: Math.max(1, (vertical ? slider.clientHeight : slider.clientWidth) - 10) })
         : app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: positionValue } }).value);
     }
     function show() {
@@ -87,8 +87,8 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-in'; ctx.fillStyle = getComputedStyle(root).color; ctx.fillRect(0, 0, side, side); ctx.restore();
       if (geometry.header_fade) {
         const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).backgroundColor;
-        fade.addColorStop(0, background); fade.addColorStop(.55, background); fade.addColorStop(1, 'transparent');
-        ctx.save(); ctx.globalAlpha = .92; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
+        fade.addColorStop(0, background); fade.addColorStop(1, 'transparent');
+        ctx.save(); ctx.globalAlpha = .65; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
       }
     }
     function update(option) {
@@ -97,7 +97,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       slider.disabled = !model.numeric; cap.disabled = !model.numeric;
       marks.replaceChildren(...model.bookmarks.map(mark => {
         const line = element('span', 'toolbar-slider-mark'); line.classList.toggle('selected', mark.selected);
-        line.style.setProperty('--position', mark.fill); return line;
+        line.style.setProperty('--position', mark.selected ? fill : mark.fill); return line;
       }));
       track.style.setProperty('--position', fill); paintPreview();
     }
@@ -114,6 +114,9 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     });
     slider.addEventListener('pointerup', e => { if (contact?.id === e.pointerId) { if (contact.moved) closePopup(); contact = null; } });
     for (const type of ['pointercancel', 'lostpointercapture']) slider.addEventListener(type, () => { if (contact) closePopup(); contact = null; });
+    // Chromium's native touch range edit runs after pointerdown and can replace
+    // a snapped value. Pointer capture above owns touch; retain keyboard input.
+    slider.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
     slider.addEventListener('input', () => { change(app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: Number(slider.value) } }).value); show(); });
     const outside = e => { if (popup && popup === preview && !row.contains(e.target) && !popup.contains(e.target)) closePopup(); };
     const escape = e => { if (e.key === 'Escape') { closePopup(); contact = null; } };

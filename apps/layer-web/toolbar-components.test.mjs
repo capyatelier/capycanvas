@@ -11,8 +11,8 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
     await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:${id}'&&!JSON.parse(layerApp.app.workspace_view()).busy`); await settle();
   }
   const rect = selector => evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
-  async function click(selector, device = 'mouse') {
-    const b = await rect(selector), x = b.x + b.width / 2, y = b.y + b.height / 2;
+  async function click(selector, device = 'mouse', offset = { x: 0, y: 0 }) {
+    const b = await rect(selector), x = b.x + b.width / 2 + offset.x, y = b.y + b.height / 2 + offset.y;
     assert.ok(b.width > 0 && b.height > 0, selector);
     if (device === 'touch') {
       await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x, y }] });
@@ -24,6 +24,10 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
     const r = await rect(selector);
     const a = { x: r.x + r.width * (vertical ? .5 : .2), y: r.y + r.height * (vertical ? .8 : .5) };
     const b = { x: r.x + r.width * (vertical ? .5 : .8), y: r.y + r.height * (vertical ? .2 : .5) };
+    await gesture(a, b, device);
+    assert.equal(await evaluate(`!!document.querySelector('.toolbar-brush-preview:popover-open')`), false, `${device}: drag lift dismisses preview`);
+  }
+  async function gesture(a, b, device) {
     if (device === 'touch') {
       await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, ...a }] });
       await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, ...b }] });
@@ -34,7 +38,6 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
       await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...b, button: 'left', buttons: 0, clickCount: 1, pointerType: device });
     }
     await settle();
-    assert.equal(await evaluate(`!!document.querySelector('.toolbar-brush-preview:popover-open')`), false, `${device}: drag lift dismisses preview`);
   }
   const capture = async name => { const shot = await call('Page.captureScreenshot', { format: 'png' }); await writeFile(`${dir}/${name}.png`, Buffer.from(shot.data, 'base64')); };
   await workspace('painter'); await invoke('brush');
@@ -54,7 +57,7 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   assert.ok(Math.abs(centered.root.x+centered.root.width/2-centered.track.x-centered.track.width/2)<2, JSON.stringify(centered));
   assert.ok(Math.abs(centered.track.y-centered.root.y-(centered.root.bottom-centered.track.bottom))<2, 'equal slider end padding');
   await capture('sketch-sliders');
-  await checkSliderBookmarks({ call, evaluate, settle, click, capture, send, slider });
+  await checkSliderBookmarks({ call, evaluate, settle, click, gesture, rect, capture, send, slider });
   for (const device of ['mouse', 'touch', 'pen']) {
     const cap = await rect('[data-toolbar-component=brush_size_slider] .toolbar-slider-cap');
     const opacity = await rect('[data-toolbar-component=brush_opacity_slider]');
@@ -158,11 +161,11 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   console.log('Toolbar sliders/options: fixed values, segmented choices, contexts and compact placements passed');
 }
 
-async function checkSliderBookmarks({ call, evaluate, settle, click, capture, send, slider }) {
+async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, rect, capture, send, slider }) {
   const preview = '.toolbar-brush-preview:popover-open';
   assert.equal(await evaluate(`document.querySelectorAll('[data-toolbar-component=brush_size_slider] .number-value').length`), 0);
   for (const device of ['mouse', 'touch', 'pen']) {
-    await click(slider, device);
+    await click(slider, device, { x: 0, y: -23 });
     assert.ok(await evaluate(`!!document.querySelector('${preview}')`), `${device}: tap retains preview`);
     const value = await evaluate('layerApp.state().brush.diameter');
     assert.ok(await evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v>0)})()`), 'preview paints the actual tip');
@@ -171,8 +174,17 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, capture, se
     await capture(`preview-${device}`);
     await send({ type: 'set_tool_setting', id: 'size', value: 3 });
     assert.equal(await evaluate(`document.querySelector('${preview} .toolbar-preview-bookmark').getAttribute('aria-label')`), 'Bookmark this value');
-    await click('[data-toolbar-component=brush_size_slider] .toolbar-slider-mark', device);
-    assert.equal(await evaluate('layerApp.state().brush.diameter'), value, `${device}: exact bookmark recall`);
+    const mark = '[data-toolbar-component=brush_size_slider] .toolbar-slider-mark';
+    await click(mark, device, { x: 0, y: 16 });
+    assert.notEqual(await evaluate('layerApp.state().brush.diameter'), value, `${device}: distant tap does not snap`);
+    await click(mark, device, { x: 0, y: 10 });
+    assert.equal(await evaluate('layerApp.state().brush.diameter'), value, `${device}: nearby tap recalls exact bookmark`);
+    assert.ok(await evaluate(`(()=>{const m=document.querySelector('${mark}.selected').getBoundingClientRect(),h=document.querySelector('[data-toolbar-component=brush_size_slider] .toolbar-slider-thumb').getBoundingClientRect();return Math.abs(m.y+m.height/2-h.y-h.height/2)<.1&&Math.abs(m.x+m.width/2-h.x-h.width/2)<.1})()`), 'selected bookmark is centered inside handle');
+    const m = await rect(mark), x = m.x + m.width / 2, y = m.y + m.height / 2;
+    await gesture({x, y: y+16}, {x, y: y+10}, device);
+    assert.notEqual(await evaluate('layerApp.state().brush.diameter'), value, `${device}: dragging near bookmark does not snap`);
+    await click(mark, device, {x:0, y:10});
+    assert.equal(await evaluate('layerApp.state().brush.diameter'), value);
     await click(`${preview} .toolbar-preview-bookmark`, device);
     assert.equal(await evaluate(`document.querySelectorAll('[data-toolbar-component=brush_size_slider] .toolbar-slider-mark').length`), 0);
     for (const type of ['mousePressed','mouseReleased']) await call('Input.dispatchMouseEvent',{type,x:700,y:150,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
@@ -184,7 +196,7 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, capture, se
   assert.ok(await evaluate(`(()=>{const c=document.querySelector('${preview} canvas'),w=c.width,h=c.height,p=c.getContext('2d').getImageData(0,0,w,h).data;return [[1,h>>1],[w-2,h>>1],[w>>1,h-2]].every(([x,y])=>p[(y*w+x)*4+3]>0)})()`), 'large size stamp reaches every popup edge');
   for (const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
-    assert.ok(await evaluate(`(()=>{const p=document.querySelector('${preview}'),c=p.querySelector('canvas'),bg=getComputedStyle(p).backgroundColor.match(/[\\d.]+/g).slice(0,3).map(Number),pixel=c.getContext('2d').getImageData(c.width>>1,4,1,1).data;return bg.every((v,i)=>Math.abs(v-pixel[i])<24)})()`), `${theme}: header fade follows the popup background`);
+    assert.ok(await evaluate(`(()=>{const p=document.querySelector('${preview}'),c=p.querySelector('canvas'),bg=getComputedStyle(p).backgroundColor.match(/[\\d.]+/g).slice(0,3).map(Number),ctx=c.getContext('2d'),pixel=y=>ctx.getImageData(c.width>>1,y,1,1).data,distance=y=>bg.reduce((n,v,i)=>n+Math.abs(v-pixel(y)[i]),0);return distance(4)<distance(20)&&distance(20)<distance(48)})()`), `${theme}: header fades gradually from the top using the current background`);
     await capture(`size-edge-fill-${theme}`);
   }
   await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');

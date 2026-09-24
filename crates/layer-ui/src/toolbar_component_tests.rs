@@ -1003,15 +1003,6 @@ fn slider_bookmarks_round_trip_follow_presets_and_reject_stale_editors() {
     })
     .unwrap();
     assert!(!s.state().toolbar_component(control).unwrap().bookmarks[0].selected);
-    let mark = &view.bookmarks[0];
-    assert_eq!(
-        slider_bookmark_value(control, &[64.], mark.fill + 0.01, 0.02).unwrap(),
-        64.
-    );
-    assert_ne!(
-        slider_bookmark_value(control, &[64.], mark.fill + 0.03, 0.02).unwrap(),
-        64.
-    );
     s.dispatch(UiAction::SetToolSetting {
         id: "size".into(),
         value: 64.,
@@ -1034,6 +1025,66 @@ fn slider_bookmarks_round_trip_follow_presets_and_reject_stale_editors() {
             .bookmarks
             .is_empty()
     );
+}
+
+#[test]
+fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
+    for (control, value, neighbor) in [
+        (ToolbarControl::BrushSizeSlider, 64., 80.),
+        (ToolbarControl::BrushOpacitySlider, 0.5, 0.54),
+    ] {
+        let numeric = control.slider().unwrap().numeric();
+        let fill = |v| numeric.resolve(v, NumericOperation::Format).unwrap().fill;
+        let mark = fill(value as f64);
+        for travel in [140., 200., 400.] {
+            for sign in [-1., 1.] {
+                let near = mark + sign * 10. / travel;
+                assert_eq!(
+                    slider_bookmark_value(control, &[value], near, travel).unwrap(),
+                    value as f64
+                );
+                let far = mark + sign * 16. / travel;
+                assert_ne!(
+                    slider_bookmark_value(control, &[value], far, travel).unwrap(),
+                    value as f64
+                );
+                // The same nearby position remains unsnapped during a drag.
+                assert_ne!(
+                    slider_bookmark_value(control, &[], near, travel).unwrap(),
+                    value as f64
+                );
+            }
+        }
+        assert_eq!(
+            slider_bookmark_value(
+                control,
+                &[value, neighbor],
+                fill(neighbor as f64) - 0.001,
+                200.
+            )
+            .unwrap(),
+            neighbor as f64
+        );
+        // A very short track must not turn most of its range into a tap target.
+        assert_ne!(
+            slider_bookmark_value(control, &[value], mark + 0.11, 40.).unwrap(),
+            value as f64
+        );
+        for travel in [0., -1., f64::NAN, f64::INFINITY] {
+            assert!(slider_bookmark_value(control, &[value], mark, travel).is_err());
+        }
+        for value in [numeric.min as f32, numeric.max as f32] {
+            let position = if value == numeric.min as f32 {
+                0.01
+            } else {
+                0.99
+            };
+            assert_eq!(
+                slider_bookmark_value(control, &[value], position, 200.).unwrap(),
+                value as f64
+            );
+        }
+    }
 }
 
 #[test]
@@ -1060,7 +1111,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
             .unwrap()
             .stamp
     );
-    assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 0.1).is_err());
+    assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 200.).is_err());
     assert!(
         slider_preview_layout(ToolbarControl::BrushSizeSlider, f32::INFINITY, 180., 1.).is_err()
     );

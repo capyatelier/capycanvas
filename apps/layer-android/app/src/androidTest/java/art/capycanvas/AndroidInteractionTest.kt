@@ -1730,7 +1730,10 @@ class AndroidInteractionTest {
         for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = device
             val slider = bounds("component-slider-${size.second}")
-            tap(slider.center)
+            val mark = slider.center - Offset(0f, 23*density)
+            val near = mark + Offset(0f, 10*density)
+            val far = mark + Offset(0f, 16*density)
+            tap(mark)
             waitFor("tap retains stamp $device") { exists("brush-slider-preview") }
             val saved = state().getJSONObject("brush").number("diameter")
             tap(bounds("slider-bookmark").center); settle()
@@ -1738,8 +1741,17 @@ class AndroidInteractionTest {
             action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048f))
             captureToolbar("stamp-large-$device")
             action(obj("type" to "set_tool_setting", "id" to "size", "value" to 3f))
-            tap(slider.center); settle()
-            assertEquals("Bookmark recalls exact value $device", saved, state().getJSONObject("brush").number("diameter"), .001f)
+            tap(far); settle()
+            assertTrue("Distant tap does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals("Nearby tap recalls exact bookmark $device", saved, state().getJSONObject("brush").number("diameter"), .001f)
+            event(MotionEvent.ACTION_DOWN, far)
+            event(MotionEvent.ACTION_MOVE, near); settle()
+            event(MotionEvent.ACTION_UP); settle()
+            assertTrue("Dragging near bookmark does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals(saved, state().getJSONObject("brush").number("diameter"), .001f)
+            captureToolbar("bookmark-centered-$device")
             tap(bounds("slider-bookmark").center); settle()
             tap(bounds("workspace").center)
             waitFor("outside tap dismisses stamp") { !exists("brush-slider-preview") }

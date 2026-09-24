@@ -91,17 +91,19 @@ impl SliderBookmarks {
     }
 }
 
-/// Only taps snap to nearby marks. Dragging always retains the full numeric range.
+/// Only taps snap to nearby marks, within 12 logical pixels (at most 10% of
+/// travel). Hosts supply measured thumb travel; drags pass no bookmarks.
 pub fn slider_bookmark_value(
     control: ToolbarControl,
     values: &[f32],
     position: f64,
-    tolerance: f64,
+    travel: f64,
 ) -> Result<f64, String> {
     let numeric = control.slider().ok_or("Not a slider")?.numeric();
-    if !position.is_finite() || !tolerance.is_finite() {
+    if !position.is_finite() || !travel.is_finite() || travel <= 0. {
         return Err("Invalid slider position".into());
     }
+    let tolerance = (12. / travel).min(0.1);
     let nearest = values
         .iter()
         .filter_map(|&value| {
@@ -112,7 +114,7 @@ pub fn slider_bookmark_value(
                 .fill;
             Some(((fill - position).abs(), value))
         })
-        .filter(|(distance, _)| *distance <= tolerance.clamp(0., 0.1))
+        .filter(|(distance, _)| *distance <= tolerance)
         .min_by(|a, b| a.0.total_cmp(&b.0));
     Ok(if let Some((_, value)) = nearest {
         value as f64

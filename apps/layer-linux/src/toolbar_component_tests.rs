@@ -1556,7 +1556,8 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
             stamp.err()
         );
         let scale = d.named(&format!("component-slider-{id}"));
-        let p = d.point(&scale);
+        let center = d.point(&scale);
+        let p = [center[0], center[1] - 23.];
         drag(d, device, p, p, false);
         pump(100);
         let popup = find_named(&d.w.window.clone().upcast(), "brush-slider-preview")
@@ -1602,16 +1603,36 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
         pump(50);
         capture_popover(
             &popup.clone().downcast::<gtk::Popover>().unwrap(),
-            d.dir.join(format!("slider-stamp-large-{device}.png")).to_str().unwrap(),
+            d.dir
+                .join(format!("slider-stamp-large-{device}.png"))
+                .to_str()
+                .unwrap(),
         );
         d.w.dispatch(UiAction::SetBrushSize { value: 3. });
         pump(50);
-        drag(d, device, p, p, false);
+        let near = [p[0], p[1] + 10.];
+        let far = [p[0], p[1] + 16.];
+        drag(d, device, far, far, false);
+        assert_ne!(
+            state(&d.w).brush.diameter,
+            saved,
+            "{device}: distant tap does not snap"
+        );
+        drag(d, device, near, near, false);
         assert_eq!(
             state(&d.w).brush.diameter,
             saved,
-            "{device}: bookmark recalls its exact value"
+            "{device}: nearby tap recalls exact bookmark value"
         );
+        drag(d, device, far, near, false);
+        assert_ne!(
+            state(&d.w).brush.diameter,
+            saved,
+            "{device}: dragging near bookmark does not snap"
+        );
+        drag(d, device, near, near, false);
+        assert_eq!(state(&d.w).brush.diameter, saved);
+        d.capture_canvas(&format!("slider-bookmark-centered-{device}.png"));
         if device == "pen" {
             // The proxy routes pen events only to the first toplevel surface.
             // Activate the popup button through GTK; its native hit path is

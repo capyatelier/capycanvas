@@ -118,9 +118,9 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"))
                 ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
                     Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id"),
-                    contact = { down, moved -> preview = down || !moved }) { fill, snap, tolerance ->
+                    contact = { down, moved -> preview = down || !moved }) { fill, snap, travel ->
                     val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
-                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "tolerance" to tolerance).toString())).nextValue() as Number
+                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString())).nextValue() as Number
                     else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString())).number("value")
                     edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
                 }
@@ -301,7 +301,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 var moved = false; var finished = false
                 fun pick(p: Offset, snap: Boolean) {
                     val half = 5.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
-                    if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, 7.dp.toPx()/length)
+                    if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, length / density)
                 }
                 onContact(true, false); pick(down.position, true)
                 try {
@@ -333,7 +333,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         if (vertical) drawRoundRect(colors.thumb, Offset(x - 4.dp.toPx(), (size.height - marker) * (1f - fill)), Size(thick + 8.dp.toPx(), marker), CornerRadius(marker / 2))
         else drawRoundRect(colors.thumb, Offset((size.width - marker) * fill, y - 4.dp.toPx()), Size(marker, thick + 8.dp.toPx()), CornerRadius(marker / 2))
         for (mark in marks) {
-            val position = mark.number("fill")
+            val position = if (mark.getBoolean("selected")) fill else mark.number("fill")
             val center = if (vertical) Offset(size.width / 2, marker / 2 + (size.height-marker)*(1f-position))
                 else Offset(marker / 2 + (size.width-marker)*position, size.height / 2)
             val delta = if (vertical) Offset(7.dp.toPx(), 0f) else Offset(0f, 7.dp.toPx())
@@ -375,8 +375,8 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                             alpha = layout.number("opacity"), colorFilter = ColorFilter.tint(colors.text))
                     }
                     val fade = layout.number("header_fade")*density
-                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.92f),
-                        .55f to colors.panel.copy(alpha=.92f), 1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
+                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.65f),
+                        1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
                 }
                 Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)
