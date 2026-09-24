@@ -436,6 +436,24 @@
  use std::array;
  use std::ffi::c_int;
  use std::ffi::c_void;
+@@ -259,7 +259,7 @@
+         BD::pxstride(self.byte_len() - (-stride) as usize)
+     }
+
+-    pub fn with_offset<BD: BitDepth>(&self) -> Rav1dPictureDataComponentOffset {
++    pub fn with_offset<BD: BitDepth>(&self) -> Rav1dPictureDataComponentOffset<'_> {
+         Rav1dPictureDataComponentOffset {
+             data: self,
+             offset: self.pixel_offset::<BD>(),
+@@ -530,7 +530,7 @@
+ }
+
+ impl Rav1dPicture {
+-    pub fn lf_offsets<BD: BitDepth>(&self, y: c_int) -> [Rav1dPictureDataComponentOffset; 3] {
++    pub fn lf_offsets<BD: BitDepth>(&self, y: c_int) -> [Rav1dPictureDataComponentOffset<'_>; 3] {
+         // Init loopfilter offsets. Point the chroma offsets in 4:0:0 to the luma
+         // plane here to avoid having additional in-loop branches in various places.
+         // We never use those values, so it doesn't really matter what they point
 --- a/vendor/rav1d/lib.rs
 +++ b/vendor/rav1d/lib.rs
 @@ -11,6 +11,8 @@
@@ -503,6 +521,17 @@
  use std::cmp;
  use std::ffi::c_int;
  use std::ffi::c_uint;
+--- a/vendor/rav1d/src/cdf.rs
++++ b/vendor/rav1d/src/cdf.rs
+@@ -153,7 +153,7 @@
+         }
+     }
+
+-    pub fn cdf_write(&self) -> RwLockWriteGuard<CdfContext> {
++    pub fn cdf_write(&self) -> RwLockWriteGuard<'_, CdfContext> {
+         match self {
+             Self::QCat(_) => panic!("Expected a Cdf"),
+             Self::Cdf(cdf) => cdf.cdf.try_write().unwrap(),
 --- a/vendor/rav1d/src/decode.rs
 +++ b/vendor/rav1d/src/decode.rs
 @@ -166,7 +166,7 @@
@@ -514,6 +543,16 @@
  use std::array;
  use std::cmp;
  use std::ffi::c_int;
+--- a/vendor/rav1d/src/disjoint_mut.rs
++++ b/vendor/rav1d/src/disjoint_mut.rs
+@@ -611,6 +611,7 @@
+ }
+
+ impl Bounds {
++    #[cfg(any(debug_assertions, test))]
+     fn overlaps(&self, other: &Bounds) -> bool {
+         let a = &self.range;
+         let b = &other.range;
 --- a/vendor/rav1d/src/error.rs
 +++ b/vendor/rav1d/src/error.rs
 @@ -17,13 +17,13 @@
@@ -561,6 +600,20 @@
  use parking_lot::Condvar;
  use parking_lot::Mutex;
  use parking_lot::RwLock;
+@@ -716,13 +716,6 @@
+
+ #[derive(Default)]
+ #[repr(C)]
+-pub struct Rav1dFrameContextTaskThreadPendingTasks {
+-    pub head: Rav1dTaskIndex,
+-    pub tail: Rav1dTaskIndex,
+-}
+-
+-#[derive(Default)]
+-#[repr(C)]
+ pub(crate) struct Rav1dFrameContextTaskThread {
+     pub lock: Mutex<()>,
+     pub cond: Condvar,
 --- a/vendor/rav1d/src/ipred.rs
 +++ b/vendor/rav1d/src/ipred.rs
 @@ -37,7 +37,7 @@
@@ -647,3 +700,15 @@
  use std::array;
  use std::cmp;
  use std::ffi::c_int;
+--- a/vendor/rav1d/src/wrap_fn_ptr.rs
++++ b/vendor/rav1d/src/wrap_fn_ptr.rs
+@@ -53,8 +53,8 @@
+             /// This allows us to add a safer
+             /// (type-safe for sure, and increasingly fully safe)
+             /// interface for calling a `fn` ptr.
+-            #[derive(Clone, Copy, PartialEq, Eq)]
++            #[derive(Clone, Copy)]
+             #[repr(transparent)]
+             pub struct Fn(FnPtr);
+
+             impl Fn {

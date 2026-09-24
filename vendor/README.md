@@ -71,6 +71,11 @@ Both bit-depth features are enabled and default/assembly features disabled by
 the application and the
 [portability check](../tools/validation/portable-av1/README.md).
 
+The patch also removes unused function-pointer equality derives and an obsolete
+pending-task struct, makes three borrowed return lifetimes explicit, and builds
+the overlap helper only for debug assertions or tests. This keeps release builds
+warning-free without suppressing lints or changing decoding behavior.
+
 That independent check proves exact lossless 8/10/12-bit plane decoding in native
 Rust and Chrome WebAssembly, with no WebAssembly host imports, and checks the
 Android target. It uses one decoder thread and a frame-size limit. Application
