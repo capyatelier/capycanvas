@@ -35,6 +35,7 @@ pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
+pub use session::tonal_selection::{TonalAction, TonalOptions};
 pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
@@ -539,6 +540,17 @@ pub enum CommandId {
     PolygonSelect,
     ColorSelect,
     SelectionBrush,
+    TonalSelect,
+    ApplyTonalSelection,
+    CancelTonalSelection,
+    TonalNewBand,
+    TonalRemoveBand,
+    TonalSaveBand,
+    TonalInvert,
+    TonalLowerOpen,
+    TonalUpperOpen,
+    TonalLinkFalloff,
+
     QuickMask,
     ReturnToArtwork,
     NewSelectionLayer,
@@ -623,6 +635,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::TonalSelect | Self::ApplyTonalSelection | Self::CancelTonalSelection | Self::TonalNewBand | Self::TonalRemoveBand | Self::TonalSaveBand | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff => matches!(platform, Platform::Gtk),
             Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -690,7 +703,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::ZenMode
@@ -735,6 +748,17 @@ impl CommandId {
             Self::PolygonSelect => "polygon-select",
             Self::ColorSelect => "color-select",
             Self::SelectionBrush => "selection-brush",
+            Self::TonalSelect => "color-select",
+            Self::ApplyTonalSelection => "check",
+            Self::CancelTonalSelection => "deselect",
+            Self::TonalNewBand => "plus",
+            Self::TonalRemoveBand => "delete",
+            Self::TonalSaveBand => "save-document",
+            Self::TonalInvert => "invert-selection",
+            Self::TonalLowerOpen => "select",
+            Self::TonalUpperOpen => "select",
+            Self::TonalLinkFalloff => "link",
+
             Self::QuickMask => "mask",
             Self::ReturnToArtwork => "brush",
             Self::NewSelectionLayer => "add-layer",
@@ -811,7 +835,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 114] = [
+    pub const ALL: [Self; 124] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -849,6 +873,17 @@ impl CommandId {
         Self::PolygonSelect,
         Self::ColorSelect,
         Self::SelectionBrush,
+        Self::TonalSelect,
+        Self::ApplyTonalSelection,
+        Self::CancelTonalSelection,
+        Self::TonalNewBand,
+        Self::TonalRemoveBand,
+        Self::TonalSaveBand,
+        Self::TonalInvert,
+        Self::TonalLowerOpen,
+        Self::TonalUpperOpen,
+        Self::TonalLinkFalloff,
+
         Self::QuickMask,
         Self::ReturnToArtwork,
         Self::NewSelectionLayer,
@@ -1000,6 +1035,17 @@ impl CommandId {
             Self::PolygonSelect => "Polygonal lasso",
             Self::ColorSelect => "Select by color",
             Self::SelectionBrush => "Paint selection",
+            Self::TonalSelect => "Tonal range",
+            Self::ApplyTonalSelection => "Apply selection",
+            Self::CancelTonalSelection => "Cancel preview",
+            Self::TonalNewBand => "Add band",
+            Self::TonalRemoveBand => "Remove band",
+            Self::TonalSaveBand => "Save named band",
+            Self::TonalInvert => "Invert tones",
+            Self::TonalLowerOpen => "Include darker tones",
+            Self::TonalUpperOpen => "Include brighter tones",
+            Self::TonalLinkFalloff => "Link falloff",
+
             Self::QuickMask => "Quick Mask",
             Self::ReturnToArtwork => "Return to Artwork",
             Self::NewSelectionLayer => "New Selection Layer",
@@ -1174,6 +1220,7 @@ pub struct UiState {
     pub colors: ColorState,
     pub color_picker: ColorPickerState,
     pub tool_settings: Vec<ToolSetting>,
+    pub tool_extra: Vec<ToolOption>,
     pub toolbar_context_generation: u64,
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
@@ -1210,6 +1257,8 @@ pub struct UiState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
     Selection { action: SelectionAction },
+    Tonal { action: TonalAction },
+    SetToolText { id: String, value: String },
     ActivateHeaderItem {
         id: u32,
     },

@@ -965,6 +965,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Select => "Choose a selection tool",
                 CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
+                CommandId::TonalSelect | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => command.label(),
                 CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
                 CommandId::SelectionBrushPressure => "Use pen pressure to vary Paint selection size",
                 CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",

@@ -159,6 +159,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.input_pending = false;
         self.cancel_picker();
         self.eyedropper.renderer_replaced();
+        self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
         self.navigator_preview = Default::default();
@@ -222,6 +223,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.rendering_suspended = false;
         self.cancel_picker();
         self.eyedropper.renderer_replaced();
+        self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
         self.navigator_preview = Default::default();

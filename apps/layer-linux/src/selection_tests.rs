@@ -239,7 +239,7 @@ fn native_selection_tools_input() {
         );
         assert_eq!(d.named("drawer-panel-Tools"), tools);
         assert_eq!(d.named("drawer-panel-ToolSettings"), settings);
-        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 7);
+        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 8);
         assert_shared_icons(&d.named("tool-drawer"));
     }
     for theme in [Theme::Dark, Theme::Light] {
@@ -508,7 +508,7 @@ fn native_selection_options_input() {
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&opener);
     }
-    for tool in SelectionTool::ALL.into_iter().filter(|t| *t != SelectionTool::Brush) {
+    for tool in SelectionTool::ALL.into_iter().filter(|t| !matches!(t, SelectionTool::Brush | SelectionTool::Tonal)) {
         d.click_name(&format!("tool-choice-{:?}", tool.command()));
         assert!(d.named("tool-setting-selection_feather").is_visible());
         let settings = d.named("drawer-panel-ToolSettings");
@@ -610,4 +610,89 @@ fn native_selection_options_input() {
             .save_to_png(output.join(format!("selection-options-{theme:?}.png")))
             .unwrap();
     }
+}
+
+fn wait_tonal(d:&Driver) {
+    let deadline=Instant::now()+Duration::from_secs(25);
+    loop {pump(20);if state(&d.w).commands.iter().any(|c|c.id==CommandId::ApplyTonalSelection && c.enabled) {return;}
+        assert!(Instant::now()<deadline,"tonal preview timed out: {} {:?}",d.w.status.text(),state(&d.w).host_error);}
+}
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tonal_selection_input"]
+fn native_tonal_selection_input() {
+    let mut d=Driver::new("art.capycanvas.TonalSelection");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.dir.to_string_lossy().into()));
+    std::fs::create_dir_all(&output).unwrap();
+    // Two disconnected dark regions on white; a sampled tone must reach both.
+    d.w.dispatch(UiAction::SetColor {rgba:[0.08,0.08,0.08,1.]});
+    d.w.dispatch(UiAction::SetBrushOpacity {value:1.});
+    for (a,b) in [([600.,600.],[850.,850.]),([1150.,600.],[1400.,850.])] {
+        d.w.dispatch(UiAction::Invoke {command:CommandId::RectangleSelect});canvas_drag(&mut d,a,b,false);wait_selection(&d);
+        d.w.dispatch(UiAction::Invoke {command:CommandId::FillSelection});pump(500);
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect});
+    }
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    d.click_name("tool-choice-TonalSelect");wait_tonal(&d);
+    assert!(selection(&d).is_none());
+    d.click_name("tool-list-tonal-bands");
+    d.click_name("tool-list-tonal-bands-4");
+    let p=d.point(&d.named("tool-list-tonal-bands-0"));
+    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+    d.key(0xff1b);wait_tonal(&d);pump(120);
+    assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.engine().display_selection().as_deref().map(|s|byte_pixel(s,1250,700)),Some(255));
+    let image=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    let m=state(&d.w).camera.document_to_surface();
+    let [x,y]=[(m[0]*1250.+m[2]*700.+m[4]) as usize,(m[1]*1250.+m[3]*700.+m[5]) as usize];
+    let preview=&image.bytes[y*image.stride as usize+x*4..][..4];
+    assert!(preview[0]>preview[1].saturating_add(40),"ready tonal mask must be visibly tinted: {preview:?}");
+    assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,ToolOption::List {id:"tonal-bands",items,..} if items[0].selected && !items[4].selected)));
+    assert_shared_icons(&d.named("tool-drawer"));
+    let _=crate::snapshot(&d.w);pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("tonal-presets.png")).unwrap();
+    d.click_name(&opener);
+    canvas_click(&mut d,[700.,700.]);wait_tonal(&d);
+    assert!(selection(&d).is_none(),"sampling is a draft");
+    d.click_name(&opener);
+    let lower=state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value;
+    assert!(lower < -5.,"sampled dark patch: {lower}");
+    let entry=d.named("tool-text-tonal-name");d.click(&entry);
+    d.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":0x61,"down":true},{"key":0x61,"down":false},{"key":0xffe3,"down":false}]));
+    for c in "Dark detail".chars() {d.key(c as u32);}d.key(0xff0d);
+    assert_eq!(entry.downcast_ref::<gtk::Entry>().unwrap().text(),"Dark detail");
+    // Values survive normal native number entry and linked falloff updates.
+    d.number(&d.named("tool-setting-tonal_falloff_low"),"0.75");wait_tonal(&d);
+    let _=crate::snapshot(&d.w);pump(100);
+    crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
+    d.click_name("tool-action-ApplyTonalSelection");
+    let first=wait_selection(&d);
+    assert!(byte_pixel(&first,700,700)>240);
+    assert!(byte_pixel(&first,1250,700)>240,"point sampling selects disconnected matching regions");
+    assert_eq!(byte_pixel(&first,1000,700),0);
+    d.click_name(&opener);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(80);assert!(selection(&d).is_none());
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(80);assert_eq!(selection(&d),Some(first.clone()));
+    // Sampling a rectangle changes tone criteria, preserving the applied selection.
+    canvas_drag(&mut d,[650.,650.],[800.,800.],false);
+    wait_tonal(&d);assert_eq!(selection(&d),Some(first.clone()));
+    d.key(0xff1b);pump(100);assert_eq!(selection(&d),Some(first));
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.w.window.destroy();pump(80);
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tonal_selection_pen_input --tablet"]
+fn native_tonal_selection_pen_input() {
+    let mut d=Driver::new("art.capycanvas.TonalSelectionPen");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});wait_tonal(&d);
+    canvas_drag(&mut d,[600.,600.],[850.,800.],true);wait_tonal(&d);
+    assert!(selection(&d).is_none());
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTonalSelection});
+    let first=wait_selection(&d);
+    assert!(byte_pixel(&first,1500,1000)>240,"sampled white selects outside the probe rectangle");
+    canvas_drag(&mut d,[700.,700.],[700.,700.],true);wait_tonal(&d);
+    assert_eq!(selection(&d),Some(first.clone()));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::CancelTonalSelection});
+    assert_eq!(selection(&d),Some(first));
+    d.w.window.destroy();pump(80);
 }

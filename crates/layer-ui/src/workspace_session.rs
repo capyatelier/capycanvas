@@ -61,7 +61,7 @@ impl PreparedWorkspace {
         state.tools.validate()?;
         state.selection.validate()?;
         if let LayerCanvasTool::Selection { kind } = state.canvas_tool
-            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
+            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
             return Err("Invalid geometric selection tool".into());
         }
         state.colors.validate()?;
@@ -385,14 +385,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let canvas_tool = if self.state.platform == Platform::Gtk && working.canvas_tool.picks_color() {
             LayerCanvasTool::Paint
-        } else { working.canvas_tool };
+        } else if working.canvas_tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {LayerCanvasTool::Select}
+        else { working.canvas_tool };
         self.layer_interaction.tool = canvas_tool;
         self.layer_interaction.gradient = working.gradient;
         self.layer_interaction.figure = working.figure;
         self.state.layer_tools.tool = canvas_tool;
         self.region_tools = region_tools;
+        self.tonal_tools = Default::default();
         self.selection_tools = selection_tools::SelectionTools::default();
         self.selection_tools.options = working.selection;
+        if self.selection_tools.options.tool==SelectionTool::Tonal && !CommandId::TonalSelect.available_on(self.state.platform) {self.selection_tools.options.tool=SelectionTool::Lasso;}
         self.engine.set_tool(
             if self.state.brush.tool == Tool::Eraser || self.state.colors.transparent() {
                 StrokeTool::Eraser

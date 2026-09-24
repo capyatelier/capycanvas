@@ -5,6 +5,7 @@ Photo places these alongside Lasso and Auto select in its Tools toolbar. Sketch
 uses a Select title-bar command and a two-panel Tools → Tool drawer, matching
 the Eraser drawer. The Select command remembers the last chosen selection tool
 in the workspace. Other hosts retain their existing selection entry points.
+GTK also provides [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
 
 Preview-less tool rows match brush categories: at least 44 px on GTK/Web and
 48 dp on Android.

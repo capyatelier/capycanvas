@@ -118,6 +118,9 @@ impl ToolbarNumericBinding {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ToolOption {
+    List { id: &'static str, label: &'static str, multiple: bool, items: Vec<ToolListItem> },
+    Text { id: &'static str, label: &'static str, value: String },
+    Info { id: &'static str, text: String },
     Numeric(ToolSetting),
     Choice {
         id: &'static str,
@@ -130,10 +133,15 @@ pub enum ToolOption {
         checkable: bool,
     },
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ToolListItem { pub label: String, pub action: UiAction, pub selected: bool }
+
 impl ToolOption {
     /// Values and selection do not invalidate retained native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Info {id:a,..}, Self::Info {id:b,..}) | (Self::Text {id:a,..}, Self::Text {id:b,..}) => a==b,
+            (Self::List {id:a,multiple:x,..},Self::List {id:b,multiple:y,..}) => a==b && x==y,
             (Self::Numeric(a), Self::Numeric(b)) => {
                 a.id == b.id && a.label == b.label && a.numeric == b.numeric
             }
@@ -210,6 +218,8 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
+            UiAction::SetToolText { id, .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Text {id:key,..} if key==id)),
+            UiAction::Tonal { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::List {items,..} if items.iter().any(|i| i.action==*action))),
             UiAction::ToggleSliderBookmark { control } => control.slider()
                 .is_some_and(|binding| binding.field(self).is_some()),
             UiAction::SetBrushSize { .. } => {
@@ -246,7 +256,7 @@ impl UiState {
         let completion = |c| {
             matches!(
                 c,
-                ApplyTransform | CancelTransform | CompleteSelection | CancelSelection
+                ApplyTransform | CancelTransform | CompleteSelection | CancelSelection | ApplyTonalSelection | CancelTonalSelection
             )
         };
         let action = |a: &ToolSettingAction| {
@@ -323,6 +333,7 @@ impl UiState {
                 .collect();
             options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }
+        options.extend(self.tool_extra.iter().cloned());
         options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
         options.extend(
             self.tool_actions

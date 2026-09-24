@@ -37,6 +37,7 @@ mod tiles;
 #[cfg(test)]
 mod timing;
 mod tool_panels;
+mod tool_extra;
 mod tooltips;
 mod wayland;
 mod workspace;

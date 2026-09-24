@@ -19,6 +19,8 @@ pub use document_color_edit::ProofMode;
 pub(crate) mod figures;
 #[path = "operation.rs"]
 pub(crate) mod operation;
+#[path = "tonal_selection.rs"]
+pub(crate) mod tonal_selection;
 #[path = "selection_tools.rs"]
 pub(crate) mod selection_tools;
 pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
@@ -113,6 +115,7 @@ pub struct UiSession<R: CanvasRenderer> {
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     selection_tools: selection_tools::SelectionTools,
+    tonal_tools: tonal_selection::TonalTools,
     painted_selections: painted_selections::PaintedSelections,
     selection_masks: selection_masks::SelectionMasks,
     rulers: rulers::RulerInteraction,
@@ -186,6 +189,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             eyedropper: Default::default(),
             region_tools: Default::default(),
             selection_tools: Default::default(),
+            tonal_tools: Default::default(),
             painted_selections: Default::default(),
             selection_masks: Default::default(),
             rulers: Default::default(),
@@ -232,6 +236,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 colors,
                 color_picker: Default::default(),
                 tool_settings: Vec::new(),
+                tool_extra: Vec::new(),
                 toolbar_context_generation: 0,
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
@@ -558,6 +563,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cursor.hover.reset();
         }
         self.cursor.event = event;
+        if self.tonal_active() { self.tonal_hover(event.filter(|e|e.phase==PenPhase::Hover).map(|e| self.state.camera.input_transform().map(e.surface_position))); }
         if self.eyedropper.picking.previous.is_some() && !self.eyedropper.picking.finishing
             && self.eyedropper.picking.touch.is_none() {
             if let Some(e) = event.filter(|e| e.phase == PenPhase::Hover) {
@@ -1962,6 +1968,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
+            CommandId::ApplyTonalSelection => self.tonal_active() && self.tonal_tools.ready && self.tonal_tools.draft.as_ref().is_some_and(|d|d.revision==document.revision),
+            CommandId::CancelTonalSelection => self.tonal_tools.draft.is_some(),
+            CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => self.tonal_active() && idle,
+            CommandId::TonalRemoveBand => self.tonal_active() && self.selection_tools.options.tonal.active>=7,
+            CommandId::TonalNewBand => self.tonal_active() && self.selection_tools.options.tonal.bands.len()<layer_core::tonal::MAX_BANDS,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
@@ -2015,6 +2026,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
             || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
+            || (id == CommandId::TonalInvert && self.selection_tools.options.tonal.invert)
+            || (id == CommandId::TonalLinkFalloff && self.selection_tools.options.tonal.linked)
+            || (id == CommandId::TonalLowerOpen && self.selection_tools.options.tonal.bands[self.selection_tools.options.tonal.active].lower.is_none())
+            || (id == CommandId::TonalUpperOpen && self.selection_tools.options.tonal.bands[self.selection_tools.options.tonal.active].upper.is_none())
             || (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
             || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
@@ -2771,6 +2786,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         _ => 0.,
                     };
                     return self.dispatch(UiAction::SetToolSetting { id, value });
+                } else if id.starts_with("tonal_") {
+                    let value=self.selection_tools.options.tonal.reset_value(&id)?;
+                    return self.dispatch(UiAction::SetToolSetting {id,value});
                 } else if id.starts_with("selection_") {
                     let options = SelectionOptions {
                         constraint: self.selection_tools.options.constraint,
@@ -2788,8 +2806,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .ok_or("This setting has no default")?.value;
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
+            UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
+            UiAction::SetToolText { id, value } => {
+                if id!="tonal-name" || !self.tonal_active() {return Err("Unknown text setting".into());}
+                self.selection_tools.options.tonal.rename(value)?;
+                self.refresh_tools();(BRUSH | COMMANDS,false)
+            }
             UiAction::SetToolSetting { id, value } => {
-                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                if id.starts_with("tonal_") {
+                    if !self.tonal_active() {return Err("Choose Tonal range first".into());}
+                    self.selection_tools.options.tonal.edit(&id,value)?;self.queue_tonal(None)?;self.refresh_tools();
+                    return Ok(self.changed(BRUSH | COMMANDS,true));
+                } else if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
                 if self.layer_interaction.tool.region().is_some()
@@ -2807,6 +2835,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if id.starts_with("selection_") {
                     self.selection_tools.options.edit(&id, value)?;
                     self.region_tools.cancel();
+                    if self.tonal_active() {self.queue_tonal(None)?;}
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, true));
                 }
@@ -3177,7 +3206,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 else if self.eyedropper.picking.previous.is_some() { self.resample_picker(); }
                 changed |= BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW;
             }
-            self.region_tools.cancel();
+            if !self.tonal_active() || revision != self.engine.document().revision || tool_before.1 != self.layer_interaction.tool {
+                self.region_tools.cancel();
+                if self.tonal_active() && tool_before.1 != self.layer_interaction.tool {self.queue_tonal(None)?;}
+                else if self.tonal_tools.draft.is_some() {self.cancel_tonal();}
+            }
         }
         if !was_filter_drawer && self.filter_drawer_open() {
             self.open_filter_picker();
@@ -3765,10 +3798,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
+        if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
         self.poll_region_tool()?;
         let sample_space = self.engine.document().color.space;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
-            if self.eyedropper.picking.previous.is_some() {
+            if self.tonal_active() {self.tonal_sampled_color(color);}
+            else if self.eyedropper.picking.previous.is_some() {
                 self.state.color_picker.preview = Some(color);
                 changed |= regions::COLOR_PREVIEW;
             } else if !self.eyedropper.preview_only {
@@ -3778,6 +3813,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 changed |= regions::BRUSH;
             }
         }
+        if self.tonal_active() && !self.eyedropper.busy() && self.eyedropper.sample.is_none() && self.tonal_tools.hover.take().is_some() {self.tonal_tools.changed=true;}
         if self.eyedropper.picking.previous.is_some() && !self.eyedropper.busy()
             && self.eyedropper.sample.is_none() && self.state.color_picker.preview.take().is_some() {
             changed |= regions::COLOR_PREVIEW;
@@ -3800,12 +3836,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.refresh_document();
             changed |= regions::DOCUMENT;
         }
+        let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
+        if tonal_changed {self.refresh_tools();changed |= regions::BRUSH | regions::COMMANDS;}
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
         Ok(self.changed(
             changed,
-            self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+            tonal_changed || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
         ))
     }
 
@@ -3948,17 +3986,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
+            CommandId::TonalSelect | CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
                 let kind = match command {
                     CommandId::RectangleSelect => SelectionTool::Rectangle,
                     CommandId::EllipseSelect => SelectionTool::Ellipse,
                     CommandId::PolygonSelect => SelectionTool::Polygon,
                     CommandId::ColorSelect => SelectionTool::Color,
                     CommandId::SelectionBrush => SelectionTool::Brush,
+                    CommandId::TonalSelect => SelectionTool::Tonal,
                     _ => self.selection_tools.options.tool,
                 };
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
+                self.tonal_command(command)?;Ok((DOCUMENT | BRUSH | COMMANDS | HOST,true))
             }
             CommandId::SelectionBrushPressure => {
                 self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
@@ -3994,6 +4036,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     CommandId::SelectionAntialias => options.antialias = !options.antialias,
                     _ => options.constrain_angles = !options.constrain_angles,
                 }
+                if self.tonal_active() {self.queue_tonal(None)?;}
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, true))
             }
@@ -4444,8 +4487,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             && let Some(tool) = self.layer_interaction.tool.selection_tool() {
             selection_tools::tool_set(tool)
         } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
+        self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            let commands: &[CommandId] = if tool.geometric() {
+            let commands: &[CommandId] = if tool==SelectionTool::Tonal {
+                &[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalNewBand,CommandId::TonalRemoveBand,CommandId::TonalSaveBand,CommandId::TonalInvert,CommandId::TonalLowerOpen,CommandId::TonalUpperOpen,CommandId::TonalLinkFalloff]
+            } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
                 &[CommandId::SelectionConstrainAngles, CommandId::CompleteSelection, CommandId::CancelSelection]
@@ -4457,6 +4503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|command| ToolSettingAction { command, checkable: true }).collect()
             } else { [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
                 CommandId::SelectionIntersect, CommandId::SelectionAntialias].into_iter().chain(commands.iter().copied())
+                .filter(|c|tool!=SelectionTool::Tonal || *c!=CommandId::SelectionAntialias)
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
@@ -4504,7 +4551,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
+            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls()}
+            else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
             else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
@@ -4532,6 +4580,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
             self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
         }
+        self.state.tool_extra=self.tonal_extra();
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
     }
@@ -5071,6 +5120,7 @@ mod tests {
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
 
@@ -6684,7 +6734,7 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 7);
+            assert_eq!(s.state.tool_set.subtools.len(), if platform==Platform::Gtk {8} else {7});
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
             assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);

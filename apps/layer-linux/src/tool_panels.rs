@@ -220,6 +220,10 @@ use std::{
 pub struct ToolSettings {
     pub root: gtk::Box,
     form: gtk::Box,
+    completion: gtk::Box,
+    extra: gtk::Box,
+    extra_fields: RefCell<Vec<(layer_ui::ToolOption,crate::tool_extra::ExtraField)>>,
+    extra_context: Cell<Option<layer_ui::ToolbarContext>>,
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
     actions: RefCell<Vec<(ToolSettingAction, gtk::Widget)>>,
@@ -230,10 +234,14 @@ impl ToolSettings {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let form = body();
         let picker = crate::color_picker::Settings::new();
+        let completion=body();
+        root.append(&completion);
+        let extra=body();
+        root.append(&extra);
         root.append(&form);
         root.append(&picker.root);
         Self {
-            root, form, picker,
+            root, form, picker, extra, completion, extra_fields:RefCell::default(), extra_context:Cell::new(None),
             fields: RefCell::default(),
             actions: RefCell::default(),
             updating: Rc::new(Cell::new(false)),
@@ -242,8 +250,23 @@ impl ToolSettings {
     pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
         let picking = state.layer_tools.tool.picks_color();
         self.form.set_visible(!picking);
+        self.extra.set_visible(!picking);
+        self.completion.set_visible(!picking);
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
+        let context=state.toolbar_context();
+        let same=self.extra_context.get()==Some(context) && self.extra_fields.borrow().len()==state.tool_extra.len() && self.extra_fields.borrow().iter().zip(&state.tool_extra).all(|((old,_),next)|old.same_schema(next));
+        if !same {
+            self.extra_context.set(Some(context));
+            self.extra_fields.borrow_mut().clear();
+            while let Some(child)=self.extra.first_child() {self.extra.remove(&child);}
+            for option in &state.tool_extra {
+                let field=crate::tool_extra::ExtraField::new(workspace,option,context,false);
+                self.extra.append(&field.root);self.extra_fields.borrow_mut().push((option.clone(),field));
+            }
+        } else {
+            for ((old,field),next) in self.extra_fields.borrow_mut().iter_mut().zip(&state.tool_extra) {field.refresh(workspace,next,context);*old=next.clone();}
+        }
         let controls = &state.tool_settings;
         self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
@@ -264,6 +287,7 @@ impl ToolSettings {
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
             }
+            while let Some(child)=self.completion.first_child() {self.completion.remove(&child);}
             fields.clear();
             actions.clear();
             let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -379,7 +403,8 @@ impl ToolSettings {
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
-                if mode { mode_row.append(&widget); }
+                if matches!(action.command,layer_ui::CommandId::ApplyTonalSelection | layer_ui::CommandId::CancelTonalSelection) {self.completion.append(&widget);}
+                else if mode { mode_row.append(&widget); }
                 else { self.form.append(&widget); }
                 actions.push((*action, widget));
             }

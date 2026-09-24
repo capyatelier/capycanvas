@@ -236,6 +236,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.tool.selection_tool() == Some(SelectionTool::Brush)
     }
     pub(super) fn sync_selection_overlay(&mut self) {
+        if self.tonal_active() && let Some(selection)=self.tonal_tools.preview.clone() {
+            let display=&self.selection_tools.options.display;
+            self.engine.set_selection_display(Some(Some(selection)));
+            self.engine.backend_mut().set_selection_overlay(Some(SelectionOverlay {active:true,editing:None,color:display.color,protected:false,saved_protected:false}));
+            return;
+        }
         let display = &self.selection_tools.options.display;
         let properties = self.mask_properties();
         let target = self.selection_masks.target();

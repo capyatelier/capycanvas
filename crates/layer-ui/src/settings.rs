@@ -100,6 +100,7 @@ pub struct Settings {
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
     /// Shared by Quick Mask and every saved selection, across documents.
+    pub tonal_bands: Vec<layer_core::tonal::TonalBand>,
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
@@ -132,6 +133,7 @@ impl Default for Settings {
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
+            tonal_bands: Vec::new(),
             selection_painting: Default::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
@@ -176,6 +178,8 @@ impl Settings {
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self.tonal_bands.len() > 64 { return Err("At most 64 saved tonal bands are supported".into()); }
+        for band in &self.tonal_bands { band.validate().map_err(str::to_string)?; }
         for marks in self.slider_bookmarks.values() {
             marks.validate()?;
         }

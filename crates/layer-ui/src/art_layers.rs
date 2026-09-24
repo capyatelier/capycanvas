@@ -998,7 +998,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(());
                 }
                 if let LayerCanvasTool::Selection { kind } = tool
-                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
+                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
                     return Err("Invalid geometric selection tool".into());
                 }
                 if tool == LayerCanvasTool::Transform {
@@ -1013,6 +1013,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     self.layer_interaction.figure = (shape, paint);
                 }
+                if tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {return Err("Tonal range is currently available on GTK".into());}
                 self.cancel_layer_gesture()?;
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;
@@ -1032,6 +1033,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
+                if self.tonal_active() {self.queue_tonal(None)?;}
                 self.refresh_tools();
             }
             LayerAction::Deselect => { self.return_to_artwork()?; self.layer_edit(Edit::SetSelection(None))?; },
@@ -1747,6 +1749,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
             return Err("Invalid canvas point".into());
         }
+        if self.tonal_active() {return self.tonal_pen(event,p);}
         if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
             return self.selection_pen(event, p, kind);
         }
@@ -1859,6 +1862,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
         if self.cancel_selection_contact() { return Ok(true); }
+        let tonal=self.cancel_tonal();
         let effect = self.cancel_effect_gesture()?;
         let sdr = self.cancel_sdr_gesture()?;
         let transform = self.cancel_transform()?;
@@ -1867,7 +1871,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(selection || region || transform || effect || sdr);
+            return Ok(tonal || selection || region || transform || effect || sdr);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine

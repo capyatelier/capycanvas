@@ -221,3 +221,59 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     assert_eq!(byte(&p, 10, 8), 0);
     assert_eq!(byte(&p, 192, 8), 255);
 }
+
+#[test]
+fn tonal_sdr_native_painted_source_and_composite() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut white = Layer::paint(LayerId(2), "Paper");
+    white.kind = layer_core::LayerKind::Background;
+    let gray = 0.007f32;
+    let mut ink = dab([gray, gray, gray, 1.]);
+    ink.center = Point { x: 300., y: 300. };
+    let mut stroke = batch(1);
+    stroke.damage = layer_core::Rect {
+        min: Point::default(),
+        max: Point { x: 512., y: 512. },
+    };
+    r.submit(FramePacket {
+        view: view(),
+        document_extent: [512, 512],
+        layers: &[Layer::paint(LayerId(1), "Paint"), white],
+        dabs: &[ink],
+        dab_batches: &[stroke],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    let _ = receive(
+        &mut r,
+        RegionSource::Composite,
+        vec![TonalBand::defaults()[4].clone()],
+        false,
+        None,
+        None,
+    );
+    let _ = receive(&mut r, RegionSource::Composite, vec![], false, None, None);
+    let bands = vec![TonalBand::defaults()[0].clone()];
+    for source in [RegionSource::Layer(LayerId(1)), RegionSource::Composite] {
+        let result = receive(
+            &mut r,
+            source.clone(),
+            bands.clone(),
+            false,
+            Some(TonalProbe {
+                bounds: [298, 298, 303, 303],
+                point: true,
+            }),
+            None,
+        );
+        assert!(
+            byte(&result.pixels, 300, 300) > 240,
+            "{source:?}: sample {:?} coverage {}",
+            result.tonal_sample,
+            byte(&result.pixels, 300, 300)
+        );
+    }
+}
