@@ -8,6 +8,8 @@ mod brush;
 mod canvas;
 mod feedback;
 mod input;
+mod selection_stroke;
+pub use selection_stroke::SelectionStroke;
 #[cfg(feature = "prediction-bench")]
 pub mod prediction_bench;
 pub mod recording;

@@ -54,22 +54,22 @@ impl WebApp {
     }
     /// Static for each shape; fetch when switching models, not on every drag.
     pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.state().colors.wheel_hue_stops())
+        serialize(&self.session.state().display_colors().wheel_hue_stops())
     }
     pub fn color_panel_layout(&self, size: f32) -> Result<JsValue, JsValue> {
-        serialize(&if self.session.engine().document().color.depth.is_float() {layer_ui::ColorPanelLayout::with_hdr(size)} else {layer_ui::ColorPanelLayout::new(size)})
+        serialize(&if self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float() {layer_ui::ColorPanelLayout::with_hdr(size)} else {layer_ui::ColorPanelLayout::new(size)})
     }
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
         color_field(&self.session.state().preview_colors(), side,
-            self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition()))
+            (self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition()))
     }
     pub fn color_preview(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.color_preview())
     }
     pub fn color_field_request(&self, side: u32) -> Result<String, JsValue> {
         serde_json::to_string(&json!({"side":side,"colors":self.session.state().preview_colors(),
-            "rendition":self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition())})).map_err(js)
+            "rendition":(self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition())})).map_err(js)
     }
 
     // Legacy host contract: Zen no longer projects an alternative layout.
@@ -82,7 +82,7 @@ impl WebApp {
     pub fn color_wheel_hit(&self, size: f32, x: f32, y: f32) -> Result<JsValue, JsValue> {
         serialize(
             &layer_ui::ColorWheelGeometry::new(size)
-                .and_then(|g| g.hit_shape([x, y], self.session.state().colors.wheel_shape())),
+                .and_then(|g| g.hit_shape([x, y], self.session.state().display_colors().wheel_shape())),
         )
     }
     pub fn navigator_geometry(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {

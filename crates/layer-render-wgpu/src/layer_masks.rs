@@ -54,7 +54,8 @@ impl MaskRenderer {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("mask coverage brush"),
                     source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                        include_str!("brush.wgsl"),
+                        include_str!("analytic_coverage.wgsl"),
+                    include_str!("brush.wgsl"),
                         include_str!("brush_geometry.wgsl"),
                         include_str!("selection_clip.wgsl"),
                     ])),

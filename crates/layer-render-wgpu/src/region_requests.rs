@@ -48,7 +48,7 @@ impl RegionRequests {
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
-        let extent = match request.source { layer_render::RegionSource::Layer(id) => r.target_extent(id), _ => r.document_extent };
+        let extent = match request.source { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(id), _ => r.document_extent };
         if extent.contains(&0)
             || request.position[0] >= extent[0]
             || request.position[1] >= extent[1]
@@ -56,7 +56,7 @@ impl RegionRequests {
             || !(0.0..=1.).contains(&request.tolerance)
             || !request.refinement.is_valid()
             || request.selection.as_ref().is_some_and(|s| !s.is_valid())
-            || (matches!(request.source, layer_render::RegionSource::Selection(_)) && request.selection.is_none())
+            || (matches!(request.source, layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Coverage(_)) && request.selection.is_none())
         {
             return Err(GpuRasterError::InvalidExtent);
         }
@@ -67,10 +67,10 @@ impl RegionRequests {
             startup.compiler.check()?;
             let mut ready = true;
             if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
-                ready &= self.flood.prepare(&startup.compiler, request.refinement);
+                if !matches!(request.source, layer_render::RegionSource::Coverage(_)) { ready &= self.flood.prepare(&startup.compiler, request.refinement); }
                 ready &= self.raw.prepare(&startup.compiler);
             }
-            if request.selection.is_some() { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler); }
+            if let Some(options) = &request.selection { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler, options); }
             if request.limit.is_some() || request.selection.is_some() {
                 for pipeline in [
                     &r.selection_clip.crossings,
@@ -113,11 +113,13 @@ impl RegionRequests {
             flood::Region { coverage: copy, bounds_offset: 0 }
         } else {
             let classified = self.raw.encode(r, &request, &mut encoder)?;
-            self.flood.encode_input(
+            if matches!(request.source, layer_render::RegionSource::Coverage(_)) {
+                flood::Region { coverage: classified, bounds_offset: 0 }
+            } else { self.flood.encode_input(
                 &r.device, &mut encoder, &r.empty_view, extent, request.position,
                 request.tolerance, request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
                 request.refinement, Some(&classified), request.contiguous,
-            )?
+            )? }
         };
         #[cfg(test)]
         let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
@@ -179,42 +181,9 @@ impl RegionRequests {
         if let Some(t) = &mut self.timing {
             t.submitted(&r.queue);
         }
-        let ready = readback.clone();
-        let tx = self.tx.clone();
         self.pending = Some(region);
-        readback
-            .slice(..size)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let result = result
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                    .and_then(|_| {
-                        let bytes = ready
-                            .slice(..size)
-                            .get_mapped_range()
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let read = |offset: usize| {
-                            u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-                        };
-                        let words: std::sync::Arc<[u32]> = (0..extent[0].div_ceil(if byte_coverage { 4 } else { 8 }) as usize
-                            * extent[1] as usize)
-                            .map(|i| read(32 + i * 4))
-                            .collect();
-                        let bounds = if read(coverage_size as usize + 16) == 0 {
-                            [0; 4]
-                        } else {
-                            std::array::from_fn(|i| read(coverage_size as usize + i * 4))
-                        };
-                        let pixels = if byte_coverage { layer_core::SelectionPixels::bytes(extent, bounds, words) }
-                            else { layer_core::SelectionPixels::new(extent, bounds, words) }
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        Ok(RegionResult {
-                            request_id: request.request_id,
-                            pixels: std::sync::Arc::new(pixels),
-                        })
-                    });
-                ready.unmap();
-                let _ = tx.send(result);
-            });
+        selection_readback::capture_selection(readback, size, coverage_size, extent,
+            byte_coverage, request.request_id, self.tx.clone(), |result,_| result);
         Ok(true)
     }
 }

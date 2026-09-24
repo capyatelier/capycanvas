@@ -141,10 +141,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return;
                 };
                 let doc = self.engine.document();
-                if fill && doc.drawing_content().is_none() {
+                let mask_target = self.selection_masks.target().filter(|_| fill);
+                if fill && mask_target.is_none() && doc.drawing_content().is_none() {
                     return;
                 }
-                let source_layer = doc.drawing_target().unwrap_or(doc.active_target());
+                let source_layer = if mask_target.is_some() { self.selection_masks.artwork().unwrap_or(doc.active_layer) }
+                    else { doc.drawing_target().unwrap_or(doc.active_target()) };
                 let (basis, extent) = if source == RegionSource::Editing {
                     (doc.layer_transform(source_layer), doc.target_extent(source_layer))
                 } else { (layer_core::Affine::IDENTITY, [doc.width, doc.height]) };
@@ -159,7 +161,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     return;
                 }
-                self.region_tools.queued = Some(RegionRequest {
+                let request = RegionRequest {
                     request_id: self.region_tools.generation,
                     contiguous,
                     selection: if fill { None } else { self.selection_refinement(basis) },
@@ -184,12 +186,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                         smoothing: if !fill && CommandId::Select.available_on(self.state.platform) && !self.selection_tools.options.antialias { 0. } else { self.region_tools.refinement.smoothing },
                         ..self.region_tools.refinement
                     },
-                    limit: if fill {
+                    limit: if fill && mask_target.is_none() {
                         doc.selection.as_ref().and_then(|s| s.transformed(inverse).ok()).map(std::sync::Arc::new)
                     } else {
                         None
                     },
-                });
+                };
+                if let Some(target) = mask_target {
+                    if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.state.host_error = Some(error); }
+                    return;
+                }
+                self.region_tools.queued = Some(request);
                 self.region_tools.target = Some(Target {
                     generation: self.region_tools.generation,
                     revision: doc.revision,

@@ -365,6 +365,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
         }
+        state?.let { SelectionResizeDialog(host, it) }
         WorkspaceDropHint(dock)
         dock.contextMenu?.let { menu ->
             val anchor = dock.contextAnchor

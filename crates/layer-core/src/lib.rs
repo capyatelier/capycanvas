@@ -22,6 +22,8 @@ pub mod raster;
 pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
+mod selection;
+pub use selection::*;
 pub use effects::*;
 mod presets;
 pub use layers::*;
@@ -161,6 +163,8 @@ pub enum LayerKind {
     Background,
     Group,
     Effect,
+    /// Named reusable coverage; never participates in artwork composition.
+    Selection,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -187,6 +191,8 @@ pub struct Layer {
     #[serde(skip)]
     pub pending_operations: Vec<LayerOperation>,
     pub effect: Option<Arc<EffectInstance>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Selection>,
 }
 
 impl Layer {
@@ -206,6 +212,7 @@ impl Layer {
             mask: self.mask.clone(),
             pending_operations: Vec::new(),
             effect: self.effect.clone(),
+            selection: self.selection.clone(),
         }
     }
     pub fn paint(id: LayerId, name: impl Into<Arc<str>>) -> Self {
@@ -223,6 +230,7 @@ impl Layer {
             mask: None,
             pending_operations: Vec::new(),
             effect: None,
+            selection: None,
         }
     }
 
@@ -245,6 +253,7 @@ impl Layer {
             mask: None,
             pending_operations: Vec::new(),
             effect: None,
+            selection: None,
         }
     }
 }
@@ -1323,6 +1332,7 @@ impl Document {
                     mask: None,
                     pending_operations: Vec::new(),
                     effect: None,
+                    selection: None,
                 },
             ],
             active_layer: paint_id,
@@ -1449,15 +1459,20 @@ impl Document {
                 Edit::SetMaskTarget(std::mem::replace(&mut self.active_mask, active))
             }
             Edit::SetSelection(selection) => {
-                if selection
-                    .as_ref()
-                    .is_some_and(|s| s.affine.inverse().is_none())
-                {
-                    return Err(DocumentError::InvalidLayerOperation(
-                        "Invalid selection transform",
-                    ));
-                }
+                if let Some(selection) = &selection { selection.validate()?; }
                 Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
+            }
+            Edit::SetSavedSelection { id, selection } => {
+                selection.validate()?;
+                let layer = self.layers.iter_mut().find(|l| l.id == id)
+                    .ok_or(DocumentError::MissingLayer(id))?;
+                if layer.kind != LayerKind::Selection {
+                    return Err(DocumentError::InvalidLayerOperation("Choose a Selection Layer"));
+                }
+                let coverage = layer.selection.as_mut()
+                    .ok_or(DocumentError::InvalidLayerOperation("Selection Layer has no coverage"))?;
+                let previous = std::mem::replace(coverage, selection);
+                Edit::SetSavedSelection { id, selection: previous }
             }
             Edit::SetRulers(rulers) => {
                 rulers::validate_rulers(&rulers)?;
@@ -1554,6 +1569,9 @@ impl Document {
                     .find(|layer| layer.id == id)
                     .ok_or(DocumentError::MissingLayer(id))?;
                 let previous = layer.opacity;
+                if layer.kind == LayerKind::Selection {
+                    return Err(DocumentError::InvalidLayerOperation("Selection Layers have no artwork opacity"));
+                }
                 layer.opacity = opacity.clamp(0.0, 1.0);
                 Edit::SetLayerOpacity {
                     id,
@@ -1581,6 +1599,15 @@ impl Document {
                 self.active_mask = false;
                 self.active_layer = id;
                 for layer in &mut self.layers {
+                    // Selection overlays follow the drawing target, like the
+                    // visibility-mask preview below. Navigation has no undo step.
+                    if layer.kind == LayerKind::Selection {
+                        if layer.id == id {
+                            layer.visible = true;
+                        } else if layer.id == previous {
+                            layer.visible = false;
+                        }
+                    }
                     if layer.id != id
                         && let Some(mask) = &mut layer.mask
                     {
@@ -1617,6 +1644,7 @@ pub enum Edit {
     ReplaceLayer(Box<Layer>),
     SetMaskTarget(bool),
     SetSelection(Option<Selection>),
+    SetSavedSelection { id: LayerId, selection: Selection },
     SetReferences(BTreeSet<LayerId>),
     SetRulers(Vec<Ruler>),
     InsertLayer {
@@ -1657,10 +1685,12 @@ impl Edit {
     fn requires_history_admission(&self, document: &Document) -> bool {
         match self {
             Self::SetColor { .. } | Self::SetProof(_) | Self::SetSdrRendition(_) => true,
+            Self::SetSavedSelection { .. } => true,
             Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
-            Self::InsertLayer { layer, .. } => layer.source.is_some(),
-            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some()),
+            Self::InsertLayer { layer, .. } => layer.source.is_some() || layer.selection.is_some(),
+            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some() || l.selection.is_some()),
             Self::ReplaceLayer(layer) => {
+                if layer.selection.is_some() || document.layer(layer.id).is_some_and(|l| l.selection.is_some()) { return true; }
                 match (document.layer(layer.id).and_then(|l| l.source.as_ref()), &layer.source) {
                     (None, None) => false,
                     (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
@@ -1684,6 +1714,17 @@ impl Edit {
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
             Self::ReplaceLayer(layer) => out.extend(layer.source.as_ref()),
             Self::InsertLayer { layer, .. } => out.extend(layer.source.as_ref()),
+            _ => (),
+        }
+    }
+    fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
+        match self {
+            Self::SetSelection(selection) => out.extend(selection.iter()),
+            Self::SetSavedSelection { selection, .. } => out.push(selection),
+            Self::ReplaceLayer(layer) => out.extend(layer.selection.iter()),
+            Self::InsertLayer { layer, .. } => out.extend(layer.selection.iter()),
+            Self::SetColor { layers, .. } => out.extend(layers.iter().filter_map(|l| l.selection.as_ref())),
+            Self::Batch(edits) => edits.iter().for_each(|edit| edit.selection_roots(out)),
             _ => (),
         }
     }
@@ -1720,7 +1761,8 @@ impl Edit {
     /// Guide-only edits affect presentation, never committed raster pixels.
     pub fn changes_image(&self) -> bool {
         match self {
-            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_) => false,
+            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_)
+                | Self::SetSavedSelection { .. } => false,
             Self::Batch(edits) => edits.iter().any(Self::changes_image),
             _ => true,
         }
@@ -1763,13 +1805,18 @@ impl HistoryEntry {
             // shared metadata is charged repeatedly rather than undercounted.
             count.0.saturating_mul(4)
         }
+        fn layer_metadata(layer: &Layer) -> usize {
+            let mut metadata = layer.clone();
+            metadata.selection = None; // Shared coverage is charged by identity.
+            serialized(&metadata)
+        }
         fn size(edit: &Edit) -> usize {
             std::mem::size_of::<Edit>().saturating_add(match edit {
                 Edit::Batch(edits) => edits.iter().map(size).fold(0usize, usize::saturating_add),
-                Edit::SetColor { layers, .. } => serialized(layers),
-                Edit::ReplaceLayer(layer) => serialized(layer),
-                Edit::InsertLayer { layer, .. } => serialized(layer),
-                Edit::SetSelection(selection) => serialized(selection),
+                Edit::SetColor { layers, .. } => layers.iter().map(layer_metadata).fold(0usize, usize::saturating_add),
+                Edit::ReplaceLayer(layer) => layer_metadata(layer),
+                Edit::InsertLayer { layer, .. } => layer_metadata(layer),
+                Edit::SetSelection(_) | Edit::SetSavedSelection { .. } => std::mem::size_of::<Selection>(),
                 Edit::SetRulers(rulers) => serialized(rulers),
                 Edit::SetReferences(ids) => serialized(ids),
                 Edit::SetProof(recipe) => recipe.as_ref().map_or(0, |recipe| {
@@ -1889,7 +1936,10 @@ impl Editor {
         // Source and color jobs publish completed ownership. Check both directions before
         // publication. Live raster transactions retain the existing capture
         // reservation path: their pending roots do not yet identify shared tiles.
-        let inverse = if edit.requires_history_admission(&self.document) {
+        // Standalone selection publication has completed backing. A selection
+        // inside an artwork transform batch still uses that raster transaction's
+        // pending capture reservation; it must not force eager raster admission.
+        let inverse = if matches!(edit, Edit::SetSelection(_)) || edit.requires_history_admission(&self.document) {
             let (candidate, inverse) = self.prepare_history_edit(edit, budget)?;
             self.document = candidate;
             inverse

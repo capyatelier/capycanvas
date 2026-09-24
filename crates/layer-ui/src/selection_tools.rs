@@ -14,15 +14,17 @@ pub enum SelectionTool {
     Polygon,
     Wand,
     Color,
+    Brush,
 }
 impl SelectionTool {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Rectangle,
         Self::Ellipse,
         Self::Lasso,
         Self::Polygon,
         Self::Wand,
         Self::Color,
+        Self::Brush,
     ];
     pub fn command(self) -> CommandId {
         match self {
@@ -32,6 +34,7 @@ impl SelectionTool {
             Self::Polygon => CommandId::PolygonSelect,
             Self::Wand => CommandId::AutoSelect,
             Self::Color => CommandId::ColorSelect,
+            Self::Brush => CommandId::SelectionBrush,
         }
     }
     pub fn canvas_tool(self, source: RegionSource) -> LayerCanvasTool {
@@ -62,6 +65,8 @@ pub enum SelectionConstraint {
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionOptions {
     pub tool: SelectionTool,
+    pub brush: super::painted_selections::SelectionBrushOptions,
+    pub display: SelectionDisplayOptions,
     pub constraint: SelectionConstraint,
     pub from_center: bool,
     pub mode: SelectionMode,
@@ -75,6 +80,8 @@ impl Default for SelectionOptions {
     fn default() -> Self {
         Self {
             tool: SelectionTool::Lasso,
+            brush: Default::default(),
+            display: Default::default(),
             constraint: SelectionConstraint::Free,
             from_center: false,
             mode: SelectionMode::New,
@@ -88,6 +95,8 @@ impl Default for SelectionOptions {
 }
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), String> {
+        self.brush.validate()?;
+        self.display.validate()?;
         NumericControl::number(
             0.,
             layer_render::SelectionRefinement::MAX_FEATHER as f64,
@@ -200,12 +209,16 @@ pub(super) struct SelectionTools {
     pub options: SelectionOptions,
     hover: Option<Point>,
     contact: bool,
+    pub gesture_mode: Option<SelectionMode>,
+    pub start_modifiers: Modifiers,
 }
 impl SelectionTools {
     pub fn cancel(&mut self) -> bool {
         let active = self.contact || self.hover.is_some();
         self.contact = false;
         self.hover = None;
+        self.gesture_mode = None;
+        self.start_modifiers = Modifiers::default();
         active
     }
 }
@@ -236,6 +249,35 @@ pub(crate) fn tool_set(active: SelectionTool) -> ToolSetView {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn effective_selection_mode(&self) -> SelectionMode {
+        if let Some(mode) = self.selection_tools.gesture_mode {
+            return mode;
+        }
+        let keys = self.interaction.modifiers;
+        if self.selection_brush_active() {
+            return if keys.shift && !keys.alt {
+                SelectionMode::Add
+            } else if self.selection_tools.options.brush.subtract ^ keys.alt {
+                SelectionMode::Subtract
+            } else {
+                SelectionMode::Add
+            };
+        }
+        match (keys.shift, keys.alt) {
+            (true, true) => SelectionMode::Intersect,
+            (true, false) => SelectionMode::Add,
+            (false, true) => SelectionMode::Subtract,
+            _ if keys.command => SelectionMode::New,
+            _ => self.selection_tools.options.mode,
+        }
+    }
+    fn selection_geometry_modifiers(&self) -> Modifiers {
+        let mut keys = self.interaction.modifiers;
+        keys.shift &= !self.selection_tools.start_modifiers.shift;
+        keys.alt &= !self.selection_tools.start_modifiers.alt;
+        keys
+    }
+
     pub(super) fn selection_outline(&self) -> Vec<Point> {
         let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool else {
             return Vec::new();
@@ -254,7 +296,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (start, end) =
             self.selection_tools
                 .options
-                .corners(*start, *end, self.interaction.modifiers);
+                .corners(*start, *end, self.selection_geometry_modifiers());
         // Use image-space precision, independent of view zoom, for the committed mask.
         if kind == SelectionTool::Rectangle {
             FigureShape::Rectangle.guide(start, end, 1.)
@@ -288,8 +330,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Choose at least three corners first".into());
         }
         let points = std::mem::take(&mut self.layer_interaction.path);
-        self.selection_tools.cancel();
         self.commit_selection_points(points)?;
+        self.selection_tools.cancel();
         self.refresh_tools();
         Ok(())
     }
@@ -325,13 +367,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         basis: layer_core::Affine,
     ) -> Option<layer_render::SelectionRefinement> {
         let options = &self.selection_tools.options;
+        let mode = self.effective_selection_mode();
         (CommandId::Select.available_on(self.state.platform)
-            && (options.mode != SelectionMode::New || !options.antialias || options.feather > 0.))
+            && (mode != SelectionMode::New || !options.antialias || options.feather > 0.))
             .then(|| layer_render::SelectionRefinement {
-                mode: options.mode,
+                resize: 0,
+                mode,
                 antialias: options.antialias,
                 feather: options.feather,
-                previous: if options.mode == SelectionMode::New {
+                previous: if mode == SelectionMode::New {
                     None
                 } else {
                     self.engine
@@ -363,7 +407,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             });
         let p = if kind == SelectionTool::Polygon
             && !closing
-            && (self.selection_tools.options.constrain_angles || self.interaction.modifiers.shift)
+            && (self.selection_tools.options.constrain_angles
+                || self.selection_geometry_modifiers().shift)
             && let Some(last) = self.layer_interaction.path.last()
         {
             let dx = p.x - last.x;
@@ -413,8 +458,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.path[1] = p;
                     let points = self.selection_outline();
                     self.layer_interaction.path.clear();
-                    self.selection_tools.cancel();
                     self.commit_selection_points(points)?;
+                    self.selection_tools.cancel();
                 }
             }
             _ => (),

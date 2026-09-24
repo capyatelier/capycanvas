@@ -147,6 +147,21 @@ impl CanvasRenderer for WebRenderer {
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
         self.0.as_mut()?.renderer.take_region()
     }
+    fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
+        self.renderer()?.paint_selection(update)
+    }
+    fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+        (&mut self.0.as_mut()?.renderer).take_selection_paint()
+    }
+    fn cancel_selection_paint(&mut self) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.cancel_selection_paint(); }
+    }
+    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_quick_mask_thumbnail(selection); }
+    }
+    fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
+        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_selection_overlay(overlay); }
+    }
     fn set_selection_outline(
         &mut self,
         selection: Option<&layer_core::Selection>,
@@ -329,6 +344,9 @@ impl WebApp {
             .settings
             .action_tooltip(label, &action, state.platform))
     }
+    pub fn selection_menu(&self, kind: JsValue) -> Result<JsValue, JsValue> {
+        serialize(&self.session.selection_menu(serde_wasm_bindgen::from_value(kind).map_err(js)?))
+    }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
@@ -337,6 +355,10 @@ impl WebApp {
             return Ok(false);
         }
         self.prepare_ui_previews()?;
+        if !self.session.renderer_mut().renderer().map_err(js)?
+            .prepare_selection_thumbnail(layer_core::LayerId(target)).map_err(js)? {
+            return Ok(false);
+        }
         self.session
             .renderer_mut()
             .request_thumbnail(request, layer_core::LayerId(target))
@@ -837,7 +859,10 @@ impl WebApp {
     }
     pub fn toolbar_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
-        serialize(&layer_ui::toolbar_ui(request).map_err(js)?)
+        let result = layer_ui::toolbar_ui(request).map_err(js)?;
+        // These JSON queries contain bounded UI numbers, not document IDs.
+        // Preserve numbers when a returned numeric spec is sent back to Rust.
+        js_sys::JSON::parse(&serde_json::to_string(&result).map_err(js)?)
     }
     pub fn toolbar_stamp(&self, context: JsValue) -> Result<JsValue, JsValue> {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;

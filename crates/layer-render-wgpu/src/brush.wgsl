@@ -90,19 +90,8 @@ fn brush_color(coverage: f32, input: VertexOutput) -> vec4<f32> {
 
 @fragment
 fn analytic_fragment(input: VertexOutput) -> @location(0) vec4<f32> {
-    let radius_squared = dot(input.local, input.local);
-    if radius_squared >= 1.0 {
-        discard;
-    }
-    let edge = max(
-        1.0 - clamp(input.flow_hardness.y, 0.0, 1.0),
-        1.0 / max(input.min_radius, 0.005),
-    );
-    let solid_radius = max(1.0 - edge, 0.0);
-    var coverage = 1.0;
-    if radius_squared > solid_radius * solid_radius {
-        coverage = clamp((1.0 - sqrt(radius_squared)) / edge, 0.0, 1.0);
-    }
+    let coverage = analytic_coverage(input.local,input.flow_hardness.y,input.min_radius);
+    if coverage <= 0. { discard; }
     return brush_color(coverage, input);
 }
 

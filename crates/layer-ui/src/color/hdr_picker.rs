@@ -7,6 +7,9 @@ pub(super) struct HdrPaint {
     pub base: RgbColor,
     pub stops: f32,
 }
+impl Default for HdrPaint {
+    fn default() -> Self { Self { base: RgbColor::BLACK, stops: 0. } }
+}
 impl HdrPaint {
     pub fn from_color(color: RgbColor, space: RgbSpace) -> Result<Self, String> {
         let stops = color.brightness_ev(space)?.unwrap_or(0.).max(0.);
@@ -65,7 +68,7 @@ impl ColorState {
         }).collect();
         let preview=|color| super::form::mapped_preview(color,self.rgb_space,RgbSpace::Srgb,Some(recipe)).unwrap().rgba;
         view.marker_color=preview(self.definition())[..3].try_into().unwrap();
-        for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4]};}
+        for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4],ColorSlot::Temporary=>preview(self.temporary)};}
         view.outside_document_gamut=!self.definition().in_hdr_gamut(self.rgb_space).unwrap();
         view.outside_display_gamut=!self.definition().in_hdr_gamut(RgbSpace::Srgb).unwrap();
         view
@@ -93,6 +96,7 @@ impl ColorState {
             Some([
                 HdrPaint::from_color(self.foreground, self.rgb_space)?,
                 HdrPaint::from_color(self.background, self.rgb_space)?,
+                HdrPaint::from_color(self.temporary, self.rgb_space)?,
             ])
         } else {
             None
@@ -129,7 +133,7 @@ impl ColorState {
     }
     pub(super) fn validate_hdr_picker(&self) -> Result<(), String> {
         if let Some(paints) = self.hdr_picker {
-            for (paint, actual) in paints.into_iter().zip([self.foreground, self.background]) {
+            for (paint, actual) in paints.into_iter().zip([self.foreground, self.background, self.temporary]) {
                 paint.base.validate_working_spaces()?;
                 if !paint.stops.is_finite() || !(-149. ..=128.).contains(&paint.stops) {
                     return Err("Invalid HDR picker intensity".into());

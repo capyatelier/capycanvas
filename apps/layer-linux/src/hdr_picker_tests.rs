@@ -389,10 +389,8 @@ fn native_hdr_picker_intensity_shape_and_input() {
             );
             perform(serde_json::json!([{"wait_ms":500},{"point":locate(3.)},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
             assert_eq!(state(&w).colors.hdr_intensity(), 0., "Double-click resets to 1×, not +1 EV");
-            let arc = scale.geometry().unwrap();
-            let radius = arc.radius + arc.width * 0.5 + 10.;
-            let angle = 76f32.to_radians();
-            let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(arc.center[0] + radius * angle.cos(), arc.center[1] + radius * angle.sin())).unwrap();
+            let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(scale.width() as f32).unwrap().intensity_caption;
+            let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(x, y - font * 0.5)).unwrap();
             let original = state(&w).colors;
             perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
             assert!(w.window.visible_dialog().is_none(), "EV caption is read-only");

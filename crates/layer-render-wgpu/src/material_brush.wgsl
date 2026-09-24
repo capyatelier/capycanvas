@@ -1,29 +1,3 @@
-struct Style {
-    color: vec4<f32>,
-    canvas_opacity: vec4<f32>,
-    grain: vec4<f32>,
-    dual: vec4<f32>,
-    dual_offset_flags: vec4<f32>,
-    flags: vec4<f32>,
-    dual_grain: vec4<f32>,
-    advanced: vec4<f32>,
-    edges: vec4<f32>,
-    material_a: vec4<f32>,
-    material_b: vec4<f32>,
-    operation: vec4<u32>,
-    deformation: vec4<f32>,
-    render_mode: vec4<f32>,
-    transport_a: vec4<f32>,
-    transport_b: vec4<f32>,
-    contact_a: vec4<f32>,
-    contact_b: vec4<f32>,
-    contact_c: vec4<f32>,
-    brush_to_layer_linear: vec4<f32>,
-    brush_to_layer_offset: vec4<f32>,
-    layer_to_brush_linear: vec4<f32>,
-    layer_to_brush_offset: vec4<f32>,
-}
-
 // The pass planner supplies the operation as a pipeline constant so the GPU
 // compiler sees only that operation's control flow. Style retains its packed
 // operation field for the shared batch layout and reservoir pass.
@@ -40,23 +14,6 @@ const OP_WATERCOLOR: u32 = 5u;
 struct Target {
     origin_extent: vec4<f32>,
     document_extent: vec4<f32>,
-}
-
-struct Dab {
-    center: vec2<f32>,
-    radii: vec2<f32>,
-    rotation: vec2<f32>,
-    motion: vec2<f32>,
-    color: vec4<f32>,
-    flow: f32,
-    hardness: f32,
-    texture_sign: vec2<f32>,
-    material: vec4<f32>,
-    previous: vec4<f32>,
-    contact: vec4<f32>,
-    previous_contact: vec4<f32>,
-    metric: vec4<f32>,
-    invariants: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> style: Style;
@@ -82,13 +39,6 @@ struct MaterialSources {
     pages: array<vec4<u32>, 9>,
 }
 @group(2) @binding(12) var<uniform> material_sources: MaterialSources;
-
-@group(3) @binding(0) var primary_texture: texture_2d<f32>;
-@group(3) @binding(1) var grain_texture: texture_2d<f32>;
-@group(3) @binding(2) var dual_texture: texture_2d<f32>;
-@group(3) @binding(3) var dual_grain_texture: texture_2d<f32>;
-@group(3) @binding(4) var transport_texture: texture_2d<f32>;
-@group(3) @binding(5) var brush_sampler: sampler;
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -209,64 +159,8 @@ fn watercolor_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
 fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
     return contact_coverage_field(dab, world, contact_field(world));
 }
-
 fn contact_coverage_field(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
-    if contact_feature(1u, style.contact_a.x > 0.5) {
-        return evolving_contact_prepared(world, dab.center, dab.radii, dab.rotation, dab.motion,
-            dab.previous, dab.contact, dab.previous_contact, dab.hardness, field,
-            dab.metric, dab.invariants.xy) * brush_selection_at(brush_to_layer(world));
-    }
-    let delta = world - dab.center;
-    let local = rotate(delta, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));
-    var coverage = tip_coverage(
-        style.flags.x > 0.5,
-        primary_texture,
-        local,
-        dab.texture_sign,
-        dab.hardness,
-        min(dab.radii.x, dab.radii.y),
-    );
-    if coverage <= 0.0 { return 0.0; }
-    if style.flags.y > 0.5 {
-        let uv = grain_uv(
-            local,
-            world,
-            style.grain,
-            style.advanced.y > 0.5,
-            dab.center,
-            style.advanced.w,
-        );
-        coverage *= mix(1.0, textureSampleLevel(grain_texture, brush_sampler, uv, 0.0).r,
-            clamp(dab.material.x, 0.0, 1.0));
-    }
-    if style.flags.w > 0.5 {
-        let shifted = local - style.dual_offset_flags.xy;
-        let dual_local = rotate(shifted, style.dual.z, -style.dual.w)
-            / vec2<f32>(max(style.dual.x * style.dual.y, 0.0001), max(style.dual.x, 0.0001));
-        var secondary = tip_coverage(
-            style.flags.z > 0.5,
-            dual_texture,
-            dual_local,
-            dab.texture_sign,
-            dab.hardness,
-            min(dab.radii.x, dab.radii.y) * style.dual.x,
-        );
-        if style.advanced.x > 0.5 {
-            let uv = grain_uv(
-                dual_local,
-                world,
-                style.dual_grain,
-                style.advanced.z > 0.5,
-                dab.center + vec2<f32>(31.7, 19.3),
-                style.edges.w,
-            );
-            secondary *= mix(1.0, textureSampleLevel(dual_grain_texture, brush_sampler, uv, 0.0).r,
-                clamp(style.dual_grain.y, 0.0, 1.0));
-        }
-        coverage = combine_coverage(coverage, secondary, style.dual_offset_flags.z);
-    }
-    if coverage < style.dual_offset_flags.w { return 0.0; }
-    return coverage * brush_selection_at(brush_to_layer(world));
+    return brush_footprint(dab, world, field) * brush_selection_at(brush_to_layer(world));
 }
 
 fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {

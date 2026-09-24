@@ -1,9 +1,6 @@
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
 export function createNumberField({ control, label, resolve, onChange, icon, inline = false, widthSamples }) {
-  // Schema-backed controls can arrive through serde_json::Value, whose
-  // integer representation crosses Wasm as BigInt. Precision is a u32 field.
-  control = { ...control, digits: Number(control.digits) };
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");

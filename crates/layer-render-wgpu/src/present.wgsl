@@ -6,12 +6,14 @@ struct Camera {
     selection: vec4<f32>,
     selection_inverse: vec4<f32>,
     rotation: vec4<f32>,
+    overlay: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
 @group(0) @binding(2) var canvas_sampler: sampler;
 struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
+@group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
 struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
@@ -135,19 +137,20 @@ fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
     return color / max(weight, .0000001);
 }
 
-fn selected(p: vec2<f32>) -> bool {
-    if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return false; }
+fn selection_coverage(p: vec2<f32>) -> f32 {
+    if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return 0.; }
     let local = vec2<f32>(dot(camera.selection_inverse.xz, p), dot(camera.selection_inverse.yw, p)) + camera.selection.xy;
     let q = vec2<i32>(floor(local)) - vec2<i32>(selection.rect.xy);
-    var covered = false;
+    var covered = 0.;
     if all(q >= vec2<i32>(0)) && all(q < vec2<i32>(selection.rect.zw)) {
         let bytes = selection.info.y == 2u;
         let count = select(8u,4u,bytes);
         let word = u32(q.y) * ((selection.rect.z+count-1u)/count) + u32(q.x)/count;
-        covered = ((selection.values[word] >> ((u32(q.x)%count)*(32u/count))) & select(15u,255u,bytes)) >= select(2u,128u,bytes);
+        covered = f32((selection.values[word] >> ((u32(q.x)%count)*(32u/count))) & select(15u,255u,bytes))/select(4.,255.,bytes);
     }
-    return covered != (camera.selection.w > .5);
+    return select(covered,1.-covered,camera.selection.w > .5);
 }
+fn selected(p: vec2<f32>) -> bool { return selection_coverage(p) >= .5; }
 
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> Vertex {
@@ -213,7 +216,18 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.
-    if camera.selection.z > .5 {
+    var tint = 0.;
+    if camera.rotation.z > .5 {
+        let q=vec2<u32>(p);
+        let saved=unpack4x8unorm(textureLoad(saved_selection,vec2<i32>(q),0).r);
+        if saved.a > 0. { rgb=mix(rgb,view_ui_rgb(saved.rgb/saved.a),saved.a); }
+    }
+    if camera.selection.z > .5 && camera.rotation.y > .5 {
+        let coverage = selection_coverage(p);
+        tint = max(tint,select(coverage,1.-coverage,camera.rotation.y > 1.5));
+    }
+    rgb = mix(rgb,view_ui_rgb(camera.overlay.rgb),clamp(tint*camera.overlay.a,0.,1.));
+    if camera.selection.z > .5 && camera.rotation.y < .5 {
         let dx = camera.inverse.xy * .6;
         let dy = camera.inverse.zw * .6;
         if selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy) {

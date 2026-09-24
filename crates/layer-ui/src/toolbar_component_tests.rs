@@ -236,7 +236,7 @@ fn toolbar_component_defaults_round_trip_on_supported_hosts() {
         ] {
             assert_eq!(
                 preset.layout(platform),
-                preset.legacy_toolbar_components_layout(platform)
+                preset.legacy_selection_drawers_layout(platform)
             );
         }
     }

@@ -21,6 +21,9 @@ Selected layer) and **Sample size** (1, 5, 15, 51 or 101 document pixels).
 Multi-pixel samples use circular footprints. Layer sampling reads raw paint,
 before opacity, masks and effects, and is available only for a paintable layer.
 Transparent samples do not replace the current color.
+While editing Quick Mask or a selection layer, the picker previews and updates
+the mask's painting colors, preserving the artwork colors. Returning to artwork
+cancels any pending sample.
 
 The Sketch toolbar gains a picker with a plain squircle icon between size and
 opacity, followed by Undo and Redo below opacity. Its tile uses the standard

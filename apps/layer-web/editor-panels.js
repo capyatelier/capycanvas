@@ -2,10 +2,11 @@ import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
+export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
   const fieldWorker = createRasterWorker();
+  const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind) => {
@@ -89,6 +90,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
           node.dataset.toolAction=spec.command;
           (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node]);
         }
+        if(s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton("Selection Actions…","selection"));
         contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
@@ -107,13 +109,17 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
   function colorWheel(root) {
     const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
     const edit=button("",async()=>{
-      const slot=state().colors.slot==="background"?"background":"foreground";
-      let intensity;const selected=await chooseColor({app,color:state().colors[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
+      const slot=displayColors().slot;
+      let intensity;const selected=await chooseColor({app,color:displayColors()[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
       if(selected)color(intensity==null?{op:"set_slot",slot,color:selected}:{op:"set_slot_intensity",slot,color:selected,stops:intensity});
     },"color-edit color-utility");
     edit.title="Edit Color…";edit.setAttribute("aria-label","Edit Color");edit.append(icon("pencil"));stage.append(edit);
     const wheel=element("canvas","color-wheel");wheel.setAttribute("aria-label","Color wheel");stage.append(wheel);
     // Paint order also controls hit testing in the intentional swatch overlap.
+    const quickColors=[true,false].map(white=>{
+      const node=button("",()=>color({op:"quick_color",white}),"color-swatch");node.dataset.quickColor=white?"white":"black";
+      const paint=element("span");node.append(paint);stage.append(node);return{white,node,paint};
+    });
     const choices=["background","foreground","transparent"].map(slot=>{
       const node=button("",()=>color({op:"select",slot}),"color-swatch");node.dataset.colorSlot=slot;node.ondblclick=()=>{if(slot!=='transparent'){color({op:'select',slot});edit.click();}};
       const paint=element("span");node.append(paint);stage.append(node);return{slot,node,paint};
@@ -131,12 +137,12 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     marker.setAttribute('fill','white');marker.setAttribute('stroke','white');marker.setAttribute('stroke-width','2');arc.append(track,markerShadow,marker,caption);stage.append(arc);
     let arcContact=null,originalIntensity=0;
     const arcPick=e=>{const r=stage.getBoundingClientRect();const hit=app.color_ui({type:'arc',size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});color({op:'hdr_intensity',stops:-2+8*hit.fraction});};
-    track.onpointerdown=e=>{if(e.button!==0||state().colors.slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
+    track.onpointerdown=e=>{if(e.button!==0||displayColors().slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
     for(const event of ['pointercancel','lostpointercapture'])track.addEventListener(event,e=>{if(e.pointerId===arcContact){arcContact=null;color({op:'hdr_intensity',stops:originalIntensity});}});
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
-    let view,layout,layoutWidth=0,paintKey="",fieldKey="",ringKey="";
+    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,paintKey="",fieldKey="",ringKey="";
     const field=document.createElement("canvas"),ring=document.createElement("canvas");
     let fieldBusy=false,fieldPending=null,fieldEpoch=0,disposed=false,previewing=false;
     function installField(bytes,side,key){
@@ -157,18 +163,37 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     const fieldContext=field.getContext("2d",{willReadFrequently:true}),ringContext=ring.getContext("2d",{willReadFrequently:true});
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
-      const width=stage.clientWidth;if(!view||width<128)return;
-      if(width!==layoutWidth||layout?.hdr!==view.hdr){
-        layoutWidth=width;layout=app.color_ui({type:"layout",size:width,hdr:view.hdr});layout.hdr=view.hdr;stage.style.height=`${layout.height}px`;const outer=frame.clientWidth;const ratio=app.color_ui({type:"layout",size:outer,hdr:view.hdr}).height/outer;frame.style.aspectRatio=`1 / ${ratio}`;stage.style.width=`min(100cqw,${100/ratio}cqh)`;
+      const availableWidth=frame.clientWidth;if(!view||availableWidth<128)return;
+      const geometry=size=>app.color_ui({type:"layout",size,hdr:view.hdr});
+      const resized=availableWidth!==frameWidth||layout?.hdr!==view.hdr;
+      if(resized){
+        const minimum=Math.ceil(geometry(128).height);naturalLayout=geometry(availableWidth);
+        frame.style.minHeight=root.style.minHeight=`${minimum}px`;
+        frame.style.aspectRatio=`${availableWidth} / ${naturalLayout.height}`;
+      }
+      const height=frame.clientHeight;
+      if(resized||height!==frameHeight){
+        // Fit the complete footer. Reading the frame avoids stage-size feedback;
+        // cache geometry across color changes, just as for the wheel raster.
+        let width=availableWidth;
+        if(naturalLayout.height>height){
+          let low=128,high=availableWidth;
+          while(low<high){const middle=Math.ceil((low+high)/2);if(geometry(middle).height<=height)low=middle;else high=middle-1;}
+          width=low;
+        }
+        frameWidth=availableWidth;frameHeight=height;layoutWidth=width;layout=geometry(width);layout.hdr=view.hdr;
+        stage.style.width=`${width}px`;stage.style.height=`${layout.height}px`;
         place(wheel,layout.wheel);
+        quickColors.forEach(({white,node})=>place(node,layout[white?"white":"black"]));
         choices.forEach(({slot,node})=>place(node,layout[slot]));
         shapes.forEach((node,i)=>place(node,layout.shapes[i]));
         place(swap,layout.swap);place(readout,layout.readout);place(edit,layout.edit);
       }
+      const width=layoutWidth;
       arc.hidden=!view.hdr;arc.style.display=view.hdr?'':'none';
       if(view.hdr){const g=app.color_ui({type:'arc',size:width,fraction:(view.intensity+2)/8});const a=g.geometry,start=app.color_ui({type:'arc',size:width,fraction:0}).point,end=app.color_ui({type:'arc',size:width,fraction:1}).point;arc.setAttribute('width',width);arc.setAttribute('height',layout.height);arc.style.width=`${width}px`;arc.style.height=`${layout.height}px`;track.setAttribute('d',`M${start} A${a.radius} ${a.radius} 0 0 0 ${end}`);track.setAttribute('stroke-width',a.width);for(const node of [markerShadow,marker]){node.setAttribute('cx',g.point[0]);node.setAttribute('cy',g.point[1]);node.setAttribute('r',a.marker_radius);}track.setAttribute('aria-valuenow',view.intensity);track.setAttribute('aria-valuetext',`${view.intensity.toFixed(1)} EV`);track.setAttribute('aria-valuemin','-2');track.setAttribute('aria-valuemax','6');
         g.path.slice(1).forEach((p,i)=>{let segment=ramp.children[i];if(!segment){segment=document.createElementNS(arc.namespaceURI,'path');segment.setAttribute('stroke-linecap','round');ramp.append(segment);}segment.setAttribute('d',`M${g.path[i]} L${p}`);segment.setAttribute('stroke',rgba(view.intensity_ramp[i]));segment.setAttribute('stroke-width',a.width);});marker.setAttribute('fill',rgba(view.marker_color));
-        const font=Math.min(12,Math.max(9,width*.044)),radius=a.radius+a.width/2+font+3,x=a.center[0]+radius*Math.cos(76*Math.PI/180),y=a.center[1]+radius*Math.sin(76*Math.PI/180);caption.setAttribute('x',x);caption.setAttribute('y',y);caption.setAttribute('text-anchor','middle');caption.setAttribute('font-size',font);caption.setAttribute('transform',`rotate(-14 ${x} ${y})`);caption.textContent=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`;
+        const [x,y,font]=layout.intensity_caption;caption.setAttribute('x',x);caption.setAttribute('y',y);caption.setAttribute('text-anchor','middle');caption.setAttribute('font-size',font);caption.textContent=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`;
       }
       shapes.forEach((node,i)=>{node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
       const half=layout.readout[2],r=layout.wheel[2]*view.geometry.outer+2;
@@ -247,14 +272,15 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     let resizeFrame;
     function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
     function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
-    const resize=new ResizeObserver(queuePaint);resize.observe(stage);
+    const resize=new ResizeObserver(queuePaint);resize.observe(frame);
     root.navigatorDispose=()=>{disposed=true;fieldPending=null;fieldEpoch++;resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       const preview=app.color_preview();
       const active=preview.picker.preview!=null;
       if(previewing!==active){fieldEpoch++;fieldPending=null;}
       previewing=active;view=preview.view;
-      edit.disabled=state().colors.slot==="transparent";
+      edit.disabled=displayColors().slot==="transparent";
+      quickColors.forEach(({white,node,paint})=>{const preset=view.quick_colors.find(p=>p.white===white);node.title=preset.label;node.setAttribute("aria-label",preset.label);node.setAttribute("aria-pressed",String(preset.selected));paint.style.background=rgba(preset.rgba);});
       choices.forEach(choice=>{
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}

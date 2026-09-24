@@ -159,9 +159,9 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let [w, h] = match request.source { layer_render::RegionSource::Layer(id) => r.target_extent(id), _ => r.document_extent };
+        let [w, h] = match request.source { layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => r.target_extent(id), _ => r.document_extent };
         let layer = match &request.source {
-            layer_render::RegionSource::Layer(id) => Some(*id),
+            layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => Some(*id),
             _ => None,
         };
         let frame = match &request.source {
@@ -188,36 +188,51 @@ impl RawRegions {
                     .unwrap_or([0.; 4]);
                 Some(Arc::new(frame))
             }
-            layer_render::RegionSource::Layer(_) => None,
+            layer_render::RegionSource::Layer(_) | layer_render::RegionSource::Coverage(_) => None,
             layer_render::RegionSource::Selection(_) => return Err(GpuRasterError::InvalidExtent),
         };
+        let coverage = matches!(request.source, layer_render::RegionSource::Coverage(_));
+        let stored_mask = coverage.then(|| layer.and_then(|id| r.layer_masks.definitions.get(&id)).cloned()).flatten();
+        if stored_mask.is_some() {
+            let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+            r.layer_masks.prepare(&r.device, encoder, (&frame.layers, &[]), r.document_extent, false, &mut r.selection_clip)?;
+        }
         let limit = r.device.limits();
         // Preflight the subsequent connected-component allocation before any
         // source decoding/submission. Classification does not relax its limit.
         let parent_bytes = u64::from(w) * u64::from(h) * 4;
-        if parent_bytes > limit.max_storage_buffer_binding_size
-            || parent_bytes > limit.max_buffer_size
+        if !coverage && (parent_bytes > limit.max_storage_buffer_binding_size
+            || parent_bytes > limit.max_buffer_size)
         {
             return Err(GpuRasterError::SizeOverflow);
         }
-        let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
+        let mask_bytes = if coverage { 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4 }
+            else { u64::from(w.div_ceil(32)) * u64::from(h) * 4 };
+        if mask_bytes > limit.max_storage_buffer_binding_size || mask_bytes > limit.max_buffer_size { return Err(GpuRasterError::SizeOverflow); }
         if self.mask.as_ref().is_none_or(|b| b.size() < mask_bytes) {
             self.bindings.clear();
             self.mask = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("raw region packed eligibility"),
                 size: mask_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
         }
         let mask = self.mask.as_ref().unwrap().clone();
-        let fallback = r
+        if coverage {
+            let header: Vec<u8> = [0,0,w,h,0,2,0,0].into_iter().flat_map(u32::to_ne_bytes).collect();
+            let upload = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("raw coverage header"), contents: &header, usage: wgpu::BufferUsages::COPY_SRC,
+            });
+            encoder.copy_buffer_to_buffer(&upload,0,&mask,0,32);
+        }
+        let fallback = if let Some(mask) = &stored_mask { [mask.default_coverage;4] } else { r
             .thumbnails
             .paper
             .filter(|(id, _)| Some(*id) == layer)
             .map_or([0.; 4], |(_, c)| {
                 [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]
-            });
+            }) };
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
         let tiles: Vec<_> = page_coordinates(PixelRect::full([w, h])).collect();
         let batches: Vec<_> = std::iter::once(std::slice::from_ref(&seed_tile))
@@ -231,7 +246,7 @@ impl RawRegions {
             let Some(layer) = layer else {
                 return true;
             };
-            r.paint_layers
+            (stored_mask.is_some() && r.layer_masks.pages.contains_key(&(layer, coordinate))) || r.paint_layers
                 .iter()
                 .find(|l| l.id == layer)
                 .is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
@@ -264,8 +279,8 @@ impl RawRegions {
                     fallback[3].to_bits(),
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
-                    0,
-                    0,
+                    if stored_mask.is_some() { 2_f32.to_bits() } else { f32::from(coverage).to_bits() },
+                    f32::from(stored_mask.as_ref().is_some_and(|m| m.inverted)).to_bits(),
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
                     .chunks_exact_mut(4)
@@ -306,7 +321,9 @@ impl RawRegions {
                 std::array::from_fn(|_| r.empty_view.clone());
             for (slot, coordinate) in tiles.iter().enumerate() {
                 let source = if let Some(layer) = layer {
-                    r.raw_layer_tile(layer, *coordinate, encoder)?
+                    if stored_mask.is_some() {
+                        r.layer_masks.pages.get(&(layer,*coordinate)).map(|p| source_access::RawTile {texture:p.texture.clone(),view:p.view.clone()})
+                    } else { r.raw_layer_tile(layer, *coordinate, encoder)? }
                 } else {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
                     Some(self.capture.region(
@@ -378,7 +395,7 @@ impl RawRegions {
             } else {
                 pass.set_pipeline(&self.tile_pipeline);
                 pass.dispatch_workgroups(
-                    (PAGE_SIZE / 32 * PAGE_SIZE).div_ceil(64),
+                    (PAGE_SIZE / if coverage {4} else {32} * PAGE_SIZE).div_ceil(64),
                     1,
                     tiles.len() as u32,
                 );

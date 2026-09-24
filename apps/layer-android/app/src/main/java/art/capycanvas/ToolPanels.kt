@@ -2,6 +2,7 @@ package art.capycanvas
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -95,14 +96,14 @@ import org.json.JSONObject
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").objects().associateBy { it.getString("id") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().selectableGroup().testTag("selection-mode-row")) {
+        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).border(1.dp, LocalPalette.current.divider, RoundedCornerShape(6.dp)).selectableGroup().testTag("selection-mode-row")) {
             actions.filter { it.getString("command") in modes }.forEach { action ->
                 val id = action.getString("command")
                 val command = commands.getValue(id)
                 val selected = command.getBoolean("selected")
                 HoverTip(command.getString("tooltip"), Modifier.weight(1f)) {
-                    Box(Modifier.fillMaxWidth().height(36.dp).testTag("tool-action-$id")
-                        .background(if (selected) LocalPalette.current.active else LocalPalette.current.panel, RoundedCornerShape(6.dp))
+                    Box(Modifier.fillMaxWidth().height(48.dp).testTag("tool-action-$id")
+                        .background(if (selected) LocalPalette.current.active else LocalPalette.current.panel)
                         .selectable(selected = selected, enabled = command.getBoolean("enabled"), role = Role.RadioButton) { host.invoke(id) },
                         contentAlignment = Alignment.Center) {
                         SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(20.dp))
@@ -110,6 +111,7 @@ import org.json.JSONObject
                 }
             }
         }
+        if (actions.any { it.getString("command") in modes }) SelectionMenuButton(host, "Selection Actions…", "selection")
         var group = ""
         state.array("tool_settings").objects().forEach { field ->
             val next = field.getString("group")

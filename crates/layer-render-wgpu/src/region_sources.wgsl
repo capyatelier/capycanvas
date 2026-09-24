@@ -18,6 +18,21 @@ fn sample_seed() { seed = raw_color(0u, batch.tiles[0].position); }
 @compute @workgroup_size(64)
 fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
     let tile = batch.tiles[id.z];
+    if tile.options.z > .5 {
+        let stride = (tile.size.x + 3u)/4u;
+        let p = vec2<u32>((id.x%stride)*4u,id.x/stride);
+        if p.y >= tile.size.y { return; }
+        var packed = 0u;
+        for(var i=0u;i<4u && p.x+i<tile.size.x;i++) {
+            let color = raw_color(id.z,p+vec2<u32>(i,0u));
+            var value = color.a;
+            if tile.options.z > 1.5 { value = color.r; }
+            if tile.options.w > .5 { value=1.-value; }
+            packed |= u32(round(clamp(value,0.,1.)*255.)) << (i*8u);
+        }
+        eligibility[8u+(tile.origin.y+p.y)*((tile.extent.x+3u)/4u)+(tile.origin.x+p.x)/4u]=packed;
+        return;
+    }
     let stride = (tile.size.x + 31u) / 32u;
     let p = vec2<u32>((id.x % stride) * 32u, id.x / stride);
     if p.y >= tile.size.y { return; }

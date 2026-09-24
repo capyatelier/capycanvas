@@ -81,6 +81,7 @@ impl WgpuRasterizer {
     /// Existing completed originals are reused; document pixels are unchanged.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn prepare_thumbnail_batch(&mut self, target: LayerId) -> Result<bool, GpuRasterError> {
+        if !self.prepare_selection_thumbnail(target)? {return Ok(false)}
         if !self.tiled_sources.contains_key(&target) {
             return Ok(true);
         }
@@ -128,7 +129,9 @@ impl WgpuRasterizer {
         };
         #[cfg(target_arch = "wasm32")]
         let source: Option<PageSurface> = None;
-        let source = if let Some(source) = source {
+        let source = if self.selection_previews.definitions.contains_key(&target) {
+            self.render_selection_thumbnail(target, &mut encoder)?
+        } else if let Some(source) = source {
             source
         } else {
             let gpu = self

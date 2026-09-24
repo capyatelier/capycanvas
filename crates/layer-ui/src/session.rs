@@ -22,6 +22,14 @@ pub(crate) mod operation;
 #[path = "selection_tools.rs"]
 pub(crate) mod selection_tools;
 pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+#[path = "painted_selections.rs"]
+mod painted_selections;
+pub use painted_selections::SelectionBrushOptions;
+#[path = "selection_masks.rs"]
+mod selection_masks;
+#[path = "selection_properties.rs"]
+mod selection_properties;
+pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
 #[path = "region_tools.rs"]
 mod region_tools;
 #[path = "rulers.rs"]
@@ -105,6 +113,8 @@ pub struct UiSession<R: CanvasRenderer> {
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     selection_tools: selection_tools::SelectionTools,
+    painted_selections: painted_selections::PaintedSelections,
+    selection_masks: selection_masks::SelectionMasks,
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
@@ -176,6 +186,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             eyedropper: Default::default(),
             region_tools: Default::default(),
             selection_tools: Default::default(),
+            painted_selections: Default::default(),
+            selection_masks: Default::default(),
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
@@ -577,10 +589,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.state.colors.transparent()
             || event.tool == layer_engine::ToolKind::Eraser
             || event.flags.contains(layer_engine::SampleFlags::INVERTED);
-        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint;
-        let blocked = self.layer_interaction.tool.draws()
+        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint || self.selection_brush_active();
+        let blocked = if self.selection_masks.target().is_some() { self.mask_brush_reason().is_some() }
+            else { self.layer_interaction.tool.draws()
             && if painting { self.engine.document().drawing_target().is_none() }
-                else { self.engine.document().drawing_content().is_none() };
+                else { self.engine.document().drawing_content().is_none() } };
         let contact = self.interaction.pointer.is_some_and(|p| p.paint);
         let mode = if !painting {
             CursorMode::Cross
@@ -618,7 +631,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.cancel(scale);
             return true;
         }
-        let dabs = if self.layer_interaction.tool == LayerCanvasTool::Paint {
+        let selection_brush = self.selection_brush_active();
+        let dabs = if selection_brush || self.selection_masks.target().is_some() { self.selection_brush_cursor(event) }
+        else if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
                 .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
         } else {
@@ -626,7 +641,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.cursor.view(
             self.engine.backend(),
-            &self.engine.brush().tip,
+            if selection_brush { &layer_core::BrushTip::AnalyticEllipse } else { &self.engine.brush().tip },
             &dabs,
             &self.state.camera,
             scale,
@@ -896,6 +911,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 editing,
                 divider,
             } => {
+                let previous_modifiers = self.interaction.modifiers;
                 self.interaction.modifiers = modifiers;
                 if key.eq_ignore_ascii_case("shift")
                     || key.eq_ignore_ascii_case("shift_l")
@@ -908,6 +924,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || key.eq_ignore_ascii_case("alt_r")
                 {
                     self.interaction.modifiers.alt = pressed;
+                }
+                if previous_modifiers != self.interaction.modifiers && self.layer_interaction.tool.selection_tool().is_some() {
+                    if !self.interaction.modifiers.shift { self.selection_tools.start_modifiers.shift = false; }
+                    if !self.interaction.modifiers.alt { self.selection_tools.start_modifiers.alt = false; }
+                    self.refresh_tools();
+                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT, true);
                 }
                 if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. } | LayerCanvasTool::Selection { .. })
                     && !self.layer_interaction.path.is_empty())
@@ -970,6 +992,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.interaction.pointer = None;
                             reply.cancel_paint = true;
                             reply.change = self.changed(regions::DOCUMENT, true);
+                            reply.handled = true;
+                        } else if !editing && self.selection_masks.quick() {
+                            reply.change = self.dispatch(UiAction::Invoke { command: CommandId::ReturnToArtwork })?;
                             reply.handled = true;
                         }
                     }
@@ -1877,6 +1902,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let idle = self.require_idle().is_ok();
 
         let enabled = match id {
+            CommandId::QuickMask | CommandId::NewSelectionLayer => idle && !self.operation.active(),
+            CommandId::SaveSelectionLayer => idle && self.current_selection().is_some(),
+            CommandId::ReturnToArtwork | CommandId::ResetMaskColors | CommandId::SwapMaskColors => idle && self.selection_masks.target().is_some(),
+            CommandId::MaskOverlayProtected | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => idle && self.selection_masks.target().is_some_and(|t| match t {
+                layer_core::SelectionTarget::Current => true,
+                layer_core::SelectionTarget::Saved(id) => !document.is_locked(id),
+            }),
+            CommandId::Reselect => idle && self.current_selection().is_none() && self.selection_masks.reselect.is_some(),
+            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
+                if self.selection_masks.target().is_some() => false,
+            CommandId::DeleteLayer if self.selection_masks.quick() => false,
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
@@ -1922,7 +1958,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
-                self.require_document_idle().is_ok() && document.selection.is_some()
+                self.require_document_idle().is_ok() && self.current_selection().is_some()
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
@@ -1964,9 +2000,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => true,
         };
         let selection = self.layer_interaction.tool.selection_tool();
-        let selected = (id == CommandId::Select && selection.is_some())
+        let selection_mode = self.effective_selection_mode();
+        let selected = (id == CommandId::QuickMask && self.selection_masks.quick())
+            || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
+            || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
+            || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
+            || (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
+            || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
-            || matches!((id, self.selection_tools.options.mode),
+            || matches!((id, selection_mode),
                 (CommandId::SelectionNew, SelectionMode::New) | (CommandId::SelectionAdd, SelectionMode::Add)
                 | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
             || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
@@ -2025,6 +2067,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("This toolbar control belongs to a previous tool or edit target".into());
             }
             return self.dispatch(*action);
+        }
+        if self.defer_selection_action(&action) {
+            return Ok(self.changed(0, true));
         }
         if self.operation.placing() && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
@@ -2177,6 +2222,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace::description::item_name(&self.state.workspace.layout, item)
             )
         });
+        let previous_mask_mode = self.state.settings.selection_painting;
+        let restores_settings = matches!(&action, UiAction::RestoreSettings { .. });
         let mut save_settings = matches!(
             &action,
             UiAction::SetTheme { .. }
@@ -2302,6 +2349,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.effect_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | LAYOUT, true)
+            }
+            UiAction::Selection { action } => {
+                self.require_document_idle()?;
+                self.selection_action(action)?;
+                (DOCUMENT | BRUSH | COMMANDS, true)
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
@@ -2626,6 +2678,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.select_brush(self.tools.group(group))?;
                 (BRUSH, false)
             }
+            UiAction::SetBrushSize { value } if self.selection_brush_active() => {
+                self.selection_tools.options.brush.edit("selection_brush_size",value)?;
+                self.refresh_tools();
+                (BRUSH,true)
+            }
+            UiAction::SetBrushOpacity { value } if self.selection_brush_active() => {
+                self.selection_tools.options.brush.edit("selection_brush_opacity",value)?;
+                self.refresh_tools();
+                (BRUSH,true)
+            }
             UiAction::SetBrushSize { value } => {
                 NumericControl::brush_size().validate(value, "Brush size")?;
                 self.state.brush.diameter = value;
@@ -2643,12 +2705,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::SetColor { rgba } => {
+                if self.selection_masks.target().is_some() {
+                    self.mask_color_action(ColorAction::Definition { color:layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,rgba)? })?;
+                    return Ok(self.changed(BRUSH | DOCUMENT, true));
+                }
                 self.state.colors.set_rgba(rgba)?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
             }
             UiAction::Color { action } => {
+                if self.selection_masks.target().is_some() {
+                    self.mask_color_action(action)?;
+                    return Ok(self.changed(BRUSH | DOCUMENT, true));
+                }
                 let hdr = self.engine.document().color.depth.is_float();
                 if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
@@ -2719,6 +2789,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
                 }
+                if id.starts_with("selection_brush_") {
+                    self.selection_tools.options.brush.edit(&id, value)?;
+                    self.refresh_tools();
+                    return Ok(self.changed(BRUSH, true));
+                }
                 if id.starts_with("selection_") {
                     self.selection_tools.options.edit(&id, value)?;
                     self.region_tools.cancel();
@@ -2745,9 +2820,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SetLayerVisibility { id, visible } => {
                 self.require_idle()?;
-                self.engine
-                    .set_layer_visibility(LayerId(id), visible)
-                    .map_err(error)?;
+                self.layer_action(LayerAction::Visibility { id, value: visible })?;
                 (0, true)
             }
             UiAction::SetLayerOpacity { id, opacity } => {
@@ -3184,6 +3257,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if was_expanded && !self.state.customization.has_drawer() && was_zen {
             self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
         }
+        if previous_mask_mode != self.state.settings.selection_painting {
+            changed |= SETTINGS | DOCUMENT | BRUSH;
+            save_settings |= !restores_settings;
+        }
         if save_settings {
             self.request(HostRequestKind::SaveSettings {
                 settings: Box::new(self.state.settings.clone()),
@@ -3232,7 +3309,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if event.phase == PenPhase::Down && self.layer_interaction.tool.selection_tool().is_some()
+            && self.layer_interaction.path.is_empty() && self.selection_tools.gesture_mode.is_none() {
+            self.selection_tools.gesture_mode = Some(self.effective_selection_mode());
+            self.selection_tools.start_modifiers = self.interaction.modifiers;
+        }
         let result = self.pen_inner(event);
+        if result.is_ok() && (event.phase == PenPhase::Cancel || (event.phase == PenPhase::Up && self.layer_interaction.path.is_empty())) {
+            self.selection_tools.gesture_mode = None;
+            self.selection_tools.start_modifiers = Modifiers::default();
+        }
         if result.is_ok() && self.engine.recording.is_active() {
             self.engine
                 .record_raw_input(event, self.state.camera.input_transform());
@@ -3252,6 +3338,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.workspace_transition
             || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
+            return Ok(());
+        }
+        if self.selection_brush_active() || (self.selection_masks.target().is_some() && self.layer_interaction.tool == LayerCanvasTool::Paint) {
+            if let Err(error) = self.selection_brush_pen(event) { self.state.host_error = Some(error); }
+            return Ok(());
+        }
+        if self.selection_masks.target().is_some()
+            && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
+            if event.phase == PenPhase::Down { self.state.host_error = Some("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing".into()); }
             return Ok(());
         }
         if self.layer_interaction.tool.region().is_some() {
@@ -3328,7 +3423,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
-        if self.input_pending
+        if self.painted_selections.has_contact()
+            || self.input_pending
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
         {
@@ -3638,10 +3734,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.pending_filters.is_some()
             || self.eyedropper.busy()
             || self.region_tools.busy()
+            || self.painted_selections.busy()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
+        changed |= self.poll_selection_paint()?;
+        self.sync_selection_overlay();
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
@@ -3674,9 +3773,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.eyedropper.picking.finishing && !self.eyedropper.busy() {
             if let Some(color) = self.eyedropper.sample {
-                self.state.colors.set_color(color)?;
-                self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
-                self.apply_brush()?;
+                if self.selection_masks.target().is_some() {
+                    self.mask_color_action(ColorAction::Definition { color })?;
+                } else {
+                    self.state.colors.set_color(color)?;
+                    self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
+                    self.apply_brush()?;
+                }
             }
             self.cancel_picker();
             changed |= regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW;
@@ -3698,6 +3801,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => {
+                self.selection_mask_command(command)?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::SdrRendition if self.state.platform == Platform::Windows => {
                 let change = crate::proof_panel::reveal(self)?;
                 Ok((change.regions, change.canvas_wake))
@@ -3830,16 +3937,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
+            CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
                 let kind = match command {
                     CommandId::RectangleSelect => SelectionTool::Rectangle,
                     CommandId::EllipseSelect => SelectionTool::Ellipse,
                     CommandId::PolygonSelect => SelectionTool::Polygon,
                     CommandId::ColorSelect => SelectionTool::Color,
+                    CommandId::SelectionBrush => SelectionTool::Brush,
                     _ => self.selection_tools.options.tool,
                 };
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionBrushPressure => {
+                self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
+                Ok((BRUSH | COMMANDS, false))
             }
             CommandId::CompleteSelection => {
                 self.finish_polygon_selection()?;
@@ -3853,6 +3965,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
+                if self.selection_brush_active() {
+                    match command {
+                        CommandId::SelectionAdd => self.selection_tools.options.brush.subtract = false,
+                        CommandId::SelectionSubtract => self.selection_tools.options.brush.subtract = true,
+                        _ => return Err("Paint selection supports Add and Subtract".into()),
+                    }
+                    self.refresh_tools();
+                    return Ok((BRUSH | COMMANDS, true));
+                }
                 let options = &mut self.selection_tools.options;
                 match command {
                     CommandId::SelectionNew => options.mode = SelectionMode::New,
@@ -3973,6 +4094,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((0, true))
             }
             CommandId::SelectAll => {
+                if !self.selection_masks.quick() { self.return_to_artwork()?; }
                 let doc = self.engine.document();
                 let [w, h] = [doc.width as f32, doc.height as f32];
                 let selection = layer_core::Selection::polygon(
@@ -4227,7 +4349,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             gamma: settings.pressure_gamma,
             ..Default::default()
         });
+        let mask_mode_changed = self.state.settings.selection_painting != settings.selection_painting;
         self.state.settings = settings;
+        if mask_mode_changed { self.refresh_document(); }
         self.refresh_shortcuts();
         Ok(())
     }
@@ -4317,9 +4441,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             } else if matches!(tool, SelectionTool::Color | SelectionTool::Wand) {
                 &[CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
             } else { &[] };
-            self.state.tool_actions = [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
+            self.state.tool_actions = if tool == SelectionTool::Brush {
+                [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionBrushPressure].into_iter()
+                    .map(|command| ToolSettingAction { command, checkable: true }).collect()
+            } else { [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
                 CommandId::SelectionIntersect, CommandId::SelectionAntialias].into_iter().chain(commands.iter().copied())
-                .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
+                .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
         if matches!(self.state.platform, Platform::Mac | Platform::Ios | Platform::Windows)
@@ -4366,7 +4493,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
+            if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
+            else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
             if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
@@ -4390,14 +4518,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
-        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() {
+        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
             self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
         }
+        self.state.layer_tools.mask_editing = self.mask_editing_view();
+        self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
     }
 
     fn require_idle(&self) -> Result<(), String> {
-        if self.input_pending
+        if self.painted_selections.has_contact()
+            || self.input_pending
             || self.effect_gesture.is_some()
+            || self.selection_masks.quick_property_gesture.is_some()
             || self.sdr_gesture.is_some()
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
@@ -4546,6 +4678,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        self.reconcile_selection_mask();
         self.refresh_file_state();
         if self.engine.document().proof.is_none() {
             self.state.soft_proof = false;
@@ -4572,9 +4705,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         interaction.selected.retain(|id| doc.layer(*id).is_some());
         let drawing_target = doc.drawing_target();
-        let drawing_owner = drawing_target.and_then(|id| doc.target_owner(id));
+        let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
         let layer_state = |l: &layer_core::Layer| LayerState {
             id: l.id.0,
+            selection_layer: l.kind == LayerKind::Selection,
+            quick_mask: false,
+            can_rename: l.kind != LayerKind::Background && !doc.is_locked(l.id),
             content_icon: l.effect.as_ref().map(|fx| {
                 format!(
                     "layer-{}-symbolic",
@@ -4582,7 +4718,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .get(&fx.program.id)
                         .map_or("adjustments", |e| e.icon.as_ref())
                 )
-            }).or_else(|| (l.kind == LayerKind::Background).then(|| "layer-paper-symbolic".into())),
+            }).or_else(|| match l.kind { LayerKind::Background => Some("layer-paper-symbolic".into()), LayerKind::Selection => Some("layer-selection-brush-symbolic".into()), _ => None }),
             content_icon_color: (l.kind == LayerKind::Background).then(|| {
                 let color = l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
                     .linear_in(layer_core::color::RgbSpace::Srgb).unwrap_or([1.; 4]);
@@ -4600,20 +4736,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             editable: l.kind == LayerKind::Paint,
             visible: l.visible,
             opacity: l.opacity,
-            selected: self.layer_interaction.selected.contains(&l.id),
+            selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&l.id),
+            load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
             selection_icon: if self.layer_interaction.selected.contains(&l.id)
                 && (self.layer_interaction.selected.len() > 1 || l.id != doc.active_layer)
             {
                 "layer-selection-checked-symbolic"
             } else if doc.reference_layers.contains(&l.id) {
                 "layer-reference-symbolic"
-            } else if drawing_owner.is_some_and(|owner| owner.id == l.id) {
+            } else if drawing_owner.is_some_and(|owner| owner.id == l.id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(l.id)) {
                 "layer-brush-symbolic"
             } else {
                 "layer-selection-empty-symbolic"
             },
-            editing: l.id == doc.active_layer,
-            drawing: drawing_owner.is_some_and(|owner| owner.id == l.id),
+            editing: l.id == doc.active_layer && !self.selection_masks.quick(),
+            drawing: drawing_owner.is_some_and(|owner| owner.id == l.id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(l.id)),
             mask_selected: l.id == doc.active_layer && (doc.active_mask
                 || l.mask.as_ref().is_some_and(|m| drawing_target == Some(m.id))),
             has_mask: l.mask.is_some(),
@@ -4640,6 +4777,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))
                 .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
+                .wrapping_add(self.selection_masks.preview_revision(l.id).wrapping_mul(65539))
                 .wrapping_add(if l.kind == LayerKind::Background {
                     l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
                         .linear_in(doc.color.space).expect("validated paper color").iter()
@@ -4663,7 +4801,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| m.id.0),
         };
         self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
-        self.state.layer_properties = effects::properties(doc);
+        self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting);
         self.state.layer_tools.controls = doc
             .layer(doc.active_layer)
             .map(|l| art_layers::LayerControls::for_layer(doc, l))
@@ -4674,11 +4812,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|l| !self.layer_interaction.hidden_by_group(doc, l))
             .map(layer_state)
             .collect();
-        self.state.layer_tools.has_selection = doc.selection.is_some();
+        if self.selection_masks.quick() {
+            let mut temporary = layer_core::Layer::selection(LayerId(0), "Quick Mask", self.current_selection().unwrap_or_else(layer_core::Selection::empty));
+            temporary.visible = self.selection_masks.quick_visible;
+            let mut row = layer_state(&temporary);
+            row.load_selection_tooltip = "Finish Quick Mask and use it as the current selection";
+            row.quick_mask = true; row.can_rename = false; row.can_delete = true;
+            row.paint_revision = self.selection_masks.preview_revision(LayerId(0));
+            row.can_drop_below = false; row.editing = true; row.drawing = true; row.selected = true;
+            row.selection_icon = "layer-brush-symbolic";
+            self.state.layer_tools.editing_layer = Some(row.clone());
+            self.state.layers.insert(0, row);
+            self.state.layer_tools.controls = LayerControls::default();
+            self.state.layer_properties = selection_properties::properties(0, "Quick Mask", &self.selection_masks.quick_properties, self.state.settings.selection_painting, true);
+        }
+        self.state.layer_tools.has_selection = self.current_selection().is_some();
+        self.state.layer_tools.quick_mask = self.selection_masks.quick();
         self.state.layer_tools.tool = self.layer_interaction.tool;
         let references = self.reference_selection();
         self.state.layer_tools.can_reference = !references.is_empty();
-        self.state.layer_tools.can_delete =
+        self.state.layer_tools.can_delete = self.selection_masks.quick() ||
             doc.can_delete_layers(&doc.layer_roots(&self.layer_interaction.selected));
         self.state.layer_tools.references_selected = !references.is_empty()
             && references
@@ -4744,6 +4897,9 @@ mod tests {
         preview_reply: Option<layer_render::CanvasPreview>,
         sample_requests: Vec<layer_render::ColorSampleRequest>,
         sample_reply: Option<layer_render::ColorSample>,
+        selection_updates: Vec<layer_render::SelectionPaint>,
+        selection_reply: Option<layer_render::SelectionPaintResult>,
+        selection_wait: bool,
         region_requests: Vec<layer_render::RegionRequest>,
         region_reply: Option<layer_render::RegionResult>,
         transform: Option<layer_render::TransformPreview>,
@@ -4767,6 +4923,12 @@ mod tests {
         ) -> Result<(), Self::Error> {
             self.transform = preview.cloned();
             Ok(())
+        }
+        fn paint_selection(&mut self,update:&layer_render::SelectionPaint)->Result<bool,Self::Error> {
+            self.selection_updates.push(update.clone()); Ok(!self.selection_wait)
+        }
+        fn take_selection_paint(&mut self)->Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+            self.selection_reply.take().map(Ok)
         }
         fn request_region(
             &mut self,
@@ -4898,6 +5060,7 @@ mod tests {
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
 
     #[test]
@@ -6510,7 +6673,7 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 6);
+            assert_eq!(s.state.tool_set.subtools.len(), 7);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
             assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);
@@ -15419,11 +15582,30 @@ mod tests {
     }
 
     #[test]
+    fn sketch_color_and_layers_drawers_survive_canvas_contacts_and_replace_each_other() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session(); s.set_platform(platform);
+            s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+            for control in [ToolbarControl::Color, ToolbarControl::Panel { panel: Panel::Layers }] {
+                let id = s.state.workspace.layout.header.zones.iter().flatten().find(|e|
+                    e.item == HeaderItem::Tool { control }).unwrap().id;
+                s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }] }).unwrap();
+                s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+                let drawer = s.state.customization.drawer.clone().unwrap();
+                assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
+                let reply = chrome(&mut s, ChromeEvent::Contact { position: [700., 500.], canvas: true }, ChromeFacts::default());
+                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
+                assert!(!reply.handled, "canvas input continues with the drawer open");
+            }
+        }
+    }
+
+    #[test]
     fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
             s.set_platform(platform);
-            let color = s
+            let brush = s
                 .state
                 .workspace
                 .layout
@@ -15431,9 +15613,10 @@ mod tests {
                 .unwrap()
                 .tiles()
                 .iter()
-                .find(|t| t.control == ToolbarControl::Color)
+                .find(|t| t.control == ToolbarControl::Command { command: CommandId::Brush })
                 .unwrap()
                 .id;
+            invoke(&mut s, CommandId::Brush);
             for (position, canvas) in [
                 ([500., 15.], false),
                 ([1000., 850.], false),
@@ -15441,16 +15624,16 @@ mod tests {
             ] {
                 s.dispatch(UiAction::ActivateTile {
                     panel: Panel::Toolbar,
-                    tile: color,
+                    tile: brush,
                 })
                 .unwrap();
                 assert!(s.state.customization.drawer.is_some());
                 assert!(
-                    !s.panel_view(Panel::Toolbar)
+                    s.panel_view(Panel::Toolbar)
                         .unwrap()
                         .tiles
                         .iter()
-                        .find(|t| t.id == color)
+                        .find(|t| t.id == brush)
                         .unwrap()
                         .choice
                         .selected
@@ -15584,12 +15767,9 @@ mod tests {
             },
             ChromeFacts::default(),
         );
-        assert!(reply.handled && !reply.paint);
-        assert!(s.state.customization.drawer.is_none());
-        // Explicit policy is for persistent column drawers: outside does not
-        // dismiss, without a per-platform special case.
-        activate(&mut s, 6);
-        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
+        assert!(!reply.handled);
+        assert!(s.state.customization.drawer.is_some());
+        // Color remains open until toggled or replaced.
         chrome(
             &mut s,
             ChromeEvent::Contact {
@@ -17140,7 +17320,7 @@ mod tests {
             let id = CommandId::Brush.shortcut_id();
             preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
             record_shortcut(&mut s, &id, "q", false);
-            preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+            preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
             preference(
                 &mut s,
                 PreferenceAction::SearchShortcuts { query: "q".into() },

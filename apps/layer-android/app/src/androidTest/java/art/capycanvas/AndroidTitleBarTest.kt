@@ -399,7 +399,23 @@ class AndroidTitleBarTest {
                     waitFor("${menu.getString("id")} popup focus") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
                     val popup = screenBounds("workspace-menu")
                     assertEquals("Menu starts under its own label", anchor.left, popup.left, 2 * density)
-                    assertTrue("Menu is below its label", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    val frame = android.graphics.Rect()
+                    instrumentation.runOnMainSync { checkNotNull(node("title-bar")).first.view.getWindowVisibleDisplayFrame(frame) }
+                    if (popup.height <= frame.bottom - anchor.bottom - 48 * density)
+                        assertTrue("${menu.getString("id")} is below its label: $popup / $anchor", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    else
+                        assertTrue("Tall menus fit the viewport: $popup / $frame", popup.top >= frame.top - density && popup.bottom <= frame.bottom + density)
+                    if (menu.getString("id") == "select") instrumentation.runOnMainSync {
+                        fun row(label: String): SemanticsNode? {
+                            fun find(n: SemanticsNode): SemanticsNode? =
+                                if (n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) n
+                                else n.children.firstNotNullOfOrNull(::find)
+                            return find(checkNotNull(node("workspace-menu")).first.semanticsOwner.rootSemanticsNode)
+                        }
+                        for (label in listOf("Load Selection", "Replace Selection Layer from Current Selection"))
+                            assertTrue("$label is unavailable without saved layers", checkNotNull(row(label)).config.contains(SemanticsProperties.Disabled))
+                        assertNotNull(row("Grow…")); assertNotNull(row("Shrink…")); assertNull(row("Modify"))
+                    }
                     shot("anchored-${menu.getString("id")}")
                     key(KeyEvent.KEYCODE_BACK)
                     waitFor("menu dismissed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
@@ -653,7 +669,7 @@ class AndroidTitleBarTest {
         if (state().getJSONObject("customization").isNull("drawer")) tap(select)
         assertEquals("[[\"tools\"],[\"tool_settings\"]]", state().getJSONObject("customization").getJSONObject("drawer").getJSONArray("columns").toString())
         val choices = state().getJSONObject("tool_set").array("subtools").objects()
-        assertEquals(6, choices.size)
+        assertEquals(7, choices.size)
         val modes = listOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
         for ((i, choice) in choices.withIndex()) {
             tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[i % 3]
@@ -662,21 +678,22 @@ class AndroidTitleBarTest {
             tap(tag)
             assertEquals(choice.getString("icon"), command("select").getString("icon"))
             assertFalse(state().getJSONObject("customization").isNull("drawer"))
-            assertNotNull(node("tool-setting-selection_feather"))
-            assertNotNull(node("tool-action-selection_antialias"))
+            val brush = choice.getString("icon") == "selection-brush"
+            assertNotNull(node("tool-setting-" + if(brush)"selection_brush_size" else "selection_feather"))
+            if(!brush) assertNotNull(node("tool-action-selection_antialias"))
+            val availableModes = if(brush) listOf("selection_add", "selection_subtract") else modes
             val row = bounds("selection-mode-row")
-            for (id in modes) {
+            for (id in availableModes) {
                 val button = bounds("tool-action-$id")
                 assertEquals(row.top, button.top, 1f)
                 assertTrue(button.right <= row.right + 1f)
                 tap("tool-action-$id")
                 assertTrue(command(id).getBoolean("selected"))
-                assertEquals(1, modes.count { command(it).getBoolean("selected") })
+                assertEquals(1, availableModes.count { command(it).getBoolean("selected") })
                 assertNull("Modes have no caption", node("tool-action-$id")!!.second.config.getOrNull(SemanticsProperties.Text))
             }
         }
-        tap("tool-action-selection_new")
-        invoke("rectangle_select"); tap("tool-action-selection_fixed_size")
+        invoke("rectangle_select"); tap("tool-action-selection_new"); tap("tool-action-selection_fixed_size")
         assertNotNull(node("tool-setting-selection_width")); assertNotNull(node("tool-setting-selection_height"))
         tap("tool-action-selection_fixed_size")
         invoke("color_select")

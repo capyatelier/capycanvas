@@ -88,6 +88,65 @@ fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
 }
 
 #[test]
+fn color_picker_keeps_selection_mask_colors_separate_from_artwork() {
+    for saved in [false, true] {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let artwork = s.state.colors.clone();
+        invoke(&mut s, CommandId::SelectAll);
+        invoke(&mut s, CommandId::QuickMask);
+        if saved {
+            invoke(&mut s, CommandId::SaveSelectionLayer);
+        }
+        s.dispatch(UiAction::SetColor {
+            rgba: [0., 1., 0., 1.],
+        })
+        .unwrap();
+        let original = s.state.display_colors().clone();
+        assert_ne!(original, artwork);
+        invoke(&mut s, CommandId::Eyedropper);
+        let hover = event(&s, 1, PenPhase::Hover, 0.);
+        s.cursor_input(Some(hover));
+        s.frame(1, 1).unwrap();
+        picker_reply(&mut s, [0.2, 0.4, 0.8, 1.]);
+        assert_eq!(s.state.display_colors(), &original);
+        assert_eq!(s.state.colors, artwork);
+        assert_eq!(
+            s.color_picker_overlay().unwrap().original,
+            original
+                .definition()
+                .linear_in(s.engine.document().color.space)
+                .unwrap()
+        );
+        let preview = s.state.preview_colors().into_owned();
+        assert_ne!(preview, original);
+        picker_pointer(
+            &mut s,
+            1,
+            ContactPhase::Down,
+            PointerKind::Mouse,
+            [hover.surface_position.x, hover.surface_position.y],
+        );
+        s.frame(13, 13).unwrap();
+        assert_eq!(s.state.display_colors(), &preview);
+        assert_eq!(s.state.colors, artwork);
+        assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Paint);
+
+        // Leaving a mask while a sample is in flight must not recolor artwork.
+        invoke(&mut s, CommandId::Eyedropper);
+        s.cursor_input(Some(hover));
+        s.frame(14, 14).unwrap();
+        invoke(&mut s, CommandId::ReturnToArtwork);
+        picker_reply(&mut s, [1., 0., 0., 1.]);
+        assert_eq!(s.state.colors, artwork);
+        assert_eq!(s.selection_masks.colors, preview);
+        assert!(s.state.color_picker.preview.is_none());
+        assert!(s.color_picker_overlay().is_none());
+        assert_eq!(s.renderer_mut().dabs, 0);
+    }
+}
+
+#[test]
 fn color_picker_cancellation_rejects_inflight_results_and_restores_wheel() {
     for cancel in 0..5 {
         let mut s = session();

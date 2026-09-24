@@ -34,12 +34,12 @@ pub struct ColorPickerState {
 impl crate::UiState {
     pub fn preview_colors(&self) -> std::borrow::Cow<'_, ColorState> {
         if let Some(sample) = self.color_picker.preview {
-            let mut colors = self.colors.clone();
+            let mut colors = self.display_colors().clone();
             if colors.set_color(sample).is_ok() {
                 return std::borrow::Cow::Owned(colors);
             }
         }
-        std::borrow::Cow::Borrowed(&self.colors)
+        std::borrow::Cow::Borrowed(self.display_colors())
     }
 }
 

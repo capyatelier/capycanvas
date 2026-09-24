@@ -13,6 +13,8 @@ fn toolbar_components_upgrade_only_untouched_supported_defaults() {
         previous.push(preset.legacy_bottom_brush_controls_layout(platform));
         if preset == WorkspacePreset::Photographer {
             previous.push(preset.legacy_photo_flip_layout(platform));
+            previous.push(preset.legacy_selection_drawers_layout(platform));
+            previous.push(preset.legacy_without_picker_layout(platform));
         }
         if preset == WorkspacePreset::Painter {
             previous.push(WorkspacePreset::legacy_brush_controls_layout(platform));
@@ -325,6 +327,8 @@ pub(super) fn updated_photographer_default(
     let previous_inner_bar = WorkspacePreset::Photographer.legacy_bottom_brush_controls_layout(platform);
     let previous_flip = WorkspacePreset::Photographer.legacy_photo_flip_layout(platform);
     let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
+    let previous_drawers = WorkspacePreset::Photographer.legacy_without_picker_layout(platform);
+    let previous_mask_panels = WorkspacePreset::Photographer.legacy_selection_drawers_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = previous_columns.clone();
@@ -337,7 +341,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip && baseline.as_ref() != &previous_drawers && baseline.as_ref() != &previous_mask_panels) {
         return None;
     }
     let mut content = entity.content.clone();
@@ -515,7 +519,8 @@ fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
             (WorkspacePreset::Painter, DEFAULT_WORKSPACES[0].0, updated_painter_default as fn(&Entity,Platform)->Option<ItemContent>),
             (WorkspacePreset::Photographer, DEFAULT_WORKSPACES[2].0, updated_photographer_default),
         ] {
-            let old=preset.legacy_selection_layout(platform);
+            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform)] {
+            if preset == WorkspacePreset::Painter && old == preset.layout(platform) { continue; }
             let mut working=preset.working_state();
             working.selection.tool=layer_ui::SelectionTool::Ellipse;
             working.selection.size=[500.,300.];
@@ -529,6 +534,7 @@ fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
             let mut customized=old; customized.header.size=layer_ui::HeaderSize::Large;
             history.append(&customized,"Custom header");
             assert!(migrate(&entity,platform).is_none());
+            }
         }
     }
 }

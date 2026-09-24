@@ -45,6 +45,18 @@ impl WorkspacePreset {
                 ToolbarControl::Command { command: crate::CommandId::Redo },
             ]).expect("Sketch history buttons");
         }
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
+        layout
+    }
+
+    /// Selection-layer defaults before toolbar components were integrated.
+    pub fn legacy_selection_drawers_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_toolbar_components_layout(platform);
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
         layout
     }
 
@@ -681,11 +693,12 @@ mod tests {
                 layout
                     .column_stacks
                     .iter()
-                    .all(|s| !s.drawers)
+                    .all(|s| s.drawers == (s.column == 4))
             );
             assert_eq!(layout.collapsed.len(), 1);
             assert!(layout.is_collapsed(4) && !layout.is_collapsed(12));
-            assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
+            assert!(layout.column_stacks.iter().all(|s| !s.auto_hide));
+            assert!(layout.column_stack(4).drawers);
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
