@@ -4,6 +4,116 @@ use super::{
 };
 
 #[test]
+fn continuity_memory_resets_on_policy_view_native_handoff_and_stale_input() {
+    let cfg = config();
+    let mut real = Vec::new();
+    let mut warm = PredictionState::default();
+    for i in 0..80 {
+        let now = i * 4000;
+        real.push(point(i as f32 * 3.2, 0.2 * (i as f32 * 0.4).sin(), now));
+        warm.estimate_for(&real, &[], now + 16000, now, IDENTITY, cfg);
+    }
+    let now = real.last().unwrap().elapsed_micros;
+    assert!(warm.last_motion.is_some());
+    for (transform, policy) in [
+        ([2., 0., 0., 2., 0., 0.], cfg),
+        (
+            IDENTITY,
+            InstantFeedbackConfig {
+                prediction_horizon_micros: 8000,
+                ..cfg
+            },
+        ),
+        (
+            IDENTITY,
+            InstantFeedbackConfig {
+                prediction_horizon_micros: 0,
+                ..cfg
+            },
+        ),
+    ] {
+        let mut state = warm.clone();
+        let mut fresh = PredictionState::default();
+        let a = state.estimate_for(&real, &[], now + 16000, now, transform, policy);
+        let b = fresh.estimate_for(&real, &[], now + 16000, now, transform, policy);
+        assert_eq!(a, b);
+        assert_eq!(
+            state.engine_intermediates().collect::<Vec<_>>(),
+            fresh.engine_intermediates().collect::<Vec<_>>()
+        );
+        if policy.prediction_horizon_micros == 0 {
+            assert_eq!(a.unwrap().source, TipSource::Real);
+            assert!(state.output.is_none());
+        }
+    }
+    let mut native = warm.clone();
+    let tip = native
+        .estimate_for(
+            &real,
+            &[point(270., 0., now + 16000)],
+            now + 16000,
+            now,
+            IDENTITY,
+            InstantFeedbackConfig {
+                use_platform_prediction: true,
+                ..cfg
+            },
+        )
+        .unwrap();
+    assert_eq!(tip.source, TipSource::Platform);
+    assert!(native.last_motion.is_none() && native.output.is_none());
+    let tip = warm
+        .estimate_for(&real, &[], now + 116000, now + 100000, IDENTITY, cfg)
+        .unwrap();
+    assert_eq!(tip.source, TipSource::Real);
+    assert!(warm.last_motion.is_none() && warm.output.is_none());
+}
+
+#[test]
+fn a_missing_delivery_cannot_advance_the_retained_forecast() {
+    for horizon in [8000, 16000, 32000] {
+        for quantum in [1, 1000] {
+            for period in [4167, 8333] {
+                let cfg = InstantFeedbackConfig {
+                    timestamp_resolution_micros: quantum,
+                    prediction_horizon_micros: horizon,
+                    ..config()
+                };
+                let mut state = PredictionState::default();
+                let mut real = Vec::new();
+                for i in 0..60 {
+                    let time = i * period;
+                    real.push(point(time as f32 * 0.0012, 0., time / quantum * quantum));
+                    state.estimate_for(&real, &[], time + horizon, time, IDENTITY, cfg);
+                }
+                let latest = real.last().unwrap().elapsed_micros;
+                let mut target = state
+                    .output
+                    .as_ref()
+                    .unwrap()
+                    .point_at(state.output.as_ref().unwrap().horizon)
+                    .elapsed_micros;
+                for age in [2000, 4000, 8000, 12000] {
+                    let now = latest + age;
+                    let tip = state
+                        .estimate_for(&real, &[], now + horizon, now, IDENTITY, cfg)
+                        .unwrap();
+                    assert!(
+                        tip.point.elapsed_micros <= target,
+                        "missing reports must not earn reach: {period}/{quantum}/{horizon}"
+                    );
+                    target = tip.point.elapsed_micros;
+                    assert_eq!(
+                        state.estimate_for(&real, &[], now + horizon, now, IDENTITY, cfg),
+                        Some(tip)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn local_motion_keeps_honest_target_times_sensors_bounds_and_repeatability() {
     for zoom in [0.25, 1., 4.] {
         let transform = [0., zoom, -zoom, 0., 19., -7.];
@@ -88,6 +198,7 @@ fn lookahead_distinguishes_straight_motion_from_turns_at_every_speed_and_zoom() 
                 24000,
                 None,
                 None,
+                0.,
             )
             .unwrap();
             let horizon = model.horizon(24_000, 0, 24_000);
@@ -126,7 +237,7 @@ fn detail_lookahead_does_not_pulse_with_queries_or_report_rate() {
         };
         real.push(point(x, 0., time));
         if let Some(model) =
-            local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, previous.as_ref())
+            local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, previous.as_ref(), 0.)
         {
             let horizon = model.horizon(24000, 0, 24000);
             if previous.is_some() {
@@ -136,7 +247,7 @@ fn detail_lookahead_does_not_pulse_with_queries_or_report_rate() {
                 );
             }
             let repeat =
-                local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&model))
+                local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&model), 0.)
                     .unwrap();
             assert_eq!(horizon, repeat.horizon(24000, 0, 24000));
             previous = Some(model);
@@ -165,6 +276,7 @@ fn quantized_tablet_clock_does_not_misclassify_fast_strokes_as_missing_history()
                 24000,
                 None,
                 previous.as_ref(),
+                0.,
             ) {
                 if i > 40 {
                     assert!(
@@ -183,18 +295,18 @@ fn correcting_turn_history_invalidates_the_detail_allowance_without_a_new_tip() 
     let mut real: Vec<_> = (0..100)
         .map(|i| point(i as f32 * 8.8, 0., i * 4000))
         .collect();
-    let before = local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, None).unwrap();
+    let before = local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, None, 0.).unwrap();
     assert_eq!(before.horizon(24000, 0, 24000), 24000);
     // This sample informs the turn detector but lies outside the 40 ms fit.
     // The anchor and fitted polynomial are unchanged by the late correction.
     real[87].position.y += 60.;
     let after =
-        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&before)).unwrap();
+        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&before), 0.).unwrap();
     // The recent heading is still steady, but the corrected older turn must
     // invalidate the cached fast/detail allowance even without a new tip.
     assert!(after.horizon(24000, 0, 24000) < before.horizon(24000, 0, 24000));
     let repeat =
-        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&after)).unwrap();
+        local_motion::LocalMotion::fit(&real, IDENTITY, 0, 24000, None, Some(&after), 0.).unwrap();
     assert_eq!(
         after.horizon(24000, 0, 24000),
         repeat.horizon(24000, 0, 24000)
@@ -218,6 +330,7 @@ fn slow_and_medium_corners_drop_reach_then_recover_on_the_settled_line() {
                     24000,
                     stable.then_some((24_000, 0.)),
                     previous.as_ref(),
+                    0.,
                 ) {
                     let horizon = model.horizon(24000, 0, 24000);
                     if time == 396000 || time == 464000 {

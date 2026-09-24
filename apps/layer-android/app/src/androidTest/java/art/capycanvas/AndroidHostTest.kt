@@ -792,12 +792,17 @@ class AndroidHostTest {
     }
     @Test fun strokeRecordingSavesRawStylusInput() {
         customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
-        floatPanel("stats", 100f, 120f)
-        compose.onNodeWithTag("stroke-recording").performClick()
+        floatPanel("stats", 500f, 120f)
+        // Diagnostics arrive asynchronously and move the recording button down.
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("stroke-recording").assertIsDisplayed().assertIsEnabled().performClick()
         compose.waitUntil(5_000) { host.strokeRecording.status?.optBoolean("recording") == true }
         compose.onNodeWithTag("stroke-recording").assertTextContains("Stop stroke recording")
+        // Keep the floating panel clear of injected pen input on smaller tablets.
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to false))
         penStroke(40)
         compose.waitUntil(5_000) { (host.strokeRecording.status?.optLong("raw_events") ?: 0) >= 41 }
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
         compose.onNodeWithTag("stroke-recording").performClick()
         fun node(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
             fun find(n: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {

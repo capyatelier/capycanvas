@@ -8,7 +8,10 @@ export async function checkStrokeRecording({call, evaluate, settle}) {
   const workspace = await evaluate('layerApp.state().workspace');
   const settings = await evaluate('layerApp.state().settings');
   await action({type:'customize', action:{type:'set_panel_visible',panel:'stats',visible:true}});
+  await evaluate(`for(const column of layerApp.app.layout(innerWidth,innerHeight).collapsed){const group=column.groups.find(g=>g.icons.some(i=>i.panel==='stats'));if(group)layerApp.dispatch({type:'customize',action:{type:'set_column_collapsed',group:group.group,collapsed:false}});}`);
+  await settle();
   await evaluate(`(()=>{const g=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('stats'));if(g&&g.active!=='stats')layerApp.dispatch({type:'select_panel_tab',group:g.id,panel:'stats'});})()`);
+  await settle();
   await evaluate(`window.strokeTest={picker:window.showSaveFilePicker};
     window.showSaveFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')};`);
   const button = `document.querySelector('[data-control="stroke-recording"]')`;

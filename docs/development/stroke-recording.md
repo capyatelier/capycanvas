@@ -76,15 +76,16 @@ other training pipelines. Split training and evaluation by recording, not by
 neighboring samples from the same stroke. Keep hover, predicted input and
 interrupted contacts distinguishable when preparing labels.
 
-Replay runs the same Smooth Motion state machine as the application, including
-its corrections and native-prediction precedence. It writes per-query CSV to
-stdout and summary diagnostics to stderr; `--frames frames.jsonl` additionally
-exports the entire preview and causal actual-sample replacements. Both binary
+Replay runs the current Smooth Motion predictor, including its corrections and
+native-prediction precedence, on the recorded inputs, policies and query timing.
+It writes per-query CSV to stdout and summary diagnostics to stderr;
+`--frames frames.jsonl` additionally exports the entire preview and causal actual-sample replacements. Both binary
 v2 and legacy v1 JSONL (optionally gzip compressed) are readable. Conversion
 preserves legacy samples and queries without inventing raw inputs or missing
 clocks; metadata identifies these limitations. The v2 policy wire layout keeps
-one reserved integer in the retired algorithm slot so existing captures remain
-readable. It never selects a runtime algorithm.
+the original integer slot: historical values 0–4 read as Optimized, and new
+captures write 3. This includes captures made with the retired Previous choice.
+Unknown values are rejected; the rest of each recorded policy is preserved.
 
 ## Evaluating visible stability and tracking
 
@@ -111,7 +112,7 @@ travel. The evaluation therefore measures these distinct behaviors:
 | Oscillating preview | Opposing residual revisions over three frames at identical future times, integrated over the body and separately at the sensitive tip |
 | Abrupt correction during ordinary motion | Whole-preview correction acceleration at fixed future times, excluding forward pen travel; sudden turns/braking are classified separately |
 | Unproductive correction or one-frame flash | Displacement that does not reduce geometric error, and incorrect ink withdrawn on the next frame; report body and tip |
-| Sudden loss of preview length | Retreat beyond actual pen travel on straightish motion, plus disappearance/length lost |
+| Sudden loss of preview length | Missing useful coverage after transporting the old preview by actual pen travel and crediting removal of old error; score body and tip separately on steady lines and curves |
 | Ghosts at curves, stops or reversals | Distance from all predicted points to the eventual local path, including braking exposure |
 | Stable but lagging preview | Uncovered pen distance and signed endpoint lag at common query+0/8/16/24 ms clocks, independent of a model's chosen horizon |
 
@@ -124,22 +125,60 @@ motion. Thus a slow straight line is not penalized as an erratic detail stroke.
 Ground-truth classification is retrospective and is never available to the
 predictor. All distances use the recorded physical-surface transform.
 
+The steady-continuation classes additionally require forward 16 ms chords to
+retain at least 75% of recent speed. This excludes braking from the cutback
+objective without excluding ordinary curvature. Labels depend only on recorded
+truth, never pressure or a candidate's output. Severity CSV rows include both
+tracking categories and the separate retreat categories.
+
 Reports include severity counts, duration, episodes and eligible time. Query
 counts are windows, not independent mistakes. Gaps and missing truth remain
-unscored rather than being filled with invented future input. Version 2 of the
-stability snapshot scores each model's entire available common future interval;
-optional paired comparisons restrict both models to identical future support.
+unscored rather than being filled with invented future input. Version 5 of the
+stability snapshot follows each initial preview across later frames, including
+its settlement into measured ink. A withdrawn tail moves to the remaining
+endpoint; it is not discarded from scoring. This catches long → absent → long
+flashes and makes short-lookahead revisions visible. Optional paired comparisons
+use the common initial preview support. The version migration remeasures the
+frozen pre-change outputs, without changing the other reference values or budgets.
 The per-tablet regression gate guards stability, tracking, ghosts, braking and
 scoring eligibility together. It must not be passed by shortening the preview.
+The Rust summary preserves endpoint RMS and prediction coverage guards. Endpoint
+error-step bins and chosen-horizon means remain diagnostics: their targets change
+with the predictor, and shorter horizons can improve them while making tracking
+worse. The Python bank gates full-preview severity and common-clock tracking
+instead. More gradable boundary queries are allowed; lost scoring coverage is not.
+
 These captures do not contain GPU presentation timestamps, brush raster, opacity
 or texture; centerline metrics and display-delay sweeps do not establish actual
 pen-to-photon latency or replace physical pen assessment.
 
-Smooth Motion preserves the user-approved stable model exactly. Its 100 ms
-history was selected after testing 100 and 200 ms: it retains ordinary motion
-continuity while adapting sooner to changes. Smoothing prioritizes correction
-continuity and may slightly increase instantaneous geometric error. The reviewed
-baseline records that tradeoff, rather than claiming every metric improves.
+### Speed-sensitive cost
+
+`speed_weighted` reports physical threshold rates alongside penalties weighted
+by `600 / max(speed_px_per_second, 60)`, using the same retrospective truth speed
+for both algorithms. An equal displacement costs twice as much at 300 as at
+600 px/s, and ten times as much at rest. The floor prevents division by zero.
+Cost is the time integral of weighted **squared** displacement divided by actual
+eligible seconds, so slowing a trace raises its cost even if every error is
+unchanged. This is an explicit optimization preference, not a calibrated model
+of perception. Report raw exposure too; the weighted percentage has a different
+denominator and must not be described as physical seconds of flashing.
+
+`transient_peak` counts either incorrect ink disappearing next frame or useful
+preview reach being withdrawn, anywhere in the preview (tip or body RMS).
+`transient_cost` uses the larger of those two displacements per region, with
+two-thirds tip and one-third body squared-error cost. It does not add overlapping
+failures twice. Both measurements and speed must be available; eligibility is
+reported and guarded. Ghost geometry, correction oscillation/shock, and fixed-clock
+tracking remain separate to prevent a stable but inaccurate/lagging model from
+winning through this score alone.
+
+Smooth Motion uses 100 ms of drawing history. Its continuity controller separates
+curve geometry from visible reach: a changing confidence window need not abruptly
+withdraw otherwise useful ink. Stop/turn evidence releases that memory promptly.
+Falling pressure qualifies a motion alarm; varying pressure alone does not shorten
+a steady stroke. Fit-window confidence and physical stopping evidence serve
+separate purposes. Native predictions keep their platform precedence.
 
 See the [tablet bank guide](../../crates/layer-engine/tests/data/README.md) for
 capture naming, hash-bound baselines and adding recordings from other tablets.

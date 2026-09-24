@@ -14,7 +14,7 @@ They are not title-bar items. Other hosts do not yet offer these components.
 
 Sketch centers size and opacity in a compact toolbar on the left edge. Photo appends
 Tool Options to its top commands toolbar, retaining New/Open/Save, Undo/Redo,
-Scale/Rotate and Flip Horizontal, and removing Clear Layer and Fill Selection.
+Scale/Rotate, and removing Flip Horizontal, Clear Layer and Fill Selection.
 Tool Options takes the remaining lane width. Other hosts and Paint retain their
 previous defaults. Only untouched built-in Sketch/Photo layouts migrate; custom
 baselines, copied workspaces and edited histories are preserved.

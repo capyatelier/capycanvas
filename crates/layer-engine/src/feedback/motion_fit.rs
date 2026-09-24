@@ -435,6 +435,30 @@ impl MotionFit {
         preferred
     }
 
+    /// Transport a briefly missing fit without forgetting covariance or the
+    /// distance already spent from its stopping budget. The caller bounds age
+    /// and corroborates continuation with fresh observations.
+    pub(super) fn advanced_to(&self, anchor: StrokePoint, transform: [f32; 6]) -> Self {
+        let mut next = self.clone();
+        let elapsed = anchor
+            .elapsed_micros
+            .saturating_sub(self.anchor.elapsed_micros);
+        next.stopping_distance =
+            (self.stopping_distance - self.travel(f64::from(elapsed) / 1000.)).max(0.);
+        next.translate_time(f64::from(elapsed) / (self.span_ms * 1000.));
+        let delta = transform_vector(
+            transform,
+            Point {
+                x: self.anchor.position.x - anchor.position.x,
+                y: self.anchor.position.y - anchor.position.y,
+            },
+        );
+        next.parameters[0] += f64::from(delta.x);
+        next.parameters[1] += f64::from(delta.y);
+        next.anchor = anchor;
+        next
+    }
+
     // Rebase both mean and covariance onto the unchanged public sample clock.
     // Discarding the reconstructed last-sample phase would copy clock noise
     // back into the endpoint, especially in the direction of fast travel.
@@ -832,6 +856,43 @@ impl MotionFit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advancing_a_cached_fit_preserves_absolute_geometry_uncertainty_and_stop_budget() {
+        use crate::feedback::test_support::point;
+        for zoom in [0.25, 1., 4.] {
+            let transform = [0., zoom, -zoom, 0., 21., -9.];
+            let real: Vec<_> = (0..=50)
+                .map(|i| {
+                    let t = i as f32 * 0.004;
+                    point(
+                        100. * (t * 8.).sin() / zoom,
+                        100. * (1. - (t * 8.).cos()) / zoom,
+                        i * 4000,
+                    )
+                })
+                .collect();
+            let mut original = MotionFit::fit(&real, transform, 1).unwrap();
+            original.stopping_distance = 30.;
+            let mut anchor = original.fitted_point_at(8000);
+            anchor.position.x += 0.5 / zoom;
+            let rebased = original.advanced_to(anchor, transform);
+            for time in [0, 4000, 16000] {
+                assert!(
+                    super::super::surface_distance(
+                        original.fitted_point_at(time + 8000).position,
+                        rebased.fitted_point_at(time).position,
+                        transform
+                    ) < 0.001
+                );
+                assert!(
+                    (original.uncertainty(time + 8000) - rebased.uncertainty(time)).abs() < 1e-7
+                );
+            }
+            assert!((rebased.stopping_distance + original.travel(8.) - 30.).abs() < 1e-8);
+            assert!(rebased.stopping_distance < original.stopping_distance);
+        }
+    }
 
     #[test]
     fn clock_reconstruction_is_bounded_and_respects_irregular_reports() {

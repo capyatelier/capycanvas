@@ -8,6 +8,8 @@ pub(super) const HISTORY_MICROS: u32 = 100_000;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DrawingState {
     pub smooth: f64,
+    /// Confidence in continued reach, separate from geometric smoothing.
+    pub continuity: f64,
     pub reach: f64,
     pub interrupted: bool,
     pub stop_in_micros: f64,
@@ -18,6 +20,7 @@ impl Default for DrawingState {
     fn default() -> Self {
         Self {
             smooth: 0.,
+            continuity: 0.,
             reach: 0.,
             interrupted: true,
             stop_in_micros: 0.,
@@ -87,6 +90,7 @@ impl DrawingState {
         let chords = &chords[..n - 2];
         let mut risk: f64 = 0.;
         let mut turning = 0.;
+        let mut innovation = 0.;
         let mut previous = 0.;
         for i in 1..chords.len() {
             if length(chords[i]).min(length(chords[i - 1])) < 1. {
@@ -97,6 +101,7 @@ impl DrawingState {
             turning += turn * turn;
             if i > 1 {
                 risk += 4. * (turn - previous).powi(2);
+                innovation += 4. * (turn - previous).powi(2);
             }
             previous = turn;
         }
@@ -107,6 +112,14 @@ impl DrawingState {
         let deceleration = length(recent) / length(before).max(1e-6);
         let older = [0, 1].map(|a| points[n - 3][a] - points[n - 4][a]);
         let older_ratio = length(before) / length(older).max(1e-6);
+        // One moderate speed dip after steady/accelerating motion is weak
+        // evidence of a stop. Consecutive dips retain their full weight;
+        // a large drop or sharp turn still interrupts immediately.
+        let deceleration = if deceleration > 0.75 && older_ratio >= 0.95 {
+            1.
+        } else {
+            deceleration
+        };
         let interrupt = (1. - ramp((angle(before, recent).abs() - 0.10) / 0.12))
             * ramp((deceleration - 0.65) / 0.25);
         let mut stop_in_micros = if deceleration < 0.95 && older_ratio < 0.95 {
@@ -137,7 +150,15 @@ impl DrawingState {
         let smooth = (1. - ramp((risk - 0.04) / 0.10)) * ramp((speed - 1100.) / 900.) * interrupt;
         let curvature = (turning / (chords.len() - 1) as f64).sqrt();
         let reach = smooth * (1. - ramp((curvature - 0.04) / 0.04));
+        // Consistent curvature supports reach even when it does not justify
+        // extra smoothing of the fitted geometry. Keep this evidence causal,
+        // over the same 100 ms window, and weaken it near micro motion.
+        let continuity = (1.
+            - ramp(((innovation / (chords.len() - 1) as f64).sqrt() - 0.04) / 0.10))
+            * ramp((speed - 300.) / 900.)
+            * interrupt;
         Self {
+            continuity,
             speed,
             stop_in_micros,
             reach,
@@ -228,5 +249,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn medium_curves_support_reach_without_extra_geometry_smoothing() {
+        for period in [1_000, 4_000, 8_000] {
+            for zoom in [0.25, 1., 4.] {
+                let points: Vec<_> = (0..=400_000 / period)
+                    .map(|i| {
+                        let a = i as f32 * period as f32 / 180_000.;
+                        point(
+                            180. * a.sin() / zoom,
+                            180. * (1. - a.cos()) / zoom,
+                            i * period,
+                        )
+                    })
+                    .collect();
+                let state = DrawingState::measure(&points, [zoom, 0., 0., zoom, 0., 0.]);
+                assert!(state.continuity > 0.85, "{period}/{zoom}: {state:?}");
+                assert_eq!(state.smooth, 0.);
+            }
+        }
+    }
+
+    #[test]
+    fn isolated_moderate_dip_is_not_sustained_braking() {
+        let motion = |repeated: bool| {
+            (0..=400)
+                .map(|i| {
+                    let t = i as f32 * 1000.;
+                    let x = 0.002 * t
+                        - 0.0003 * (t - 383_334.).max(0.)
+                        - if repeated {
+                            0.0003 * (t - 391_667.).max(0.)
+                        } else {
+                            0.
+                        };
+                    point(x, 0., i * 1000)
+                })
+                .collect::<Vec<_>>()
+        };
+        let single = DrawingState::measure(&motion(false), IDENTITY);
+        let repeated = DrawingState::measure(&motion(true), IDENTITY);
+        assert!(single.continuity > 0.99);
+        assert!(single.stop_in_micros.is_infinite());
+        assert!(repeated.continuity < single.continuity);
+        assert!(repeated.stop_in_micros.is_finite());
     }
 }
