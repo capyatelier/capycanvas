@@ -98,6 +98,16 @@ the canvas on all six hosts. The strip starts closed, with Auto-hide and Open
 individual panels off. Paint retains its original expanded left panels and
 initially open right stack.
 
+On GTK, Web and Android, Paint's Color and Navigator groups take their content
+height. Color follows its SDR or HDR wheel and footer; Navigator follows the
+document shape, from a 4:1 strip up to a square. Tool Set and Tool share the
+rest of the left column evenly, and Properties and Layers keep their 30:45 split.
+Untouched Paint workspaces upgrade; customized ones keep their arrangement until
+Restore Starting Layout. Other hosts keep the proportional columns. Check with
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted_columns`,
+`node apps/layer-web/device.test.mjs --paint-columns` on a tablet origin, and
+`AndroidTitleBarTest#paintColorAndNavigatorFitTheirContent`.
+
 ## Workspace behavior
 
 - Paint and Photo title-bar defaults include Settings at the right. Sketch ends

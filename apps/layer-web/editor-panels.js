@@ -142,7 +142,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
-    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,paintKey="",fieldKey="",ringKey="";
+    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,naturalAspect="",paintKey="",fieldKey="",ringKey="";
     const field=document.createElement("canvas"),ring=document.createElement("canvas");
     let fieldJob=null,fieldPending=null,fieldEpoch=0,fieldGeometry='',disposed=false,previewing=false;
     function installField(bytes,side,key){
@@ -169,7 +169,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       if(resized){
         const minimum=Math.ceil(geometry(128).height);naturalLayout=geometry(availableWidth);
         frame.style.minHeight=root.style.minHeight=`${minimum}px`;
-        frame.style.aspectRatio=`${availableWidth} / ${naturalLayout.height}`;
+        const aspect=`${availableWidth} / ${naturalLayout.height}`;
+        if(aspect!==naturalAspect){naturalAspect=aspect;frame.style.aspectRatio=aspect;contentChanged("color");}
       }
       const height=frame.clientHeight;
       if(resized||height!==frameHeight){
@@ -314,6 +315,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
     let commandsKey="";
     return()=>{
+      const aspect=app.navigator_aspect();
+      if(aspect!==record.aspect){record.aspect=aspect;overview.style.aspectRatio=`1 / ${aspect}`;contentChanged("navigator");}
       const commands=buttons.map(([id])=>state().commands.find(c=>c.id===id)),key=JSON.stringify(commands);
       if(key!==commandsKey){commandsKey=key;buttons.forEach(([,node],i)=>{const c=commands[i];if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;});}
       queuePositions();

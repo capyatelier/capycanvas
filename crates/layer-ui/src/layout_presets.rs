@@ -34,6 +34,16 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_proportional_layout(platform);
+        if self == Self::Illustrator
+            && matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+        {
+            fit_paint_columns(&mut layout);
+        }
+        layout
+    }
+
+    pub fn legacy_proportional_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_without_picker_layout(platform);
         if self == Self::Painter && platform.color_picker() {
             let panel = layout.panels.iter().find(|p| p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)).unwrap();
@@ -547,6 +557,23 @@ impl DockLayout {
     }
 }
 
+fn fit_paint_columns(layout: &mut DockLayout) {
+    let group = |id| layout.node(id).cloned().expect("Paint default group");
+    let stack = |id, fraction, first, second| DockNode::Split {
+        id,
+        axis: Axis::Vertical,
+        fraction,
+        first: Box::new(first),
+        second: Box::new(second),
+    };
+    let left = stack(4, 0.6528, stack(5, 0.5, group(6), group(7)), group(10));
+    let right = stack(12, 0.25, group(14), stack(13, 0.4, group(15), group(16)));
+    for (band, root) in [(3, left), (11, right)] {
+        layout.bands.iter_mut().find(|b| b.id == band).expect("Paint default column").root = root;
+    }
+    layout.fit_height_groups = vec![10, 14];
+}
+
 fn replace_tool(layout: &mut DockLayout, old: crate::CommandId, new: crate::CommandId) {
     layout.header.replace_tool(old, new);
     let old = ToolbarControl::Command { command: old };
@@ -804,6 +831,75 @@ mod tests {
             );
             assert!(!layout.canvas_info.visible);
             assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
+        }
+    }
+
+    #[test]
+    fn paint_color_and_navigator_fit_their_content_and_share_the_rest() {
+        let bounds = |layout: &DockLayout, height, panel| {
+            layout.resolve(1400., height).groups.into_iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
+        };
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut layout = WorkspacePreset::Illustrator.layout(platform);
+            assert_eq!(layout.fit_height_groups, [10, 14]);
+            for invalid in [vec![10, 10], vec![10, 999]] {
+                let mut invalid_layout = layout.clone();
+                invalid_layout.fit_height_groups = invalid;
+                assert!(invalid_layout.validate().is_err());
+            }
+            let mut saved = serde_json::to_value(&layout).unwrap();
+            for field in ["bands", "collapsed", "column_stacks"] {
+                saved[field] = serde_json::json!([]);
+            }
+            let restored: DockLayout = serde_json::from_value(saved).unwrap();
+            assert!(restored.fit_height_groups.is_empty());
+            restored.validate().unwrap();
+            layout.open_default_columns(platform);
+            let column = |layout: &DockLayout, height| {
+                bounds(layout, height, Panel::Brushes).height
+                    + bounds(layout, height, Panel::ToolSettings).height
+                    + bounds(layout, height, Panel::Color).height
+                    + WORKSPACE_SPACING * 2.
+            };
+            let proportional = WorkspacePreset::Illustrator.legacy_proportional_layout(platform);
+            assert!((bounds(&layout, 1000., Panel::Color).height - bounds(&proportional, 1000., Panel::Color).height).abs() < WORKSPACE_SPACING);
+            layout.measurements = [(Panel::Color, 300.), (Panel::Navigator, 180.), (Panel::Brushes, 900.)]
+                .map(|(panel, content_height)| PanelMeasurement { panel, tab_width: 0., content_height, scroll: None })
+                .to_vec();
+            for height in [640., 1000., 1600.] {
+                assert_eq!(bounds(&layout, height, Panel::Color).height, 300. + TAB_BAR_HEIGHT);
+                assert_eq!(bounds(&layout, height, Panel::Navigator).height, 180. + TAB_BAR_HEIGHT);
+                assert_eq!(bounds(&layout, height, Panel::Brushes).height, bounds(&layout, height, Panel::ToolSettings).height);
+                let properties = bounds(&layout, height, Panel::Properties).height;
+                let layers = bounds(&layout, height, Panel::Layers).height;
+                assert!((properties / (properties + layers) - 0.4).abs() < 0.01);
+            }
+            let short = 380.;
+            let minimum = TAB_BAR_HEIGHT + TILE_SIZE;
+            assert_eq!(bounds(&layout, short, Panel::Brushes).height, minimum);
+            assert_eq!(bounds(&layout, short, Panel::ToolSettings).height, minimum);
+            assert!(bounds(&layout, short, Panel::Color).height < 300. + TAB_BAR_HEIGHT);
+
+            let mut resized = layout.clone();
+            let color = bounds(&resized, 1000., Panel::Color);
+            let divider = resized.resolve(1400., 1000.).dividers.into_iter().find(|d| d.id == 4).unwrap().bounds;
+            resized.resize(4, [divider.x + 10., divider.y + divider.height * 0.5 - 100.], [1400., 1000.]).unwrap();
+            assert_eq!(resized.fit_height_groups, [14]);
+            let dragged = bounds(&resized, 1000., Panel::Color);
+            assert!((dragged.height - color.height - 100.).abs() < 0.5);
+            assert!((bounds(&resized, 1400., Panel::Color).height - dragged.height).abs() > 50.);
+
+            let mut moved = layout.clone();
+            moved.move_item([1400., 1000.], DockItem::Group { group: 10 }, DockTarget::Split { group: 6, edge: Edge::Top }).unwrap();
+            assert_eq!(moved.fit_height_groups, [14, 10]);
+            assert_eq!(bounds(&moved, 1000., Panel::Color).height, 300. + TAB_BAR_HEIGHT);
+            assert_eq!(bounds(&moved, 1000., Panel::Color).y, bounds(&layout, 1000., Panel::Brushes).y);
+            moved.move_item([1400., 1000.], DockItem::Group { group: 10 }, DockTarget::Tab { group: 7, index: None }).unwrap();
+            assert_eq!(moved.fit_height_groups, [14]);
+            assert!((column(&layout, 1000.) - column(&resized, 1000.)).abs() < 0.01);
+        }
+        for platform in [Platform::Windows, Platform::Mac, Platform::Ios, Platform::Generic] {
+            assert!(WorkspacePreset::Illustrator.layout(platform).fit_height_groups.is_empty());
         }
     }
 

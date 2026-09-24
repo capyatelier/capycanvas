@@ -1401,7 +1401,8 @@ class AndroidInteractionTest {
                 assertEquals("$case: preview preserves source size", source.height, host.workspaceGeometry!!.bounds!!.height, 1f)
                 event(MotionEvent.ACTION_UP); settle(); settle()
                 val final = group(panel).getJSONObject("bounds").rect()
-                val expected = when (case) { "squashed" -> budget; "usable" -> source.height; "navigator-squashed" -> 304f; else -> final.width + 20f }
+                val navigator = snapshot().array("panel_measurements").objects().first { it.getString("panel") == "navigator" }.number("content_height") + 36f
+                val expected = when (case) { "squashed" -> budget; "usable" -> source.height; "navigator-squashed" -> navigator; else -> final.width + 20f }
                 assertEquals("$pointer $case: sensible drop height", expected, final.height, 1.5f)
                 val committed = workspace()
                 action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())

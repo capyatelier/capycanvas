@@ -628,7 +628,7 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .color-wheel-control :is(.color-shape,.color-swatch,.color-utility):focus-visible { outline-offset:-2px; }
 .color-wheel-control .color-readout:focus-visible { color:var(--accent); outline:none; }
 .navigator-control { display:flex; flex-direction:column; gap:2px; height:100%; min-height:0; }
-.navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; background:var(--bg); }
+.navigator-overview { position:relative; width:100%; aspect-ratio:220 / 164; flex:1 1 auto; min-height:0; touch-action:none; background:var(--bg); }
 .navigator-clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
 .navigator-surface { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 .overview-hole { position:absolute; outline:1px solid var(--border); pointer-events:none; }

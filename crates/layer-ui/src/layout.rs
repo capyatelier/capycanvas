@@ -1004,6 +1004,7 @@ pub struct DockLayout {
     pub column_scroll: Vec<(u32, f32)>,
     /// Adding tabs opts a group into natural width; manual width resize opts out.
     pub fit_tab_groups: Vec<u32>,
+    pub fit_height_groups: Vec<u32>,
     #[serde(skip)]
     pub measurements: Vec<PanelMeasurement>,
     /// Transient native caption bounds: left width, right width, height.
@@ -1688,6 +1689,7 @@ impl Default for DockLayout {
             column_stacks: Vec::new(),
             column_scroll: Vec::new(),
             fit_tab_groups: Vec::new(),
+            fit_height_groups: Vec::new(),
             measurements: Vec::new(),
             titlebar_insets: [0.0; 3],
             bottom_inset: 0.0,
@@ -1802,10 +1804,12 @@ impl DockLayout {
             node(&floating.root, &mut ids, &mut panels, 0)?;
         }
         self.validate_columns()?;
-        for (i, group) in self.fit_tab_groups.iter().enumerate() {
-            self.group_panels(*group)?;
-            if self.fit_tab_groups[..i].contains(group) {
-                return Err("Duplicate tab sizing identity".into());
+        for groups in [&self.fit_tab_groups, &self.fit_height_groups] {
+            for (i, group) in groups.iter().enumerate() {
+                self.group_panels(*group)?;
+                if groups[..i].contains(group) {
+                    return Err("Duplicate group sizing identity".into());
+                }
             }
         }
         let mut tile_ids = std::collections::BTreeSet::new();
@@ -2008,6 +2012,12 @@ impl DockLayout {
             })
             .collect();
         self.fit_tab_groups = groups;
+        self.retain_fitted_height_groups();
+    }
+    fn retain_fitted_height_groups(&mut self) {
+        let mut fitted = std::mem::take(&mut self.fit_height_groups);
+        fitted.retain(|g| self.group_panels(*g).is_ok());
+        self.fit_height_groups = fitted;
     }
 
     pub fn set_panel_visible(&mut self, panel: Panel, visible: bool) -> Result<(), String> {
@@ -2313,6 +2323,7 @@ impl DockLayout {
         next.column_stacks.clear();
         next.column_scroll.clear();
         next.fit_tab_groups.clear();
+        next.fit_height_groups.clear();
         let tools: Vec<_> = self
             .panels
             .iter()
@@ -2402,6 +2413,36 @@ impl DockLayout {
         if let Some(f) = self.floating.iter_mut().find(|f| f.root.id() == group) {
             f.height = None;
         }
+    }
+    fn fitted_height(&self, node: &DockNode) -> Option<f32> {
+        let DockNode::Tabs {
+            id, panels, active, ..
+        } = node
+        else {
+            return None;
+        };
+        if !self.fit_height_groups.contains(id) {
+            return None;
+        }
+        let content = self
+            .measurements
+            .iter()
+            .find(|m| m.panel == *active)
+            .map(|m| m.content_height)
+            .filter(|h| *h > 0.0)?;
+        let grip = panels.len() == 1 && self.panel(*active).is_ok_and(|p| p.hide_tab);
+        Some(content + if grip { PANEL_GRIP_HEIGHT } else { TAB_BAR_HEIGHT })
+    }
+    fn fitted_split(&self, first: &DockNode, second: &DockNode, usable: f32) -> Option<f32> {
+        let (height, sibling, leading) = match self.fitted_height(first) {
+            Some(height) => (height, second, true),
+            None => (self.fitted_height(second)?, first, false),
+        };
+        let size = height
+            .min(usable - stacked_min_height(sibling))
+            .max(height.min(TAB_BAR_HEIGHT))
+            .min(usable);
+        Some(if leading { size } else { usable - size })
     }
     fn tab_width(&self, group: u32) -> f32 {
         if !self.fit_tab_groups.contains(&group) {
@@ -2553,6 +2594,7 @@ impl DockLayout {
             .find(|f| f.root.id() == source_group && whole)
             .cloned();
         let was_fitted = self.fit_tab_groups.contains(&source_group) && whole;
+        let height_fitted = self.fit_height_groups.contains(&source_group) && whole;
         next.detach(&moving);
         let tiles = moving.len() == 1 && selected.kind() == PanelKind::Tiles;
         let dock_edge = match &target {
@@ -2617,6 +2659,9 @@ impl DockLayout {
                 next.insert_stack_member(moving, stack_target.unwrap(), insert_before)?;
                 if was_fitted {
                     next.fit_tabs(moving_id);
+                }
+                if height_fitted {
+                    next.fit_height_groups.push(moving_id);
                 }
                 next.validate()?;
                 *self = next;
@@ -2837,6 +2882,9 @@ impl DockLayout {
             }
         }
         next.reclaim_removed_columns(self, &before);
+        if height_fitted && next.group_panels(moving_id).is_ok() {
+            next.fit_height_groups.push(moving_id);
+        }
         next.validate()?;
         *self = next;
         Ok(())
@@ -3142,6 +3190,9 @@ impl DockLayout {
                 .map(|g| g.id)
                 .collect();
             self.fit_tab_groups.retain(|g| !affected.contains(g));
+        } else if let Some(DockNode::Split { first, second, .. }) = self.node(id) {
+            let children = [first.id(), second.id()];
+            self.fit_height_groups.retain(|g| !children.contains(g));
         }
         let (offset, extent, gap) = if d.axis == Axis::Horizontal {
             (position[0] - d.parent.x, d.parent.width, d.bounds.width)
@@ -4413,6 +4464,24 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
         minimum
     }
 }
+fn stacked_min_height(node: &DockNode) -> f32 {
+    match node {
+        DockNode::Tabs { .. } => TAB_BAR_HEIGHT + TILE_SIZE,
+        DockNode::Split {
+            axis,
+            first,
+            second,
+            ..
+        } => {
+            let (a, b) = (stacked_min_height(first), stacked_min_height(second));
+            if *axis == Axis::Vertical {
+                a + b + WORKSPACE_SPACING
+            } else {
+                a.max(b)
+            }
+        }
+    }
+}
 fn split_size(usable: f32, fraction: f32, a: f32, b: f32) -> f32 {
     if a + b <= usable {
         (usable * fraction).clamp(a, usable - b)
@@ -4607,6 +4676,8 @@ fn resolve_node(
                 let a = minimum(first);
                 let b = minimum(second);
                 first_size = split_size(usable, *fraction, a, b);
+            } else if let Some(size) = layout.fitted_split(first, second, usable) {
+                first_size = size;
             }
             if *axis == Axis::Horizontal {
                 if layout.is_collapsed(first.id()) {

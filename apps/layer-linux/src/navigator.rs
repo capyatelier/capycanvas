@@ -229,10 +229,19 @@ mod imp {
     }
     impl ObjectImpl for Overview {}
     impl WidgetImpl for Overview {
-        fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::HeightForWidth
+        }
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             match orientation {
                 gtk::Orientation::Horizontal => (0, 220, -1, -1),
-                _ => (0, 164, -1, -1),
+                _ => {
+                    let aspect = self.view.borrow().as_ref().map_or(164. / 220., |(_, document)| {
+                        NavigatorGeometry::overview_aspect(*document)
+                    });
+                    let width = if for_size < 0 { 220 } else { for_size };
+                    (0, (width as f32 * aspect).round() as i32, -1, -1)
+                }
             }
         }
         // Native hit testing/layout only; pixels live on the canvas surface.
@@ -429,6 +438,7 @@ impl Navigator {
             *self.overview.imp().view.borrow_mut() =
                 Some((state.camera.clone(), [tab.width, tab.height]));
             if changed {
+                self.overview.queue_resize();
                 self.overview.queue_draw();
             }
         }

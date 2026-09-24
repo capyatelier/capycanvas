@@ -605,6 +605,49 @@ class AndroidTitleBarTest {
         shot("paint-original-restored")
     }
 
+    @Test fun paintColorAndNavigatorFitTheirContent() {
+        waitFor("filter library", 60_000) { !state().getJSONObject("filter_load").optBoolean("pending") }
+        send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("starting layout confirmation") { node("workspace-submit") != null }
+        tap("workspace-submit")
+        assertEquals("[10,14]", state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("fit_height_groups").toString())
+        fun measured(panel: String) = snapshot().array("panel_measurements").objects().first { it.getString("panel") == panel }.number("content_height")
+        fun height(tag: String) = node(tag)!!.second.boundsInRoot.height / density
+        fun fitted(label: String): Float {
+            var settled = 0L
+            var previous = ""
+            waitFor("fitted Paint columns $label", 30_000) {
+                if (listOf("group-6", "group-7", "group-10", "group-14", "navigator-overview").any { node(it) == null }) return@waitFor false
+                val tab = state().getJSONArray("tabs").getJSONObject(0)
+                val aspect = (tab.getInt("height").toFloat() / tab.getInt("width")).coerceIn(.25f, 1f)
+                val overview = node("navigator-overview")!!.second.boundsInRoot
+                val sample = listOf(height("group-6"), height("group-7"), height("group-10"), height("group-14"), overview.height / density, measured("color"), measured("navigator")).joinToString()
+                val fits = kotlin.math.abs(height("group-6") - height("group-7")) <= 1f &&
+                    kotlin.math.abs(height("group-10") - measured("color") - 36f) <= 1f &&
+                    kotlin.math.abs(height("group-14") - measured("navigator") - 36f) <= 1f &&
+                    kotlin.math.abs(overview.height - overview.width * aspect) <= 2f * density
+                if (!fits || sample != previous) { previous = sample; settled = SystemClock.uptimeMillis() }
+                fits && SystemClock.uptimeMillis() - settled > 1000
+            }
+            shot("paint-fitted-$label")
+            return measured("color")
+        }
+        val sdr = fitted("sdr")
+        val defaults = state().getJSONObject("settings").getJSONObject("new_document").getJSONObject("defaults")
+        defaults.put("extent", JSONArray(listOf(900, 1200))).getJSONObject("color").put("depth", "F16")
+        action(obj("type" to "new_document_preferences", "action" to obj("type" to "remember", "options" to defaults, "name" to "", "defaults" to true)))
+        action(obj("type" to "invoke", "command" to "new_document"))
+        waitFor("new document dialog") { node("new-document-create") != null }
+        tap("new-document-create")
+        waitFor("HDR portrait document", 60_000) {
+            val tab = state().getJSONArray("tabs").getJSONObject(0)
+            tab.getInt("width") == 900 && tab.getInt("height") == 1200 && !state().getJSONObject("document_file").optBoolean("busy")
+        }
+        assertTrue("HDR Color panel is taller", fitted("hdr") > sdr + 10f)
+        action(obj("type" to "invoke", "command" to "close_document"))
+    }
+
     @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
         tool = MotionEvent.TOOL_TYPE_MOUSE
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))

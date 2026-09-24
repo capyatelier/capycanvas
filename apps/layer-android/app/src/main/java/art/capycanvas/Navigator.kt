@@ -41,8 +41,9 @@ import org.json.JSONObject
         if (viewport.width > 0 && viewport.height > 0) geometry = host.awaitQuery(obj("type" to "navigator",
             "viewport" to JSONArray(listOf(viewport.width / density, viewport.height / density))))
     }
-    val overviewHeight = (availableHeight - 48.dp).coerceIn(64.dp, 220.dp)
-    SideEffect { onHeight(220f, overviewHeight.value) }
+    val natural = geometry?.let { (viewport.width / density * it.number("overview_aspect")).dp } ?: 220.dp
+    val overviewHeight = (availableHeight - 48.dp).coerceIn(minOf(64.dp, natural), natural)
+    SideEffect { onHeight(natural.value, overviewHeight.value) }
     Column {
         Canvas(Modifier.fillMaxWidth().height(overviewHeight).testTag("navigator-overview").background(colors.surround)
             .onSizeChanged { viewport = it }

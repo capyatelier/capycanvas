@@ -374,7 +374,7 @@ mod tests {
                 assert_eq!(packet["layout"], full["layout"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
-                for field in ["bands", "floating", "collapsed", "fit_tab_groups"] {
+                for field in ["bands", "floating", "collapsed", "fit_tab_groups", "fit_height_groups"] {
                     assert_eq!(
                         packet["workspace_layout"][field],
                         full["state"]["workspace"]["layout"][field]

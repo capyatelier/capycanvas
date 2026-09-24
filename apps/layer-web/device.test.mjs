@@ -29,6 +29,7 @@ import {checkDrawerDragging,checkDrawerStyling,checkToolbarDrawerSwitching} from
 import {checkEditor} from "./editor.test.mjs";
 import {checkDeviceFullscreen} from "./fullscreen.test.mjs";
 import {checkMediumTiles} from "./tiles.test.mjs";
+import {checkPaintColumns} from "./paint-columns.test.mjs";
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 const endpoint=process.env.LAYER_DEVICE_CDP||"http://127.0.0.1:9228";
@@ -84,7 +85,7 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (process.argv.some(flag=>['--selection-tools','--color-panel','--color-picker'].includes(flag))) {
+  if (process.argv.some(flag=>['--selection-tools','--color-panel','--color-picker','--paint-columns'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
@@ -190,6 +191,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--fullscreen")) {
     await checkDeviceFullscreen({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--paint-columns")) {
+    await checkPaintColumns({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else {
   await checkEditor({call,evaluate,settle,canvasPixels});

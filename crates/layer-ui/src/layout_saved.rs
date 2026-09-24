@@ -21,6 +21,8 @@ struct SavedDockLayout {
     column_stacks: Vec<ColumnStack>,
     #[serde(default)]
     fit_tab_groups: Vec<u32>,
+    #[serde(default)]
+    fit_height_groups: Vec<u32>,
     #[serde(default = "initial_tile_id")]
     next_tile_id: u32,
     next_id: u32,
@@ -38,6 +40,7 @@ impl<'de> Deserialize<'de> for DockLayout {
             collapsed: saved.collapsed,
             column_stacks: saved.column_stacks,
             fit_tab_groups: saved.fit_tab_groups,
+            fit_height_groups: saved.fit_height_groups,
             next_tile_id: saved.next_tile_id,
             next_id: saved.next_id,
             header_presentation: Default::default(),
@@ -47,6 +50,7 @@ impl<'de> Deserialize<'de> for DockLayout {
             bottom_inset: 0.,
         };
         layout.expand_saved_nested_columns();
+        layout.retain_fitted_height_groups();
         Ok(layout)
     }
 }

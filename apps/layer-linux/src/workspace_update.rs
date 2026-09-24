@@ -91,6 +91,7 @@ impl Workspace {
             layout.collapsed.clone_from(&source.collapsed);
             layout.column_stacks.clone_from(&source.column_stacks);
             layout.fit_tab_groups.clone_from(&source.fit_tab_groups);
+            layout.fit_height_groups.clone_from(&source.fit_height_groups);
             layout.measurements.clone_from(&source.measurements);
             drop(layout);
             self.navigator.refresh(gpu.session.state());

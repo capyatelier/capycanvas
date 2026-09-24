@@ -1256,6 +1256,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 floating: &layout.floating,
                 collapsed: &layout.collapsed,
                 fit_tab_groups: &layout.fit_tab_groups,
+                fit_height_groups: &layout.fit_height_groups,
                 column_stacks: &layout.column_stacks,
             },
             camera: &self.state.camera,

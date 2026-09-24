@@ -18,10 +18,11 @@
 //! `workspace_layout`, `camera`, and `panel_measurements` when only dimensions or
 //! reflow measurements changed. Replace those absolute fields against matching
 //! content_revision before advancing model_revision. `workspace_layout` replaces
-//! bands, floating groups, collapsed columns, column_stacks and fit_tab_groups in the retained
-//! workspace; it is live gesture state, not a persistence request. Collapse/expand,
-//! content edits, completion and cancellation still publish full models. Existing
-//! consumers of take_update_bytes keep their original model_revision behavior.
+//! bands, floating groups, collapsed columns, column_stacks, fit_tab_groups and
+//! fit_height_groups in the retained workspace; it is live gesture state, not a
+//! persistence request. Collapse/expand, content edits, completion and
+//! cancellation still publish full models. Existing consumers of
+//! take_update_bytes keep their original model_revision behavior.
 //!
 //! Capture tab slots/clip with BeginTabDrag and publish displayed drawer bounds
 //! with MeasureColumnDrawers. Tab presentation moves drawings, not the frozen
@@ -63,6 +64,7 @@ pub struct WorkspaceLayoutState<'a> {
     pub collapsed: &'a [crate::CollapsedColumn],
     pub column_stacks: &'a [crate::ColumnStack],
     pub fit_tab_groups: &'a [u32],
+    pub fit_height_groups: &'a [u32],
 }
 
 #[derive(Clone, Debug, Serialize)]

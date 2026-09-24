@@ -93,6 +93,10 @@ impl WebApp {
             [width, height],
         ))
     }
+    pub fn navigator_aspect(&self) -> f32 {
+        let document = self.session.engine().document();
+        layer_ui::NavigatorGeometry::overview_aspect([document.width, document.height])
+    }
     pub fn navigator_surface(&mut self, id: u32, canvas: web_sys::HtmlCanvasElement) {
         self.overviews.insert(
             id,

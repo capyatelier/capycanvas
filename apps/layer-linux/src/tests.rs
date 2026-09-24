@@ -39,6 +39,8 @@ mod document_tabs;
 mod column_drop;
 #[path = "column_stack_tests.rs"]
 mod column_stack_tests;
+#[path = "paint_column_fit_tests.rs"]
+mod paint_column_fit;
 #[path = "contact_brush_tests.rs"]
 mod contact_brush;
 #[path = "squircle_tests.rs"]

@@ -1676,9 +1676,11 @@ fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
         let original = layer_ui::DockLayout::for_platform(platform);
         let collapsed = layer_ui::WorkspacePreset::legacy_illustrator_layout(platform);
         let primary = layer_ui::WorkspacePreset::legacy_illustrator_primary_layout(platform);
+        let proportional = layer_ui::WorkspacePreset::Illustrator.legacy_proportional_layout(platform);
         let mut with_preferences = original.clone();
         with_preferences.column_stacks = collapsed.column_stacks.clone();
-        for previous in [original, with_preferences, primary] {
+        let proportional = (proportional != layout).then_some(proportional);
+        for previous in [original, with_preferences, primary].into_iter().chain(proportional) {
             for customized in 0..3 {
                 let mut history = layer_ui::LayoutHistory::new(&previous);
                 if customized > 0 {

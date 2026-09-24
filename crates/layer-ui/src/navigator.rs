@@ -48,9 +48,13 @@ impl Preview {
 pub struct NavigatorGeometry {
     pub image: Bounds,
     pub work_area: [[f32; 2]; 4],
+    pub overview_aspect: f32,
     scale: f32,
 }
 impl NavigatorGeometry {
+    pub fn overview_aspect(document: [u32; 2]) -> f32 {
+        (document[1] as f32 / document[0].max(1) as f32).clamp(0.25, 1.0)
+    }
     pub fn new(camera: &Camera, document: [u32; 2], viewport: [f32; 2]) -> Option<Self> {
         if document.contains(&0) || !viewport.into_iter().all(|n| n.is_finite() && n > 8.0) {
             return None;
@@ -73,6 +77,7 @@ impl NavigatorGeometry {
         Some(Self {
             image,
             work_area,
+            overview_aspect: Self::overview_aspect(document),
             scale,
         })
     }
@@ -131,6 +136,19 @@ mod tests {
                 assert!((b * px + d * py + y - expected[1]).abs() < 0.001);
             }
             assert!(g.in_work_area(&camera, [104.0, 104.0]));
+            assert_eq!(g.overview_aspect, 0.5);
+        }
+    }
+
+    #[test]
+    fn overview_aspect_follows_the_document_between_a_strip_and_a_square() {
+        for (document, aspect) in [
+            ([1920, 1080], 0.5625),
+            ([1000, 1000], 1.0),
+            ([1080, 1920], 1.0),
+            ([8000, 1000], 0.25),
+        ] {
+            assert_eq!(NavigatorGeometry::overview_aspect(document), aspect);
         }
     }
 }

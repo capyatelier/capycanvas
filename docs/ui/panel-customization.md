@@ -128,6 +128,10 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
 - A standalone vertical toolbar narrower than two tiles keeps a center-third
   tab-merge target. Adding tabs grows the group to fit measured native tab
   widths. Manual horizontal resizing releases that automatic minimum.
+- A stacked group can instead take its active panel's measured content height,
+  leaving the rest of the column to its sibling. Siblings keep a tab bar and one
+  tile row before the fitted group shrinks. Dragging the adjacent divider
+  releases the fit; moving the whole group keeps it.
 - Docking a standalone toolbar resets its cross-axis size to one column on a
   vertical dock or one row on a horizontal dock. Add only the lanes required
   to fit its tiles and trailing grip in the available length; floating widths
