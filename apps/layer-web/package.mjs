@@ -49,7 +49,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
+  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js" && path !== "proof-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -69,8 +69,8 @@ export function fingerprintAssets(directory) {
   publish("workspace-switcher.js");
   publish("workspace-manager.js", replaceRequired(read(join(directory, "workspace-manager.js")), 'from "./workspace-switcher.js"', `from "./${names["workspace-switcher.js"]}"`));
   publish("system-status.js");
-  publish("header.js", replaceRequired(read(join(directory, "header.js")), "from './workspace-switcher.js'", `from "./${names["workspace-switcher.js"]}"`));
   publish("color-controls.js");
+  publish("header.js", replaceRequired(replaceRequired(read(join(directory, "header.js")), "from './workspace-switcher.js'", `from "./${names["workspace-switcher.js"]}"`), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
   publish("export-controls.js");
   publish("pkg/layer_web.js", replaceRequired(read(join(directory, "pkg/layer_web.js")),
     "'layer_web_bg.wasm'", JSON.stringify(basename(names["pkg/layer_web_bg.wasm"]))));
@@ -78,7 +78,13 @@ export function fingerprintAssets(directory) {
   publish("proof.js", replaceRequired(replaceRequired(read(join(directory,"proof.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`), '"./proof-worker.js"', JSON.stringify(`./${names["proof-worker.js"]}`)));
   publish("histogram.js");
   publish("document-color.js", replaceRequired(read(join(directory, "document-color.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
-  publish("editor-panels.js", replaceRequired(read(join(directory, "editor-panels.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
+  publish("raster-worker.js", replaceRequired(read(join(directory, "raster-worker.js")),
+    'from "./pkg/layer_web.js"', `from "./${names["pkg/layer_web.js"]}"`));
+  publish("raster-worker-client.js", replaceRequired(read(join(directory, "raster-worker-client.js")),
+    '"./raster-worker.js"', JSON.stringify(`./${names["raster-worker.js"]}`)));
+  let editorPanels = read(join(directory, "editor-panels.js"));
+  for (const path of ["raster-worker-client.js", "color-controls.js"]) editorPanels = replaceRequired(editorPanels, `from './${path}'`, `from "./${names[path]}"`);
+  publish("editor-panels.js", editorPanels);
   publish("selection-masks.js");
   publish("workspace-chrome.js");
   publish("image-import.js");
@@ -98,11 +104,6 @@ export function fingerprintAssets(directory) {
   publish("effects.js", effects);
   publish("tooltips.js");
   publish("pen-scroll.js");
-
-  publish("raster-worker.js", replaceRequired(read(join(directory, "raster-worker.js")),
-    'from "./pkg/layer_web.js"', `from "./${names["pkg/layer_web.js"]}"`));
-  publish("raster-worker-client.js", replaceRequired(read(join(directory, "raster-worker-client.js")),
-    '"./raster-worker.js"', JSON.stringify(`./${names["raster-worker.js"]}`)));
   let worker = read(join(directory, "workspace-worker.js"));
   for (const path of ["pkg/layer_web.js", "workspace-store.js"])
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);

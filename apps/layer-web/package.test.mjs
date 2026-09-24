@@ -90,8 +90,8 @@ function runtimeFixture(t, changes = {}) {
     "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
     "app.js": 'import {storage} from "./document-storage.js"; import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-preload.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createSelectionUi} from "./selection-masks.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nimport {installPenScrolling} from "./pen-scroll.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
-    "header.js": "import {switcher} from './workspace-switcher.js'; export const header = true;",
-    "editor-panels.js": "import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
+    "header.js": "import {switcher} from './workspace-switcher.js'; import {pickerButtonAction} from './color-controls.js'; export const header = true;",
+    "editor-panels.js": "import {createRasterWorker} from './raster-worker-client.js'; import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
     "image-import.js": "export function createImageImport() {}",
     "selection-masks.js": "export function createSelectionUi() {}",
@@ -142,6 +142,8 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.ok(app.includes(JSON.stringify(names[path])));
   for (const path of ["workspace-manager.js", "header.js"])
     assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));
+  assert.ok(readFileSync(join(dir, names["header.js"]), "utf8").includes(`from "./${names["color-controls.js"]}"`));
+  assert.ok(readFileSync(join(dir, names["editor-panels.js"]), "utf8").includes(`from "./${names["raster-worker-client.js"]}"`));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
