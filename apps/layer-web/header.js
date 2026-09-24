@@ -1,5 +1,6 @@
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
+import { pickerButtonAction } from './color-controls.js';
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
@@ -104,7 +105,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     const r={root:node,content,grip,entry};
     const kind=entry.item.kind;
     if(['capy','settings','fullscreen','tool'].includes(kind)) {
-      const b=button('',()=>activate(entry),'header-tool'); r.button=b;
+      const b=button('',pickerButtonAction(entry.item.control,{kind:'header',id:entry.id},dispatch,()=>activate(entry)),'header-tool'); r.button=b;
       if(kind==='capy')b.id='zen-button';
       if(kind==='fullscreen')b.id='fullscreen';
       const command={capy:'zen_mode',settings:'settings',fullscreen:'fullscreen'}[kind];

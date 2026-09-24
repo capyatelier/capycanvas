@@ -41,7 +41,7 @@ public final class AndroidPenMotion {
     private void motion(String name, boolean hover, int seconds, double hz) throws Exception {
         mark(name + "_start");
         long start = SystemClock.uptimeMillis();
-        pen(start, hover ? MotionEvent.ACTION_HOVER_ENTER : MotionEvent.ACTION_DOWN, 0, hover);
+        pen(start, hover ? MotionEvent.ACTION_HOVER_MOVE : MotionEvent.ACTION_DOWN, 0, hover);
         try {
             for (int tick = 1; tick <= seconds * 200; tick++) {
                 long delay = start + tick * 5L - SystemClock.uptimeMillis();
@@ -72,7 +72,7 @@ public final class AndroidPenMotion {
         AndroidPenMotion p = new AndroidPenMotion(Float.parseFloat(args[0]), Float.parseFloat(args[1]),
             Float.parseFloat(args[2]), Float.parseFloat(args[3]));
         switch (args[4]) {
-            case "hover": p.motion("hover", true, 10, 1); break;
+            case "hover": p.motion("hover", true, seconds, hz); break;
             case "stroke": p.motion("stroke", false, seconds, hz); break;
             case "undo": p.history("undo", false); break;
             case "redo": p.history("redo", true); break;

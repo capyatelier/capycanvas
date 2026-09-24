@@ -821,7 +821,7 @@ pub fn tool_icon(state: &UiState, control: ToolbarControl) -> &'static str {
 pub fn tool_state(state: &UiState, control: ToolbarControl) -> (bool, bool) {
     match control {
         ToolbarControl::ColorPicker => (
-            state.platform == Platform::Gtk && tool_state(state, ToolbarControl::Command { command: CommandId::Eyedropper }).0,
+            state.platform.color_picker() && tool_state(state, ToolbarControl::Command { command: CommandId::Eyedropper }).0,
             state.layer_tools.tool.picks_color() && state.color_picker.style == crate::ColorPickerStyle::Glass,
         ),
         ToolbarControl::Command { command } => state
@@ -852,10 +852,10 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         if control == ToolbarControl::ColorPicker {
             return self.dispatch(control.action().unwrap());
         }
-        if self.state().platform == Platform::Gtk && control == (ToolbarControl::Command { command: CommandId::Eyedropper }) {
+        if self.state().platform.color_picker() && control == (ToolbarControl::Command { command: CommandId::Eyedropper }) {
             return self.dispatch(UiAction::Invoke { command: CommandId::Eyedropper });
         }
-        if control.selectable() && self.state().platform == Platform::Gtk && self.state().layer_tools.tool.picks_color() {
+        if control.selectable() && self.state().platform.color_picker() && self.state().layer_tools.tool.picks_color() {
             return self.dispatch(UiAction::Invoke { command: CommandId::Eyedropper });
         }
         let (enabled, selected) = tool_state(self.state(), control);

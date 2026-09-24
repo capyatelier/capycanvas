@@ -2,7 +2,7 @@
 use crate::workspace::Workspace;
 use gtk::{glib, prelude::*};
 use layer_ui::{
-    ColorPickerAction, ContactPhase, CustomizationAction, DrawerAnchor, TileAnchor, ToolbarControl,
+    ColorPickerAction, ContactPhase, DrawerAnchor, ToolbarControl,
     UiAction, UiInput, UiState,
 };
 use std::{
@@ -179,22 +179,7 @@ pub fn bind_button(
                 return;
             }
             last.set(None);
-            let active = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .is_some_and(|g| g.session.state().layer_tools.tool.picks_color());
-            if !active {
-                w.dispatch(control.action().unwrap());
-            }
-            let action = match anchor {
-                DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer {
-                    anchor: TileAnchor { panel, tile },
-                },
-                DrawerAnchor::Header { id } => CustomizationAction::ToggleHeaderDrawer { id },
-                _ => return,
-            };
-            w.dispatch(UiAction::Customize { action });
+            w.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Settings { anchor } });
         }
     ));
 }

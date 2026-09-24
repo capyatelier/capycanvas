@@ -33,7 +33,7 @@ impl WebApp {
     pub fn editor_models(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         js_sys::JSON::parse(&serde_json::to_string(&json!({
-            "color_panel": state.display_colors().view_mapped(self.session.effective_sdr_rendition()),
+            "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition()),
             "partial_zen": false,
             "zen_toolbars": {"sections": []},
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
@@ -50,7 +50,7 @@ impl WebApp {
         })).map_err(js)?)
     }
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.state().display_colors().view_mapped(self.session.effective_sdr_rendition()))
+        serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition()))
     }
     /// Static for each shape; fetch when switching models, not on every drag.
     pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
@@ -61,17 +61,17 @@ impl WebApp {
     }
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
-        if !(1..=2048).contains(&side) {
-            return Err(js("Invalid color field size"));
-        }
-        let state = self.session.state().display_colors();
-        let mut pixels = vec![0; side as usize * side as usize * 4];
-        let valid = if self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float() {state.render_field_mapped(side,self.session.effective_sdr_rendition(),&mut pixels)} else {state.render_field(side, &mut pixels)};
-        if !valid {
-            return Err(js("Color field does not use a raster"));
-        }
-        Ok(pixels)
+        color_field(&self.session.state().preview_colors(), side,
+            (self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition()))
     }
+    pub fn color_preview(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.color_preview())
+    }
+    pub fn color_field_request(&self, side: u32) -> Result<String, JsValue> {
+        serde_json::to_string(&json!({"side":side,"colors":self.session.state().preview_colors(),
+            "rendition":(self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition())})).map_err(js)
+    }
+
     // Legacy host contract: Zen no longer projects an alternative layout.
     pub fn workspace_projection(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         serialize(&(false, json!({"sections": []})))
@@ -299,4 +299,22 @@ impl WebApp {
         }
         Ok(retry)
     }
+}
+
+fn color_field(colors: &layer_ui::ColorState, side: u32, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Result<Vec<u8>, JsValue> {
+    if !(1..=2048).contains(&side) { return Err(js("Invalid color field size")); }
+    let mut pixels = vec![0; side as usize * side as usize * 4];
+    let valid = match rendition {
+        Some(recipe) => colors.render_field_mapped(side, recipe, &mut pixels),
+        None => colors.render_field(side, &mut pixels),
+    };
+    if !valid { return Err(js("Color field does not use a raster")); }
+    Ok(pixels)
+}
+#[wasm_bindgen]
+pub fn raster_worker_color_field(metadata: &str) -> Result<Vec<u8>, JsValue> {
+    #[derive(Deserialize)]
+    struct Request { colors: layer_ui::ColorState, side: u32, rendition: Option<layer_core::color::hdr::SdrRendition> }
+    let request: Request = serde_json::from_str(metadata).map_err(js)?;
+    color_field(&request.colors, request.side, request.rendition)
 }

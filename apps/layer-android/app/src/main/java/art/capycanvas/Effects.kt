@@ -145,16 +145,19 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     }
 }
 
-@Composable private fun PropertyChoice(label: String, options: List<String>, selected: Int, enabled: Boolean = true, select: (Int) -> Unit) {
+@Composable internal fun PropertyChoice(label: String, options: List<String>, selected: Int, enabled: Boolean = true, onOpenChanged: (Boolean) -> Unit = {}, select: (Int) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val openChanged by rememberUpdatedState(onOpenChanged)
+    fun close() { open=false;openChanged(false) }
+    DisposableEffect(Unit) { onDispose { if(open)openChanged(false) } }
     Box {
         Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).clip(ControlShape)
-            .background(LocalPalette.current.input).clickable(enabled = enabled) { open = true }.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            .background(LocalPalette.current.input).clickable(enabled = enabled) { openChanged(true);open = true }.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(options.getOrNull(selected) ?: label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             SharedIcon("chevron-down", label)
         }
-        DropdownMenu(open, { open = false }) {
-            options.forEachIndexed { index, text -> DropdownMenuItem(text = { Text(text) }, onClick = { open = false; select(index) }) }
+        DropdownMenu(open, ::close) {
+            options.forEachIndexed { index, text -> DropdownMenuItem(text = { Text(text) }, onClick = { close(); select(index) }) }
         }
     }
 }

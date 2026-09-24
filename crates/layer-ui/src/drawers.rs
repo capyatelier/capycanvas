@@ -25,7 +25,7 @@ pub struct ColumnDrawerMeasurement {
     pub bounds: Bounds,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
     Header {
@@ -411,7 +411,7 @@ impl ContentDrawer {
                 .and_then(|p| p.tiles().iter().find(|t| t.id == tile)).map(|t| t.control),
             _ => None,
         };
-        self.compact = platform == Platform::Gtk && matches!(control,
+        self.compact = platform.color_picker() && matches!(control,
             Some(ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }));
         if self.compact {
             self.dismissal = DrawerDismissal::Explicit;

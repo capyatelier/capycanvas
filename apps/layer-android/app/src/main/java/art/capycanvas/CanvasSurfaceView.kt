@@ -10,6 +10,7 @@ import android.view.MotionPredictor
 import android.view.PointerIcon
 import android.view.Surface
 import android.view.SurfaceHolder
+import android.view.ViewConfiguration
 import android.view.SurfaceView
 import org.json.JSONArray
 import kotlin.math.cos
@@ -18,6 +19,27 @@ import kotlin.math.sin
 /** Separate compositor layer, not a texture embedded in Compose's renderer. */
 class CanvasSurfaceView(context: Context, private val host: CanvasHost,
     private val chromeHitTest: (Float, Float) -> Boolean = { _, _ -> false }) : SurfaceView(context), SurfaceHolder.Callback {
+    private var pickerHold: Runnable? = null
+    private var pickerContact = -1
+    private var pickerX=0f
+    private var pickerY=0f
+    private fun cancelPickerHold() { pickerHold?.let(::removeCallbacks);pickerHold=null;pickerContact=-1 }
+    private fun pickerTouch(event: MotionEvent) {
+        if(event.actionMasked==MotionEvent.ACTION_DOWN && event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER && !event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            cancelPickerHold();pickerContact=event.getPointerId(0);pickerX=event.x;pickerY=event.y
+            val id=(event.deviceId.toLong().and(0xffffffffL) shl 16) or pickerContact.toLong()
+            val metrics=resources.displayMetrics
+            val offset=(metrics.ydpi*10f/25.4f).coerceIn(36f*metrics.density,64f*metrics.density)
+            pickerHold=Runnable {
+                pickerHold=null
+                host.input(obj("type" to "color_picker_hold","id" to id,"position" to JSONArray(listOf(pickerX,pickerY)),"offset" to offset))
+            }.also { postDelayed(it,ViewConfiguration.getLongPressTimeout().toLong()) }
+        } else if(event.actionMasked==MotionEvent.ACTION_MOVE) {
+            val index=event.findPointerIndex(pickerContact)
+            val slop=ViewConfiguration.get(context).scaledTouchSlop
+            if(index<0 || kotlin.math.hypot(event.getX(index)-pickerX,event.getY(index)-pickerY)>slop)cancelPickerHold()
+        } else if(event.actionMasked in listOf(MotionEvent.ACTION_POINTER_DOWN,MotionEvent.ACTION_UP,MotionEvent.ACTION_POINTER_UP,MotionEvent.ACTION_CANCEL))cancelPickerHold()
+    }
     private var attached = false
     private var predictor: MotionPredictor? = null
     private var predictionDevice: Int? = null
@@ -48,10 +70,12 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         inputManager.unregisterInputDeviceListener(inputDevices)
         predictor = null; predictionDevice = null; predictionProbe = null
+        cancelPickerHold()
         super.onDetachedFromWindow()
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
+        if(!hasWindowFocus)cancelPickerHold()
         if (!hasWindowFocus && Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         if (hasWindowFocus) refreshPredictionAvailability()
     }
@@ -85,11 +109,13 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         } else host.resize(width, height, density)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        cancelPickerHold()
         host.hdr.unbindSurface(this)
         predictor = null; predictionDevice = null
         if (attached) { host.detach(); attached = false }
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        pickerTouch(event)
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             requestUnbufferedDispatch(event)
             parent.requestDisallowInterceptTouchEvent(true)
@@ -144,7 +170,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         )
         if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
             host.chrome(obj("kind" to "leave", "touch" to false))
-            send(event, 0, 4, false)
+            host.input(obj("type" to "cursor_leave"))
         } else {
             host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(event.x / resources.displayMetrics.density, event.y / resources.displayMetrics.density))))
             send(event, 0, 0, true)

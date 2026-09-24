@@ -710,6 +710,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let mut released_chrome_pin = false;
         match input {
+            UiInput::CursorLeave => {
+                let preview = self.state.color_picker.preview.is_some();
+                self.cursor_input(None);
+                reply.change = self.changed(if preview { regions::COLOR_PREVIEW } else { 0 }, true);
+            }
             UiInput::ColorPickerHold { .. } => (),
             UiInput::Chrome {
                 event,
@@ -2732,11 +2737,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 use layer_render::ColorSampleArea;
                 let area = match width {
                     1 => ColorSampleArea::Point,
-                    3 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle3,
-                    5 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle5,
-                    15 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle15,
-                    51 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle51,
-                    101 if self.state.platform == Platform::Gtk => ColorSampleArea::Circle101,
+                    3 if self.state.platform.color_picker() => ColorSampleArea::Circle3,
+                    5 if self.state.platform.color_picker() => ColorSampleArea::Circle5,
+                    15 if self.state.platform.color_picker() => ColorSampleArea::Circle15,
+                    51 if self.state.platform.color_picker() => ColorSampleArea::Circle51,
+                    101 if self.state.platform.color_picker() => ColorSampleArea::Circle101,
                     3 => ColorSampleArea::Average3,
                     5 => ColorSampleArea::Average5,
                     _ => return Err("Choose a supported sample size".into()),
@@ -3352,7 +3357,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Hand input is routed through UiInput::Pointer's pan gesture.
             return Ok(());
         }
-        if self.state.platform == Platform::Gtk && (self.eyedropper.picking.previous.is_some()
+        if self.state.platform.color_picker() && (self.eyedropper.picking.previous.is_some()
             || self.eyedropper.picking.consumed.contains(&event.device_id)) {
             if event.phase == PenPhase::Hover {
                 self.cursor_input(Some(event));
@@ -4021,7 +4026,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, false))
             }
-            CommandId::Eyedropper if self.state.platform == Platform::Gtk => {
+            CommandId::Eyedropper if self.state.platform.color_picker() => {
                 if self.eyedropper.picking.previous.is_some() { self.cancel_picker(); }
                 else { self.start_picker()?; }
                 Ok((BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true))
@@ -4444,7 +4449,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
-        if matches!(self.state.platform, Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
+        if matches!(self.state.platform, Platform::Mac | Platform::Ios | Platform::Windows)
             && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
                 [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
@@ -4458,7 +4463,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }),
             );
         }
-        if self.state.platform == Platform::Gtk && self.layer_interaction.tool.picks_color() {
+        if self.state.platform.color_picker() && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.groups.clear();
             self.state.tool_set.subtools = [
                 ("Color Picker", "color-picker", ColorPickerStyle::Glass),
@@ -4583,7 +4588,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if regions != 0 {
             self.state.revision += 1;
-            if regions != regions::CAMERA {
+            if regions & !(regions::CAMERA | regions::COLOR_PREVIEW) != 0 {
                 self.workspace_model_revision = self.state.revision;
                 self.workspace_content_revision = self.state.revision;
             }
@@ -7577,7 +7582,7 @@ mod tests {
         let old = *s.renderer_mut().sample_requests.last().unwrap();
         s.dispatch(UiAction::SetColorSampleSize { width: 5 }).unwrap();
         assert_eq!(s.state.color_picker.sample_width, 5);
-        if platform != Platform::Gtk { assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
+        if !platform.color_picker() { assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
             && item.action == UiAction::SetColorSampleSize { width: 5 })); }
         assert!(s.dispatch(UiAction::SetColorSampleSize { width: 4 }).is_err());
         let color = s.state.colors.rgba();
@@ -7586,11 +7591,11 @@ mod tests {
         s.frame(2, 2).unwrap();
         assert_eq!(s.state.colors.rgba(), color);
         let next = *s.renderer_mut().sample_requests.last().unwrap();
-        assert_eq!(next.area, if platform == Platform::Gtk { ColorSampleArea::Circle5 } else { ColorSampleArea::Average5 });
+        assert_eq!(next.area, if platform.color_picker() { ColorSampleArea::Circle5 } else { ColorSampleArea::Average5 });
         assert_ne!(next.request_id, old.request_id);
         s.renderer_mut().sample_reply = Some(ColorSample { request_id: next.request_id, rgba: [0.25, 0.5, 0.75, 0.2] });
         s.frame(3, 3).unwrap();
-        if platform == Platform::Gtk {
+        if platform.color_picker() {
             assert_eq!(s.state.colors.rgba(), color);
             assert!(s.state.color_picker.preview.is_some());
         } else { assert_ne!(s.state.colors.rgba(), color); }

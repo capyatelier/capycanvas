@@ -441,3 +441,28 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
         invoke(&mut s, CommandId::Eyedropper);
     }
 }
+
+#[test]
+fn picker_preview_keeps_workspace_models_retained_on_supported_hosts() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        let mut s = session();
+        s.set_platform(platform);
+        invoke(&mut s, CommandId::Eyedropper);
+        let model = s.workspace_model_revision();
+        let content = s.workspace_content_revision();
+        let colors = s.state.colors.clone();
+        let hover = event(&s, 1, PenPhase::Hover, 0.);
+        s.cursor_input(Some(hover));
+        s.frame(1, 1).unwrap();
+        picker_reply(&mut s, [0.2, 0.4, 0.8, 1.]);
+        assert!(s.state.color_picker.preview.is_some());
+        assert_eq!(s.workspace_model_revision(), model);
+        assert_eq!(s.workspace_content_revision(), content);
+        let reply = s.input(UiInput::CursorLeave).unwrap();
+        assert_eq!(reply.change.regions, regions::COLOR_PREVIEW);
+        assert!(s.state.color_picker.preview.is_none());
+        assert_eq!(s.state.colors, colors);
+        assert_eq!(s.workspace_model_revision(), model);
+        assert!(s.state.layer_tools.tool.picks_color());
+    }
+}

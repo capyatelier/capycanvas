@@ -118,6 +118,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     // revision. Retain their model identity when only placement changes.
     internal var panelContent by mutableStateOf<JSONObject?>(null)
         private set
+    internal var colorPreview by mutableStateOf<JSONObject?>(null)
+        private set
     private var modelSnapshot: JSONObject? = null // Native owner only.
     var surfaceReady by mutableStateOf(false)
         private set
@@ -162,7 +164,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val drawingTabs = DrawingTabsController(this)
     internal val documents = DocumentController(this, application)
     internal val recovery = RecoveryController(this, application)
-    private val saved = application.getSharedPreferences("capy-canvas", 0)
+    private val saved = application.getSharedPreferences(workspaceDirectoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas", 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache(this)
     private var choreographer: Choreographer? = null
@@ -199,6 +201,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     /** Focused native color buttons own Space/Enter instead of canvas shortcuts. */
     internal var colorControlFocus: Any? = null
+    internal var pickerPopupOpen = false
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
     private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
@@ -664,6 +667,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             workspaceUpdatesPublished++
             recordPublication()
             main.post {
+                next.objectOrNull("color_preview")?.let { colorPreview = it }
                 applyWorkspaceGeometry(geometry)
                 next.objectOrNull("camera")?.let { camera ->
                     snapshot?.getJSONObject("state")?.put("camera", camera)
@@ -727,6 +731,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (publishContent && measuredPublications != null) panelContentChanges++
         recordPublication()
         main.post {
+            colorPreview = next.objectOrNull("color_preview")
             if (publishContent) panelContent = content
             snapshot = next
             drawingTabs.refresh()

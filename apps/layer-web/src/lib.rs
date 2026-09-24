@@ -1251,11 +1251,13 @@ impl WebApp {
         // full-window SVG overlay made every pen frame repaint DOM artwork.
         self.session.update_canvas_cursor(&mut self.cursor);
         self.session.append_layer_overlay(&mut self.cursor.segments);
+        let picker = self.session.color_picker_overlay();
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter
             .set_cursor(gpu.renderer.device(), &self.cursor.segments, scale);
+        gpu.presenter.set_color_picker(&gpu.renderer, picker);
         let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,

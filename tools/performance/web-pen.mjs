@@ -8,9 +8,14 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const options = new Set(process.argv.slice(2));
 for (const option of options)
-  assert(["--os-input", "--reload", "--navigator", "--profile", "--trace"].includes(option), `Unknown option: ${option}`);
+  assert(["--os-input", "--reload", "--navigator", "--profile", "--trace", "--picker"].includes(option), `Unknown option: ${option}`);
 const osInput = options.has("--os-input");
+const picker = options.has("--picker");
+const sampleWidth = Number(process.env.LAYER_PICKER_SAMPLE_SIZE || 1);
+assert([1,5,15,51,101].includes(sampleWidth), "LAYER_PICKER_SAMPLE_SIZE must be a picker option");
 const adb = process.env.ADB || "adb";
+const penHelper = process.env.LAYER_PEN_HELPER || "/data/local/tmp/capy-web-pen.dex";
+assert(/^\/data\/local\/tmp\/[a-zA-Z0-9._-]+$/.test(penHelper), "LAYER_PEN_HELPER must be a device temporary filename");
 const serial = process.env.LAYER_DEVICE_SERIAL || process.env.CAPY_ANDROID_SERIAL;
 if (osInput) assert(serial, "Set LAYER_DEVICE_SERIAL or CAPY_ANDROID_SERIAL for --os-input");
 const endpoint = process.env.LAYER_DEVICE_CDP || "http://127.0.0.1:9258";
@@ -33,8 +38,8 @@ const summary = values => {
   const percentile = p => sorted[Math.floor((sorted.length - 1) * p)];
   return { count: sorted.length, p50: percentile(.5), p95: percentile(.95), p99: percentile(.99), max: sorted.at(-1) };
 };
-const inject = (x, y, rx, ry, hz, seconds) => exec(adb, ["-s", serial, "shell",
-  `CLASSPATH=/data/local/tmp/capy-web-pen.dex app_process -Xmx64m / AndroidPenMotion ${x} ${y} ${rx} ${ry} stroke ${hz} ${seconds}`,
+const inject = (x, y, rx, ry, hz, seconds, mode="stroke") => exec(adb, ["-s", serial, "shell",
+  `CLASSPATH=${penHelper} app_process -Xmx64m / AndroidPenMotion ${x} ${y} ${rx} ${ry} ${mode} ${hz} ${seconds}`,
 ], { timeout: seconds * 1000 + 30000 });
 
 await mkdir(output, { recursive: true });
@@ -134,16 +139,22 @@ try {
     startup: layerApp.startupTimes,
     capabilities: { raw: "onpointerrawupdate" in window, prediction: typeof PointerEvent.prototype.getPredictedEvents },
   }, (_, value) => typeof value === "bigint" ? Number(value) : value)));
-  const origin = await inPage(() => {
+  if(picker) {
+    await inPage(()=>layerApp.dispatch({type:'move_panel',panel:'color',target:{kind:'float',position:[30,80]}}));
+    await delay(500);
+  }
+  const origin = await inPage(picker => {
     const camera = layerApp.app.camera(), rect = layerApp.canvas.getBoundingClientRect();
     const area = camera.work_area, scale = rect.width / camera.viewport[0];
-    return { x: rect.x + (area[0] + area[2] / 2) * scale,
-      y: rect.y + (area[1] + area[3] / 2) * scale, radius: Math.min(area[2], area[3]) * .32 * scale };
-  });
+    // Stay to the right of the floating wheel for both visibility states.
+    // Crossing a panel intentionally hides the loupe and invalidates a pacing comparison.
+    return { x: rect.x + (area[0] + area[2] * (picker ? .77 : .5)) * scale,
+      y: rect.y + (area[1] + area[3] / 2) * scale, radius: Math.min(area[2] * (picker ? .16 : .32), area[3] * .32) * scale };
+  }, picker);
   await inPage(() => {
     const bench = window.penBench = { original: {}, frames: [], calls: {}, events: [], raf: [],
       running: true, lastInput: null, signal: new AbortController() };
-    for (const name of ["frame", "pen", "input", "cursor_input", "workspace_update", "state_update"]) {
+    for (const name of ["frame", "pen", "input", "cursor_input", "workspace_update", "state_update", "color_field_pixels"]) {
       const original = layerApp.app[name];
       bench.original[name] = original;
       bench.calls[name] = [];
@@ -153,6 +164,7 @@ try {
           for (let i = 0; i < args[0].length; i += 11)
             if (!(args[0][i + 9] & 1)) bench.lastInput = args[0][i + 8];
         }
+        if (name === "cursor_input" && args[0].length) bench.lastInput=args[0][6];
         try { return original.apply(this, args); }
         finally {
           const end = performance.now();
@@ -186,22 +198,37 @@ try {
     assert(point, "Calibration contact must reach the canvas");
     screenOffset = { x: 1201 - point.x * info.viewport[2], y: 800 - point.y * info.viewport[2] };
     info.screenOffset = screenOffset;
-    info.input = "Android shell stylus replay, 200 Hz, pressure 1";
+    info.input = picker ? "Android shell stylus hover replay, 200 Hz" : "Android shell stylus replay, 200 Hz, pressure 1";
     await delay(500);
   } else info.input = "CDP pen replay, nominal 200 Hz, varying pressure";
+  if(picker) {
+    await inPage(()=>layerApp.dispatch({type:'set_brush_size',value:220}));
+    for(let i=0;i<4;i++) {
+      await inPage(rgba=>layerApp.dispatch({type:'set_color',rgba}),[[1,0,0,1],[0,1,0,1],[0,0,1,1],[1,0,1,1]][i]);
+      const point={x:origin.x+origin.radius*Math.cos(i*Math.PI/2),y:origin.y+origin.radius*.65*Math.sin(i*Math.PI/2)};
+      for(const type of ['mousePressed','mouseMoved','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,x:point.x+(type==='mouseMoved'?5:0),button:'left',buttons:type==='mouseReleased'?0:1,pointerType:'pen',force:type==='mouseReleased'?0:1});
+      await delay(150);
+    }
+    await inPage(()=>{
+      layerApp.dispatch({type:'color_picker',action:{kind:'style',style:'glass'}});
+      layerApp.dispatch({type:'color_picker',action:{kind:'source',layer:false}});
+      layerApp.dispatch({type:'invoke',command:'eyedropper'});
+    });
+    await inPage(width=>layerApp.dispatch({type:'set_color_sample_size',width}),sampleWidth);
+  }
   const stroke = async (run, milliseconds) => {
     if (osInput) {
       const scale = info.viewport[2];
       return inject(origin.x * scale + screenOffset.x, origin.y * scale + screenOffset.y,
-        origin.radius * scale, origin.radius * scale * .65, .5 * speed, Math.max(1, Math.round(milliseconds / 1000)));
+        origin.radius * scale, origin.radius * scale * .65, .5 * speed, Math.max(1, Math.round(milliseconds / 1000)),picker?"hover":"stroke");
     }
     const send = (type, time) => call("Input.dispatchMouseEvent", {
       type, x: origin.x + origin.radius * Math.sin(time * 3.2),
       y: origin.y + origin.radius * .65 * Math.sin(time * 4.7 + run * .31),
-      button: "left", buttons: type === "mouseReleased" ? 0 : 1, pointerType: "pen",
-      force: type === "mouseReleased" ? 0 : .65 + .3 * Math.sin(time * 1.7),
+      button: picker?"none":"left", buttons: picker||type === "mouseReleased" ? 0 : 1, pointerType: "pen",
+      force: picker||type === "mouseReleased" ? 0 : .65 + .3 * Math.sin(time * 1.7),
     });
-    await send("mousePressed", 0);
+    if(!picker)await send("mousePressed", 0);
     const begin = performance.now(), inflight = [];
     let inputError;
     try {
@@ -213,7 +240,7 @@ try {
         await delay(Math.max(0, 5 - (performance.now() - begin - elapsed)));
       }
       await Promise.all(inflight);
-    } finally { await send("mouseReleased", milliseconds / 1000 * speed); }
+    } finally { if(!picker)await send("mouseReleased", milliseconds / 1000 * speed); }
   };
   await stroke(0, 1500);
   await delay(800);
@@ -228,7 +255,12 @@ try {
     tracing = true;
   }
   const runs = [];
-  for (let run = 0; run < repeats; run++) {
+  for (let run = 0; run < repeats*(picker?2:1); run++) {
+    if(picker){
+      await inPage(visible=>layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'color',visible}}),run%2===1);
+      await delay(500);
+      assert.equal(await inPage(()=>[...document.querySelectorAll('.color-wheel-control')].some(n=>n.getBoundingClientRect().width>128)),run%2===1,"Wheel visibility must match the measured condition");
+    }
     await inPage(() => {
       penBench.frames = []; penBench.events = []; penBench.raf = []; penBench.lastInput = null;
       for (const values of Object.values(penBench.calls)) values.length = 0;
@@ -241,14 +273,20 @@ try {
       stats: layerApp.app.renderer_stats(), revision: layerApp.state().document_file.revision,
     }, (_, value) => typeof value === "bigint" ? Number(value) : value)));
     await writeFile(`${output}/${label}-latest.json`, JSON.stringify({ info, before, data, errors }, null, 2));
-    assert(data.revision > before, "Stroke must commit real paint");
-    const down = data.events.find(event => event.type === "pointerdown")?.arrival;
-    const up = data.events.find(event => event.type === "pointerup")?.arrival;
+    if(picker){
+      assert.equal(data.revision,before,"Hover cannot change paint");
+      assert.equal(data.calls.color_field_pixels.length,0,"Hover cannot rasterize a wheel on the UI thread");
+      assert.equal(data.calls.state_update.length,0,"Hover cannot rebuild workspace models");
+    }
+    else assert(data.revision > before, "Stroke must commit real paint");
+    const down = picker?data.events.find(event=>event.type==="pointermove")?.arrival:data.events.find(event => event.type === "pointerdown")?.arrival;
+    const up = picker?data.events.findLast(event=>event.type==="pointermove")?.arrival:data.events.find(event => event.type === "pointerup")?.arrival;
     assert(Number.isFinite(down) && up > down, "Stroke must deliver both endpoints");
     const frames = data.frames.filter(frame => frame.start >= down && frame.start <= up);
     const raf = data.raf.filter(time => time >= down && time <= up);
     assert(frames.length, "Stroke must submit drawing frames");
     data.summary = {
+      ...(picker?{wheel:run%2===1,sample_width:sampleWidth}:{}),
       frames: frames.length, updates_per_second: frames.length / ((up - down) / 1000),
       frame_cpu_ms: summary(frames.map(frame => frame.end - frame.start)),
       frame_interval_ms: summary(frames.slice(1).map((frame, i) => frame.start - frames[i].start)),
@@ -289,6 +327,7 @@ try {
   if (profiling) await call("Profiler.stop").catch(() => {});
   if (tracing) await call("Tracing.end").catch(() => {});
   await inPage(() => {
+    if(layerApp.state().layer_tools.tool.startsWith?.("pick_"))layerApp.dispatch({type:"invoke",command:"eyedropper"});
     clearInterval(window.penBenchRecovery);
     if (window.penBench) {
       penBench.running = false;

@@ -90,6 +90,15 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn configure_picker(&mut self, action: ColorPickerAction) -> Result<(), String> {
         match action {
+            ColorPickerAction::Settings { anchor } => {
+                let action = match anchor {
+                    DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer { anchor: TileAnchor { panel, tile } },
+                    DrawerAnchor::Header { id } => CustomizationAction::ToggleHeaderDrawer { id },
+                    _ => return Err("Color picker options need a tool anchor".into()),
+                };
+                if self.eyedropper.picking.previous.is_none() { self.start_picker()?; }
+                self.dispatch(UiAction::Customize { action })?;
+            }
             ColorPickerAction::Toggle => {
                 if !self.cancel_picker() {
                     self.state.color_picker.style = ColorPickerStyle::Glass;
@@ -181,7 +190,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         input: &UiInput,
     ) -> Result<Option<UiChange>, String> {
-        if self.state.platform != Platform::Gtk {
+        if !self.state.platform.color_picker() {
             return Ok(None);
         }
         let mut changed = regions::COLOR_PREVIEW;

@@ -438,6 +438,7 @@ impl App {
         self.host
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = self.host.session.state().camera.view();
+        let picker = self.host.session.color_picker_overlay();
         let zoom_milli_percent = (self.host.session.state().camera.zoom * 100_000.0).round() as i64;
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
@@ -541,6 +542,7 @@ impl App {
         surface
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_color_picker(gpu, picker);
         surface.presenter.set_surface_rotation(surface.quarter_turns);
         surface.presenter.set_overviews(gpu, &overviews);
         surface

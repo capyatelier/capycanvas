@@ -48,6 +48,9 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -60,7 +63,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
 
 /** Shared wheel and footer geometry; Rust owns layout and color math. */
 @Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
-    val view = host.panelContent?.objectOrNull("color_panel") ?: return
+    val view = host.colorPreview?.objectOrNull("view") ?: host.panelContent?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
     val config = LocalViewConfiguration.current
     // Expanding the compact corner targets to 48dp would cover the hue ring and
@@ -267,6 +270,12 @@ private class ReadoutCorner(private val radius: Float) : Shape {
     }
 }
 
+private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:Int,val space:String,
+    val hdr:Boolean,val colors:String,val rendition:String?,val preview:Boolean) {
+    fun compatible(other:ColorFieldRequest)=pixels==other.pixels && shape==other.shape && space==other.space &&
+        hdr==other.hdr && rendition==other.rendition && preview==other.preview && (preview || this==other)
+}
+
 @Composable private fun ColorWheel(host:CanvasHost,view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
     val rgbSpace = view.getString("rgb_space")
@@ -285,9 +294,26 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         val pixels = ceil(maxWidth.value * if (shape == "circle") 1f else density).toInt().coerceIn(1, 2048)
         // Like GTK/Web, sample the smooth disc once per logical pixel. Keep the
         // ring, clip, triangle and marker outlines at the tablet's physical DPI.
-        val field = remember(shape, hue, pixels, rgbSpace,view.optDouble("intensity"),view.optJSONObject("rendition")?.toString()) {
-            Bitmap.createBitmap(if(view.optBoolean("hdr"))Native.colorFieldMapped(pixels,host.panelContent!!.getJSONObject("state").displayColors().toString(),view.getJSONObject("rendition").toString())else Native.colorFieldPixels(pixels, hue, shape, rgbSpace), pixels, pixels, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val preview = host.colorPreview
+        val request = ColorFieldRequest(shape, hue, pixels, rgbSpace, view.optBoolean("hdr"),
+            if(view.optBoolean("hdr"))(preview?.objectOrNull("colors") ?: host.panelContent!!.getJSONObject("state").displayColors()).toString() else "",
+            view.optJSONObject("rendition")?.toString(), preview?.objectOrNull("picker")?.objectOrNull("preview") != null)
+        val requests = remember { Channel<ColorFieldRequest>(Channel.CONFLATED) }
+        val latest by rememberUpdatedState(request)
+        var field by remember { mutableStateOf<ImageBitmap?>(null) }
+        // One worker and one latest request: JNI rasterization never runs on
+        // Compose's thread and rapid hover cannot accumulate background jobs.
+        LaunchedEffect(requests) {
+            for (job in requests) {
+                val result = withContext(Dispatchers.Default) {
+                    Bitmap.createBitmap(if(job.hdr)Native.colorFieldMapped(job.pixels,job.colors,job.rendition!!)
+                        else Native.colorFieldPixels(job.pixels,job.hue,job.shape,job.space),job.pixels,job.pixels,Bitmap.Config.ARGB_8888).asImageBitmap()
+                }
+                if(job.compatible(latest))field=result
+            }
         }
+        LaunchedEffect(request) { requests.send(request) }
+        DisposableEffect(requests) { onDispose { requests.close() } }
         Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = "Color wheel" }
             .pointerInput(shape, focused) {
                 if (!focused) return@pointerInput
@@ -321,7 +347,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                 val length = square.getDouble(2).toFloat() * side
                 val outline = Path().apply { addRoundRect(RoundRect(Rect(origin, Size(length, length)), CornerRadius(min(6.dp.toPx(), side * .02f)))) }
                 clipPath(outline) {
-                    drawImage(field, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low)
+                    field?.let { drawImage(it, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low) }
                 }
             } else {
                 val outline = Path().apply {
@@ -330,7 +356,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                         addOval(Rect(center - Offset(radius, radius), Size(radius * 2, radius * 2)))
                     } else addRect(Rect(Offset.Zero, size))
                 }
-                clipPath(outline) { drawImage(field, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low) }
+                clipPath(outline) { field?.let { drawImage(it, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low) } }
             }
             rotate(view.number("wheel_hue_start_degrees"), center) {
                 drawCircle(hueRing, (inner + outer) / 2, center, style = Stroke(outer - inner))

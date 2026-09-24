@@ -111,10 +111,13 @@ impl NativeHost {
             struct Motion<'a> {
                 workspace_update: &'a layer_ui::WorkspaceUpdate,
                 #[serde(skip_serializing_if = "Option::is_none")]
+                color_preview: Option<layer_ui::PickerPreview<'a>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
                 camera: Option<&'a layer_ui::Camera>,
             }
             let snapshot = Motion {
                 workspace_update: update,
+                color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.session.color_preview()),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
             .serialize(serializer)?;
@@ -232,6 +235,7 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
+        if state.platform.color_picker() { map.serialize_entry("color_preview", &self.session.color_preview())?; }
         map.serialize_entry("color_panel", &if matches!(state.platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {state.display_colors().view_mapped(self.session.effective_sdr_rendition())}else{state.display_colors().view_in(self.ui_color_space)})?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),

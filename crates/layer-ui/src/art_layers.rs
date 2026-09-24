@@ -991,7 +991,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
                     return Err("Return to artwork to use this tool".into());
                 }
-                if self.state.platform == Platform::Gtk && tool.picks_color() {
+                if self.state.platform.color_picker() && tool.picks_color() {
                     self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
                     if self.eyedropper.picking.previous.is_none() { self.start_picker()?; }
                     else { self.configure_picker(ColorPickerAction::Source { layer: self.eyedropper.layer })?; }

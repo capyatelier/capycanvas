@@ -18,16 +18,18 @@ pub enum ColorPickerStyle {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ColorPickerAction {
     Toggle,
+    Settings { anchor: crate::DrawerAnchor },
     Style { style: ColorPickerStyle },
     Source { layer: bool },
 }
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ColorPickerState {
     pub style: ColorPickerStyle,
     pub layer: bool,
     pub sample_width: u32,
     pub can_sample_layer: bool,
     pub preview: Option<RgbColor>,
+    pub sample_sizes: &'static [u32],
 }
 impl crate::UiState {
     pub fn preview_colors(&self) -> std::borrow::Cow<'_, ColorState> {
@@ -129,5 +131,27 @@ impl Eyedropper {
             self.sample = Some(color);
         }
         Ok(color)
+    }
+}
+
+impl Default for ColorPickerState {
+    fn default() -> Self {
+        Self { style: ColorPickerStyle::Glass, layer: false, sample_width: 1,
+            can_sample_layer: false, preview: None, sample_sizes: &COLOR_SAMPLE_WIDTHS }
+    }
+}
+
+/// Small, reversible color-panel publication; never a workspace or paint edit.
+#[derive(Serialize)]
+pub struct PickerPreview<'a> {
+    pub picker: &'a ColorPickerState,
+    pub colors: std::borrow::Cow<'a, ColorState>,
+    pub view: crate::ColorPanelView,
+}
+impl<R: CanvasRenderer> crate::UiSession<R> {
+    pub fn color_preview(&self) -> PickerPreview<'_> {
+        let colors = self.state().preview_colors();
+        let view = colors.view_mapped(self.effective_sdr_rendition());
+        PickerPreview { picker: &self.state().color_picker, colors, view }
     }
 }

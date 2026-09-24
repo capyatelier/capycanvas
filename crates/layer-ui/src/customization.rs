@@ -1119,7 +1119,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
-        .chain((platform == Platform::Gtk).then_some(ToolbarControl::ColorPicker))
+        .chain(platform.color_picker().then_some(ToolbarControl::ColorPicker))
         .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
             .into_iter().filter(move |_| ToolbarControl::components_available(platform)))
         .chain(
@@ -2760,7 +2760,7 @@ mod tests {
         let web = tool_catalog(Platform::Web);
         assert_eq!(
             native.len(),
-            web.len() + 1 // Standalone Color Picker is currently GTK-only.
+            web.len()
                 + CommandId::ALL
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
@@ -2768,7 +2768,7 @@ mod tests {
                 + Panel::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
         );
         assert!(native.iter().any(|c| c.control == ToolbarControl::ColorPicker));
-        assert!(!web.iter().any(|c| c.control == ToolbarControl::ColorPicker));
+        assert!(web.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(native.iter().all(|c| !c.label.is_empty()
             && !c.description.is_empty()
             && ui_catalog().icons.contains(&c.icon)));

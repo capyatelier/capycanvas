@@ -1,3 +1,4 @@
+import {checkColorPicker} from './color-picker.test.mjs';
 import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
@@ -393,6 +394,9 @@ try {
     await checkToolbarComponents({call,evaluate,settle});
   } else if (process.argv.includes("--selection-tools")) {
     await checkSelectionTools({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-picker")) {
+    await checkColorPicker({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--brush-drawers")) {
     await checkBrushDrawers({call,evaluate,settle});

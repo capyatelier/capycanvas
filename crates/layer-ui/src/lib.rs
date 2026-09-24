@@ -27,7 +27,7 @@ pub mod recovery;
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
-pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle};
+pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle, PickerPreview};
 mod export;
 pub use export::{ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportResolution, ExportSize};
 mod export_presets;

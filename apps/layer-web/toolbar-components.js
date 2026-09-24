@@ -25,6 +25,9 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     popup.style.top = `${Math.max(6, Math.min(a.y, innerHeight - b.height - 6))}px`;
   }
   function brushSlider(field, context) {
+    // The disabled slider's schema crosses the JSON-valued toolbar query;
+    // restore the u32 precision before returning it to the typed numeric API.
+    field = { ...field, numeric: { ...field.numeric, digits: Number(field.numeric.digits) } };
     const row = element('div', `toolbar-slider ${field.id === 'opacity' ? 'opacity-track' : 'size-track'}`);
     const cap = button('', show, 'toolbar-slider-cap'); cap.title = field.label; cap.setAttribute('aria-label', field.label);
     target(cap, item); draggable(cap, item);

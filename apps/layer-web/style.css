@@ -974,3 +974,9 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .toolbar-slider-mark.selected { background: var(--panel); }
 .toolbar-slider input.number-slider::-moz-range-progress { background: transparent; }
 .toolbar-slider:has(input:disabled) { opacity: .4; }
+
+.picker-setting { display:grid; grid-template-columns:68px minmax(0,1fr); align-items:center; gap:8px; min-height:36px; font-size:13px; }
+.picker-setting > span { white-space:nowrap; }
+.picker-setting select { min-width:0; width:100%; padding:6px 8px; font-size:13px; }
+
+.picker-drawer .panel { padding:12px; }

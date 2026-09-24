@@ -1,3 +1,4 @@
+import {checkColorPicker} from './color-picker.test.mjs';
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkToolbarComponents} from './toolbar-components.test.mjs';
 import {checkSelectionTools} from "./selection-tools.test.mjs";
@@ -83,7 +84,7 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (process.argv.some(flag=>['--selection-tools','--color-panel'].includes(flag))) {
+  if (process.argv.some(flag=>['--selection-tools','--color-panel','--color-picker'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
@@ -165,6 +166,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--selection-tools")) {
     await checkSelectionTools({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-picker")) {
+    await checkColorPicker({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--brush-drawers")) {
     await checkBrushDrawers({call,evaluate,settle});
