@@ -1708,7 +1708,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
-        let compact_edge = (!docks_hidden && matches!(self.state.platform, Platform::Gtk | Platform::Generic))
+        let compact_edge = (!docks_hidden && crate::ToolbarControl::components_available(self.state.platform))
             .then(|| self.state.workspace.layout.compact_edge_drop_hint(
                 &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
             )).flatten();

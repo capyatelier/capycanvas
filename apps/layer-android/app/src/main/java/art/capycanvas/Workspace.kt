@@ -39,6 +39,8 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
@@ -80,6 +82,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 }
 
 @Composable fun CapyApp(host: CanvasHost) {
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val snapshot = host.snapshot
     val state = snapshot?.getJSONObject("state")
     if (state == null) {
@@ -134,6 +138,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(workspaceInsets).pointerInput(host) {
                     awaitEachGesture {
                         val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                        if (host.toolbarEditorBounds?.contains(down.position) == false) { focusManager.clearFocus(); keyboard?.hide() }
                         val swipe=host.layerSwipe
                         val onDelete=swipe.owner!=null && swipe.bounds.contains(down.position) && down.position.x>=swipe.bounds.right-swipe.offset
                         if(!swipe.bounds.contains(down.position))swipe.close()

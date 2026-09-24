@@ -119,6 +119,7 @@ internal object Native {
     @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long, cancel: Long = 0): Long
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
+    @JvmStatic external fun toolbarUi(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String
     @JvmStatic external fun colorPanelLayout(size: Float): String

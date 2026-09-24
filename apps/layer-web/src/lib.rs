@@ -829,6 +829,10 @@ impl WebApp {
             serde_wasm_bindgen::from_value(request).map_err(js)?;
         serialize(&request.resolve().map_err(js)?)
     }
+    pub fn toolbar_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
+        serialize(&layer_ui::toolbar_ui(request).map_err(js)?)
+    }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
     }

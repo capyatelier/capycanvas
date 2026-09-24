@@ -923,14 +923,9 @@ impl Customization {
         };
         for toolbar in self.toolbars.borrow().iter() {
             if let Some(view) = views.iter().find(|v| v.id == toolbar.id) {
-                // Release the session borrow before native focus or popover callbacks.
-                let components: Vec<_> = w.gpu.borrow().as_ref().map(|g| {
-                    view.tiles.iter().map(|t| {
-                        g.session.state().toolbar_component(t.choice.control)
-                    }).collect()
-                }).unwrap_or_default();
-                for ((item, tile), component) in toolbar.items.iter().zip(&view.tiles).zip(&components) {
-                    item.refresh(w, tile, component.as_ref());
+                // The owned panel projection releases the session before native callbacks.
+                for (item, tile) in toolbar.items.iter().zip(&view.tiles) {
+                    item.refresh(w, tile, tile.component.as_ref());
                 }
             }
         }

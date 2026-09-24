@@ -36,7 +36,12 @@ import kotlin.math.roundToInt
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
-                val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
+                val placement = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}")
+                if (tile.has("component")) {
+                    ToolbarComponent(host, panel, tile, bounds, dock, vertical, placement)
+                    return@forEachIndexed
+                }
+                val modifier = placement.dragSource(dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")), holdToDrag = true)
                 if (kind == "divider") {
                     ToolbarDivider(modifier, horizontal = vertical)

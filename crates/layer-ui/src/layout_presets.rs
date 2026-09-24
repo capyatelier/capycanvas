@@ -34,8 +34,10 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
-        let mut layout = self.legacy_photo_flip_layout(platform);
-        if self == Self::Photographer && platform == crate::Platform::Gtk {
+        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android);
+        let mut layout = self.component_layout(platform, supported);
+        self.arrange_components(&mut layout, supported);
+        if self == Self::Photographer && supported {
             let flip = layout.panel(Panel::Commands).unwrap().tiles().iter()
                 .find(|t| t.control == ToolbarControl::Command {
                     command: crate::CommandId::FlipHorizontal,
@@ -48,28 +50,35 @@ impl WorkspacePreset {
     /// Exact prior default, before removing Flip Image from Photo's top bar.
     pub fn legacy_photo_flip_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_bottom_brush_controls_layout(platform);
-        if self == Self::Painter && platform == crate::Platform::Gtk {
+        self.arrange_components(&mut layout, platform == crate::Platform::Gtk);
+        layout
+    }
+
+    fn arrange_components(self, layout: &mut DockLayout, supported: bool) {
+        if !supported { return; }
+        if self == Self::Painter {
             let panel = layout.panels.iter().find(|p| {
                 p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)
             }).unwrap().id;
-            layout.move_panel(
-                [1600., 1000.],
-                panel,
-                DockTarget::CompactEdge { edge: Edge::Left, alignment: EdgeAlignment::Center },
-            ).expect("centered brush toolbar");
+            layout.move_panel([1600., 1000.], panel,
+                DockTarget::CompactEdge { edge: Edge::Left, alignment: EdgeAlignment::Center })
+                .expect("centered brush toolbar");
         }
-        if self == Self::Photographer && platform == crate::Platform::Gtk {
+        if self == Self::Photographer {
             layout.move_panel([1600., 1000.], Panel::Commands,
                 DockTarget::Edge { edge: Edge::Top, outer: true })
                 .expect("outer Photo options bar");
         }
-        layout
     }
 
     /// Previous component default; only untouched included layouts migrate.
     pub fn legacy_bottom_brush_controls_layout(self, platform: crate::Platform) -> DockLayout {
+        self.component_layout(platform, platform == crate::Platform::Gtk)
+    }
+
+    fn component_layout(self, platform: crate::Platform, supported: bool) -> DockLayout {
         let mut layout = self.legacy_toolbar_components_layout(platform);
-        if platform == crate::Platform::Gtk {
+        if supported {
             match self {
                 Self::Painter => {
                     let panel = layout
@@ -640,7 +649,7 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                if platform == crate::Platform::Gtk { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
+                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
                 else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
             for (id, expected) in [
                 (14, if Panel::Proof.available_on(platform) {vec![Panel::Color, Panel::Proof, Panel::Stats]} else {vec![Panel::Color, Panel::Stats]}),
@@ -713,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_sketch_keeps_header_tools_and_gtk_brush_sliders() {
+    fn projected_sketch_keeps_header_tools_and_supported_brush_sliders() {
         for platform in [
             crate::Platform::Gtk,
             crate::Platform::Web,
@@ -724,7 +733,7 @@ mod tests {
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.floating.is_empty());
-            if platform == crate::Platform::Gtk {
+            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
                 assert_eq!(layout.bands.len(), 1);
                 assert_eq!(layout.bands[0].edge, Edge::Left);
                 assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));

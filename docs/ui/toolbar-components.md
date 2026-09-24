@@ -1,9 +1,9 @@
-# Toolbar components (GTK)
+# Toolbar components
 
 [Workspace and UI](README.md) · [Panel contract](panel-customization.md) ·
 [Numeric controls](numeric-controls.md) · [Drag convention](drag-and-reorder.md)
 
-GTK toolbars support **Brush size slider**, **Brush opacity slider**, and
+GTK, Web and Android toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
@@ -15,8 +15,7 @@ They are not title-bar items. Other hosts do not yet offer these components.
 Sketch centers size and opacity in a compact toolbar on the left edge. Photo appends
 Tool Options to its top commands toolbar, retaining New/Open/Save, Undo/Redo,
 Scale/Rotate, and removing Flip Horizontal, Clear Layer and Fill Selection.
-Tool Options takes the remaining lane width. Other hosts and Paint retain their
-previous defaults. Only untouched built-in Sketch/Photo layouts migrate; custom
+Tool Options takes the remaining lane width. Paint and hosts without component views retain their previous defaults. Only untouched built-in Sketch/Photo layouts migrate; custom
 baselines, copied workspaces and edited histories are preserved.
 
 ## Numeric controls
@@ -67,7 +66,7 @@ uses these same rows. Short allocations clip trailing content and keep
 visible insertion targets attached to their original tile IDs.
 
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
-shorter form fields. GTK supplies natural sizes and theme spacing; Rust fits
+shorter form fields. Hosts supply natural sizes and theme spacing; Rust fits
 complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
 including actions that did not fit. The drawer aligns to its right edge with a
 standard gap, connector and corner treatment of other tool drawers. Multiple
@@ -92,6 +91,12 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   pointer capture and native dropdowns. Both normal toolbars and nested drawer toolbars
   use the same typed `TileWidget` builder and refresh path. The existing numeric
   editor supplies parsing and keyboard behavior.
+- Web `toolbar-components.js` and Android `ToolbarComponents.kt` render the same
+  owned component projection in ordinary toolbars and retained drawers.
+  `toolbar_transport.rs` exposes stateless fitting, numeric metadata and formatting
+  queries to Wasm/JNI; pointer timing/capture and font measurement stay native.
+  Editors retain their original context token, and measurements are cached across
+  value-only updates. The standalone slider uses the same shared cap/track geometry.
 - Numeric values, native measurements and overflow visibility are not saved in
   toolbar configuration. Typed component kinds, horizontal text/icon mode, slider visibility, and ordinary
   tile IDs persist. Preferences participate in workspace undo/redo.
@@ -107,7 +112,7 @@ secondary click. Vertical options always use icons.
 
 Core regressions cover numeric bindings and invalid/stale edits, contextual
 settings and completion actions, all five tile styles and both axes, flexible
-allocation/overflow, GTK-only defaults, serialization, and conservative migration.
+allocation/overflow, supported-host defaults, serialization, and conservative migration.
 GTK native-input regressions run through
 `tools/performance/workspace-motion.sh gtk` on a private Mutter display:
 
@@ -142,3 +147,16 @@ history remain intact. Compact top/bottom options use a preferred length of
 sixteen tiles (side options retain eight), then shrink to the available edge.
 `native_toolbar_rows_input` verifies stable readout bounds across range changes,
 all six horizontal compact anchors, and editing in floating/left/right toolboxes.
+
+Web regression: `tools/performance/workspace-motion.sh web --toolbar-components`.
+The same journey runs with `apps/layer-web/device.test.mjs --toolbar-components`
+against a dedicated tablet test origin and forwarded Chrome debugger. It covers
+mouse/touch/pen sliders, fixed value widths, segmented/list choices, all twelve
+compact handle targets and history, all tile sizes, editor dismissal, and drawers.
+
+Android regressions: `AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts`
+and `#toolbarEditorsAndOverflow`, built with a separate application ID, on an
+attached tablet. They use native mouse/finger/stylus MotionEvents and isolated
+workspace stores. Screenshots cover both themes, standalone tracks, horizontal
+options, vertical sizes, numeric popovers and the connected drawer. These are
+injected native input journeys, not a hands-on physical stylus test.

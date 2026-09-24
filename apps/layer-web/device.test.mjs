@@ -1,3 +1,4 @@
+import {checkToolbarComponents} from './toolbar-components.test.mjs';
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
@@ -92,7 +93,9 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--filter-drawer")) {
+  if (process.argv.includes("--toolbar-components")) {
+    await checkToolbarComponents({call,evaluate,settle}); assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--stroke-recording")) {
     await checkStrokeRecording({call,evaluate,settle}); assert.deepEqual(errors,[]);

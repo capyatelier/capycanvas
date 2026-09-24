@@ -142,6 +142,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     // Native focus, not application state; prevents typing from invoking tools.
     var editingText = false
+    internal var toolbarEditorBounds: androidx.compose.ui.geometry.Rect? = null
     internal var headerKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
     private var platformPredictionAvailable: Boolean? = null
     internal val nativePredictionEnabled: Boolean

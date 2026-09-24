@@ -39,6 +39,8 @@ mod color;
 mod tool_settings;
 mod toolbar_components;
 pub use toolbar_components::*;
+mod toolbar_transport;
+pub use toolbar_transport::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,

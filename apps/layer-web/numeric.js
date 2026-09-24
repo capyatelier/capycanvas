@@ -1,6 +1,6 @@
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, resolve, onChange, icon, inline = false }) {
+export function createNumberField({ control, label, resolve, onChange, icon, inline = false, widthSamples }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");
@@ -29,7 +29,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     labels.remove(); minus.remove(); plus.remove();
     root.replaceChildren(track, valueBox);
     const measure = node("span", "number-measure");
-    measure.textContent = [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text)
+    measure.textContent = (widthSamples || [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text))
       .sort((a, b) => b.length - a.length)[0].replace(/\d/g, "8");
     valueBox.append(measure);
   }
@@ -85,6 +85,10 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     if (text) { const p = node("p", "number-description"); p.textContent = text; labels.append(p); }
   };
   root.entry = entry;
+  root.valueButton = valueButton;
+  root.slider = slider;
+  root.format = () => show(resolve({ control, value, operation: { type: "format" } }));
+  root.apply = apply;
   root.cancelEditing = () => finish(true);
   entry.hidden = ranged; valueButton.hidden = !ranged;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }

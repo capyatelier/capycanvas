@@ -19,6 +19,9 @@ impl Default for ToolOptionsStyle {
 }
 
 impl ToolbarControl {
+    pub fn components_available(platform: Platform) -> bool {
+        matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Generic)
+    }
     pub const TOOL_OPTIONS: Self = Self::ToolOptions {
         style: ToolOptionsStyle {
             text: true,
@@ -307,7 +310,7 @@ impl UiState {
 
 /// Native natural sizes and theme spacing are supplied by the host. The core
 /// chooses a contiguous prefix and always reserves access to the complete form.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ToolOptionsLayout {
     pub fields: Vec<Option<Bounds>>,
     pub more: Bounds,

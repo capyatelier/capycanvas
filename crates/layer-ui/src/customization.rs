@@ -1105,7 +1105,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
-            .into_iter().filter(move |_| matches!(platform, Platform::Gtk | Platform::Generic)))
+            .into_iter().filter(move |_| ToolbarControl::components_available(platform)))
         .chain(
             matches!(
                 platform,
@@ -1196,6 +1196,8 @@ pub struct TileView {
     pub choice: ToolChoice,
     pub enabled: bool,
     pub tooltip: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<crate::ToolbarComponentView>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelView {
@@ -1266,6 +1268,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
             };
             TileView {
                 id: tile.id,
+                component: state.toolbar_component(tile.control),
                 tooltip: tile.control.action().map_or_else(
                     || choice.label.clone(),
                     |action| {
@@ -2734,7 +2737,6 @@ mod tests {
         assert_eq!(
             native.len(),
             web.len()
-                + 3 // GTK inline toolbar components
                 + CommandId::ALL
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))

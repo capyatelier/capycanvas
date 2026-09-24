@@ -180,9 +180,9 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
 }
 
 #[test]
-fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
-    for preset in WorkspacePreset::ALL {
-        let layout = preset.layout(Platform::Gtk);
+fn toolbar_component_defaults_round_trip_on_supported_hosts() {
+    for (preset, platform) in WorkspacePreset::ALL.into_iter().flat_map(|p| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (p, platform))) {
+        let layout = preset.layout(platform);
         layout.validate().unwrap();
         let loaded: DockLayout =
             serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
@@ -230,8 +230,6 @@ fn toolbar_component_defaults_are_gtk_only_and_round_trip() {
             );
         }
         for platform in [
-            Platform::Web,
-            Platform::Android,
             Platform::Mac,
             Platform::Ios,
             Platform::Windows,

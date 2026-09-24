@@ -35,22 +35,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     root.style.setProperty("--tile-label-lines",view.tile_label_lines);
     root.style.setProperty("--tile-label-weight",view.tile_label_bold?700:400);
     for(const tile of view.tiles) {
-      const node=element("div","tile-button tool-tile");node.dataset.tile=tile.id;
-      if(tile.control.kind==="divider"){node.classList.add("tile-divider");node.setAttribute("role","separator");}
-      else {const b=button("",()=>dispatch({type:"activate_tile",panel,tile:tile.id}));
-        b.disabled=!tile.enabled;b.title=tile.tooltip;b.setAttribute("aria-label",tile.label);b.setAttribute("aria-pressed",tile.selected);
-        b.append(icon(tile.icon));if(view.tile_label_lines>0) b.append(element("span","tile-label",tile.label));node.append(b);}
-      customization.target(node,{kind:"tile",panel,tile:tile.id});
-      root.append(draggable(node,{kind:"tile",panel,tile:tile.id}));
-      if(tiles){const bounds=tiles.find(([id])=>id===tile.id)?.[1];if(bounds)place(node,bounds);else node.hidden=true;}
+      const node=customization.tileWidget(panel,view,tile);root.append(node);
+      if(tiles){const bounds=tiles.find(([id])=>id===tile.id)?.[1];customization.layoutTile(node,bounds,axis);}
     }
     root.refreshPanel=()=>{
       const current=customization.view(panel);
       root.style.setProperty("--tile-icon-size",`${current.tile_icon_size}px`);
       for(const tile of current.tiles) {
-        const row=[...root.children].find(n=>Number(n.dataset.tile)===tile.id),b=row?.querySelector("button");
-        if(!b)continue;b.disabled=!tile.enabled;b.title=tile.tooltip;b.setAttribute("aria-pressed",String(tile.selected));b.setAttribute("aria-label",tile.label);
-        const glyph=b.querySelector("svg");if(glyph?.dataset.asset!==tile.icon)glyph?.replaceWith(icon(tile.icon));
+        customization.refreshTile([...root.children].find(n=>Number(n.dataset.tile)===tile.id),tile);
       }
     };
     return root;
@@ -174,7 +166,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         for(const strip of body.querySelectorAll("[data-drawer-toolbar]")) {
           const geometry=app.drawer_toolbar(strip.dataset.drawerToolbar,width);
           strip.style.height=`${geometry.content_height}px`;
-          [...strip.children].forEach((tile,i)=>place(tile,geometry.tiles[i]));
+          [...strip.children].forEach((tile,i)=>customization.layoutTile(tile,geometry.tiles[i],strip.dataset.axis));
         }
       }
       const heights=r.bodies.map(body=>body.scrollHeight+(r.drawer.tabs?resolved.tab_bar_height:0));

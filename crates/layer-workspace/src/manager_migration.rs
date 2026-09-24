@@ -3,19 +3,19 @@ use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[test]
-fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
+fn toolbar_components_upgrade_only_untouched_supported_defaults() {
     use layer_ui::{LayoutHistory, Panel, ToolbarControl, WorkspacePreset};
-    for (index, preset) in [
+    for (index, preset, platform) in [
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
-    ] {
-        let mut previous = vec![preset.legacy_toolbar_components_layout(Platform::Gtk)];
-        previous.push(preset.legacy_bottom_brush_controls_layout(Platform::Gtk));
+    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (i, p, platform))) {
+        let mut previous = vec![preset.legacy_toolbar_components_layout(platform)];
+        previous.push(preset.legacy_bottom_brush_controls_layout(platform));
         if preset == WorkspacePreset::Photographer {
-            previous.push(preset.legacy_photo_flip_layout(Platform::Gtk));
+            previous.push(preset.legacy_photo_flip_layout(platform));
         }
         if preset == WorkspacePreset::Painter {
-            previous.push(WorkspacePreset::legacy_brush_controls_layout(Platform::Gtk));
+            previous.push(WorkspacePreset::legacy_brush_controls_layout(platform));
         }
         for old in previous {
             let working = preset.working_state();
@@ -38,18 +38,18 @@ fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
                     updated_photographer_default(e, p)
                 }
             };
-            let updated = update(&entity, Platform::Gtk).unwrap();
+            let updated = update(&entity, platform).unwrap();
             let ItemContent::Workspace {
                 baseline, history, ..
             } = &updated
             else {
                 panic!()
             };
-            assert_eq!(**baseline, preset.layout(Platform::Gtk));
+            assert_eq!(**baseline, preset.layout(platform));
             assert_eq!(history.layout(), baseline.as_ref());
             assert_eq!(entity.working.as_ref(), Some(&working));
             entity.content = updated;
-            assert!(update(&entity, Platform::Gtk).is_none());
+            assert!(update(&entity, platform).is_none());
             let mut customized = old;
             customized
                 .insert_tools(Panel::Commands, None, &[ToolbarControl::Color])
@@ -62,7 +62,7 @@ fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
                 *history = LayoutHistory::new(&customized);
             }
             assert!(
-                update(&entity, Platform::Gtk).is_none(),
+                update(&entity, platform).is_none(),
                 "customized baseline is retained"
             );
         }

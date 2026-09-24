@@ -104,7 +104,7 @@ impl ToolbarBody {
         let view = w.gpu.borrow().as_ref().and_then(|g| g.session.panel_view(self.panel).ok());
         if let Some(view) = view {
             for (item, tile) in self.items.borrow().iter().zip(&view.tiles) {
-                item.refresh(w, tile, state.toolbar_component(tile.choice.control).as_ref());
+                item.refresh(w, tile, tile.component.as_ref());
             }
         }
     }
