@@ -23,10 +23,10 @@ pub(super) fn properties(
         })
     };
     add(
-        "mask_painting",
-        "Painting",
+        "mask_mode",
+        "Mode",
         PropertyKind::Choice {
-            options: ["Color / transparent", "Black / white"]
+            options: ["Selection paint", "Grayscale mask"]
                 .map(std::sync::Arc::from)
                 .into(),
         },
@@ -48,17 +48,6 @@ pub(super) fn properties(
         },
         EffectValue::Number(p.opacity),
         EffectValue::Number(defaults.opacity),
-    );
-    add(
-        "mask_side",
-        "Overlay",
-        PropertyKind::Choice {
-            options: ["Selected areas", "Protected areas"]
-                .map(std::sync::Arc::from)
-                .into(),
-        },
-        EffectValue::Choice(u32::from(p.protected)),
-        EffectValue::Choice(0),
     );
     controls[1].color_action = Some(UiAction::Effect {
         action: EffectAction::UseCurrentColor {
@@ -89,9 +78,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     pub(super) fn mask_paint_value(&self, eraser: bool) -> f32 {
+        let grayscale = self.mask_properties().protected();
         if eraser || self.selection_masks.erases() {
-            0.
-        } else if self.mask_properties().painting == SelectionPaintBehavior::ColorTransparency {
+            if grayscale { 1. } else { 0. }
+        } else if !grayscale {
             1.
         } else {
             self.selection_masks.gray()
@@ -135,7 +125,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 EffectAction::Set { value, .. } => value.clone(),
                 EffectAction::Reset { .. } => field.default.clone(),
                 EffectAction::UseCurrentColor { .. } => {
-                    EffectValue::Color(self.state.colors.definition())
+                    EffectValue::Color(self.selection_masks.colors.definition())
                 }
                 EffectAction::Number { operation, .. } => {
                     let (PropertyKind::Number { numeric }, EffectValue::Number(value)) =
@@ -150,7 +140,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 _ => unreachable!(),
             };
             match (key.as_str(), value) {
-                ("mask_painting", EffectValue::Choice(v @ 0..=1)) => {
+                ("mask_mode", EffectValue::Choice(v @ 0..=1)) => {
                     p.painting = if v == 0 {
                         SelectionPaintBehavior::ColorTransparency
                     } else {
@@ -159,7 +149,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 ("mask_color", EffectValue::Color(c)) => p.color = c,
                 ("mask_opacity", EffectValue::Number(v)) => p.opacity = v,
-                ("mask_side", EffectValue::Choice(v @ 0..=1)) => p.protected = v == 1,
                 _ => return Err("Invalid mask property".into()),
             }
             p.validate().map_err(error)?;

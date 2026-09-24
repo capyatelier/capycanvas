@@ -1,5 +1,63 @@
 mod painted_selection_checks {
     use super::*;
+    #[test]
+    fn saving_quick_mask_activates_saved_layer_and_navigation_hides_only_previous_mask() {
+        use layer_core::SelectionTarget;
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        let art = s.engine.document().active_layer;
+        invoke(&mut s, CommandId::SelectAll);
+        let coverage = s.engine.document().selection.clone().unwrap();
+        invoke(&mut s, CommandId::QuickMask);
+        invoke(&mut s, CommandId::SaveSelectionLayer);
+        let first = s.engine.document().active_layer;
+        assert_ne!(first, art);
+        assert_eq!(s.selection_masks.target(), Some(SelectionTarget::Saved(first)));
+        assert!(!s.state.layer_tools.quick_mask);
+        assert!(!s.state.layers.iter().any(|l| l.quick_mask));
+        assert_eq!(s.engine.document().saved_selection(first).unwrap(), coverage);
+        invoke(&mut s, CommandId::NewSelectionLayer);
+        let second = s.engine.document().active_layer;
+        assert!(!s.engine.document().layer(first).unwrap().visible);
+        assert!(s.engine.document().layer(second).unwrap().visible);
+        s.layer_action(LayerAction::Select { id: art.0, mask: false }).unwrap();
+        assert!(!s.engine.document().layer(second).unwrap().visible);
+        s.layer_action(LayerAction::Select { id: first.0, mask: false }).unwrap();
+        assert!(s.engine.document().layer(first).unwrap().visible);
+        assert!(!s.engine.document().layer(second).unwrap().visible);
+        // Navigation neither adds undo steps nor destroys redo.
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().layer(second).is_none());
+        s.layer_action(LayerAction::Select { id: art.0, mask: false }).unwrap();
+        assert!(s.command(CommandId::Redo).enabled);
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().layer(first).is_none());
+        assert_eq!(s.engine.document().selection, Some(coverage));
+    }
+    #[test]
+    fn mask_mode_couples_overlay_and_painting_and_bucket_uses_displayed_color() {
+        use layer_core::{EffectValue, color::{RgbColor, RgbSpace}};
+        let mut s = session(); s.set_platform(Platform::Gtk);
+        let artwork = s.state.colors.clone();
+        invoke(&mut s, CommandId::QuickMask);
+        let color = RgbColor::new(RgbSpace::Srgb, [0.,0.5,1.,1.]).unwrap();
+        s.mask_color_action(ColorAction::SetSlot { slot: ColorSlot::Foreground, color }).unwrap();
+        s.effect_action(EffectAction::UseCurrentColor { layer: 0, key: "mask_color".into() }).unwrap();
+        assert_eq!(s.mask_properties().color, color);
+        assert_eq!(s.state.colors, artwork);
+        assert!(!s.mask_properties().protected());
+        assert_eq!((s.mask_paint_value(false),s.mask_paint_value(true)),(1.,0.));
+        s.effect_action(EffectAction::Set { layer: 0, key: "mask_mode".into(), value: EffectValue::Choice(1) }).unwrap();
+        assert!(s.mask_properties().protected());
+        assert_eq!(s.mask_paint_value(true),1.);
+        invoke(&mut s, CommandId::ResetMaskColors);
+        assert_eq!(s.mask_paint_value(false),0.);
+        invoke(&mut s, CommandId::SwapMaskColors);
+        assert_eq!(s.mask_paint_value(false),1.);
+        assert_eq!(s.state.layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["mask_mode","mask_color","mask_opacity"]);
+        let menu = s.application_menu(ApplicationMenu::Select);
+        assert!(!menu.sections.iter().flatten().any(|i| matches!(i.action, Some(UiAction::Invoke { command: CommandId::RectangleSelect | CommandId::SelectionBrush | CommandId::Lasso }))));
+        assert_eq!(CommandId::SelectionBrush.label(), "Paint selection");
+    }
     fn send(s: &mut UiSession<Recorder>, phase: PenPhase, x: f32) {
         let mut e = event(s, 1, phase, 1.);
         e.surface_position = Point { x, y: 100. };
@@ -58,7 +116,7 @@ mod painted_selection_checks {
         reply(&mut s, 0x80808080);
         s.frame(3, 3).unwrap();
         assert!(s.state.layer_tools.quick_mask);
-        assert_eq!(s.state.layer_properties.controls.len(), 4);
+        assert_eq!(s.state.layer_properties.controls.len(), 3);
         assert!(!s.state.layer_tools.controls.opacity);
         assert!(s.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).is_err());
         let epoch = s.state.document_file.epoch;
@@ -103,7 +161,7 @@ mod painted_selection_checks {
         s.set_platform(Platform::Gtk);
         let artwork = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
-        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: 0, key: "mask_painting".into(), value: layer_core::EffectValue::Choice(1) } }).unwrap();
+        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: 0, key: "mask_mode".into(), value: layer_core::EffectValue::Choice(1) } }).unwrap();
         s.mask_color_action(ColorAction::SetSlot {
             slot: ColorSlot::Foreground,
             color: layer_core::color::RgbColor::new(
@@ -220,7 +278,7 @@ mod painted_selection_checks {
             .find(|l| l.kind == LayerKind::Selection)
             .unwrap()
             .id;
-        assert!(s.selection_masks.target().is_none());
+        assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
         s.dispatch(UiAction::Selection {
             action: SelectionAction::EditLayer { id: id.0 },
         })
@@ -407,7 +465,7 @@ mod painted_selection_checks {
         assert_eq!(s.mask_properties().opacity, 0.5);
         assert!(s.require_idle().is_ok());
         let set = |layer, key: &str, value| UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } };
-        s.dispatch(set(0, "mask_painting", EffectValue::Choice(1))).unwrap();
+        s.dispatch(set(0, "mask_mode", EffectValue::Choice(1))).unwrap();
         assert_eq!(s.mask_properties().painting, SelectionPaintBehavior::BlackWhite);
         assert_eq!(s.mask_paint_value(false), s.selection_masks.gray());
         s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();

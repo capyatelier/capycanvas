@@ -1,7 +1,7 @@
 # Paintable selection specification
 
 Date: 2026-09-23. Status: Core implementation complete on GTK, Web, and Android.
-Selection Brush, Quick Mask with a temporary Layers row, and persistent
+Paint selection, Quick Mask with a temporary Layers row, and persistent
 Selection Layers are in scope.
 
 The [Selection Layer design](saved-selections-assessment.md) records the agreed
@@ -11,7 +11,7 @@ to menus, tool controls, and layer rows, distinguishing required integration fro
 recommended follow-up operations. Deeper Quick Mask editing remains identified
 separately rather than implicitly enabling every image operation on masks.
 
-Provide two ways to edit the same document selection. **Selection Brush** paints
+Provide two ways to edit the same document selection. **Paint selection** paints
 or encloses areas with Add/Subtract controls. **Quick Mask** lets ordinary
 coverage-producing drawing tools edit the selection as a grayscale image.
 Both preserve partial coverage, use a live overlay, and share document undo.
@@ -22,11 +22,11 @@ This document defines Capy Canvas behavior. Defaults, gesture recognition, and
 coverage equations below are explicit product decisions for implementation and
 prototype validation.
 
-## Selection Brush
+## Paint selection
 
 ### Placement and controls
 
-Add **Selection Brush** to the Select family's existing Tools → Tool drawer,
+Add **Paint selection** to the Select family's existing Tools → Tool drawer,
 Select menu, and customizable tool inventory. The Select opener remembers it
 and displays its icon through existing workspace tool memory. Sketch needs no
 new top-level tool button. Use a shared SVG icon and native controls.
@@ -45,7 +45,7 @@ The Tool panel contains:
 The cursor previews the brush diameter and includes a plus or minus indicator.
 Size, hardness, opacity, and mode changes do not alter an existing selection.
 Keep settings separate from the painting brush and its colors. Foreground color
-does not affect Selection Brush.
+does not affect Paint selection.
 
 Do not attach the geometric tools' New/Add/Subtract/Intersect row, feather,
 fixed-size, or anti-aliasing controls to this tool. Edges are anti-aliased;
@@ -119,7 +119,7 @@ Never turn complete erasure into unrestricted painting automatically.
 
 ### Overlay and completion
 
-While Selection Brush is active, tint selected pixels red at an initial display
+While Paint selection is active, tint selected pixels red at an initial display
 opacity of 50%, scaled by coverage. Offer alternate colors and display opacity
 in Overlay settings. Keep those settings distinct from brush Opacity. Use a
 display-space overlay with legible cursor contrast on light, dark, and HDR artwork.
@@ -183,36 +183,40 @@ Do not expose artwork merge/export operations in the mask context menu.
 Exiting removes the row without a layer-history entry. Choosing an artwork row
 finishes Quick Mask and selects that target; choosing a Selection Layer finishes
 Quick Mask and begins editing the saved mask. Preserve completed edits in both
-cases. **Save as Selection Layer…** creates a named independent snapshot without
-ending Quick Mask or selecting the saved copy. All these actions remain reachable
+cases. **Save as Selection Layer…** creates a named independent snapshot, exits
+Quick Mask, and selects the new layer for painting. All these actions remain reachable
 through menus and the editing-target controls when Layers is closed.
 
 ### Painting and display
 
-Quick Mask and Selection Layers use the same four Properties controls:
-**Painting**, **Overlay color**, **Overlay opacity**, and **Overlay**
-(Selected areas / Protected areas). There is no mask editing popup, strip, Done,
-or Swap property. The managed overlay color picker and current-color action
-work like Paper color. Layer visibility controls the overlay.
+Quick Mask and Selection Layers use the same three Properties controls:
+**Mode**, **Overlay color**, and **Overlay opacity**. There is no mask editing
+popup, strip, Done, or Swap property. The overlay picker and current-color bucket
+work like Paper color; the bucket copies the displayed mask painting color.
+Layer visibility controls the overlay.
 
-Default **Color / transparent** painting follows the familiar selection-layer
-convention: any color adds selected coverage; transparent color and erasers
-remove it. Optional **Black / white** painting maps black to zero, white to one,
-and gray to partial coverage. Mask colors remain independent of artwork colors;
-entering starts from the artwork colors, constrained to gray when appropriate.
-Ordinary color-panel swap/reset actions and shortcuts remain available.
+Default **Selection paint** mode tints selected areas: any color adds selected
+coverage; transparent color and erasers remove it. **Grayscale mask** mode tints
+protected areas: black protects, white selects, and gray gives partial coverage.
+Transparent color and erasers remove protection, selecting those pixels.
+Changing mode couples painting meaning and overlay polarity without changing
+stored coverage. Mask colors remain independent of artwork colors and are
+constrained to gray when appropriate. Ordinary color-panel swap/reset actions
+and shortcuts remain available.
 
 For paint target G and effective brush alpha A, blend as `S * (1 - A) + G * A`.
-In Color / transparent mode G is 1 for paint and 0 for erasing; in Black / white
-mode G is the chosen gray (0 for erasing). Brush opacity, spacing, pressure, and
-tip shape determine A. A physical pen eraser also removes selected coverage.
-Ordinary mask brush strokes do not use Selection Brush's automatic loop fill.
+In Selection paint, G is 1 for paint and 0 for erasing. In Grayscale mask, G is
+the chosen gray, or 1 for erasing. Brush opacity, pressure, and tip shape determine
+A. Physical pen erasers follow the same convention. Ordinary mask strokes do
+not use Paint selection's automatic loop fill. Swept nibs publish every real
+endpoint so large G-Pen brushes refresh during sub-spacing movement.
 
-Overlay defaults to **selected** areas red at 50%. Display side/color/opacity
-never change coverage or painting meaning. Quick Mask remembers these settings
-for the document session. Selection Layers persist their own settings; saving a
-Quick Mask copies them. Several visible saved masks composite their individual
-tints in layer order without modifying the current selection.
+Overlay defaults to red at 50%; color and opacity affect display only. Quick
+Mask remembers these properties for the document session. Selection Layers
+persist their properties; saving a Quick Mask copies them. Activating a saved
+mask shows it, and switching to another layer hides the previous saved mask.
+This target navigation adds no undo step. Other explicitly visible saved masks
+can still composite their tints in layer order without changing the selection.
 
 ### Supported operations
 
@@ -232,7 +236,7 @@ and explanation from shared Rust; never silently route them to artwork or
 substitute a different material behavior. The chosen ordinary brush preset is
 preserved for exit.
 
-Choosing Selection Brush or another selection-construction tool exits Quick Mask
+Choosing Paint selection or another selection-construction tool exits Quick Mask
 and activates that tool on the resulting selection. Explicitly choosing a layer
 or layer-mask editing target also exits, then applies that target choice.
 Artwork filters, destructive layer commands, and content transforms are disabled
@@ -271,7 +275,7 @@ There is still only one current selection restricting artwork edits.
 
 | Action | Required behavior |
 | --- | --- |
-| Save as Selection Layer… | Snapshot current coverage, including completed Quick Mask edits. Ask for a name with an automatic default; preserve the current editing target and working selection. Default to the document root. |
+| Save as Selection Layer… | Snapshot current coverage, including completed Quick Mask edits. Ask for a name with an automatic default; activate the new layer while preserving the working selection. Default to the document root. |
 | New Selection Layer… | Create an empty stored mask and enter Color / transparent painting. A group-specific creation command explicitly parents it to that group. |
 | Click row / Edit Selection Layer | Edit stored coverage directly with the shared mask Properties and paintbrush row indicator. Preserve the current selection separately; it does not clip stored-mask painting. |
 | Load Selection | Resolve the stored mask's placement, copy coverage to the current selection, and return to the last valid artwork editing target. Never consume or delete the saved row. |
@@ -327,7 +331,7 @@ Other formats require explicit support before claiming this data is preserved.
 
 ## Shared implementation contract
 
-Selection Brush and Quick Mask edit one authoritative current selection.
+Paint selection and Quick Mask edit one authoritative current selection.
 Selection Layers hold independent immutable coverage snapshots. Use explicit
 editing targets for artwork, layer masks, current Quick Mask, and saved selection
 IDs. Display, editing target, and loaded current selection are separate state.
@@ -335,9 +339,9 @@ IDs. Display, editing target, and loaded current selection are separate state.
 | Existing code | Integration |
 | --- | --- |
 | [Selection data](../../crates/layer-core/src/layers.rs) | Reuse contour/pixel coverage, inversion, affine placement, immutable snapshots, and 8-bit results. Normalize into document coordinates for a new painted result without modifying old snapshots. |
-| [Selection tools](../../crates/layer-ui/src/selection_tools.rs), [session](../../crates/layer-ui/src/session.rs) | Add Selection Brush identity, separate Add/Subtract settings, Quick Mask state, shared commands, control visibility, gesture lifecycle, and target restoration. Update geometric-tool guards explicitly. |
+| [Selection tools](../../crates/layer-ui/src/selection_tools.rs), [session](../../crates/layer-ui/src/session.rs) | Add Paint selection identity, separate Add/Subtract settings, Quick Mask state, shared commands, control visibility, gesture lifecycle, and target restoration. Update geometric-tool guards explicitly. |
 | [Stroke engine](../../crates/layer-engine/src/canvas.rs) | Reuse pen samples, pressure, stabilization, and dab placement. Route to explicit current/saved selection targets; neither uses the current selection as its clip. Current-selection edits bypass artwork locks; saved edits validate their own and ancestor locks. Commit to the captured target instead of layer raster edits. |
-| [Mask renderer](../../crates/layer-render-wgpu/src/layer_masks.rs), [brush shader](../../crates/layer-render-wgpu/src/brush.wgsl) | Reuse coverage geometry and GPU page management. Add per-contact footprint accumulation for Selection Brush and grayscale painting for Quick Mask. Existing layer-mask setup forces white, so it cannot provide grayscale behavior unchanged. |
+| [Mask renderer](../../crates/layer-render-wgpu/src/layer_masks.rs), [brush shader](../../crates/layer-render-wgpu/src/brush.wgsl) | Reuse coverage geometry and GPU page management. Add per-contact footprint accumulation for Paint selection and grayscale painting for Quick Mask. Existing layer-mask setup forces white, so it cannot provide grayscale behavior unchanged. |
 | [Selection refinement](../../crates/layer-render-wgpu/src/selection_refine.wgsl), [region tools](../../crates/layer-ui/src/region_tools.rs) | Reuse coverage transport and validation; preserve geometric selection Boolean modes. The new brush blending equations are separate. Replace latest-request cancellation with ordered completion for successive paint strokes. |
 | [Presentation](../../crates/layer-render-wgpu/src/present.rs), [display shader](../../crates/layer-render-wgpu/src/present.wgsl) | Add continuous-coverage tint and transient stroke display. Keep the overlay out of document raster, sampling, and export. |
 | [Workspace working state](../../crates/layer-ui/src/workspace.rs) | Persist tool settings, display preferences, and last selection-tool identity with defaults for old workspaces. Do not serialize a pending contact or Quick Mask editing session into a workspace. |
@@ -382,7 +386,7 @@ Implementation milestones, in delivery order:
    copies, placement, lock validation, project persistence, and bounded undo
    accounting. Implemented; core/engine/UI regression suites pass. Existing
    selection types were moved out of layer ownership code, not duplicated.
-2. Shared painted coverage and GTK Selection Brush: implemented. Shared real-pen
+2. Shared painted coverage and GTK Paint selection: implemented. Shared real-pen
    sampling, enclosed-area filling, ordered asynchronous captures, unchanged-edit
    suppression, and coverage-scaled overlays have core/GPU regression coverage.
    GTK mouse and injected Wayland pen journeys pass; light/dark controls reviewed.
@@ -401,7 +405,7 @@ Implementation milestones, in delivery order:
    feel remains a manual check; automated device contacts are injected.
 
 Build the selection editing target, ordered transactions, and overlay first.
-Then deliver Selection Brush, Quick Mask with its temporary row, and persistent
+Then deliver Paint selection, Quick Mask with its temporary row, and persistent
 Selection Layers with the agreed save/edit/load workflow. All three are required
 to complete this feature. Use the command inventory's **Core** entries for their
 necessary menu integration. Its **Next** and **Later** entries are recommendations,
@@ -426,7 +430,7 @@ Required acceptance cases:
   rotation, and flips; geometry remains in document coordinates.
 - A single 50% stroke, overlapping dabs within it, two separate 50% strokes,
   low-opacity values without ants, and full subtraction to an explicit empty mask.
-- Independent Selection Brush settings, mode modifiers, physical eraser priority,
+- Independent Paint selection settings, mode modifiers, physical eraser priority,
   live closure feedback, overlay visibility, and keyboard-free mode controls.
 - Quick Mask entry from none/empty/soft/transformed selections; unchanged round
   trip; black/white/gray painting, erase, swap, fill, and gradient.

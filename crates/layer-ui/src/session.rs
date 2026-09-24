@@ -1967,7 +1967,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selected = (id == CommandId::QuickMask && self.selection_masks.quick())
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
-            || (id == CommandId::MaskOverlayProtected && self.mask_properties().protected)
+            || (id == CommandId::MaskOverlayProtected && self.mask_properties().protected())
             || (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
             || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
@@ -3820,7 +3820,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     match command {
                         CommandId::SelectionAdd => self.selection_tools.options.brush.subtract = false,
                         CommandId::SelectionSubtract => self.selection_tools.options.brush.subtract = true,
-                        _ => return Err("Selection Brush supports Add and Subtract".into()),
+                        _ => return Err("Paint selection supports Add and Subtract".into()),
                     }
                     self.refresh_tools();
                     return Ok((BRUSH | COMMANDS, true));

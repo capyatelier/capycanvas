@@ -67,9 +67,10 @@ impl SelectionStroke {
         }
         self.real_points += 1;
         self.generator.append(point, &self.brush, dabs);
-        if event.phase == PenPhase::Up {
-            self.generator.finish(&self.brush, dabs);
-        }
+        // Masks accumulate real contacts without artwork's disposable tail
+        // preview. Publish the swept endpoint on every sample so large nibs
+        // do not wait half a diameter before their coverage refreshes.
+        self.generator.finish(&self.brush, dabs);
         self.loops
             .as_mut()
             .map_or_else(Vec::new, |loops| loops.push(point.position))
@@ -89,7 +90,12 @@ impl SelectionStroke {
         )
         .ok()?;
         let mut dabs = Vec::new();
-        DabGenerator::generate(&stroke, layer_core::color::RgbSpace::Srgb, &mut dabs);
+        let mut generator = DabGenerator::new(layer_core::color::RgbSpace::Srgb);
+        generator.reset_for_replay(&stroke);
+        for point in stroke.points.iter().copied() {
+            generator.append(point, &stroke.brush, &mut dabs);
+            generator.finish(&stroke.brush, &mut dabs);
+        }
         Some(dabs)
     }
     pub fn cursor(&self, event: PenEvent) -> Vec<Dab> {
@@ -269,6 +275,66 @@ fn polygon_selection(points: Vec<Point>) -> Option<Selection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_gpen_publishes_every_real_endpoint_and_replays_the_same_path() {
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        brush.diameter = 800.;
+        brush.taper.end_distance_diameters = 1.;
+        brush.taper.end_size = 0.;
+        let mut stroke = SelectionStroke::new(
+            1,
+            brush,
+            ViewTransform::IDENTITY,
+            PressureCurve::default(),
+            None,
+        );
+        let mut live = Vec::new();
+        for i in 0..=10 {
+            let before = live.len();
+            let event = PenEvent {
+                device_id: 1,
+                sequence: i,
+                timestamp_ns: i * 8_000_000,
+                view_revision: 0,
+                surface_position: p(100. + i as f32 * 2., 100.),
+                pressure: 0.7,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase: if i == 0 {
+                    PenPhase::Down
+                } else {
+                    PenPhase::Move
+                },
+                tool: crate::ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            };
+            stroke.push(event, &mut live);
+            assert!(
+                live.len() > before,
+                "sample {i} must advance coverage before half-diameter spacing"
+            );
+            assert_eq!(live.last().unwrap().center, event.surface_position);
+            let real_count = live.len();
+            stroke.push(
+                PenEvent {
+                    flags: SampleFlags::PREDICTED,
+                    ..event
+                },
+                &mut live,
+            );
+            assert_eq!(live.len(), real_count);
+        }
+        let replay = stroke.finished_replay().unwrap();
+        assert_eq!(
+            live.iter().map(|d| d.center).collect::<Vec<_>>(),
+            replay.iter().map(|d| d.center).collect::<Vec<_>>()
+        );
+        assert!(
+            replay.last().unwrap().radii[0] < live.last().unwrap().radii[0],
+            "end taper is still resolved on lift"
+        );
+    }
     fn p(x: f32, y: f32) -> Point {
         Point { x, y }
     }

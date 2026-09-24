@@ -16,7 +16,6 @@ pub struct SelectionMaskProperties {
     pub painting: SelectionPaintBehavior,
     pub color: color::RgbColor,
     pub opacity: f32,
-    pub protected: bool,
 }
 impl Default for SelectionMaskProperties {
     fn default() -> Self {
@@ -24,11 +23,15 @@ impl Default for SelectionMaskProperties {
             painting: SelectionPaintBehavior::default(),
             color: color::RgbColor::new(color::RgbSpace::Srgb, [1., 0., 0., 1.]).unwrap(),
             opacity: 0.5,
-            protected: false,
         }
     }
 }
 impl SelectionMaskProperties {
+    /// The convention couples painting and overlay polarity. Old project files
+    /// may contain an independent `protected` field; serde ignores that field.
+    pub fn protected(&self) -> bool {
+        self.painting == SelectionPaintBehavior::BlackWhite
+    }
     pub fn validate(&self) -> Result<(), DocumentError> {
         if self.color.validate_working_spaces().is_err()
             || !self.opacity.is_finite()
@@ -343,6 +346,15 @@ impl Selection {
 mod selection_tests {
     use super::*;
 
+    #[test]
+    fn legacy_mask_side_is_replaced_by_the_painting_convention() {
+        let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"color_transparency","protected":true}"#).unwrap();
+        assert!(!p.protected());
+        let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"black_white","protected":false}"#).unwrap();
+        assert!(p.protected());
+        assert!(!serde_json::to_string(&p).unwrap().contains("protected"));
+    }
+
     fn soft_mask() -> Selection {
         Selection::pixels(Arc::new(
             SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff804020]).unwrap(),
@@ -358,7 +370,6 @@ mod selection_tests {
         let properties = SelectionMaskProperties {
             painting: SelectionPaintBehavior::BlackWhite,
             opacity: 0.35,
-            protected: true,
             ..Default::default()
         };
         layer.properties.selection_mask = Some(properties.clone());

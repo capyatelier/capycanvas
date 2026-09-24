@@ -284,7 +284,7 @@ impl WgpuRasterizer {
                 let bind = gpu.bind(
                     self,
                     self.document_extent,
-                    properties.protected,
+                    properties.protected(),
                     {
                         let mut color = properties
                             .color

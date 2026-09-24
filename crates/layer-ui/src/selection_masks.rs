@@ -655,7 +655,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.selection_masks.colors.constrain_grayscale()?;
         }
         if let SelectionTarget::Saved(id) = target {
-            self.engine.set_layer_visibility(id, true).map_err(error)?;
             self.engine.set_active_layer(id).map_err(error)?;
             self.layer_interaction.selected = std::collections::BTreeSet::from([id]);
         }
@@ -752,15 +751,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                     !self.selection_tools.options.display.overlay
             }
             CommandId::MaskOverlayProtected => {
+                // Keep old customized buttons/shortcuts readable, but make
+                // their toggle select the coupled mode, not a second polarity.
                 let layer = match self.selection_masks.target().ok_or("Select a mask first")? {
                     SelectionTarget::Current => 0,
                     SelectionTarget::Saved(id) => id.0,
                 };
                 self.effect_action(EffectAction::Set {
                     layer,
-                    key: "mask_side".into(),
+                    key: "mask_mode".into(),
                     value: layer_core::EffectValue::Choice(u32::from(
-                        !self.mask_properties().protected,
+                        !self.mask_properties().protected(),
                     )),
                 })?;
             }
@@ -938,11 +939,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if save_current && self.selection_masks.target().is_some() {
                     layer.properties.selection_mask = Some(self.mask_properties());
                 }
-                layer.visible = !save_current;
                 self.layer_edit(Edit::InsertLayer { index: 0, layer })?;
-                if !save_current {
-                    self.begin_selection_mask(SelectionTarget::Saved(id))?;
-                }
+                self.begin_selection_mask(SelectionTarget::Saved(id))?;
                 self.state.layer_tools.rename_layer = Some(id.0);
             }
             SelectionAction::EditLayer { id } => {

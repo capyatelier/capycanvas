@@ -30,7 +30,7 @@ Hold Shift before starting a selection to Add, Alt to Subtract, or Shift+Alt to
 Intersect. Ctrl/Cmd temporarily chooses New. The operation is latched for the
 whole gesture (including a polygon); releasing keys does not change a pending
 result or the remembered tool mode. Shift/Alt pressed after the initial contact
-constrain shape geometry instead. Selection Brush keeps its two-mode behavior:
+constrain shape geometry instead. Paint selection keeps its two-mode behavior:
 Alt swaps Add/Subtract and Shift chooses Add. All modes have visible controls.
 
 Select by Color shares region classification, tolerance, visible/editing/reference
@@ -92,7 +92,7 @@ Keep machine-specific logs and screenshots in ignored `artifacts/`, not Git.
 
 ## Paintable coverage and saved masks
 
-`selection_stroke.rs` shares the ordinary dab generator; Selection Brush indexes
+`selection_stroke.rs` shares the ordinary dab generator; Paint selection indexes
 real centerline crossings, while grayscale mask editing uses the configured dry
 brush. `painted_selections.rs` serializes completed contacts and GPU captures.
 A submitted chunk stays immutable until acknowledged, including when final end
@@ -128,16 +128,33 @@ so selecting a mask does not move its name between double-clicks/taps.
 Quick Mask has no separate editing strip or popup. Its temporary row remains
 outside groups and cannot be renamed/reordered; exiting removes it.
 
-`selection_properties.rs` publishes the same four Properties controls for both
-mask kinds: Painting, Overlay color, Overlay opacity, and selected/protected
-areas. Color uses the same managed picker/current-color action as paper.
-Color / transparent painting is the default: every opaque color adds coverage;
-eraser/transparent removes it. Black / white is optional (black removes, white
-selects, gray gives partial coverage). Both blend with ordinary paint opacity.
-Entry without a current selection provides an empty working mask; leaving an
-untouched mask preserves no selection and creates no history. Overlay defaults
-to selected areas in red at 50%. Saved layers persist these properties and use
-ordinary single-step history; saving a Quick Mask copies its properties.
+`selection_properties.rs` publishes three controls for both mask kinds: Mode,
+Overlay color, and Overlay opacity. Selection paint (default) paints selected
+coverage with color, removes it with transparency/erasers, and overlays selected
+areas. Grayscale mask uses black to protect, white to select, gray for partial
+coverage, and transparency/erasers to select; its overlay shows protected areas.
+Both blend with ordinary paint opacity. Overlay polarity derives from the mode,
+including for old files that stored a separate `protected` field. The color
+bucket copies the displayed mask painting color, independent of artwork colors.
+
+Entry without a selection provides an empty working mask; leaving it untouched
+preserves no selection and creates no history. Saved layers persist their
+properties with ordinary single-step history. Saving exits Quick Mask, copies
+its coverage/properties, and activates the saved layer. Activating a saved layer
+shows it; leaving for another target automatically hides it without adding an
+undo step or discarding redo.
+
+Swept mask brushes flush every real input endpoint, rather than waiting for the
+ordinary brush's distance simplifier. Masks have no disposable artwork tail
+preview. Completed end-taper replay uses the same endpoint sampling so live and
+finished geometry agree. Stamp-brush spacing is unchanged.
+
+Tool-page sliders arbitrate touch/pen travel in the host. Press edits immediately;
+vertical movement past native slop restores the initial value and scrolls the
+parent, while horizontal movement retains slider editing. GTK owns the contact
+and scroll adjustment; Compose lets its scrollable parent take vertical travel;
+Web uses native touch panning and the existing pen scroller. Mouse/keyboard and
+accessibility continue through the native range controls.
 
 Select → Modify and mask row → Modify provide Grow/Shrink with an integer
 1–128 image-pixel distance. Apply queues one asynchronous GPU circular
@@ -164,7 +181,7 @@ Additional reproducible checks:
 - `cargo test --locked -p layer-render-wgpu selection_paint -- --test-threads=1`
   covers scalar blending, coherent brush sweeps, gradients, source coverage,
   previews, thumbnails and export isolation (requires a GPU).
-- Web `--selection-tools` also exercises Selection Brush Add/Subtract controls,
+- Web `--selection-tools` also exercises Paint selection Add/Subtract controls,
   Quick Mask rows/properties, independent colors, compact Load icons, mouse/touch inline rename,
   Grow/Shrink dialogs, saved-mask edit/load and reselect.
   Its light/dark screenshot assertions inspect the painted canvas area. Tested
@@ -173,7 +190,7 @@ Additional reproducible checks:
   physical pen sensor. Keep the tablet awake before starting the harness; it
   holds a screen wake lock during this suite and preserves recovery prompts
   using Keep for Later.
-- Android `AndroidRasterTest#paintableSelectionsOnDevice` tests Selection Brush
+- Android `AndroidRasterTest#paintableSelectionsOnDevice` tests Paint selection
   GPU history, native stylus Quick Mask contacts, normal thumbnails, double-tap
   rename, Grow, independent colors, compact Load icons and artwork export isolation.
   Light/dark captures are written to the app’s external files directory. Run alongside
@@ -185,10 +202,10 @@ Additional reproducible checks:
   coverage and tint pixels, saves/edits/loads a mask, and captures both themes.
 - `cargo test --locked -p layer-render-wgpu --release selection_paint_latency
   -- --ignored --nocapture --test-threads=1` measures a 4096² mask. On NVIDIA
-  RTX PRO 6000 Blackwell Max-Q/Vulkan 610.57.04, the shared-footprint path measured
-  0.027 ms submit p95, 0.090 ms GPU-complete p95 per eight contacts, and 32.482 ms
-  final asynchronous capture. First-use pipeline/init completion was 74.695 ms;
-  interactive hosts compile pipelines asynchronously. These are workstation
+  RTX PRO 6000 Blackwell Max-Q/Vulkan 610.57.04, eight real G-Pen samples per
+  update measured 0.073/0.209 ms sample-and-submit p95 and 0.177/0.628 ms
+  GPU-complete p95 for 64/800px brushes. Final capture took 11.5/5.2 ms.
+  Interactive hosts compile pipelines asynchronously. These are workstation
   measurements, not tablet latency claims.
 - `cargo test --locked -p layer-render-wgpu selection_resize_latency --lib --
   --ignored --nocapture --test-threads=1` measures a 2048² soft mask with no

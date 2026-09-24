@@ -1599,6 +1599,15 @@ impl Document {
                 self.active_mask = false;
                 self.active_layer = id;
                 for layer in &mut self.layers {
+                    // Selection overlays follow the drawing target, like the
+                    // visibility-mask preview below. Navigation has no undo step.
+                    if layer.kind == LayerKind::Selection {
+                        if layer.id == id {
+                            layer.visible = true;
+                        } else if layer.id == previous {
+                            layer.visible = false;
+                        }
+                    }
                     if layer.id != id
                         && let Some(mask) = &mut layer.mask
                     {

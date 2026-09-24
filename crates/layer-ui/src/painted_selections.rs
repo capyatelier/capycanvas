@@ -69,7 +69,7 @@ impl SelectionBrushOptions {
             .controls()
             .into_iter()
             .find(|c| c.id == id)
-            .ok_or("Unknown selection brush setting")?;
+            .ok_or("Unknown Paint selection setting")?;
         control.numeric.validate(value, control.label)?;
         match id {
             "selection_brush_size" => self.size = value,
@@ -259,7 +259,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut color = properties.color.encoded_in(layer_core::color::RgbSpace::Srgb).unwrap_or(properties.color.rgba);
                 color[3] *= properties.opacity; color
             } else { display.color },
-            protected: target.is_some() && properties.protected,
+            protected: target.is_some() && properties.protected(),
         });
         let selection = if let Some(target) = target {
             Some(if display.overlay && active {

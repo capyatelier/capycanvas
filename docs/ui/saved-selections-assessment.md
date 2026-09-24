@@ -57,7 +57,8 @@ an unfinished contact is cancelled. Opening/closing the temporary row is not
 another undoable layer insertion/deletion.
 
 Provide **Save as Selection Layer…** to create a persistent snapshot. Saving
-does not end Quick Mask or make the saved copy follow later Quick Mask edits.
+exits Quick Mask and activates the saved layer for painting. The copy is
+independent of the current selection.
 The Layers row supplements the existing menu/button/exit indicator, so artists
 can still work when the Layers panel is closed or in a drawer.
 
@@ -133,8 +134,8 @@ character-local regions with their artwork.
 
 | Action | Required behavior |
 | --- | --- |
-| Save as Selection Layer… | Create a named snapshot of the current coverage, including a completed Quick Mask result. Never exit Quick Mask solely to save the snapshot. |
-| New Selection Layer… | Create an empty saved mask, select it for editing, and choose white for painting. Default to the root unless invoked explicitly for a group. |
+| Save as Selection Layer… | Create a named snapshot of the current coverage, including a completed Quick Mask result. Exit Quick Mask and activate the new saved layer. |
+| New Selection Layer… | Create an empty saved mask, select it for editing, using Selection paint by default. Default to the root unless invoked explicitly for a group. |
 | Select row | Make that saved mask the editing target. Drawing changes the stored Selection Layer directly; show its name in the editing-target indicator. |
 | Load Selection | Copy the stored coverage into the current selection and restore the most recent valid artwork editing target. |
 | Add / Subtract / Intersect | Combine a saved mask with the current selection using the existing selection Boolean operations, then return to artwork editing. |
@@ -146,7 +147,8 @@ Keep row editing and Load Selection distinct. Choosing a row does not replace
 the current selection; loading does not leave the saved mask as the painting
 target. Editing a Selection Layer uses the mask editing controls and shared
 coverage engine without creating a second temporary Quick Mask row. Leaving it
-for an artwork row retains the saved edits.
+for another layer retains the saved edits and automatically hides its overlay.
+Activating it again shows the overlay; target navigation has no undo step.
 
 For example: save a region as Hair, then choose an artwork layer and continue
 drawing. Select the Hair row to improve the stored mask. Choose Load Selection

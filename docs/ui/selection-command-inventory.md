@@ -38,7 +38,7 @@ applications use identical labels, shortcuts, mathematics, or menus.
 | Mark | Meaning |
 | --- | --- |
 | Existing | Shared implementation exists. Reuse it, while checking host exposure and the new editing targets. |
-| Core | Required command integration for the agreed Selection Brush / Quick Mask / Selection Layer feature. New unless explicitly identified as an adaptation. |
+| Core | Required command integration for the agreed Paint selection / Quick Mask / Selection Layer feature. New unless explicitly identified as an adaptation. |
 | Next | Recommended next delivery for a complete everyday selection workflow; separate work from the agreed paintable-selection foundation. |
 | Later | Useful specialist capability or extra UI, intentionally deferred. |
 
@@ -74,7 +74,7 @@ Keep this the complete, discoverable home for current-selection commands.
 | Lifecycle | Select All; Deselect; Invert Selection | Existing. Preserve soft coverage; inversion is `1 - coverage`. |
 | Lifecycle | Reselect | Core. Restore the last deselected coverage in this document, including soft edges and placement. |
 | Create | Rectangle; Ellipse; Lasso; Polygon; Auto Select; Color Select | Existing selection-tool commands. Preserve their settings. |
-| Create | Selection Brush | Core. Activates its own Add/Subtract controls. |
+| Create | Paint selection | Core. Activates its own Add/Subtract controls. |
 | Paint | Quick Mask | Core. Checkable mode toggle; explicit Exit Quick Mask while active. |
 | From layer | Select Layer Opacity → Replace / Add / Subtract / Intersect | Core. Also available on artwork thumbnails. |
 | From mask | Load Layer Mask as Selection → Replace / Add / Subtract / Intersect | Core. Also available on artwork-mask thumbnails. |
@@ -82,7 +82,7 @@ Keep this the complete, discoverable home for current-selection commands.
 | Modify | Feather… | Next. Operate on the current result, not on the next gesture. |
 | Modify | Border…; Smooth… | Next. Border creates a selected band; Smooth reduces small irregularities. |
 | Geometry | Move Selection; Transform Selection… | Next. Affect coverage/placement only; artwork stays stationary. |
-| Store | Save as Selection Layer… | Core. Named snapshot; default root placement; keeps current editing target. |
+| Store | Save as Selection Layer… | Core. Named snapshot; default root placement; activates the new layer. |
 | Recall | Load Selection… | Core. Named submenu with group path, Replace/Add/Subtract/Intersect, and Load Inverted Selection. Works when Layers is closed; Layers provides the coverage thumbnail. |
 | Update stored | Replace Selection Layer from Current Selection… | Core. Explicit named destination submenu; never infer an overwrite from the last loaded source. Row context targets its own row. |
 | Display | Show Selection Outline | Core. Same action and checked state as View. Never deselects. |
@@ -109,7 +109,7 @@ coverage is available for Save even before the first stroke.
 Load/Add with no current selection uses the source as the new selection.
 Subtract/Intersect require a current selection; explicit empty counts as present.
 Invert source affects only the incoming snapshot. All four modes preserve partial
-values and use the existing Boolean rules, distinct from Selection Brush's
+values and use the existing Boolean rules, distinct from Paint selection's
 per-stroke opacity accumulation. A no-op creates no history entry.
 
 ## 2. Canvas selection actions and optional action bar
@@ -158,12 +158,12 @@ away from the contact and viewport edges, and do not move it during a stroke.
 | Rectangle/Ellipse | Free / Fixed Ratio / Fixed Size; dimensions; From Center | Existing; retain shape-specific visibility. |
 | Polygon | Constrain Angles; Complete Selection; Cancel Selection | Existing. Escape/cancel retains the previously committed selection. |
 | Auto Select/Color Select | Sampling source: editing layer / visible artwork / reference layers; relevant tolerance and region settings | Existing. Saved masks and overlays are excluded from artwork sampling. |
-| Selection Brush | Add / Subtract; Size; Hardness; Opacity; pressure-for-size option; overlay settings | Core. No New/Intersect row or generic feather toggle. |
+| Paint selection | Add / Subtract; Size; Hardness; Opacity; pressure-for-size option; overlay settings | Core. No New/Intersect row or generic feather toggle. |
 | Quick Mask / Selection Layer editing | Supported brush, eraser, fill and gradient settings | Core. Painting convention and overlay settings stay in Properties; ordinary color controls provide swap/reset. |
 | Mask editing indicator | Paintbrush in the active layer row; Quick Mask command checked while active | Core. Layer indicator remains visible when its overlay is hidden. |
 | Select panel | Selection Actions… | Core. Keyboard-free access to the current-selection menu. |
 
-Keep Selection Brush's temporary Alt/Option mode swap and physical eraser rules
+Keep Paint selection's temporary Alt/Option mode swap and physical eraser rules
 from the main specification. Do not apply thumbnail-load modifiers to canvas
 gestures. Existing geometric Shift/Alt constraints need their own precedence;
 adding a blanket Shift=Add rule would conflict with current shape constraints.
@@ -173,14 +173,14 @@ All persistent modes must remain selectable without a keyboard.
 
 The row uses ordinary layer presentation, is pinned and selected while editing,
 and is removed on exit. A compact Load icon ends editing.
-Painting behavior, overlay color/opacity, and selected/protected display stay
+Mode (Selection paint / Grayscale mask) and overlay color/opacity stay
 in Properties; the eye controls visibility. Its context menu is short and
 target-specific:
 
 | Item | Behavior | Priority |
 | --- | --- | --- |
 | Exit Quick Mask | Keep completed edits, return to artwork, remove temporary row. | Core |
-| Save as Selection Layer… | Create named snapshot, leave Quick Mask active. | Core |
+| Save as Selection Layer… | Create named snapshot, exit Quick Mask, activate the saved layer. | Core |
 | Invert Mask | Invert current selection coverage; stay in the mode. | Core; reuse current-selection inversion |
 | Select Entire Canvas | Set mask coverage to 1. | Core; adapt Select All |
 | Clear Selection Coverage | Set mask coverage to 0. Does not exit or remove the selection restriction. | Core |
@@ -247,7 +247,7 @@ These bridges prevent Selection Layers from becoming an isolated feature:
 | Artwork-mask thumbnail → Pixel Selection | Load Mask as Selection; Add Mask to Selection; Subtract Mask from Selection; Intersect with Mask | Core. Read the mask's own stored coverage, even when the mask is disabled. |
 | Artwork row → Layer Mask | Reveal Selection; Hide Selection; Replace Mask: Reveal Selection; Replace Mask: Hide Selection | Existing. Creates/replaces artwork visibility coverage; these are not saved-selection commands. |
 | Artwork-mask context | Edit Mask / Edit Layer Content; Show Mask Area; Enable Mask; Link Mask to Layer; Copy / Paste Mask; Invert; Reveal All / Hide All; Apply / Delete Mask | Existing. Preserve these distinct visibility-mask operations. |
-| Layers + / Layer → New | New Selection Layer…; Save Current Selection as Selection Layer… | Core. Blank creation enters stored editing; saving a snapshot retains the prior target. |
+| Layers + / Layer → New | New Selection Layer…; Save Current Selection as Selection Layer… | Core. Blank creation enters stored editing; saving a snapshot also activates the new layer. |
 | Group context → New | New Selection Layer in Group…; Save Current Selection in Group… | Core. Explicit opt-in to parent geometry/lifetime. |
 | Layer row organization | Select All Layer Rows; Clear Layer Row Selection | Existing behavior with unambiguous labels. Separate from Pixel Selection submenu. |
 
@@ -309,7 +309,7 @@ Reselect defaults, so do not silently rebind existing users to another scheme.
 Quick Mask uses Q; mask color swap uses X; Reset to Black/White is a visible
 command with D as a proposed mask-mode default after conflict checking. Escape
 cancels a contact/preview first, then exits Quick Mask while retaining edits.
-Selection Brush reuses existing size shortcuts and its specified Alt/Option
+Paint selection reuses existing size shortcuts and its specified Alt/Option
 mode swap. Native text fields retain all editing shortcuts. Other selection
 tools use Shift Add, Alt Subtract, Shift+Alt Intersect, and Ctrl/Cmd New when
 held before the gesture. The operation is latched until completion; keys first

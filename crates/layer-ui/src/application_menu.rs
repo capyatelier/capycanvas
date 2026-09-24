@@ -92,7 +92,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Layer if self.selection_masks.quick() => self.quick_mask_menu(),
             M::Select => ContextMenu { title: menu.label().into(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
-                [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso, CommandId::PolygonSelect, CommandId::AutoSelect, CommandId::ColorSelect, CommandId::SelectionBrush].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
                 vec![ContextMenuItem::submenu("Modify", vec![self.selection_resize_items(None)])],
                 self.selection_source_menu_items(),

@@ -952,7 +952,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Select => "Choose a selection tool",
                 CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
                 CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
-                CommandId::SelectionBrushPressure => "Use pen pressure to vary selection brush size",
+                CommandId::SelectionBrushPressure => "Use pen pressure to vary Paint selection size",
                 CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",
                 CommandId::EllipseSelect => "Drag an elliptical selection; Shift constrains a circle, Alt draws from center",
                 CommandId::PolygonSelect => "Click corners; click the first point or press Enter to finish, Backspace removes a point",

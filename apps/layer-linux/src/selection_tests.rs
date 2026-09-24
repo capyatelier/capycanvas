@@ -57,7 +57,7 @@ fn native_quick_mask_input() {
     d.key(b'q' as u32);
     assert!(state(&d.w).layer_tools.quick_mask);
     assert!(selection(&d).is_none(), "entering is display state only");
-    assert_eq!(state(&d.w).layer_properties.controls.len(),4);
+    assert_eq!(state(&d.w).layer_properties.controls.len(),3);
     d.w.dispatch(UiAction::SetBrushSize { value: 80. });
     let _=crate::snapshot(&d.w); pump(100);
     crate::snapshot(&d.w).save_to_png(output.join("quick-mask-before.png")).unwrap();

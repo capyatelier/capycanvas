@@ -40,7 +40,7 @@ distinguishes upstream photo workflows from local GTK placement work and sets
 out the remaining editing, external-drop, format and native performance gates.
 
 The [paintable-selection specification](paintable-selection-proposal.md) defines
-Selection Brush, Quick Mask, and persistent Selection Layer workflows, including
+Paint selection, Quick Mask, and persistent Selection Layer workflows, including
 gestures, soft coverage, display, shared implementation, and acceptance checks.
 The [Selection Layer design](saved-selections-assessment.md) records save/edit/load
 behavior, grouping, persistence, and proposed further Quick Mask capabilities.
