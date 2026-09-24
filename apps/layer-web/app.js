@@ -726,7 +726,9 @@ function contentPanel(id, splitPicker=false) {
   panel.refreshPanel();return panel;
 }
 function update(regions) {
-  if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
+  // Canvas-based controls read these colors while refreshing their pixels.
+  if (regions & 16) applyTheme(state.theme, state.palette);
+  if (regions & (1 | 2 | 4 | 8 | 16 | 128)) customization.refresh();
   if (regions & 2) {
     for (const [size, button] of sizeButtons) {
       const pressed = String(size === state.brush.diameter);
@@ -773,7 +775,6 @@ function update(regions) {
         }
       }
   if (regions & 16) {
-    applyTheme(state.theme, state.palette);
     systemStatus?.sync();
     refreshPreferences(app.preferences_cached());
   }

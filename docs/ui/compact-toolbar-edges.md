@@ -7,7 +7,8 @@ Drag a toolbar's handle close to the start, center, or end of an edge to dock
 it at its natural length. The visible toolbar reaching an edge activates a
 compact target; the grip need not reach the screen edge. The target has a
 minimum pointer reach of 24 logical pixels and a short section around each
-anchor. Its preview remains a 24px strip. The top edge begins below the title
+anchor. Each target is 192 logical pixels long (clamped to one third of a short
+edge so regions never overlap). Its preview remains a 24px strip. The top edge begins below the title
 bar. Farther from the edge, the existing full-width/full-height targets remain
 available farther inward from the visible toolbar. The short target is shaded
 while dragging. Native footer insets do not block the bottom target. Existing

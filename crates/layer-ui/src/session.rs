@@ -2181,6 +2181,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         let (mut changed, wake) = match action {
             UiAction::ToolbarEdit { .. } => unreachable!("validated before dispatch"),
+            UiAction::ToggleSliderBookmark { control } => {
+                let binding = control.slider().ok_or("Not a brush slider")?;
+                let field = binding.field(&self.state).ok_or("This slider is unavailable")?;
+                self.state.settings.slider_bookmarks.entry(self.state.brush.preset.to_string())
+                    .or_default().toggle(&binding, field.value)?;
+                save_settings = true;
+                (BRUSH, false)
+            }
             UiAction::WorkspaceManager { command } => {
                 if self.managed_workspace.is_none() {
                     return Err("Workspace management is not connected".into());
@@ -4801,6 +4809,12 @@ mod tests {
                 OUTLINE.get_or_init(|| {
                     vec![vec![[-1.0, -0.5], [0.5, -0.5], [-1.0, 0.5], [-1.0, -0.5]]]
                 })
+            })
+        }
+        fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
+            (asset == &AssetId::from("preview-test")).then_some(HostImage {
+                width: 4, height: 4, stride: 4, format: layer_render::PixelFormat::R8Unorm,
+                bytes: &[255,255,255,255,255,0,0,255,255,0,0,255,255,255,255,255],
             })
         }
         fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> {

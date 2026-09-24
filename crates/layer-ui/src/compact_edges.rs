@@ -412,7 +412,7 @@ impl DockLayout {
         } else {
             point[1] - bounds.y
         };
-        let reach = 48_f32.min(length / 6.);
+        let reach = 96_f32.min(length / 6.);
         let (alignment, offset) = if coordinate <= reach * 2. {
             (EdgeAlignment::Start, 0.)
         } else if coordinate >= length - reach * 2. {
@@ -714,6 +714,9 @@ mod tests {
         let item = DockItem::Panel { panel: source };
         for (point, edge, alignment) in [
             ([1196., 450.], Edge::Right, EdgeAlignment::Center),
+            ([1196., 525.], Edge::Right, EdgeAlignment::Center),
+            ([1196., 210.], Edge::Right, EdgeAlignment::Start),
+            ([680., 50.], Edge::Top, EdgeAlignment::Center),
             ([1196., 64.], Edge::Right, EdgeAlignment::Start),
             ([1196., 885.], Edge::Right, EdgeAlignment::End),
             ([600., 50.], Edge::Top, EdgeAlignment::Center),
@@ -721,6 +724,7 @@ mod tests {
         ] {
             let hint = l.compact_edge_drop_hint(&r, item, point, None).unwrap();
             assert_eq!(hint.target, DockTarget::CompactEdge { edge, alignment });
+            assert_eq!(along(hint.bounds, ribbon_axis(edge)), 192.);
         }
         assert!(
             l.compact_edge_drop_hint(&r, item, [1170., 450.], None)

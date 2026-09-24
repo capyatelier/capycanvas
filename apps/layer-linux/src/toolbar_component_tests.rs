@@ -111,45 +111,7 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
             );
             assert!(d.w.workspace_drag.borrow().is_none());
         }
-        d.w.dispatch(UiAction::SetBrushSize { value: 20. });
-        pump(80);
-        let value = d.named(&format!("tile-{size}"));
-        let a = d.point(&value);
-        drag(d, device, a, [a[0], a[1] - 40.], false);
         assert_eq!(state(&d.w).workspace, initial);
-        if device == "mouse" {
-            assert_eq!(state(&d.w).brush.diameter, 20.);
-        } else {
-            assert!(
-                state(&d.w).brush.diameter > 20.,
-                "{device}: scrub the number upward"
-            );
-        }
-        assert!(
-            !find_css(&d.named(&format!("component-value-{size}")), "number-entry")
-                .unwrap()
-                .is_mapped(),
-            "drag is not a text-entry click"
-        );
-        if device == "mouse" {
-            d.perform(serde_json::json!([{"point":a},{"wheel":[0,-1]}]));
-            assert!(
-                state(&d.w).brush.diameter > 20.,
-                "mouse wheel edits the number"
-            );
-        } else {
-            let spec = NumericControl::brush_size();
-            let position = spec.resolve(20., NumericOperation::Format).unwrap().fill + 0.2;
-            let expected = spec
-                .resolve(20., NumericOperation::Position { position })
-                .unwrap()
-                .value;
-            assert_eq!(
-                state(&d.w).brush.diameter,
-                expected as f32,
-                "{device}: number drag uses the logarithmic slider mapping"
-            );
-        }
         // The value cap requires a hold with all three devices.
         let before = state(&d.w).workspace;
         let handle = d.named(&format!("tile-{opacity}"));
@@ -194,34 +156,8 @@ fn native_toolbar_components_input() {
         restore(&d, WorkspacePreset::Painter);
         let size = component_id(&d, ToolbarControl::BrushSizeSlider);
         slider_gestures(&mut d, &["mouse", "touch"]);
-        // Exact entry uses the same expression/clamping policy as panel controls.
-        let number = d.named(&format!("component-value-{size}"));
-        d.number(&number, "85/2");
-        assert_eq!(state(&d.w).brush.diameter, 43.);
-        d.number(&number, "0");
-        assert_eq!(state(&d.w).brush.diameter, 0.5);
-        d.number(&number, "24");
-        d.number(&number, "1/0");
-        assert!(number.has_css_class("error"));
-        d.key(0xff1b);
+        slider_preview_gestures(&mut d, &["mouse", "touch"]);
         d.capture_canvas(&format!("sketch-{theme:?}.png"));
-
-        // A tool change cancels an in-flight expression before focus leaves.
-        d.click(&find_css(&number, "number-value").unwrap());
-        find_css(&number, "number-entry")
-            .unwrap()
-            .downcast::<gtk::Entry>()
-            .unwrap()
-            .set_text("517.6");
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::Eraser,
-        });
-        pump(150);
-        assert!(!find_css(&number, "number-entry").unwrap().is_mapped());
-        assert_ne!(state(&d.w).brush.diameter, 517.6);
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::Brush,
-        });
 
         // Every size style supports a vertical slider and a floating toolbar.
         for style in [
@@ -254,14 +190,12 @@ fn native_toolbar_components_input() {
             assert!(scale.is_inverted());
             d.w.dispatch(UiAction::SetBrushSize { value: 2047.9 });
             pump(80);
-            let cap = d.named(&format!("tile-{size}"));
-            let readout = find_css(&cap, "number-readout")
-                .unwrap()
-                .downcast::<gtk::Label>()
-                .unwrap();
             assert!(
-                readout.layout().pixel_size().0 <= readout.width(),
-                "full six-character slider value at {style:?}"
+                find_named(
+                    &d.w.surface.clone().upcast(),
+                    &format!("component-value-{size}")
+                )
+                .is_none()
             );
             let b = scale.compute_bounds(&d.w.window).unwrap();
             drag(
@@ -488,6 +422,8 @@ fn native_toolbar_components_pen_input() {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         restore(&d, WorkspacePreset::Painter);
         slider_gestures(&mut d, &["pen"]);
+        slider_preview_gestures(&mut d, &["pen"]);
+        slider_preview_placement(&mut d, &["pen"]);
     }
     d.finish();
 }
@@ -588,9 +524,6 @@ fn native_toolbar_components_drawer_input() {
         assert!(state(&d.w).brush.diameter > 4.);
         assert!(d.w.workspace_drag.borrow().is_none());
     }
-    let number = find_named(&body, &format!("component-value-{size}")).unwrap();
-    d.number(&number, "33");
-    assert_eq!(state(&d.w).brush.diameter, 33.);
     d.click_name(&format!("column-icon-{:?}", brush_panel(&d)));
     assert!(state(&d.w).customization.column_drawers.is_empty());
     d.finish();
@@ -989,49 +922,8 @@ fn native_compact_toolbar_edges_pen_input() {
 fn native_toolbar_value_controls_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarValues");
     restore(&d, WorkspacePreset::Painter);
-    for device in ["touch"] {
-        for (control, value, action) in [
-            (
-                ToolbarControl::BrushSizeSlider,
-                8.,
-                UiAction::SetBrushSize { value: 8. },
-            ),
-            (
-                ToolbarControl::BrushOpacitySlider,
-                0.3,
-                UiAction::SetBrushOpacity { value: 0.3 },
-            ),
-        ] {
-            d.w.dispatch(action);
-            pump(80);
-            let id = component_id(&d, control);
-            let button = d.named(&format!("tile-{id}"));
-            let p = d.point(&button);
-            // Downward motion leaves enough room above the centered toolbar.
-            drag(&mut d, device, p, [p[0], p[1] + 20.], false);
-            let spec = control.slider().unwrap().numeric();
-            let origin = spec.resolve(value, NumericOperation::Format).unwrap().fill;
-            let expected = spec
-                .resolve(
-                    value,
-                    NumericOperation::Position {
-                        position: origin - 0.1,
-                    },
-                )
-                .unwrap()
-                .value;
-            let current = state(&d.w)
-                .toolbar_component(control)
-                .unwrap()
-                .numeric
-                .unwrap()
-                .value;
-            assert!(
-                (current as f64 - expected).abs() < 0.001,
-                "{device}: mapped number drag {control:?}: {current} != {expected}"
-            );
-        }
-    }
+    slider_preview_gestures(&mut d, &["mouse", "touch"]);
+    slider_preview_placement(&mut d, &["mouse", "touch"]);
     restore(&d, WorkspacePreset::Photographer);
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::Brush,
@@ -1225,29 +1117,19 @@ fn native_toolbar_visual_audit_input() {
                 d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
                 pump(180);
                 d.capture_canvas(&format!("audit-slider-{theme:?}-{edge:?}-{style:?}.png"));
-                let number = d.named(&format!("component-value-{size}"));
-                let label = find_css(&number, "number-readout")
-                    .unwrap()
+                let slider = d.named(&format!("component-slider-{size}"));
+                assert!(slider.is_mapped());
+                let cap = d.named(&format!("tile-{size}"));
+                assert!(find_css(&cap, "number-readout").is_none());
+                d.click(&cap);
+                pump(100);
+                let caption = d
+                    .named("slider-preview-label")
                     .downcast::<gtk::Label>()
                     .unwrap();
-                let b = label.compute_bounds(&d.w.window).unwrap();
-                let slider = d.named(&format!("component-slider-{size}"));
-                let s = slider.compute_bounds(&d.w.window).unwrap();
-                assert!(
-                    label.layout().pixel_size().0 <= label.width(),
-                    "slider digits fit {edge:?} {style:?}"
-                );
-                if edge == Edge::Top {
-                    assert_eq!(label.text(), "2048 px");
-                    assert!(
-                        (b.y() + b.height() / 2. - s.y() - s.height() / 2.).abs() < 2.,
-                        "horizontal slider/value centers agree: {style:?} {b:?} {s:?}"
-                    );
-                } else {
-                    assert!(number.width() as f32 <= style.size()[0]);
-                    assert!(b.y() >= number.compute_bounds(&d.w.window).unwrap().y() + 5.);
-                    assert_eq!(find_css(&number, "number-unit").unwrap().is_mapped(), false);
-                }
+                assert!(caption.text().contains("2048 px"));
+                assert!(caption.layout().pixel_size().0 <= caption.width());
+                d.key(0xff1b);
             }
         }
         restore(&d, WorkspacePreset::Photographer);
@@ -1553,11 +1435,25 @@ fn native_toolbar_segments_input() {
         restore(&d, WorkspacePreset::Photographer);
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         let mut workspace = state(&d.w).workspace;
-        let removed: Vec<_> = workspace.layout.panel(Panel::Commands).unwrap().tiles()
-            .iter().filter(|t| t.control.options_style().is_none()).map(|t| t.id).collect();
+        let removed: Vec<_> = workspace
+            .layout
+            .panel(Panel::Commands)
+            .unwrap()
+            .tiles()
+            .iter()
+            .filter(|t| t.control.options_style().is_none())
+            .map(|t| t.id)
+            .collect();
         for tile in removed {
             // Removing an item also collapses neighboring dividers.
-            if workspace.layout.panel(Panel::Commands).unwrap().tiles().iter().any(|t| t.id == tile) {
+            if workspace
+                .layout
+                .panel(Panel::Commands)
+                .unwrap()
+                .tiles()
+                .iter()
+                .any(|t| t.id == tile)
+            {
                 workspace.layout.remove_tool(Panel::Commands, tile).unwrap();
             }
         }
@@ -1643,4 +1539,193 @@ fn native_toolbar_segments_pen_input() {
         select_toolbar_segment(&mut d, "pen", i, command);
     }
     d.finish();
+}
+
+fn slider_preview_placement(d: &mut Driver, devices: &[&str]) {
+    let id = component_id(d, ToolbarControl::BrushSizeSlider);
+    for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+        d.w.dispatch(UiAction::MovePanel {
+            panel: brush_panel(d),
+            target: DockTarget::CompactEdge {
+                edge,
+                alignment: EdgeAlignment::Center,
+            },
+            viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32],
+        });
+        pump(150);
+        for &device in devices {
+            let scale = d.named(&format!("component-slider-{id}"));
+            let toolbar = scale
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .compute_bounds(&d.w.window)
+                .unwrap();
+            let p = d.point(&scale);
+            drag(d, device, p, p, false);
+            pump(100);
+            let popup = d
+                .named("brush-slider-preview")
+                .downcast::<gtk::Popover>()
+                .unwrap();
+            let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+            let content = popup.child().unwrap().compute_bounds(&popup).unwrap();
+            let (dx, dy) = popup.surface_transform();
+            let x = surface.position_x() as f32 - dx as f32 + content.x();
+            let y = surface.position_y() as f32 - dy as f32 + content.y();
+            let gap = match edge {
+                Edge::Left => x - toolbar.x() - toolbar.width(),
+                Edge::Right => toolbar.x() - x - content.width(),
+                Edge::Top => y - toolbar.y() - toolbar.height(),
+                Edge::Bottom => toolbar.y() - y - content.height(),
+            };
+            assert!(
+                (7. ..=16.).contains(&gap),
+                "{device}/{edge:?}: preview clears the toolbar, gap={gap}"
+            );
+            capture_popover(
+                &popup,
+                d.dir
+                    .join(format!("slider-placement-{edge:?}-{device}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            // A real drag dismisses the nonmodal preview, including with pen.
+            let end = if matches!(edge, Edge::Left | Edge::Right) {
+                [p[0], p[1] + 24.]
+            } else {
+                [p[0] + 24., p[1]]
+            };
+            drag(d, device, p, end, false);
+            assert!(!popup.is_mapped());
+        }
+    }
+}
+
+fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
+    let id = component_id(d, ToolbarControl::BrushSizeSlider);
+    for &device in devices {
+        let context = state(&d.w).toolbar_context();
+        let stamp =
+            d.w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .toolbar_stamp(context);
+        assert!(
+            stamp.is_ok(),
+            "{device}: preview assets ready: {:?}",
+            stamp.err()
+        );
+        let scale = d.named(&format!("component-slider-{id}"));
+        let center = d.point(&scale);
+        let p = [center[0], center[1] - 23.];
+        drag(d, device, p, p, false);
+        pump(100);
+        let popup = find_named(&d.w.window.clone().upcast(), "brush-slider-preview")
+            .unwrap_or_else(|| {
+                d.capture_canvas("missing-slider-preview.png");
+                panic!(
+                    "{device}: missing preview at {p:?}, active={}, context={context:?}",
+                    d.w.window.is_active()
+                );
+            });
+        assert!(popup.is_mapped(), "{device}: tap retains the stamp");
+        let saved = state(&d.w).brush.diameter;
+        if device == "pen" {
+            // The proxy routes pen events only to the first toplevel surface.
+            // Activate the popup button through GTK; its native hit path is
+            // covered by mouse/touch here and pen on the Wacom hosts.
+            d.named("slider-bookmark")
+                .downcast::<gtk::Button>()
+                .unwrap()
+                .emit_clicked();
+            pump(100);
+        } else {
+            let button = d.point(&d.named("slider-bookmark"));
+            drag(d, device, button, button, false);
+        }
+        assert_eq!(
+            state(&d.w)
+                .toolbar_component(ToolbarControl::BrushSizeSlider)
+                .unwrap()
+                .bookmarks
+                .len(),
+            1
+        );
+        d.capture_canvas(&format!("slider-preview-{device}.png"));
+        capture_popover(
+            &popup.clone().downcast::<gtk::Popover>().unwrap(),
+            d.dir
+                .join(format!("slider-stamp-{device}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
+        pump(50);
+        capture_popover(
+            &popup.clone().downcast::<gtk::Popover>().unwrap(),
+            d.dir
+                .join(format!("slider-stamp-large-{device}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.w.dispatch(UiAction::SetBrushSize { value: 3. });
+        pump(50);
+        let near = [p[0], p[1] + 16.];
+        let far = [p[0], p[1] + 24.];
+        drag(d, device, far, far, false);
+        assert_ne!(
+            state(&d.w).brush.diameter,
+            saved,
+            "{device}: distant tap does not snap"
+        );
+        drag(d, device, near, near, false);
+        assert_eq!(
+            state(&d.w).brush.diameter,
+            saved,
+            "{device}: nearby tap recalls exact bookmark value"
+        );
+        drag(d, device, far, near, false);
+        assert_ne!(
+            state(&d.w).brush.diameter,
+            saved,
+            "{device}: dragging near bookmark does not snap"
+        );
+        drag(d, device, near, near, false);
+        assert_eq!(state(&d.w).brush.diameter, saved);
+        d.capture_canvas(&format!("slider-bookmark-centered-{device}.png"));
+        if device == "pen" {
+            // The proxy routes pen events only to the first toplevel surface.
+            // Activate the popup button through GTK; its native hit path is
+            // covered by mouse/touch here and pen on the Wacom hosts.
+            d.named("slider-bookmark")
+                .downcast::<gtk::Button>()
+                .unwrap()
+                .emit_clicked();
+            pump(100);
+        } else {
+            let button = d.point(&d.named("slider-bookmark"));
+            drag(d, device, button, button, false);
+        }
+        assert!(
+            state(&d.w)
+                .toolbar_component(ToolbarControl::BrushSizeSlider)
+                .unwrap()
+                .bookmarks
+                .is_empty()
+        );
+        d.key(0xff1b);
+        pump(100);
+        assert!(!popup.is_mapped());
+        drag(d, device, p, [p[0], p[1] - 20.], false);
+        pump(100);
+        assert!(
+            !find_named(&d.w.window.clone().upcast(), "brush-slider-preview")
+                .is_some_and(|w| w.is_mapped()),
+            "{device}: dragging dismisses on lift"
+        );
+    }
 }

@@ -18,6 +18,14 @@ mod telemetry;
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
+/// Immutable brush source shared across a render-worker boundary. Pixel storage
+/// is reference-counted; cursor geometry and UI stamps use the same generation.
+#[derive(Clone, Debug)]
+pub struct BrushSource {
+    pub image: layer_core::ProjectAsset,
+    pub outline: TipOutline,
+}
+
 /// Display-only overlay primitive in logical viewport pixels.
 /// Kept separate from brush dabs: cursors never touch document textures.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -542,6 +550,10 @@ pub trait CanvasRenderer {
 
     /// Cached source-asset geometry for UI cursors; no GPU work or readback.
     fn tip_outline(&self, _asset: &AssetId) -> Option<&TipOutline> {
+        None
+    }
+    /// Immutable R8 brush source for small UI stamps; never reads back the GPU.
+    fn tip_mask(&self, _asset: &AssetId) -> Option<HostImage<'_>> {
         None
     }
 

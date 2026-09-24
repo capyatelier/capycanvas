@@ -42,6 +42,8 @@ mod toolbar_components;
 pub use toolbar_components::*;
 mod toolbar_transport;
 pub use toolbar_transport::*;
+mod toolbar_preview;
+pub use toolbar_preview::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
@@ -1271,6 +1273,9 @@ pub enum UiAction {
     },
     ColorPicker {
         action: ColorPickerAction,
+    },
+    ToggleSliderBookmark {
+        control: ToolbarControl,
     },
     SetColorSampleSize {
         width: u32,

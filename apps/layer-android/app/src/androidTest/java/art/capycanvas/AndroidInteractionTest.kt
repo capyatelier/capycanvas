@@ -38,6 +38,8 @@ class AndroidInteractionTest {
     private var density = 1f
     private var downAt = 0L
     private var contact = false
+    private var popupInput = false
+    private var inputWindow: View? = null
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
     private var mouseButton = MotionEvent.BUTTON_PRIMARY
@@ -59,12 +61,24 @@ class AndroidInteractionTest {
     private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
         if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node
         else node.children.firstNotNullOfOrNull { find(it, tag) }
+    private fun tagged(tag: String): Pair<ViewRootForTest, SemanticsNode>? {
+        find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { return owner to it }
+        return android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
+            findView<ViewRootForTest>(view)?.let { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { root to it } }
+        }
+    }
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
-        instrumentation.runOnMainSync { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot }
+        instrumentation.runOnMainSync {
+            tagged(tag)?.let { (root,node) ->
+                val origin = IntArray(2); val base = IntArray(2)
+                root.view.getLocationOnScreen(origin); owner.view.getLocationOnScreen(base)
+                result = node.boundsInRoot.translate(Offset((origin[0]-base[0]).toFloat(), (origin[1]-base[1]).toFloat()))
+            }
+        }
         return checkNotNull(result) { "Missing $tag" }
     }
-    private fun exists(tag: String) = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag) != null
+    private fun exists(tag: String) = tagged(tag) != null
     private fun snapshot() = host.snapshot!!
     private fun state() = snapshot().getJSONObject("state")
     private fun workspace() = state().getJSONObject("workspace").toString()
@@ -114,7 +128,21 @@ class AndroidInteractionTest {
                 if (!accepted && action == MotionEvent.ACTION_DOWN) contact = false
                 assertTrue("System accepts ${MotionEvent.actionToString(action)} at $next (screen ${coords[0].x}, ${coords[0].y}; origin ${location.toList()}; rotation ${owner.view.display.rotation})", accepted)
             }
-            else instrumentation.runOnMainSync { motion.offsetLocation(-location[0].toFloat(), -location[1].toFloat()); owner.view.dispatchTouchEvent(motion) }
+            else instrumentation.runOnMainSync {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    inputWindow = owner.view
+                    if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
+                        findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "brush-slider-preview") } != null
+                    }?.let { view ->
+                        val p = IntArray(2); view.getLocationOnScreen(p)
+                        if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
+                        else MotionEvent.obtain(motion).also { outside -> outside.action = MotionEvent.ACTION_OUTSIDE; view.dispatchTouchEvent(outside); outside.recycle() }
+                    }
+                }
+                val target = inputWindow ?: owner.view; val p = IntArray(2); target.getLocationOnScreen(p)
+                motion.offsetLocation(-p[0].toFloat(), -p[1].toFloat()); target.dispatchTouchEvent(motion)
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) inputWindow = null
+            }
         } finally { motion.recycle() }
         if (systemInput && action == MotionEvent.ACTION_MOVE) {
             // Android resamples a lone high-velocity event beyond its supplied
@@ -165,6 +193,9 @@ class AndroidInteractionTest {
     }
     @Before fun ready() {
         CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "interaction-workspace-tests/${java.util.UUID.randomUUID()}").absolutePath
+        // A previous canvas tap can leave a recovery offer that steals window
+        // focus. Isolate drawing recovery alongside the workspace fixture.
+        RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
             activity=it
@@ -201,7 +232,7 @@ class AndroidInteractionTest {
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 recovery.delete()
             } }
-            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null }
+            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null; RecoveryController.directoryForTest = null }
         }
     }
 
@@ -1656,7 +1687,7 @@ class AndroidInteractionTest {
             event(MotionEvent.ACTION_DOWN, bounds("ribbon-grip-${size.first}").center)
             event(MotionEvent.ACTION_MOVE, workspaceBounds.center); settle()
             event(MotionEvent.ACTION_MOVE, destination); settle()
-            val target = host.workspaceGeometry?.hint?.getJSONObject("target") ?: error("Missing $device/$edge/$alignment target")
+            val target = host.workspaceGeometry?.hint?.getJSONObject("target") ?: run { captureToolbar("missing-target"); error("Missing $device/$edge/$alignment target; focus=${owner.view.hasWindowFocus()} dragging=${workspaceDragging()} geometry=${host.workspaceGeometry} grip=${bounds("ribbon-grip-${size.first}")} destination=$destination") }
             assertEquals("compact_edge", target.getString("kind")); assertEquals(edge, target.getString("edge")); assertEquals(alignment, target.getString("alignment"))
             event(MotionEvent.ACTION_UP); settle()
             assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("bands").objects().any { it.optString("alignment") == alignment && it.getString("edge") == edge })
@@ -1695,22 +1726,71 @@ class AndroidInteractionTest {
         assertTrue(owner.view.hasWindowFocus())
         switchToolbarWorkspace("painter"); action(obj("type" to "invoke", "command" to "brush"))
         val size = toolbarComponent("brush_size_slider")
-        for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+        popupInput = true
+        for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = device
-            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 8f))
-            val cap = bounds("number-value-toolbar-size-${size.second}").center
-            val spec = state().array("tool_settings").objects().first { it.getString("id") == "size" }.getJSONObject("numeric")
-            val fill = JSONObject(Native.number(obj("control" to spec, "value" to 8, "operation" to obj("type" to "format")).toString())).number("fill")
-            val expected = JSONObject(Native.number(obj("control" to spec, "value" to 8, "operation" to obj("type" to "position", "position" to fill + .2f)).toString())).number("value")
-            event(MotionEvent.ACTION_DOWN, cap); event(MotionEvent.ACTION_MOVE, cap - Offset(0f, 40 * density)); event(MotionEvent.ACTION_UP); settle()
-            assertEquals("Mapped number scrub $device", expected, state().getJSONObject("brush").number("diameter"), .11f)
+            val slider = bounds("component-slider-${size.second}")
+            val mark = slider.center - Offset(0f, 23*density)
+            val near = mark + Offset(0f, 16*density)
+            val far = mark + Offset(0f, 24*density)
+            tap(mark)
+            waitFor("tap retains stamp $device") { exists("brush-slider-preview") }
+            val saved = state().getJSONObject("brush").number("diameter")
+            tap(bounds("slider-bookmark").center); settle()
+            captureToolbar("stamp-$device")
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048f))
+            captureToolbar("stamp-large-$device")
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 3f))
+            tap(far); settle()
+            assertTrue("Distant tap does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals("Nearby tap recalls exact bookmark $device", saved, state().getJSONObject("brush").number("diameter"), .001f)
+            event(MotionEvent.ACTION_DOWN, far)
+            event(MotionEvent.ACTION_MOVE, near); settle()
+            event(MotionEvent.ACTION_UP); settle()
+            assertTrue("Dragging near bookmark does not snap $device", saved != state().getJSONObject("brush").number("diameter"))
+            tap(near); settle()
+            assertEquals(saved, state().getJSONObject("brush").number("diameter"), .001f)
+            captureToolbar("bookmark-centered-$device")
+            tap(bounds("slider-bookmark").center); settle()
+            tap(bounds("workspace").center)
+            waitFor("outside tap dismisses stamp") { !exists("brush-slider-preview") }
+            event(MotionEvent.ACTION_DOWN, slider.center)
+            event(MotionEvent.ACTION_MOVE, slider.center - Offset(0f,20*density)); settle()
+            waitFor("drag shows stamp") { exists("brush-slider-preview") }
+            event(MotionEvent.ACTION_UP); settle()
+            waitFor("lift dismisses stamp") { !exists("brush-slider-preview") }
             val value = state().getJSONObject("brush").number("diameter")
-            event(MotionEvent.ACTION_DOWN, bounds("number-value-toolbar-size-${size.second}").center)
+            event(MotionEvent.ACTION_DOWN, bounds("slider-cap-${size.second}").center)
             SystemClock.sleep(700)
             event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
-            assertEquals("Held cap reorders without scrubbing", value, state().getJSONObject("brush").number("diameter"), .01f)
+            assertEquals("Held cap reorders without editing", value, state().getJSONObject("brush").number("diameter"), .01f)
             event(MotionEvent.ACTION_CANCEL); settle()
         }
+
+        for (edge in listOf("left", "right", "top", "bottom")) {
+            action(obj("type" to "move_panel", "panel" to size.first, "viewport" to viewport,
+                "target" to obj("kind" to "compact_edge", "edge" to edge, "alignment" to "center")))
+            settle()
+            for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = device
+                tap(bounds("component-slider-${size.second}").center)
+                waitFor("edge preview $edge/$device") { exists("brush-slider-preview") }; settle()
+                val toolbar = bounds("panel-body-${size.first}")
+                val preview = bounds("brush-slider-preview")
+                val gap = when (edge) {
+                    "left" -> preview.left-toolbar.right
+                    "right" -> toolbar.left-preview.right
+                    "top" -> preview.top-toolbar.bottom
+                    else -> toolbar.top-preview.bottom
+                } / density
+                assertTrue("Preview clears toolbar $edge/$device: $gap", gap >= 7f && gap <= 16f)
+                captureToolbar("preview-$edge-$device")
+                tap(bounds("workspace").center)
+                waitFor("edge preview dismissed") { !exists("brush-slider-preview") }
+            }
+        }
+
     }
 
 }
