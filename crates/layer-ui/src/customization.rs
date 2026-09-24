@@ -344,6 +344,7 @@ impl ToolbarControl {
     /// ActivateTile or ActivateHeaderItem, whose identity anchors their drawer.
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
+            Self::ColorPicker => UiAction::ColorPicker { action: crate::ColorPickerAction::Toggle },
             Self::Command { command } => UiAction::Invoke { command },
             Self::Brush { id } => UiAction::SelectBrush { id },
             Self::Size { pixels } => UiAction::SetBrushSize {
@@ -1070,6 +1071,11 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             "Choose the current paint color".into(),
             "color",
         ),
+        ToolbarControl::ColorPicker => (
+            "Color Picker".into(),
+            "Pick a canvas color with the magnifying ring".into(),
+            "color-picker",
+        ),
         ToolbarControl::Opacity => (
             "Brush opacity".into(),
             "Adjust the strength of the current brush".into(),
@@ -1109,6 +1115,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
+        .chain((platform == Platform::Gtk).then_some(ToolbarControl::ColorPicker))
         .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
             .into_iter().filter(move |_| ToolbarControl::components_available(platform)))
         .chain(
@@ -1242,6 +1249,11 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
             let mut choice = tool_choice(tile.control);
             let mut enabled = true;
             choice.selected = match tile.control {
+                ToolbarControl::ColorPicker => {
+                    let state = crate::tool_state(state, tile.control);
+                    enabled = state.0;
+                    state.1
+                }
                 ToolbarControl::Command { command } => {
                     if let Some(command) = state.commands.iter().find(|c| c.id == command) {
                         enabled = command.enabled;
@@ -1861,6 +1873,7 @@ impl CustomizationState {
                     ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
                     _ => unreachable!(),
                 };
+                drawer.configure_picker(layout, platform);
                 if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {
                     drawer.columns = vec![vec![Panel::Adjustments]];
                 }
@@ -2743,13 +2756,15 @@ mod tests {
         let web = tool_catalog(Platform::Web);
         assert_eq!(
             native.len(),
-            web.len()
+            web.len() + 1 // Standalone Color Picker is currently GTK-only.
                 + CommandId::ALL
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
                 + Panel::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
         );
+        assert!(native.iter().any(|c| c.control == ToolbarControl::ColorPicker));
+        assert!(!web.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(native.iter().all(|c| !c.label.is_empty()
             && !c.description.is_empty()
             && ui_catalog().icons.contains(&c.icon)));

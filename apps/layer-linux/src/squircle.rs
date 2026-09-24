@@ -8,9 +8,7 @@ const KEEP_ROUND: &str = "capy-keep-round";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
 
-pub fn snapshot_round(parent: &impl IsA<gtk::Widget>, child: &impl IsA<gtk::Widget>, snapshot: &gtk::Snapshot) {
-    let round = gtk::Snapshot::new();
-    parent.as_ref().snapshot_child(child, &round);
+pub fn append_round(snapshot: &gtk::Snapshot, round: gtk::Snapshot) {
     if let Some(node) = round.to_node() {
         snapshot.append_node(gsk::DebugNode::new(node, KEEP_ROUND.into()));
     }

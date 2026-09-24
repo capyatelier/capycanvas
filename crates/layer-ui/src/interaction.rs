@@ -89,6 +89,7 @@ pub enum UiInput {
         button: PointerButton,
         position: [f32; 2],
     },
+    ColorPickerHold { id: u64, position: [f32; 2], offset: f32 },
     /// Focus loss/unmap cancels canvas ownership; the host queues its last raw
     /// pen sample as Cancel when `cancel_paint` is returned.
     Blur,

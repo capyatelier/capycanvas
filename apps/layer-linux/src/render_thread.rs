@@ -37,6 +37,7 @@ struct Frame {
     composite: bool,
     geometry: Geometry,
     surround: [f32; 4],
+    picker: Option<layer_render::ColorPickerOverlay>,
     cursor: Vec<CursorSegment>,
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     stroke_target: Option<crate::wayland::StrokeTarget>,
@@ -171,6 +172,7 @@ pub struct RenderWorker {
     effect_validation: Option<layer_render::EffectValidationResult>,
     pub(super) geometry: Option<Geometry>,
     pub(super) surround: [f32; 4],
+    pub(super) picker: Option<layer_render::ColorPickerOverlay>,
     pub(super) cursor: Vec<CursorSegment>,
     pub(super) overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     pub(super) stroke_target: Option<crate::wayland::StrokeTarget>,
@@ -329,6 +331,7 @@ impl RenderWorker {
             effect_validation: None,
             geometry: None,
             surround: [0.033; 4],
+            picker: None,
             cursor: Vec::new(),
             overviews: Vec::new(),
             #[cfg(test)]
@@ -685,6 +688,7 @@ impl CanvasRenderer for RenderWorker {
             composite: packet.composite_all,
             geometry,
             surround: self.surround,
+            picker: self.picker,
             cursor: self.cursor.clone(),
             overviews: self.overviews.clone(),
             stroke_target: self.stroke_target,
@@ -721,6 +725,7 @@ struct Worker {
     view_color: crate::display_color::ViewColor,
     last_view: Option<(ViewState, [f32; 4])>,
     area: gtk::glib::SendWeakRef<gtk::Picture>,
+    picker: Option<layer_render::ColorPickerOverlay>,
     cursor: Vec<CursorSegment>,
     cursor_scale: f32,
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
@@ -1235,6 +1240,7 @@ impl Worker {
             config,
             last_view: None,
             area,
+            picker: None,
             cursor: Vec::new(),
             cursor_scale: 1.0,
             overviews: Vec::new(),
@@ -1355,6 +1361,8 @@ impl Worker {
         }
         #[cfg(test)]
         timing.mark(0);
+        self.picker = frame.picker;
+        self.presenter.set_color_picker(&self.renderer, self.picker);
         self.cursor.clone_from(&frame.cursor);
         self.overviews.clone_from(&frame.overviews);
         self.presenter
@@ -1489,6 +1497,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, texture.format(), color.surface()).map_err(error)?;
         presenter.inherit_proof(&self.renderer, &self.presenter);
         presenter.set_hdr_view(&self.renderer, self.hdr_rendition, 1.).map_err(error)?;
+        presenter.set_color_picker(&self.renderer, self.picker);
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         presenter.set_overviews(&self.renderer, &self.overviews);
         let mut encoder = self

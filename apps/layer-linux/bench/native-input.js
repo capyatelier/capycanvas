@@ -205,9 +205,9 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.touch) {
-                    if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
+                    if (event.touch === 'up') send('NotifyTouchUp', '(u)', [event.slot ?? 0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
-                        '(sudd)', [touchStream, 0, ...event.point.map(v => v * touchScale)]);
+                        '(sudd)', [touchStream, event.slot ?? 0, ...event.point.map(v => v * touchScale)]);
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.pen) {
@@ -216,7 +216,12 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.point) {
-                    send('NotifyPointerMotionRelative', '(dd)',
+                    // Touch, tablet input and native popups can reposition the
+                    // pointer. Correctness fixtures need actual desktop points,
+                    // not deltas from a stale pre-popup mouse position.
+                    if (nativeTest) send('NotifyPointerMotionAbsolute', '(sdd)',
+                        [touchStream, ...event.point.map(v => v * touchScale)]);
+                    else send('NotifyPointerMotionRelative', '(dd)',
                         [event.point[0] - previous[0], event.point[1] - previous[1]]);
                     previous = event.point;
                 }

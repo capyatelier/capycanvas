@@ -9,6 +9,9 @@ mod effects;
 mod files;
 mod histogram;
 mod color_editor;
+mod color_picker;
+mod color_preview_raster;
+mod color_readout;
 mod new_document;
 mod color_library;
 #[cfg(test)]

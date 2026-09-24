@@ -86,6 +86,7 @@ pub struct Input {
     next_touch: Cell<u64>,
     clock: Cell<Option<(u32, u64)>>,
     tablets: tablet::TabletDevices,
+    picker_hold: Rc<crate::color_picker::Hold>,
 }
 
 pub fn install(workspace: &Rc<Workspace>) {
@@ -236,6 +237,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                 if phase == PenPhase::Down && workspace.reveal_chrome_at(position[0], position[1]) {
                     return glib::Propagation::Stop;
                 }
+                input.picker_hold.input(&workspace, id, contact_phase(phase), position, input.touches.borrow().len());
                 let scale = workspace.area.scale_factor() as f32;
                 workspace.interact(UiInput::Pointer {
                     id,
@@ -337,15 +339,27 @@ pub fn install(workspace: &Rc<Workspace>) {
         }
     ));
     workspace.area.add_controller(scroll);
+    // Native popups can deactivate the toplevel while focus remains in its
+    // widget tree. Only leaving both the window and its descendants is blur.
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_leave(glib::clone!(
+        #[weak]
+        workspace,
+        #[strong]
+        input,
+        move |focus| input.window_focus_changed(&workspace, focus)
+    ));
+    workspace.window.add_controller(focus.clone());
     workspace.window.connect_is_active_notify(glib::clone!(
         #[weak]
         workspace,
         #[strong]
         input,
+        #[strong]
+        focus,
         move |window| {
             if !window.is_active() {
-                input.cancel(&workspace);
-                workspace.cursor_input(None);
+                input.window_focus_changed(&workspace, &focus);
             }
         }
     ));
@@ -675,7 +689,29 @@ impl Input {
             }
         }
     }
+    fn window_focus_changed(
+        self: &Rc<Self>,
+        workspace: &Rc<Workspace>,
+        focus: &gtk::EventControllerFocus,
+    ) {
+        // Let GTK finish moving focus between native surfaces before deciding.
+        glib::idle_add_local_once(glib::clone!(
+            #[weak]
+            workspace,
+            #[weak(rename_to = input)]
+            self,
+            #[weak]
+            focus,
+            move || {
+                if !workspace.window.is_active() && !focus.contains_focus() {
+                    input.cancel(&workspace);
+                    workspace.cursor_input(None);
+                }
+            }
+        ));
+    }
     fn cancel(&self, workspace: &Rc<Workspace>) {
+        self.picker_hold.cancel();
         let reply = workspace.interact(UiInput::Blur);
         if reply.cancel_paint
             && let Some(event) = self.last.get()

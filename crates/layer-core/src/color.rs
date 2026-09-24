@@ -1,6 +1,7 @@
 //! Document interpretation and byte layout. GPU formats are a separate choice.
 use serde::{Deserialize, Serialize};
 pub mod rgb;
+pub mod oklab;
 pub use rgb::RgbSpace;
 mod value;
 pub use value::RgbColor;

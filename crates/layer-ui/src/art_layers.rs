@@ -956,6 +956,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if self.state.platform == Platform::Gtk && tool.picks_color() {
+                    self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
+                    if self.eyedropper.picking.previous.is_none() { self.start_picker()?; }
+                    else { self.configure_picker(ColorPickerAction::Source { layer: self.eyedropper.layer })?; }
+                    return Ok(());
+                }
                 if let LayerCanvasTool::Selection { kind } = tool
                     && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon) {
                     return Err("Invalid geometric selection tool".into());

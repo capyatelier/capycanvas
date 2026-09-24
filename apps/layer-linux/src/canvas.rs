@@ -36,10 +36,12 @@ impl GpuCanvas {
     pub fn update_cursor(&mut self) -> bool {
         self.session.update_canvas_cursor(&mut self.cursor);
         self.session.append_layer_overlay(&mut self.cursor.segments);
+        let picker = self.session.color_picker_overlay();
         let renderer = self.session.renderer_mut();
-        if renderer.cursor == self.cursor.segments {
+        if renderer.cursor == self.cursor.segments && renderer.picker == picker {
             return false;
         }
+        renderer.picker = picker;
         std::mem::swap(&mut renderer.cursor, &mut self.cursor.segments);
         self.needs_present = true;
         true

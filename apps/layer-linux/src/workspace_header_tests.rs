@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "canvas_pen_button_tests.rs"]
 mod canvas_pen_buttons;
+#[path = "color_picker_tests.rs"]
+mod color_picker_tests;
 
 fn assert_shared_icons(widget: &gtk::Widget) {
     if let Some(image) = widget.downcast_ref::<gtk::Image>()

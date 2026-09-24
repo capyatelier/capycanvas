@@ -21,7 +21,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar .header-tool.capy-button { padding: 0; }
 .window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
 .window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
-.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
+.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
@@ -90,6 +90,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }
 .dock-panel.join-sw { border-bottom-left-radius: 0; }
+.toolbar-controls button.drawer-open { border-radius: 0; }
 .toolbar-controls button.drawer-origin-top, .collapsed-column button.drawer-origin-top { border-top-left-radius: 0; border-top-right-radius: 0; }
 .toolbar-controls button.drawer-origin-bottom, .collapsed-column button.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .toolbar-controls button.drawer-origin-left, .collapsed-column button.drawer-origin-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }

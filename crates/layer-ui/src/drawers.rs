@@ -79,6 +79,8 @@ pub struct ContentDrawer {
     pub columns: Vec<Vec<Panel>>,
     pub dismissal: DrawerDismissal,
     pub tabs: Option<DrawerTabs>,
+    /// Small tool families use their measured height beside the opening tile.
+    pub compact: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -289,6 +291,7 @@ impl ResolvedLayout {
 impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
+            Self::ColorPicker => Some(vec![vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Eraser } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Sculpt } => Some(vec![vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
@@ -321,7 +324,7 @@ impl ToolbarControl {
         }
     }
     pub(crate) fn selectable(self) -> bool {
-        matches!(self, Self::Brush { .. } | Self::Command { .. })
+        matches!(self, Self::Brush { .. } | Self::Command { .. } | Self::ColorPicker)
     }
 }
 
@@ -337,6 +340,7 @@ impl ContentDrawer {
                 .ok_or("This item has no tool drawer")?,
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
+            compact: false,
         })
     }
     pub(crate) fn for_tile(layout: &DockLayout, anchor: TileAnchor) -> Result<Self, String> {
@@ -352,6 +356,7 @@ impl ContentDrawer {
             columns: control.drawer_columns().ok_or("This tile has no drawer")?,
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
+            compact: false,
         })
     }
 
@@ -376,6 +381,7 @@ impl ContentDrawer {
             },
             columns: vec![vec![active]],
             tabs: Some(DrawerTabs { group, panels: panels.to_vec(), active }),
+            compact: false,
             dismissal: if layout.column_stack(column).auto_hide {
                 DrawerDismissal::OutsideContact
             } else {
@@ -383,7 +389,27 @@ impl ContentDrawer {
             },
         })
     }
+    pub(crate) fn configure_picker(&mut self, layout: &DockLayout, platform: Platform) {
+        let control = match self.anchor {
+            DrawerAnchor::Header { id } => layout.header.entry(id).ok().and_then(|e| match e.item {
+                HeaderItem::Tool { control } => Some(control), _ => None,
+            }),
+            DrawerAnchor::Tile { panel, tile } => layout.panel(panel).ok()
+                .and_then(|p| p.tiles().iter().find(|t| t.id == tile)).map(|t| t.control),
+            _ => None,
+        };
+        self.compact = platform == Platform::Gtk && matches!(control,
+            Some(ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }));
+        if self.compact {
+            self.dismissal = DrawerDismissal::Explicit;
+        }
+    }
     pub fn column_widths(&self) -> Vec<f32> {
+        if self.compact {
+            return self.columns.iter().map(|panels| {
+                if panels.contains(&Panel::ToolSettings) { 240. } else { 184. }
+            }).collect();
+        }
         if let Some(tabs) = &self.tabs {
             return vec![
                 tabs.panels
@@ -546,11 +572,11 @@ impl ContentDrawer {
             }
             Edge::Top => {
                 let bottom = (anchor.y - WORKSPACE_SPACING).max(available.y + 1.0);
-                let height = 800.0_f32.min(available.height).min(bottom - available.y);
+                let height = (if self.compact { height } else { 800. }).min(available.height).min(bottom - available.y);
                 (horizontal_x, bottom - height, height)
             }
             Edge::Left | Edge::Right => {
-                let y = (anchor.y - 500.0).max(available.y);
+                let y = (if self.compact { anchor.y + anchor.height - height } else { anchor.y - 500.0 }).max(available.y);
                 let height = height
                     .max(anchor.y + anchor.height - y)
                     .min(available.y + available.height - y);

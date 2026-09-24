@@ -68,6 +68,7 @@ mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 mod present;
+mod present_picker;
 mod artwork;
 mod display_mips;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
@@ -6652,6 +6653,8 @@ mod tests {
     mod live_windows;
     #[cfg(not(target_arch = "wasm32"))]
     mod cold_paint;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod color_picker;
     mod curve_reference;
     mod filter_library;
     mod material;

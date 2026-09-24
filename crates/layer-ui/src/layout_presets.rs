@@ -34,6 +34,47 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_picker_category_layout(platform);
+        if self == Self::Painter && platform == crate::Platform::Gtk {
+            for panel in &mut layout.panels {
+                if panel.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider) {
+                    for tile in panel.tiles_mut().expect("Sketch toolbar") {
+                        if tile.control == (ToolbarControl::Command { command: crate::CommandId::Eyedropper }) {
+                            tile.control = ToolbarControl::ColorPicker;
+                        }
+                    }
+                }
+            }
+        }
+        layout
+    }
+
+    /// Exact GTK default before the Sketch picker became a standalone tool.
+    pub fn legacy_picker_category_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_without_picker_history_layout(platform);
+        if self == Self::Painter && platform == crate::Platform::Gtk {
+            let panel = layout.panels.iter().find(|p| p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)).unwrap().id;
+            layout.insert_tools(panel, None, &[
+                ToolbarControl::Command { command: crate::CommandId::Undo },
+                ToolbarControl::Command { command: crate::CommandId::Redo },
+            ]).expect("Sketch history buttons");
+        }
+        layout
+    }
+
+    /// Exact GTK default with the picker but before its Undo/Redo buttons.
+    pub fn legacy_without_picker_history_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_without_picker_layout(platform);
+        if self == Self::Painter && platform == crate::Platform::Gtk {
+            let panel = layout.panels.iter().find(|p| p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)).unwrap();
+            let before = panel.tiles().iter().find(|t| t.control == ToolbarControl::BrushOpacitySlider).unwrap().id;
+            layout.insert_tools(panel.id, Some(before), &[ToolbarControl::Command { command: crate::CommandId::Eyedropper }]).expect("Sketch color picker");
+        }
+        layout
+    }
+
+    /// Exact default before the GTK Color Picker button, for untouched saves.
+    pub fn legacy_without_picker_layout(self, platform: crate::Platform) -> DockLayout {
         let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android);
         let mut layout = self.component_layout(platform, supported);
         self.arrange_components(&mut layout, supported);
