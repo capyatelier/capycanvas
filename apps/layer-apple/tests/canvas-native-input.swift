@@ -23,7 +23,10 @@ private final class TabletEvent: NSEvent {
     var point = CGPoint.zero
     var force: Float = 1
     var time = ProcessInfo.processInfo.systemUptime
-    override var type: NSEvent.EventType { .tabletPoint }
+    var nativeType: NSEvent.EventType = .tabletPoint
+    var nativeButton = 0
+    override var type: NSEvent.EventType { nativeType }
+    override var buttonNumber: Int { nativeButton }
     override var subtype: NSEvent.EventSubtype { .tabletPoint }
     override var locationInWindow: CGPoint { point }
     override var modifierFlags: NSEvent.ModifierFlags { [] }
@@ -259,6 +262,54 @@ private final class TabletEvent: NSEvent {
             let painted = try await pixels()
             try require(blue(painted,32,32) && blue(painted,80,64) && !blue(painted,80,32), "Native lasso must follow its concave path")
             return painted
+        }
+        // Side buttons use AppKit's tablet-backed right/other mouse callbacks.
+        // Exercise both hover-first and mid-stroke presses through the adapter.
+        for button in [1, 2] {
+            for heldBefore in [false, true] {
+                try await newDocument()
+                try await action(["type":"set_brush_size", "value":4])
+                try await tool(["figure":["shape":"line", "paint":"outline"]])
+                let paper = try await pixels(), camera = store.state["camera"]
+                let tablet = TabletEvent()
+                func pose(_ x: Double, force: Float) {
+                    let scale = window.backingScaleFactor
+                    tablet.point = canvas.convert(CGPoint(
+                        x: (camera["translation"][0].number + x * camera["zoom"].number) / scale,
+                        y: (camera["translation"][1].number + 64 * camera["zoom"].number) / scale), to: nil)
+                    tablet.force = force; tablet.time = ProcessInfo.processInfo.systemUptime
+                }
+                func side(_ down: Bool) async throws {
+                    tablet.nativeButton = button
+                    tablet.nativeType = button == 1 ? (down ? .rightMouseDown : .rightMouseUp)
+                        : (down ? .otherMouseDown : .otherMouseUp)
+                    if button == 1 {
+                        if down { canvas.rightMouseDown(with: tablet) } else { canvas.rightMouseUp(with: tablet) }
+                    } else {
+                        if down { canvas.otherMouseDown(with: tablet) } else { canvas.otherMouseUp(with: tablet) }
+                    }
+                    try await drain(0.025)
+                }
+                pose(24, force: 0)
+                if heldBefore { try await side(true) }
+                pose(24, force: 1); tablet.nativeButton = 0; tablet.nativeType = .leftMouseDown
+                canvas.mouseDown(with: tablet); try await drain(0.025)
+                if !heldBefore { try await side(true) }
+                pose(72, force: 1); tablet.nativeButton = 0; tablet.nativeType = .leftMouseDragged
+                canvas.mouseDragged(with: tablet); try await drain(0.025)
+                if !heldBefore { try await side(false) }
+                pose(96, force: 0); tablet.nativeButton = 0; tablet.nativeType = .leftMouseUp
+                canvas.mouseUp(with: tablet); try await drain(0.025)
+                if heldBefore { try await side(false) }
+                let painted = try await pixels()
+                try require(blue(painted,32,64) && blue(painted,88,64), "Side buttons preserve the complete pen line")
+                try require(store.state["camera"]["translation"].array.map(\.number)
+                    == camera["translation"].array.map(\.number), "Pen buttons cannot pan the canvas")
+                try await invoke("undo")
+                let undone = try await pixels(); try require(undone == paper, "One Undo removes the pen line")
+                try await invoke("redo")
+                let redone = try await pixels(); try require(redone == painted, "Redo restores the pen line")
+            }
         }
         // Match the existing UIKit figure checks with actual AppKit mouse and
         // modifier delivery through the assembled editor's canvas hit target.

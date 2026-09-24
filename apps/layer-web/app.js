@@ -1216,6 +1216,10 @@ window.addEventListener(
     // consume editor input, so forwarding a dialog contact would swallow its
     // buttons before the DOM click handler can run.
     if (e.target.closest("dialog[open]")) return;
+    if (e.target === canvas && e.pointerType === "pen" && !(e.buttons & 33)) {
+      e.preventDefault();
+      return;
+    }
     if (e.target.closest("#header")) chromeHeld = true;
     const reply = chromeInput({
       kind: "contact",
@@ -1326,8 +1330,20 @@ function queuePen(e, stage, predictionsOnly = false) {
 // navigation and hover keep their ordinary pointermove arbitration. Observe
 // actual raw delivery, so browsers/devices without it still paint via moves.
 let rawPenPointer = null;
+const canvasPenContacts = new Set();
 function canvasPointer(e, stage) {
   if (e.cancelable) e.preventDefault();
+  if (e.pointerType === "pen") {
+    const active = canvasPenContacts.has(e.pointerId), touching = !!(e.buttons & 33);
+    // DOM button chording reports tip down/up as pointermove while a barrel
+    // button is held. Only tip/eraser contact starts drawing or navigation.
+    if (stage === 1 && !touching) return;
+    if (stage === 2 && !active && touching && (e.button === 0 || e.button === 5)) stage = 1;
+    if (stage === 2 && active && !touching &&
+        (e.pressure === 0 || e.button === 0 || e.button === 5)) stage = 3;
+    if (stage === 1) canvasPenContacts.add(e.pointerId);
+  }
+  if (stage === 3 || stage === 4) canvasPenContacts.delete(e.pointerId);
   if (
     stage === 2 && e.type === "pointermove" && rawPenPointer === e.pointerId &&
     ((e.buttons & 33) || e.pressure !== 0)
@@ -1349,7 +1365,7 @@ function canvasPointer(e, stage) {
   // pointerup. Finish once, at the last contact sample: termination events may
   // have reset coordinates/pressure or already be outside the drawing surface.
   if (activePen && (stage === 4 ||
-      (stage === 2 && !(e.buttons & 33) && e.pressure === 0))) {
+      (e.type !== "pointerup" && stage === 3))) {
     sample = lastPenEvent;
     stage = 3;
   }
@@ -1381,7 +1397,7 @@ function pointerInput(e, stage, point = position(e)) {
     phase: ["move", "down", "move", "up", "cancel"][stage],
     kind: e.pointerType || "mouse",
     button:
-      e.button === 0 || e.button === 5
+      e.pointerType === "pen" || e.button === 0 || e.button === 5
         ? "primary"
         : e.button === 1 || e.button === 2
           ? "pan"

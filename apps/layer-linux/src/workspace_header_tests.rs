@@ -1,6 +1,9 @@
 //! Actual GTK widgets and Mutter-delivered input for the window-bar builder.
 use super::*;
 
+#[path = "canvas_pen_button_tests.rs"]
+mod canvas_pen_buttons;
+
 fn assert_shared_icons(widget: &gtk::Widget) {
     if let Some(image) = widget.downcast_ref::<gtk::Image>()
         && let Some(name) = crate::icons::name(image).filter(|name| name.starts_with("layer-"))

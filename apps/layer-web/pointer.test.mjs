@@ -18,13 +18,13 @@ test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
   for (const [pointerType, buttons, kind] of [["mouse", 0, 1], ["pen", 0, 0], ["pen", 32, 2]]) {
     context.cursorInput({ pointerType, buttons, pointerId: 1, target: canvas, clientX: 20,
       clientY: 30, timeStamp: 12, pressure: .5 });
-    assert.equal(samples.at(-1).length, 8);
-    assert.equal(samples.at(-1)[7], kind);
+    assert.equal(samples.at(-1).length, 11);
+    assert.equal(samples.at(-1)[9], kind);
   }
   context.cursorInput({ pointerType: "touch" });
   assert.deepEqual(samples.at(-1), []);
 });
-function harness({ raw = false, prediction = false } = {}) {
+function harness({ raw = false, prediction = false, paint: allowPaint = true } = {}) {
   const listeners = new Map(), records = [], phases = [], cursors = [];
   let contact = null;
   const context = {
@@ -39,7 +39,7 @@ function harness({ raw = false, prediction = false } = {}) {
     input(event) {
       phases.push(event);
       if (event.phase === "down" && contact === null && event.kind !== "touch")
-        contact = { id: event.id, paint: event.button === "primary" };
+        contact = { id: event.id, paint: allowPaint && event.button === "primary" };
       const paint = contact?.id === event.id && contact.paint;
       const handled = contact?.id === event.id;
       if (contact?.id === event.id && ["up", "cancel"].includes(event.phase)) contact = null;
@@ -127,13 +127,68 @@ test("mouse cancellation and touch/pan routing retain their semantics", () => {
   mouse.send("pointerdown", { pointerType: "mouse" });
   mouse.send("pointercancel", { pointerType: "mouse" });
   assert.deepEqual(mouse.samples().map(s => s[1]), [1, 4]);
-  for (const overrides of [{ pointerType: "touch" }, { button: 2, buttons: 2 }]) {
+  for (const overrides of [{ pointerType: "touch" }, { pointerType: "mouse", button: 2, buttons: 2 }]) {
     const h = harness();
     h.send("pointerdown", overrides);
     h.send("pointercancel", overrides);
     assert.deepEqual(h.samples(), []);
     assert.equal(h.phases.at(-1).phase, "cancel");
   }
+});
+
+for (const raw of [false, true]) {
+  for (const [button, mask] of [[1, 4], [2, 2]]) {
+    test(`pen side button ${button} preserves the contact (raw=${raw})`, () => {
+      const h = harness({ raw });
+      const move = (overrides) => {
+        if (raw) h.send("pointerrawupdate", overrides);
+        h.send("pointermove", overrides);
+      };
+      h.send("pointerdown");
+      move({ button, buttons: 1 | mask, clientX: 80 });
+      move({ button: -1, buttons: 1 | mask, clientX: 100 });
+      move({ button, buttons: 1, clientX: 120 });
+      h.send("pointerup", { buttons: 0, pressure: 0 });
+      assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 2, 2, 3]);
+      assert.ok(h.phases.every(p => p.button === "primary"));
+    });
+
+    test(`pen tip can draw and lift while side button ${button} stays held (raw=${raw})`, () => {
+      const h = harness({ raw });
+      h.send("pointerdown", { button, buttons: mask, pressure: 0 });
+      assert.equal(h.phases.length, 0, "hover button must not start navigation");
+      for (const tip of [1, 32]) {
+        h.send("pointermove", { button: tip === 1 ? 0 : 5, buttons: tip | mask });
+        if (raw) h.send("pointerrawupdate", { button: -1, buttons: tip | mask, clientX: 100 });
+        h.send("pointermove", { button: -1, buttons: tip | mask, clientX: 100 });
+        if (raw) h.send("pointerrawupdate", { buttons: mask, pressure: 0 });
+        h.send("pointermove", { button: tip === 1 ? 0 : 5, buttons: mask, pressure: 0 });
+      }
+      h.send("pointerup", { button, buttons: 0, pressure: 0 });
+      assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3, 1, 2, 3]);
+      assert.deepEqual(h.samples().map(s => s[10]), [0, 0, 0, 2, 2, 2]);
+    });
+  }
+}
+
+test("tip lift wins over fallback pressure while a barrel button stays active", () => {
+  const h = harness();
+  h.send("pointerdown", { buttons: 3 });
+  h.send("pointermove", { button: -1, buttons: 3, clientX: 100 });
+  h.send("pointermove", { button: 0, buttons: 2, pressure: .5 });
+  h.send("pointermove", { button: -1, buttons: 2, pressure: .5 });
+  h.send("pointerup", { button: 2, buttons: 0, pressure: 0 });
+  assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3]);
+});
+
+test("pen navigation also follows tip boundaries with a held barrel button", () => {
+  const h = harness({ paint: false });
+  h.send("pointerdown", { button: 2, buttons: 2, pressure: 0 });
+  h.send("pointermove", { button: 0, buttons: 3 });
+  h.send("pointermove", { button: -1, buttons: 3 });
+  h.send("pointermove", { button: 0, buttons: 2, pressure: 0 });
+  assert.deepEqual(h.phases.map(p => p.phase), ["down", "move", "up"]);
+  assert.deepEqual(h.samples(), []);
 });
 
 for (const ending of ["pointerup", "pointercancel", "lostpointercapture", "pointerrawupdate", "pointermove"]) {

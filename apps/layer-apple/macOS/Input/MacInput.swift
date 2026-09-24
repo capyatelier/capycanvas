@@ -45,6 +45,9 @@ import QuartzCore
     }
     func mouse(_ event: NSEvent, phase: Double) {
         if event.subtype == .tabletProximity { proximity(event); return }
+        // Tablet side buttons arrive as right/other mouse events. They must
+        // neither start navigation nor disturb the tip's captured contact.
+        if tablet(event), event.buttonNumber != 0 { return }
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
             store.layerSwipe.close()
