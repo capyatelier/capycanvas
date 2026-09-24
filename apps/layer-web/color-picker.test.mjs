@@ -57,6 +57,33 @@ export async function checkColorPicker({call,evaluate,settle}) {
   await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await wait('layerApp.state().layer_tools.tool==="paint"');
   await invoke('eyedropper');await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...point}]});await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
   assert.equal((await state()).layer_tools.tool,'paint','finger tap cancels button picker');
+  // Begin a palm contact before pen/mouse toolbar activation. Wait beyond the
+  // pending hold, then release/cancel without first touching the canvas by pen.
+  const camera=async()=>(await state()).camera;
+  for(const ending of ['touchEnd','touchCancel']) {
+    const palm={id:10,x:point.x-100,y:point.y};
+    await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[palm]});
+    await tap(await buttonPoint(picker),'pen');
+    await new Promise(r=>setTimeout(r,650));
+    await mouse('mouseMoved',point,'pen');await settle();
+    assert.ok((await state()).layer_tools.tool.startsWith('pick_'),'toolbar picker stays active through old hold');
+    await call('Input.dispatchTouchEvent',{type:ending,touchPoints:[]});
+    await key('Escape','Escape',27);
+    const before=await camera();
+    for(let id=11;id<13;id++) {
+      const p={id,x:point.x+40,y:point.y};
+      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[p]});
+      await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...p,x:p.x+60,y:p.y+50}]});
+      await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
+      assert.deepEqual(await camera(),before,'one fresh finger cannot navigate around a released palm');
+    }
+    const pair=[palm,{id:13,x:point.x+40,y:point.y}];
+    await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:pair});
+    await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[palm,{...pair[1],x:point.x+90,y:point.y+50}]});
+    await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
+    const after=await camera();assert.notEqual(after.zoom,before.zoom);assert.notEqual(after.rotation,before.rotation);
+    await invoke('fit_canvas');
+  }
   await send({type:'color_picker',action:{kind:'source',layer:false}});
   await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:'builtin:workspace:illustrator'}));null`);
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:illustrator'&&!JSON.parse(layerApp.app.workspace_view()).busy`);await settle();

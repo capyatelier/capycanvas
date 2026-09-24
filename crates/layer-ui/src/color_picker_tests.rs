@@ -193,6 +193,7 @@ fn color_picker_touch_tracks_one_contact_toggles_source_and_commits_on_lift() {
     s.set_platform(Platform::Gtk);
     let original = s.state.colors.clone();
     let camera = s.state.camera.clone();
+    picker_pointer(&mut s, 8, ContactPhase::Down, PointerKind::Touch, [250., 300.]);
     s.input(UiInput::ColorPickerHold {
         id: 8,
         position: [250., 300.],
@@ -263,6 +264,115 @@ fn color_picker_touch_tracks_one_contact_toggles_source_and_commits_on_lift() {
     assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Paint);
     assert!(s.eyedropper.picking.consumed.is_empty());
     assert_eq!(s.renderer_mut().dabs, 0);
+}
+
+#[test]
+fn color_picker_retires_touches_that_predate_toolbar_entry() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
+            for finger_cancels in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                let camera = s.state.camera.clone();
+                picker_pointer(&mut s, 10, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
+                s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
+                picker_pointer(&mut s, 10, terminal, PointerKind::Touch, [200., 200.]);
+                if finger_cancels {
+                    picker_pointer(&mut s, 11, ContactPhase::Down, PointerKind::Touch, [400., 200.]);
+                    picker_pointer(&mut s, 11, ContactPhase::Up, PointerKind::Touch, [400., 200.]);
+                } else {
+                    s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
+                }
+                // Each isolated finger must remain inert; no pen press or blur
+                // between them is allowed to conceal a stranded contact.
+                for id in 12..15 {
+                    picker_pointer(&mut s, id, ContactPhase::Down, PointerKind::Touch, [400., 200.]);
+                    picker_pointer(&mut s, id, ContactPhase::Move, PointerKind::Touch, [500., 300.]);
+                    picker_pointer(&mut s, id, terminal, PointerKind::Touch, [500., 300.]);
+                    assert_eq!(s.state.camera, camera, "{platform:?}/{terminal:?}");
+                }
+                // New, genuinely simultaneous contacts still navigate.
+                picker_pointer(&mut s, 20, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
+                picker_pointer(&mut s, 21, ContactPhase::Down, PointerKind::Touch, [400., 200.]);
+                picker_pointer(&mut s, 21, ContactPhase::Move, PointerKind::Touch, [500., 300.]);
+                assert_ne!(s.state.camera.zoom, camera.zoom);
+                assert_ne!(s.state.camera.rotation, camera.rotation);
+            }
+        }
+    }
+}
+
+#[test]
+fn color_picker_hold_requires_a_live_unclaimed_single_touch() {
+    for interruption in ["up", "cancel", "blur", "pen", "second finger", "picker", "picker cancelled"] {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::Move);
+        let previous = s.state.layer_tools.tool;
+        picker_pointer(&mut s, 8, ContactPhase::Down, PointerKind::Touch, [250., 300.]);
+        match interruption {
+            "up" => { picker_pointer(&mut s, 8, ContactPhase::Up, PointerKind::Touch, [250., 300.]); }
+            "cancel" => { picker_pointer(&mut s, 8, ContactPhase::Cancel, PointerKind::Touch, [250., 300.]); }
+            "blur" => { s.input(UiInput::Blur).unwrap(); }
+            "pen" => {
+                picker_pointer(&mut s, 50, ContactPhase::Down, PointerKind::Pen, [400., 400.]);
+                picker_pointer(&mut s, 50, ContactPhase::Up, PointerKind::Pen, [400., 400.]);
+            }
+            "second finger" => { picker_pointer(&mut s, 9, ContactPhase::Down, PointerKind::Touch, [400., 300.]); }
+            _ => {
+                s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
+                if interruption == "picker cancelled" {
+                    s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
+                }
+            }
+        }
+        let tool = s.state.layer_tools.tool;
+        s.input(UiInput::ColorPickerHold { id: 8, position: [250., 300.], offset: 44. }).unwrap();
+        assert_eq!(s.state.layer_tools.tool, tool, "{interruption}");
+        if interruption == "picker" {
+            s.picker_position([250., 300.]);
+            assert_eq!(s.color_picker_overlay().unwrap().sample, [250., 300.]);
+            s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
+        }
+        assert_eq!(s.state.layer_tools.tool, previous, "{interruption}");
+    }
+}
+
+#[test]
+fn color_picker_consumed_touch_does_not_capture_another_pointer_kind() {
+    for kind in [PointerKind::Mouse, PointerKind::Pen] {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::Eyedropper);
+        picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
+        assert!(picker_pointer(&mut s, 1, ContactPhase::Down, kind, [400., 400.]).paint);
+        assert!(!picker_pointer(&mut s, 1, ContactPhase::Up, PointerKind::Touch, [200., 200.]).paint);
+        // The picker no longer owns this touch; it still cannot release the
+        // pen/mouse contact with the same numeric ID in ordinary routing.
+        assert!(!picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]).paint);
+        assert!(!picker_pointer(&mut s, 1, ContactPhase::Cancel, PointerKind::Touch, [200., 200.]).paint);
+        assert!(picker_pointer(&mut s, 1, ContactPhase::Move, kind, [450., 450.]).paint);
+        assert!(picker_pointer(&mut s, 1, ContactPhase::Up, kind, [450., 450.]).paint);
+        assert!(s.interaction.pointer.is_none());
+    }
+}
+
+#[test]
+fn touch_release_cleans_up_even_when_normal_routing_is_blocked() {
+    for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
+        for blocked in ["settings", "workspace transition", "invalid position"] {
+            let mut s = session();
+            picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
+            s.state.settings_open = blocked == "settings";
+            s.workspace_transition = blocked == "workspace transition";
+            let reply = s.input(UiInput::Pointer {
+                id: 1, phase: terminal, kind: PointerKind::Touch, button: PointerButton::Primary,
+                position: if blocked == "invalid position" { [f32::NAN; 2] } else { [200., 200.] },
+            });
+            assert_eq!(reply.is_err(), blocked == "invalid position");
+            assert!(!s.touch.is_active(), "{blocked}/{terminal:?}");
+        }
+    }
 }
 
 #[test]

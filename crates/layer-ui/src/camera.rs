@@ -180,6 +180,14 @@ impl TouchGesture {
         self.points.clear();
     }
 
+    pub(crate) fn is_only_contact(&self, id: u64) -> bool {
+        self.points.len() == 1 && self.points.contains_key(&id)
+    }
+
+    pub(crate) fn release(&mut self, id: u64) {
+        self.points.remove(&id);
+    }
+
     pub fn update(
         &mut self,
         camera: &mut Camera,
@@ -188,6 +196,12 @@ impl TouchGesture {
         point: [f32; 2],
         single_pan: bool,
     ) -> bool {
+        // Cancellation may have no usable coordinates. Retire the contact
+        // before validating positions or interpreting any camera movement.
+        if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+            self.release(id);
+            return false;
+        }
         if !point.into_iter().all(f32::is_finite) {
             return false;
         }
@@ -204,10 +218,7 @@ impl TouchGesture {
                     return false;
                 }
             }
-            PenPhase::Up | PenPhase::Cancel => {
-                self.points.remove(&id);
-            }
-            PenPhase::Hover => return false,
+            PenPhase::Up | PenPhase::Cancel | PenPhase::Hover => return false,
         }
         if phase != PenPhase::Move {
             return false;

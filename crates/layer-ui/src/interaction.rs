@@ -115,6 +115,7 @@ pub struct InputReply {
 #[derive(Clone, Copy)]
 pub(crate) struct PointerContact {
     pub id: u64,
+    pub kind: PointerKind,
     pub paint: bool,
     pub position: [f32; 2],
 }

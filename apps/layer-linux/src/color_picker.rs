@@ -202,12 +202,9 @@ impl Hold {
         position: [f32; 2],
         contacts: usize,
     ) {
-        let active = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .is_some_and(|g| g.session.state().layer_tools.tool.picks_color());
-        if contacts > 1 || active || matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+        // Shared Rust checks ownership when the timer fires; this collector
+        // only recognizes native timing, slop, and the contact's lifetime.
+        if contacts > 1 || matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             self.cancel();
             return;
         }

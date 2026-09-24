@@ -7,6 +7,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
@@ -246,6 +247,84 @@ class AndroidColorPanelTest {
         waitFor("101 pixel setting") {picker().getInt("sample_width")==101}
         fullCapture("picker-sketch-settings")
         action(obj("type" to "invoke","command" to "eyedropper"))
+    }
+    @Test fun pickerRetiresRestingContactsAndPendingHolds() {
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:painter")) }
+        waitFor("Sketch workspace", 30000) {
+            host.workspaceManager?.optString("id") == "builtin:workspace:painter" && host.workspaceManager?.optBoolean("busy") == false
+        }
+        action(obj("type" to "invoke", "command" to "brush"))
+        val panel = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first { p ->
+            p.getJSONObject("content").optJSONArray("tiles")?.objects()?.any { it.getJSONObject("control").optString("kind") == "color_picker" } == true
+        }
+        val tile = panel.getJSONObject("content").array("tiles").objects().first { it.getJSONObject("control").optString("kind") == "color_picker" }
+        val tag = "tile-${panel.getString("id")}-${tile.getInt("id")}"
+        val p = canvasPoint()
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        for (terminal in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+            for (pendingHold in listOf(false, true)) {
+                event(MotionEvent.ACTION_DOWN, p - Offset(120f, 0f))
+                if (!pendingHold) event(MotionEvent.ACTION_MOVE, p - Offset(60f, 0f))
+                // Activate the actual Compose toolbar control while the OS
+                // finger stream remains down; do not replace it with pen input.
+                val pickerNode = node(tag)
+                instrumentation.runOnMainSync {
+                    fun click(node: SemanticsNode): (() -> Boolean)? =
+                        node.config.getOrNull(SemanticsActions.OnClick)?.action ?: node.children.firstNotNullOfOrNull(::click)
+                    assertTrue(checkNotNull(click(pickerNode)) { "Picker tile needs a click action" }.invoke())
+                }
+                waitFor("toolbar picker") { state().getJSONObject("layer_tools").getString("tool").startsWith("pick_") }
+                SystemClock.sleep(ViewConfiguration.getLongPressTimeout().toLong() + 150)
+                assertTrue("Pending hold must preserve toolbar picking: terminal=$terminal pendingHold=$pendingHold",
+                    state().getJSONObject("layer_tools").getString("tool").startsWith("pick_"))
+                event(terminal)
+                settle()
+                assertTrue("Old touch must neither accept nor cancel toolbar picking: terminal=$terminal pendingHold=$pendingHold",
+                    state().getJSONObject("layer_tools").getString("tool").startsWith("pick_"))
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+                waitFor("cancel picker") { state().getJSONObject("layer_tools").getString("tool") == "paint" }
+                val camera = state().getJSONObject("camera").toString()
+                repeat(2) {
+                    event(MotionEvent.ACTION_DOWN, p)
+                    event(MotionEvent.ACTION_MOVE, p + Offset(70f, 50f))
+                    event(MotionEvent.ACTION_UP)
+                    settle()
+                    assertEquals("No ghost contact may transform a single finger", camera, state().getJSONObject("camera").toString())
+                }
+            }
+        }
+        event(MotionEvent.ACTION_DOWN, p)
+        waitFor("touch owns held picker") { state().getJSONObject("layer_tools").getString("tool").startsWith("pick_") }
+        event(MotionEvent.ACTION_CANCEL)
+        waitFor("cancel owned touch picker") { state().getJSONObject("layer_tools").getString("tool") == "paint" }
+        // Touch navigation still works with two real contacts.
+        val before = state().getJSONObject("camera")
+        event(MotionEvent.ACTION_DOWN, p)
+        secondFinger(true)
+        // The first contact moves while the second remains at its original point.
+        val properties = (7..8).map { id -> MotionEvent.PointerProperties().apply { this.id = id; toolType = MotionEvent.TOOL_TYPE_FINGER } }.toTypedArray()
+        val coords = listOf(p + Offset(-40f, 50f), p + Offset(100f, 0f)).map { at ->
+            MotionEvent.PointerCoords().apply { x = at.x; y = at.y; pressure = .7f }
+        }.toTypedArray()
+        // The OS cancellation must contain both live pointers. Compose may
+        // replace it with an anonymous cancellation when forwarding to canvas.
+        for (action in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_CANCEL)) {
+            val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 2, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try {
+                val origin = IntArray(2); instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+                motion.offsetLocation(origin[0].toFloat(), origin[1].toFloat())
+                assertTrue(instrumentation.uiAutomation.injectInputEvent(motion, true))
+            } finally { motion.recycle() }
+        }
+        contact = false
+        waitFor("two finger navigation") { state().getJSONObject("camera").getDouble("zoom") != before.getDouble("zoom") }
+        assertNotEquals(before.getDouble("rotation"), state().getJSONObject("camera").getDouble("rotation"))
+        val cancelled = state().getJSONObject("camera").toString()
+        event(MotionEvent.ACTION_DOWN, p)
+        event(MotionEvent.ACTION_MOVE, p + Offset(70f, 50f))
+        event(MotionEvent.ACTION_UP)
+        settle()
+        assertEquals("Anonymous cancellation retires every captured finger", cancelled, state().getJSONObject("camera").toString())
     }
     @Test fun pickerWheelPreviewPerformance() {
         action(obj("type" to "invoke","command" to "fit_canvas"))

@@ -34,6 +34,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn start_picker(&mut self) -> Result<(), String> {
         self.require_idle()?;
         self.cancel_layer_gesture()?;
+        // Contacts already resting on the canvas must not resume navigation
+        // after picking. This also invalidates their pending native holds.
+        self.touch.clear();
         self.eyedropper.cancel();
         self.eyedropper.preview_only = true;
         let previous = self.layer_interaction.tool;
@@ -203,6 +206,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !offset.is_finite()
                     || offset < 0.
                     || !position.into_iter().all(f32::is_finite)
+                    || self.eyedropper.picking.previous.is_some()
+                    || !self.touch.is_only_contact(id)
                     || self.interaction.pointer.is_some()
                     || self.state.settings_open
                     || self.require_idle().is_err()
@@ -210,10 +215,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(None);
                 }
                 self.start_picker()?;
-                self.touch.clear();
                 self.eyedropper.picking.touch = Some(id);
                 self.eyedropper.picking.touch_offset = offset;
-                self.eyedropper.picking.consumed.push(id);
+                self.eyedropper.picking.consumed.push((PointerKind::Touch, id));
                 self.picker_position(position);
                 changed |= regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION;
             }
@@ -240,18 +244,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 button,
                 position,
             } => {
-                let consumed = self.eyedropper.picking.consumed.contains(&id);
+                let contact = (kind, id);
+                let consumed = self.eyedropper.picking.consumed.contains(&contact);
+                if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+                    self.eyedropper.picking.consumed.retain(|&p| p != contact);
+                }
                 let active = self.eyedropper.picking.previous.is_some();
                 if !consumed && (!active || button != PointerButton::Primary) {
                     return Ok(None);
                 }
                 if phase == ContactPhase::Down && !consumed {
-                    self.eyedropper.picking.consumed.push(id);
+                    self.eyedropper.picking.consumed.push(contact);
                 }
                 if !active || self.eyedropper.picking.finishing {
-                    if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
-                        self.eyedropper.picking.consumed.retain(|&p| p != id);
-                    }
                     return Ok(Some(UiChange::default()));
                 }
                 match kind {
@@ -298,9 +303,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.cancel_picker();
                         }
                     }
-                }
-                if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
-                    self.eyedropper.picking.consumed.retain(|&p| p != id);
                 }
             }
             _ => return Ok(None),

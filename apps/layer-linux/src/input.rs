@@ -219,15 +219,19 @@ pub fn install(workspace: &Rc<Workspace>) {
                 _ => return glib::Propagation::Proceed,
             };
             let sequence = event.event_sequence();
-            let id = *input
-                .touches
-                .borrow_mut()
-                .entry(sequence.clone())
-                .or_insert_with(|| {
+            let known = input.touches.borrow().get(&sequence).copied();
+            let id = match (phase, known) {
+                (_, Some(id)) => id,
+                (PenPhase::Down, None) => {
                     let id = input.next_touch.get() + 1;
                     input.next_touch.set(id);
+                    input.touches.borrow_mut().insert(sequence.clone(), id);
                     id
-                });
+                }
+                // A reset/cancelled sequence cannot acquire a new identity
+                // from a trailing update or release.
+                _ => return glib::Propagation::Stop,
+            };
             let position = event
                 .position()
                 .and_then(|(x, y)| widget_point(&workspace.area, x, y))

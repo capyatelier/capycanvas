@@ -3,6 +3,8 @@ package art.capycanvas
 import android.content.Context
 import android.hardware.input.InputManager
 import android.os.Build
+import android.os.SystemClock
+import android.util.LongSparseArray
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -12,6 +14,7 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.ViewConfiguration
 import android.view.SurfaceView
+import androidx.core.util.size
 import org.json.JSONArray
 import kotlin.math.cos
 import kotlin.math.sin
@@ -19,6 +22,20 @@ import kotlin.math.sin
 /** Separate compositor layer, not a texture embedded in Compose's renderer. */
 class CanvasSurfaceView(context: Context, private val host: CanvasHost,
     private val chromeHitTest: (Float, Float) -> Boolean = { _, _ -> false }) : SurfaceView(context), SurfaceHolder.Callback {
+    private class Contact(val tool: Int, val button: Int, var x: Double, var y: Double)
+    private val contacts = LongSparseArray<Contact>()
+    private fun cancelContacts(time: Long = SystemClock.uptimeMillis() * 1_000_000L) {
+        for (i in 0 until contacts.size) {
+            val contact = contacts.valueAt(i)
+            val samples = host.pointerBuffer(9)
+            samples.fill(0.0, 0, 9)
+            samples[0] = contact.x; samples[1] = contact.y
+            samples[7] = time.toDouble(); samples[8] = 4.0
+            host.pointer(contacts.keyAt(i), contact.tool, contact.button, samples, 9)
+        }
+        contacts.clear()
+        predictor = null; predictionDevice = null
+    }
     private var pickerHold: Runnable? = null
     private var pickerContact = -1
     private var pickerX=0f
@@ -69,13 +86,14 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
     override fun onDetachedFromWindow() {
         if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         inputManager.unregisterInputDeviceListener(inputDevices)
-        predictor = null; predictionDevice = null; predictionProbe = null
+        predictionProbe = null
         cancelPickerHold()
+        cancelContacts()
         super.onDetachedFromWindow()
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if(!hasWindowFocus)cancelPickerHold()
+        if (!hasWindowFocus) { cancelPickerHold(); cancelContacts() }
         if (!hasWindowFocus && Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         if (hasWindowFocus) refreshPredictionAvailability()
     }
@@ -110,26 +128,33 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         cancelPickerHold()
+        cancelContacts()
         host.hdr.unbindSurface(this)
-        predictor = null; predictionDevice = null
         if (attached) { host.detach(); attached = false }
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         pickerTouch(event)
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            // Compose can synthesize cancellation with device/id/source zero
+            // and TOOL_TYPE_UNKNOWN. End the captured native contacts, never
+            // reinterpret that empty record as a new pen's cancellation.
+            val time = if (Build.VERSION.SDK_INT >= 34) event.eventTimeNanos else event.eventTime * 1_000_000L
+            cancelContacts(time)
+            return true
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             requestUnbufferedDispatch(event)
             parent.requestDisallowInterceptTouchEvent(true)
             requestFocus()
         }
         val action = event.actionMasked
-        val all = action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_CANCEL
+        val all = action == MotionEvent.ACTION_MOVE
         val first = if (all) 0 else event.actionIndex
         val last = if (all) event.pointerCount - 1 else first
         for (i in first..last) {
             val phase = when (action) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> 1
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (Build.VERSION.SDK_INT >= 33 && event.flags and MotionEvent.FLAG_CANCELED != 0) 4 else 3
-                MotionEvent.ACTION_CANCEL -> 4
                 else -> 2
             }
             send(event, i, phase, action == MotionEvent.ACTION_MOVE)
@@ -202,6 +227,14 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         val samples = host.pointerBuffer(used)
         packPointerSamples(event, index, phase, count, tool == 1, samples)
         val id = (event.deviceId.toLong().and(0xffffffffL) shl 16) or event.getPointerId(index).toLong()
+        if (!predicted) {
+            val x = samples[count * 9]; val y = samples[count * 9 + 1]
+            when (phase) {
+                1 -> contacts.put(id, Contact(tool, button, x, y))
+                2 -> contacts[id]?.let { it.x = x; it.y = y }
+                3, 4 -> contacts.remove(id)
+            }
+        }
         host.pointer(id, tool, button, samples, used, predicted)
     }
 }

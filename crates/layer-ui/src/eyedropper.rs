@@ -51,7 +51,7 @@ pub(crate) struct Picking {
     pub touch: Option<u64>,
     pub touch_offset: f32,
     pub finishing: bool,
-    pub consumed: Vec<u64>,
+    pub consumed: Vec<(crate::PointerKind, u64)>,
 }
 
 #[derive(Default)]

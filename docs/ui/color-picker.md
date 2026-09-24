@@ -54,6 +54,17 @@ the settings drawer open. Native hold timing, movement slop and sequence
 ownership belong to each host; sampling, preview, acceptance and cancellation belong
 to shared Rust.
 
+Entering the picker retires existing navigation contacts, including a resting
+palm. Their later movement cannot resume navigation, and their pending hold
+callbacks cannot take over the picker. Shared Rust accepts a native hold only
+for the sole live, unclaimed navigation contact. Touch release/cancellation
+always retires navigation state, including during tool or workspace transitions.
+Consumed contacts are identified by pointer kind and ID together; a touch must
+not capture a mouse or pen that has the same numeric ID.
+Android retains native contact identities until release: Compose may synthesize
+an empty cancellation event, which ends those contacts without inventing a pen.
+Focus loss and surface teardown also cancel captured native contacts.
+
 The loupe has a 2× interior, a tiny central cross, and a 14-logical-pixel split ring with the
 candidate on top and the original selected color below. Fine edge reflections
 give it a glass appearance, with no thick outer stroke or shadow. The interior
@@ -122,10 +133,18 @@ library access.
 
 ## Validation
 
+- Resting-contact regressions run in the shared picker tests,
+  `native_color_picker_input` on GTK, `--color-picker` in the Web desktop/device
+  harnesses, and Android's
+  `AndroidColorPanelTest#pickerRetiresRestingContactsAndPendingHolds` with
+  `-e systemInput true`. They cover toolbar entry during contact, pending holds,
+  release/cancellation, inert subsequent single-finger drags, and continued
+  two-finger navigation. Shared tests also cover pointer-kind ID collisions and
+  terminal cleanup during blocked routing.
+
 - GTK release build: `cargo build --locked --release -p layer-linux`.
-- Shared UI/host/workspace library tests: 586 UI, 29 host and 5 workspace checks
-  pass (one unrelated host test is ignored). Coverage includes reversible
-  hover, exact acceptance during rapid motion, stale readbacks, transparent
+- Shared UI/host/workspace library coverage includes reversible hover,
+  exact acceptance during rapid motion, stale readbacks, transparent
   samples, tool restoration, touch ownership, source switching and Navigator
   navigation. Temporary picking is omitted from saved workspace tool state.
 - GPU checks cover circular Oklab averages, sRGB/Display P3, alpha weighting,

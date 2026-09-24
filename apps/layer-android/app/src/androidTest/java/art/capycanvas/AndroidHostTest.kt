@@ -2550,7 +2550,8 @@ class AndroidHostTest {
         try {
             assertTrue(instrumentation.uiAutomation.setRotation(portraitRotation))
             compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
-            val settingsLabel = state().array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")
+            // The header's accessible label is distinct from the Preferences command tooltip.
+            val settingsLabel = "Settings"
             // Configuration changes precede the resized Compose hierarchy.
             compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(settingsLabel).fetchSemanticsNodes().size == 1 }
             capture("16-workspace-portrait")

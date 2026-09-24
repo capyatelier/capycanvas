@@ -397,6 +397,43 @@ fn native_color_picker_input() {
     d.perform(serde_json::json!([{"touch":"down","point":[650,400]},{"touch":"move","point":[720,400]},{"wait_ms":700}]));
     assert!(!state(&d.w).layer_tools.tool.picks_color());
     d.perform(serde_json::json!([{"touch":"up"}]));
+    // A resting palm predates a toolbar press. Neither its pending hold nor
+    // its eventual release may acquire picker ownership or survive as a
+    // navigation contact. Exercise real mouse and tablet toolbar activation.
+    for pen in [false, true] {
+        let tile = d.point(&d.named(&button));
+        let press = if pen { serde_json::json!({"pen":"down","point":tile}) }
+            else { serde_json::json!({"point":tile,"down":true}) };
+        let release = if pen { serde_json::json!({"pen":"up"}) }
+            else { serde_json::json!({"down":false}) };
+        d.perform(serde_json::json!([
+            {"touch":"down","point":[650,400]}, press, release, {"wait_ms":700},
+            {"pen":"move","point":[820,479]}
+        ]));
+        assert!(state(&d.w).layer_tools.tool.picks_color());
+        let ring = d.w.gpu.borrow().as_ref().unwrap().session.color_picker_overlay().unwrap();
+        let scale = d.w.area.scale_factor() as f32;
+        assert_eq!(ring.sample, [820. * scale, 479. * scale], "old hold must not own the picker");
+        d.perform(serde_json::json!([{"touch":"up"},{"pen":"leave"}]));
+        d.key('i' as u32);
+        let camera = state(&d.w).camera;
+        for _ in 0..2 {
+            d.perform(serde_json::json!([
+                {"touch":"down","point":[850,600]},
+                {"touch":"move","point":[920,650]}, {"touch":"up"}
+            ]));
+            assert_eq!(state(&d.w).camera, camera, "released palm must not become a ghost finger");
+        }
+        d.perform(serde_json::json!([
+            {"touch":"down","point":[650,400]},
+            {"touch":"down","slot":1,"point":[850,400]},
+            {"touch":"move","slot":1,"point":[920,470]},
+            {"touch":"up","slot":1}, {"touch":"up"}
+        ]));
+        assert_ne!(state(&d.w).camera.zoom, camera.zoom);
+        assert_ne!(state(&d.w).camera.rotation, camera.rotation);
+        d.w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    }
     // Retained Color panels show a reversible preview without changing paint.
     d.w.dispatch(UiAction::Customize {
         action: CustomizationAction::SetPanelVisible {

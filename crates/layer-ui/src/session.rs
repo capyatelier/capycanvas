@@ -676,6 +676,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
+        // Tool routing and UI transitions may consume terminal events, but
+        // must never keep their contacts alive in the camera gesture.
+        if let UiInput::Pointer {
+            id, kind: PointerKind::Touch,
+            phase: ContactPhase::Up | ContactPhase::Cancel, ..
+        } = &input {
+            self.touch.release(*id);
+        }
         let mut reply = InputReply {
             chrome_hidden: self.interaction.hidden,
             ..Default::default()
@@ -1084,7 +1092,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Invalid pointer position".into());
                 }
                 let placement_contact = kind == PointerKind::Touch
-                    && (self.interaction.pointer.is_some_and(|contact| contact.id == id)
+                    && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
                             && !self.touch.is_active() && self.placement_touch_hit(position)));
                 if kind == PointerKind::Touch && !placement_contact {
@@ -1105,11 +1113,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.touch.clear();
                         self.interaction.pointer = Some(PointerContact {
                             id,
+                            kind,
                             paint,
                             position,
                         });
                     }
-                    if let Some(contact) = self.interaction.pointer.filter(|p| p.id == id) {
+                    if let Some(contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind) {
                         reply.handled = true;
                         reply.paint = contact.paint;
                         if !contact.paint
@@ -3358,8 +3367,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Hand input is routed through UiInput::Pointer's pan gesture.
             return Ok(());
         }
+        let kind = if event.tool == layer_engine::ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen };
         if self.state.platform.color_picker() && (self.eyedropper.picking.previous.is_some()
-            || self.eyedropper.picking.consumed.contains(&event.device_id)) {
+            || self.eyedropper.picking.consumed.contains(&(kind, event.device_id))) {
             if event.phase == PenPhase::Hover {
                 self.cursor_input(Some(event));
             } else {
@@ -3367,7 +3377,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     id: event.device_id, phase: match event.phase {
                         PenPhase::Down => ContactPhase::Down, PenPhase::Up => ContactPhase::Up,
                         PenPhase::Cancel => ContactPhase::Cancel, _ => ContactPhase::Move,
-                    }, kind: if event.tool == layer_engine::ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen },
+                    }, kind,
                     button: PointerButton::Primary,
                     position: [event.surface_position.x, event.surface_position.y],
                 });

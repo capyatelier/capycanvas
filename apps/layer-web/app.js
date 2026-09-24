@@ -1349,7 +1349,7 @@ function pickerTouch(e,stage){
     if(canvasFingers.size===1){
       pickerHold={id:e.pointerId,x:e.clientX,y:e.clientY,timer:setTimeout(()=>{
         pickerHold=null;
-        applyChange(app.input({type:'color_picker_hold',id:e.pointerId,position:position(e),offset:44*(devicePixelRatio||1)}).change);
+        applyChange(app.input({type:'color_picker_hold',id:corePointerId(e),position:position(e),offset:44*(devicePixelRatio||1)}).change);
       },500)};
     }
   } else if(stage===2&&pickerHold?.id===e.pointerId&&Math.hypot(e.clientX-pickerHold.x,e.clientY-pickerHold.y)>8)cancelPickerHold();
