@@ -154,8 +154,9 @@ mod imp {
             );
             cr.set_line_width(1.);
             let _ = cr.stroke();
-            // Read-only type follows the lower arc; all numeric editing is in the sheet.
-            let font = (obj.width() as f64 * 0.044).clamp(9., 12.);
+            // Read-only caption stays clear of the compact swatch groups.
+            let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(obj.width() as f32)
+                .unwrap().intensity_caption.map(f64::from);
             cr.select_font_face(
                 "Adwaita Sans",
                 cairo::FontSlant::Normal,
@@ -163,27 +164,9 @@ mod imp {
             );
             cr.set_font_size(font);
             let text = format!("{:+.2} EV", obj.value());
-            let radius = (g.radius + g.width * 0.5 + 3.) as f64 + font;
-            let advance: f64 = text
-                .chars()
-                .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
-                .sum();
-            let mut cursor = -advance * 0.5;
-            for c in text.chars() {
-                let text = c.to_string();
-                let width = cr.text_extents(&text).unwrap().x_advance();
-                let a = 76f64.to_radians() - (cursor + width * 0.5) / radius;
-                let _ = cr.save();
-                cr.translate(
-                    g.center[0] as f64 + radius * a.cos(),
-                    g.center[1] as f64 + radius * a.sin(),
-                );
-                cr.rotate(a - std::f64::consts::FRAC_PI_2);
-                cr.move_to(-width * 0.5, 0.);
-                let _ = cr.show_text(&text);
-                let _ = cr.restore();
-                cursor += width;
-            }
+            let advance = cr.text_extents(&text).unwrap().x_advance();
+            cr.move_to(x - advance * 0.5, y);
+            let _ = cr.show_text(&text);
         }
     }
 }

@@ -1178,32 +1178,36 @@ pub struct ColorPanelLayout {
     pub shape_rotations: [f32; 2],
     pub readout: [f32; 4],
     pub readout_radius: f32,
+    /// HDR caption center X, baseline Y, and font size; zero in SDR.
+    pub intensity_caption: [f32; 3],
 }
 impl ColorPanelLayout {
-    /// Preserve each swatch's SDR edge clearance from the new outer arc.
+    /// Keep the remembered swatches clear of the HDR arc and mirror the shortcuts.
     pub fn with_hdr(size: f32) -> Option<Self> {
         let mut layout = Self::new(size)?;
         let wheel = ColorWheelGeometry::new(layout.wheel[2])?;
         let arc = HdrIntensityArc::new(size)?;
         let expansion = arc.radius + arc.width * 0.5 - wheel.outer;
         let old_background_y = layout.background[1];
-        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent, &mut layout.black, &mut layout.white] {
+        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent] {
             let dx = b[0] + b[2] * 0.5 - arc.center[0];
             let dy = b[1] + b[3] * 0.5 - arc.center[1];
             let distance = dx.hypot(dy) + expansion;
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
-        // Leave the EV readout visible above the neutral shortcut circles.
-        let shortcut_drop = (size * 0.044).clamp(9., 12.) + 2.;
-        layout.black[1] += shortcut_drop;
-        layout.white[1] += shortcut_drop;
+        layout.black[1] = layout.background[1];
+        layout.white[1] = layout.background[1] + layout.background[3] - layout.white[3];
+        // Keep both swatch groups level; the caption has its own compact row.
+        let font = (size * 0.044).clamp(9., 12.);
+        layout.intensity_caption = [size * 0.5, layout.height() + font + 2., font];
         Some(layout)
     }
-    /// HDR footer height follows the swatches instead of a fixed vertical offset.
+    /// Include the complete swatch groups and the optional HDR caption.
     pub fn height(&self) -> f32 {
         [self.foreground, self.background, self.transparent, self.black, self.white, self.swap]
             .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
+            .max(self.intensity_caption[1] + 3.)
     }
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 128. {
@@ -1220,7 +1224,7 @@ impl ColorPanelLayout {
         let transparent = [size - fg, foreground[1], fg, fg];
         let black = [size - background[0] - bg, background[1], bg, bg];
         let white_size = (bg * 0.88).round();
-        let white = [black[0] - bg * 0.60, black[1] + bg * 0.40, white_size, white_size];
+        let white = [black[0] - bg * 0.48, size - white_size, white_size, white_size];
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
@@ -1246,6 +1250,7 @@ impl ColorPanelLayout {
             shape_rotations: angles.map(|a| a + 90.),
             readout: [0., 0., c.round(), c.round()],
             readout_radius: (size - 28.) * 0.49 + 6.,
+            intensity_caption: [0.; 3],
         })
     }
 }

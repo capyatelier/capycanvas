@@ -93,7 +93,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         SideEffect {onHeight(naturalHeight,layout.number("height"))}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
-                if(hdr)ColorIntensityArc(view,Modifier.matchParentSize(),::color)
+                if(hdr)ColorIntensityArc(view,layout,Modifier.matchParentSize(),::color)
                 ColorWheel(host,view, Modifier.place(layout.array("wheel")), ::color)
                 for (white in listOf(true, false)) {
                     val preset = view.array("quick_colors").objects().first { it.getBoolean("white") == white }
@@ -414,7 +414,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
     }
 }
 
-@Composable private fun ColorIntensityArc(view:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+@Composable private fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
@@ -438,11 +438,11 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         val side=size.width/density
         val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to side,"fraction" to ((view.number("intensity")+2f)/8f)).toString()))
         scale(density,pivot=Offset.Zero) {
-            val g=arc.getJSONObject("geometry");val center=g.array("center").point(1f);val radius=g.number("radius")
+            val g=arc.getJSONObject("geometry")
             val path=arc.array("path");val ramp=view.array("intensity_ramp")
             for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f),path.getJSONArray(i+1).point(1f),g.number("width"),cap=StrokeCap.Round)
-            val font=(side*.044f).coerceIn(9f,12f);val labelRadius=radius+g.number("width")/2f+font+3f;val x=center.x+labelRadius*cos(76f*PI.toFloat()/180f);val y=center.y+labelRadius*sin(76f*PI.toFloat()/180f)
-            drawIntoCanvas{canvas->val native=canvas.nativeCanvas;native.save();native.rotate(-14f,x,y);native.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER});native.restore()}
+            val caption=layout.array("intensity_caption");val x=caption.getDouble(0).toFloat();val y=caption.getDouble(1).toFloat();val font=caption.getDouble(2).toFloat()
+            drawIntoCanvas{canvas->canvas.nativeCanvas.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER})}
             val p=arc.array("point").point(1f);val markerRadius=g.number("marker_radius")
             drawCircle(view.array("marker_color").color(),markerRadius,p)
             drawCircle(Color.Black.copy(alpha=.5f),markerRadius,p,style=Stroke(4f))

@@ -20,6 +20,9 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
   const bounds=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
   const point=async(selector,fx=.5,fy=.5)=>{const r=await bounds(selector);return{x:r.x+r.width*fx,y:r.y+r.height*fy};};
   const gesture=async(device,from,to=from,cancel=false)=>{
+    // Chrome can synthesize a touch click after its pointer-up acknowledgement.
+    // Wait for that event and verify its target instead of racing a fixed delay.
+    const tap=!cancel&&from.x===to.x&&from.y===to.y&&await evaluate(`(()=>{const target=document.elementFromPoint(${from.x},${from.y})?.closest('button');if(!target)return false;window.colorPanelTap=new Promise(resolve=>{const done=e=>{clearTimeout(timer);document.removeEventListener('click',done,true);resolve(!!e&&target.contains(e.target));};const timer=setTimeout(()=>done(null),2000);document.addEventListener('click',done,true);});return true;})()`);
     if(native&&device!=='pen'&&!cancel) {
       const events=device==='touch'?[{touch:'down',point:[from.x,from.y]},{touch:'move',point:[to.x,to.y]},{touch:'up'}]:[{point:[from.x,from.y],down:true},{point:[to.x,to.y]},{down:false}];
       await performNative(events);
@@ -31,6 +34,7 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
       for(const [type,p,buttons] of [['mousePressed',from,1],['mouseMoved',to,1],['mouseReleased',to,0]])
         await call('Input.dispatchMouseEvent',{type,...p,buttons,button:'left',clickCount:1,pointerType:device});
     }
+    if(tap)assert.ok(await evaluate('colorPanelTap.then(result=>{delete window.colorPanelTap;return result})'),`${device}: tap reaches its button`);
     await settle();
     await evaluate('new Promise(r=>setTimeout(r,100))');
   };
