@@ -78,40 +78,6 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     }
   });
   slider.addEventListener("input", () => { finish(true); apply({ type: "position", position: Number(slider.value) }); });
-  // Touch/pen taps edit on press. Keep vertical travel available to scrolling
-  // and retract that provisional edit when the browser or pen scroller pans.
-  // Mouse, keyboard and accessibility continue to use the native range input.
-  let contact;
-  const position = x => {
-    const bounds = slider.getBoundingClientRect();
-    const thumb = parseFloat(getComputedStyle(slider).getPropertyValue('--slider-thumb-size')) || 0;
-    return Math.max(0, Math.min(1, (x - bounds.left - thumb / 2) / Math.max(1, bounds.width - thumb)));
-  };
-  const cancelContact = () => {
-    if (!contact || contact.scrolling) return;
-    contact.scrolling = true;
-    apply({ type: "value", value: contact.before });
-  };
-  slider.addEventListener("pointerdown", e => {
-    if (disabled || e.button || !e.isPrimary || !['touch', 'pen'].includes(e.pointerType)) return;
-    finish(true);
-    contact = { id: e.pointerId, x: e.clientX, y: e.clientY, before: value, horizontal: false, scrolling: false };
-    e.preventDefault(); slider.focus(); slider.setPointerCapture(e.pointerId);
-    apply({ type: "position", position: position(e.clientX) });
-  });
-  slider.addEventListener("pointermove", e => {
-    if (!contact || contact.id !== e.pointerId || contact.scrolling) return;
-    const dx = e.clientX - contact.x, dy = e.clientY - contact.y;
-    if (!contact.horizontal) {
-      if (Math.hypot(dx, dy) <= 8) return;
-      if (Math.abs(dy) > Math.abs(dx)) { cancelContact(); return; }
-      contact.horizontal = true;
-    }
-    e.preventDefault(); apply({ type: "position", position: position(e.clientX) });
-  });
-  slider.addEventListener("pointercancel", cancelContact);
-  slider.addEventListener("lostpointercapture", () => { cancelContact(); contact = null; });
-  slider.addEventListener("pointerup", () => { contact = null; });
   root.update = next => { if(!display || next !== value) show(resolve({ control, value: next, operation: { type: "format" } })); };
   root.setDisabled = next => { if (disabled === next) return; disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => {

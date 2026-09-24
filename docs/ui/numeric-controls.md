@@ -9,10 +9,6 @@ GTK, web and Android share the same touch-first numeric controls.
 - Wider integers and continuous values: label left and a plain, tappable value
   right; a native slider underneath with minus and plus at its ends. Tapping
   the value enters text editing. There are no hidden drag gestures on it.
-- A touch/pen press on a slider changes its value immediately. If travel becomes
-  vertical after native movement slop, restore the pre-press value and scroll the
-  panel. Horizontal drags retain their edits. Cancellation restores the value;
-  mouse, keyboard and accessibility retain native range behavior.
 - In Preferences the complete name/description/value header is above the
   slider. Rows expand for descriptions; the numeric content is capped at
   600 logical pixels. Surrounding groups share the same width so labels align.
@@ -73,10 +69,7 @@ editing, expression evaluation, slider geometry and settings input isolation.
 brush-size sweep through the GTK session. Model refreshes do not emit edits;
 deferred GTK range changes compare values at the core's numeric resolution,
 avoiding f64/f32 rounding feedback loops on the main thread.
-`native_panel_pen_input --tablet`, Web `--selection-tools`, and Android
-`AndroidTitleBarTest#toolSliderPressThenScrollRestoresValue` verify press-before-up,
-vertical scrolling with rollback, and retained horizontal edits. Web and Android
-checks use the attached tablet's real host and graphics stack with injected input.
+No drawing renderer or input hot path changes are part of this UI work.
 
 References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 [Adwaita SpinRow](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SpinRow.html),

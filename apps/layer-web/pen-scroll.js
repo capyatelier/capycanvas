@@ -5,7 +5,7 @@ export function installPenScrolling() {
   document.addEventListener("pointerdown", e => {
     contact = null; suppressClick = false;
     if (e.pointerType !== "pen" || e.button || !e.isPrimary ||
-        e.target.closest("input:not([type=range]),textarea,select,[contenteditable=true]")) return;
+        e.target.closest("input,textarea,select,[contenteditable=true]")) return;
     for (let node = e.target; node && node !== document.body; node = node.parentElement) {
       const style = getComputedStyle(node);
       if (style.touchAction === "none" || style.touchAction === "pan-x") return;

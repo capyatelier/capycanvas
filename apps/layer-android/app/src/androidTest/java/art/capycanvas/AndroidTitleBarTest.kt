@@ -698,37 +698,6 @@ class AndroidTitleBarTest {
         assertTrue(command("color_select").getBoolean("selected"))
     }
 
-    @Test fun toolSliderPressThenScrollRestoresValue() {
-        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
-        instrumentation.runOnMainSync { host.resize((1200*density).toInt(),(360*density).toInt(),density) }
-        idle()
-        val select = "header-control-"+entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("command")=="select" }.getInt("id")
-        tap(select)
-        if(state().getJSONObject("customization").isNull("drawer"))tap(select)
-        action(obj("type" to "invoke", "command" to "color_select"))
-        fun value() = state().array("tool_settings").objects().first { it.getString("id")=="tolerance" }.number("value")
-        val tag="number-slider-Tolerance"
-        for(device in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS)) {
-            tool=device
-            tap(select);tap(select)
-            action(obj("type" to "set_tool_setting", "id" to "tolerance", "value" to .1))
-            val before=value()
-            val top=bounds(tag).top
-            down(tag); val start=point
-            waitFor("$device changes the value before release") { value()!=before }
-            for(i in 1..5)event(MotionEvent.ACTION_MOVE,start+Offset(0f,-18*density*i))
-            event(MotionEvent.ACTION_UP);idle()
-            assertEquals("$device restores the press edit on scroll",before,value(),.0001f)
-            val after=node(tag)?.second?.boundsInRoot
-            assertTrue("$device scrolls Tool from the slider: $top -> $after",after==null || after.height==0f || after.top<top-10*density)
-            tap(select);tap(select)
-            down(tag);val horizontal=point
-            event(MotionEvent.ACTION_MOVE,horizontal+Offset(35*density,0f));event(MotionEvent.ACTION_UP);idle()
-            assertTrue("$device horizontal edits persist",value()!=before)
-        }
-        shot("tool-slider-scroll")
-    }
-
     @Test fun brushAndSculptDrawersKeepIndependentSelections() {
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         fun header(command: String) = "header-control-" + entries().first {

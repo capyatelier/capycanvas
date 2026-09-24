@@ -286,7 +286,6 @@ impl NumberControl {
                 control.imp().steps.set([minus, plus]).unwrap();
             }
             control.imp().slider.set(slider).unwrap();
-            control.install_slider_gesture();
         }
         control.set_value(spec.min);
         // Observe native input without claiming the sequence from GtkRange or
@@ -324,69 +323,6 @@ impl NumberControl {
     }
     fn spec(&self) -> &NumericControl {
         self.imp().spec.get().unwrap()
-    }
-    fn install_slider_gesture(&self) {
-        use std::{cell::RefCell, rc::Rc};
-        // GtkRange claims touch/stylus drags immediately. Own those contacts
-        // in capture, retaining the native range for mouse/keys/accessibility.
-        // Use GTK's movement threshold and the enclosing scroll adjustment.
-        let drag = gtk::GestureDrag::new();
-        drag.set_button(1);
-        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let contact = Rc::new(RefCell::new(None::<(f64, f64, f64, f64, Option<(gtk::Adjustment, f64)>, u8)>));
-        drag.connect_drag_begin(glib::clone!(#[weak(rename_to=control)] self, #[strong] contact, move |g,x,y| {
-            let slider = control.imp().slider.get().unwrap();
-            let Some(bounds) = slider.compute_bounds(&control) else { return; };
-            if !crate::input::touch_or_pen(g) || !slider.is_sensitive()
-                || !bounds.contains_point(&gtk::graphene::Point::new(x as f32,y as f32)) {
-                g.set_state(gtk::EventSequenceState::Denied); return;
-            }
-            let mut ancestor = control.parent();
-            let mut scroll = None;
-            while let Some(widget) = ancestor {
-                if let Some(s) = widget.downcast_ref::<gtk::ScrolledWindow>() {
-                    let a = s.vadjustment();
-                    if a.upper()-a.lower()>a.page_size() { scroll = Some((a.clone(),a.value())); break; }
-                }
-                ancestor = widget.parent();
-            }
-            let track = slider.range_rect();
-            let left = f64::from(bounds.x()) + f64::from(track.x());
-            let width = f64::from(track.width()).max(1.);
-            *contact.borrow_mut() = Some((control.value(),x,left,width,scroll,0));
-            g.set_state(gtk::EventSequenceState::Claimed);
-            control.begin_interaction();
-            slider.grab_focus();
-            control.apply(NumericOperation::Position { position: ((x-left)/width).clamp(0.,1.) });
-        }));
-        drag.connect_drag_update(glib::clone!(#[weak(rename_to=control)] self, #[strong] contact, move |_,dx,dy| {
-            let Some((before,x,left,width,scroll,mut axis)) = contact.borrow().clone() else { return; };
-            if axis==0 {
-                if !control.drag_check_threshold(0,0,dx as i32,dy as i32) { return; }
-                axis = if dy.abs()>dx.abs() { 2 } else { 1 };
-                if let Some(c) = contact.borrow_mut().as_mut() { c.5 = axis; }
-                if axis==2 {
-                    control.apply(NumericOperation::Value { value: before });
-                    control.end_interaction(true);
-                }
-            }
-            if axis==1 {
-                control.apply(NumericOperation::Position { position: ((x+dx-left)/width).clamp(0.,1.) });
-            } else if let Some((adjustment,origin)) = scroll {
-                adjustment.set_value((origin-dy).clamp(adjustment.lower(),(adjustment.upper()-adjustment.page_size()).max(adjustment.lower())));
-            }
-        }));
-        drag.connect_drag_end(glib::clone!(#[weak(rename_to=control)] self, #[strong] contact, move |_,_,_| {
-            if contact.borrow_mut().take().is_some() { control.end_interaction(false); }
-        }));
-        drag.connect_cancel(glib::clone!(#[weak(rename_to=control)] self, move |_,_| {
-            let canceled = contact.borrow_mut().take();
-            if let Some((before,_,_,_,_,axis)) = canceled {
-                if axis!=2 { control.apply(NumericOperation::Value { value: before }); }
-                control.end_interaction(true);
-            }
-        }));
-        self.add_controller(drag);
     }
     pub fn value(&self) -> f64 {
         self.imp().value.get()

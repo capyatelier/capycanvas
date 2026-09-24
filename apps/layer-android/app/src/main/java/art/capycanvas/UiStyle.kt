@@ -6,8 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.FocusInteraction
@@ -35,9 +33,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerType
-import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -203,54 +198,8 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     onValueChangeFinished: (() -> Unit)? = null) {
     val colors = LocalPalette.current
     val focus = LocalFocusManager.current
-    val currentValue by rememberUpdatedState(value)
-    val currentChange by rememberUpdatedState(onChange)
-    val currentFinished by rememberUpdatedState(onValueChangeFinished)
-    val direction = androidx.compose.ui.platform.LocalLayoutDirection.current
-    val contactInput = Modifier.pointerInput(enabled, range, showThumb, direction) {
-        if (!enabled) return@pointerInput
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            if (down.type != PointerType.Touch && down.type != PointerType.Stylus && down.type != PointerType.Eraser) return@awaitEachGesture
-            val before = currentValue
-            val inset = if (showThumb) 8.dp.toPx() else 0f
-            fun update(x: Float) {
-                val fraction = ((x - inset) / (size.width - 2 * inset).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                val logical = if (direction == LayoutDirection.Rtl) 1f - fraction else fraction
-                currentChange(range.start + logical * (range.endInclusive - range.start))
-            }
-            // Consume only the down, then arbitrate movement before Material's
-            // drag handler. The enclosing vertical scroll observes unconsumed
-            // vertical travel and owns its native capture/kinetic scrolling.
-            down.consume()
-            focus.clearFocus()
-            update(down.position.x)
-            var horizontal = false
-            var committed = false
-            try {
-                while (true) {
-                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
-                    if (change.isConsumed) break
-                    val delta = change.position - down.position
-                    if (!horizontal && delta.getDistance() > viewConfiguration.touchSlop) {
-                        if (kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x)) break
-                        horizontal = true
-                    }
-                    if (!change.pressed) {
-                        change.consume()
-                        committed = true
-                        currentFinished?.invoke()
-                        break
-                    }
-                    if (horizontal) { change.consume(); update(change.position.x) }
-                }
-            } finally {
-                if (!committed) currentChange(before)
-            }
-        }
-    }
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
-        Slider(value.coerceIn(range), { focus.clearFocus(); onChange(it) }, modifier.height(height).then(contactInput).semantics { contentDescription = label },
+        Slider(value.coerceIn(range), { focus.clearFocus(); onChange(it) }, modifier.height(height).semantics { contentDescription = label },
             enabled = enabled, valueRange = range, onValueChangeFinished = onValueChangeFinished,
             thumb = {
                 // Material measures the slider from its thumb/track, so reserve

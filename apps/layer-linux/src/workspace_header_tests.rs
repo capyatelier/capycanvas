@@ -1713,9 +1713,6 @@ fn native_panel_pen_input() {
     let tools = d.named("drawer-panel-Tools");
     let scroll = tools.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
     // Constrain this native viewport to make every device exercise overflow.
-    scroll.set_vexpand(false);
-    scroll.set_valign(gtk::Align::Start);
-    scroll.set_min_content_height(0);
     scroll.set_max_content_height(180);
     scroll.set_propagate_natural_height(false);
     scroll.set_height_request(180);
@@ -1748,42 +1745,6 @@ fn native_panel_pen_input() {
         else { assert!(scroll.vadjustment().value() > 40_f64.min(overflow * 0.8), "{device} scrolls choices: {}", scroll.vadjustment().value()); }
     }
     assert!(input_tools.get() > 0, "Wayland tablet-v2 produced real GDK tablet events");
-    let number = d.named("tool-setting-size").downcast::<crate::number_control::NumberControl>().unwrap();
-    let settings_scroll = number.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
-    settings_scroll.set_vexpand(false);
-    settings_scroll.set_valign(gtk::Align::Start);
-    settings_scroll.set_min_content_height(0);
-    settings_scroll.set_max_content_height(130);
-    settings_scroll.set_propagate_natural_height(false);
-    settings_scroll.set_height_request(130);
-    settings_scroll.set_kinetic_scrolling(false);
-    pump(200);
-    fn scale(root: &gtk::Widget) -> Option<gtk::Widget> {
-        if root.is::<gtk::Scale>() { return Some(root.clone()); }
-        let mut child = root.first_child();
-        while let Some(w) = child { if let Some(s) = scale(&w) { return Some(s); } child = w.next_sibling(); }
-        None
-    }
-    for device in ["touch", "pen"] {
-        d.w.dispatch(UiAction::SetBrushSize { value: 20. });
-        settings_scroll.vadjustment().set_value(0.); pump(100);
-        let before = number.value();
-        let slider = scale(number.upcast_ref()).unwrap();
-        let b = slider.compute_bounds(&d.w.window).unwrap();
-        let p = [b.x()+b.width()*0.7,b.y()+b.height()/2.];
-        d.perform(serde_json::json!([{device:"down","point":p}]));
-        assert_ne!(number.value(),before,"{device} edits on press before release");
-        d.perform(serde_json::json!([
-            {device:"move","point":[p[0],p[1]-20.]},
-            {device:"move","point":[p[0],p[1]-65.]}, {device:"up"}
-        ]));
-        assert!((number.value()-before).abs()<0.001,"{device} vertical drag restores the value: {} vs {before}",number.value());
-        assert!(settings_scroll.vadjustment().value()>15.,"{device} scrolls the Tool page from the slider");
-        settings_scroll.vadjustment().set_value(0.); pump(100);
-        d.perform(serde_json::json!([{device:"down","point":p},{device:"move","point":[p[0]+25.,p[1]]},{device:"up"}]));
-        assert_ne!(number.value(),before,"{device} horizontal drag keeps its edit");
-        assert_eq!(settings_scroll.vadjustment().value(),0.);
-    }
     d.perform(serde_json::json!([{"pen":"leave"}]));
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let id = state(&d.w).layer_properties.layer.unwrap();
