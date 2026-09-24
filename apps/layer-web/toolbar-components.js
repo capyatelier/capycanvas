@@ -82,9 +82,14 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       const pixels = Math.round(side * ratio);
       if (canvas.width !== pixels || canvas.height !== pixels) canvas.width = canvas.height = pixels;
       const ctx = canvas.getContext('2d', { willReadFrequently: true }); ctx.resetTransform(); ctx.clearRect(0, 0, pixels, pixels); ctx.scale(ratio, ratio);
-      ctx.save(); ctx.beginPath(); ctx.rect(8, 36, side - 16, side - 44); ctx.clip();
+      ctx.save(); ctx.beginPath(); const viewport = geometry.viewport; ctx.rect(viewport.x, viewport.y, viewport.width, viewport.height); ctx.clip();
       ctx.globalAlpha = geometry.opacity; const b = geometry.stamp; ctx.drawImage(stamp.image, b.x, b.y, b.width, b.height);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-in'; ctx.fillStyle = getComputedStyle(root).color; ctx.fillRect(0, 0, side, side); ctx.restore();
+      if (geometry.header_fade) {
+        const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).backgroundColor;
+        fade.addColorStop(0, background); fade.addColorStop(.55, background); fade.addColorStop(1, 'transparent');
+        ctx.save(); ctx.globalAlpha = .92; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
+      }
     }
     function update(option) {
       if (option) current = option.value;
@@ -117,10 +122,10 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     function orient() {
       slider.style.writingMode = vertical ? 'vertical-lr' : ''; slider.style.direction = vertical ? 'rtl' : '';
       slider.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
-      const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', cap: 16 });
+      const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal' });
       place(cap, capBounds);
-      place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 4, width: 28, height: Math.max(0, trackBounds.height - 12) }
-        : { ...trackBounds, x: trackBounds.x + 4, y: (extent[1] - 28) / 2, width: Math.max(0, trackBounds.width - 12), height: 28 });
+      place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: Math.max(0, trackBounds.height - 4) }
+        : { ...trackBounds, x: trackBounds.x + 2, y: (extent[1] - 28) / 2, width: Math.max(0, trackBounds.width - 4), height: 28 });
     }
     update(); return { row, update, orient, dispose() { closePopup(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); window.removeEventListener('blur', blur); } };
   }

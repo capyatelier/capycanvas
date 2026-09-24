@@ -153,12 +153,11 @@ mod imp {
                 }
             };
             if self.slider.get() {
-                for (child, b) in children.iter().zip(toolbar_slider_layout(
-                    width as f32,
-                    height as f32,
-                    axis,
-                    16.,
-                )) {
+                for (child, b) in
+                    children
+                        .iter()
+                        .zip(toolbar_slider_layout(width as f32, height as f32, axis))
+                {
                     allocate(child, b);
                 }
             } else {
@@ -444,6 +443,7 @@ impl Component {
         w.install_context(&cap, target);
         root.append(&cap);
         let slider = if let Some(ref binding) = binding {
+            button.add_css_class("slider-cap");
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
             scale.set_draw_value(false);
             scale.set_hexpand(true);
@@ -716,11 +716,25 @@ impl Component {
                     let b = layout.stamp;
                     let ink = area.color();
                     let _ = cr.save();
+                    let side = layout.side as f64;
+                    let quarter = std::f64::consts::FRAC_PI_2;
+                    for (x, y, angle) in [
+                        (side - 10., 10., -quarter),
+                        (side - 10., side - 10., 0.),
+                        (10., side - 10., quarter),
+                        (10., 10., 2. * quarter),
+                    ] {
+                        cr.arc(x, y, 10., angle, angle + quarter);
+                    }
+                    cr.close_path();
+                    cr.clip();
+                    let _ = cr.save();
+                    let viewport = layout.viewport;
                     cr.rectangle(
-                        8.,
-                        36.,
-                        (layout.side - 16.) as f64,
-                        (layout.side - 44.) as f64,
+                        viewport.x as f64,
+                        viewport.y as f64,
+                        viewport.width as f64,
+                        viewport.height as f64,
                     );
                     cr.clip();
                     cr.translate(b.x as f64, b.y as f64);
@@ -735,6 +749,23 @@ impl Component {
                         layout.opacity as f64,
                     );
                     let _ = cr.mask_surface(&image, 0., 0.);
+                    let _ = cr.restore();
+                    if layout.header_fade > 0. {
+                        let [r, g, b] = component
+                            .root
+                            .imp()
+                            .bookmark_selected
+                            .get()
+                            .map(|c| c as f64 / 255.);
+                        let fade =
+                            gtk::cairo::LinearGradient::new(0., 0., 0., layout.header_fade as f64);
+                        fade.add_color_stop_rgba(0., r, g, b, 0.92);
+                        fade.add_color_stop_rgba(0.55, r, g, b, 0.92);
+                        fade.add_color_stop_rgba(1., r, g, b, 0.);
+                        let _ = cr.set_source(&fade);
+                        cr.rectangle(0., 0., side, layout.header_fade as f64);
+                        let _ = cr.fill();
+                    }
                     let _ = cr.restore();
                 }
             ));

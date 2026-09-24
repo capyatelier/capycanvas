@@ -104,7 +104,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val shown = formatted(spec, value)
             val marks = model.array("bookmarks").objects()
             val geometry = remember(width, height, vertical) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
-                "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "cap" to 16).toString())) }
+                "height" to height, "axis" to if (vertical) "vertical" else "horizontal").toString())) }
             var preview by remember { mutableStateOf(false) }
             var stamp by remember { mutableStateOf<JSONObject?>(null) }
             DisposableEffect(preview) {
@@ -290,7 +290,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     val onChange by rememberUpdatedState(change)
     val onContact by rememberUpdatedState(contact)
     val colors = LocalPalette.current
-    Canvas(modifier.padding(if (vertical) PaddingValues(horizontal = 5.dp, vertical = 8.dp) else PaddingValues(horizontal = 8.dp, vertical = 5.dp))
+    Canvas(modifier.padding(if (vertical) PaddingValues(horizontal = 5.dp, vertical = 2.dp) else PaddingValues(horizontal = 2.dp, vertical = 5.dp))
         .alpha(if (enabled) 1f else .4f).semantics {
             contentDescription = label; progressBarRangeInfo = ProgressBarRangeInfo(fill, 0f..1f)
             if (enabled) setProgress { onChange(it, false, 0f); onContact(false, false); true } else disabled()
@@ -367,11 +367,16 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             Box {
                 Canvas(Modifier.fillMaxSize()) {
                     val b = layout.getJSONObject("stamp")
-                    clipRect(8.dp.toPx(),36.dp.toPx(),size.width-8.dp.toPx(),size.height-8.dp.toPx()) {
+                    val viewport = layout.getJSONObject("viewport")
+                    clipRect(viewport.number("x")*density, viewport.number("y")*density,
+                        (viewport.number("x")+viewport.number("width"))*density, (viewport.number("y")+viewport.number("height"))*density) {
                         drawImage(bitmap, dstOffset = IntOffset((b.number("x")*density).toInt(),(b.number("y")*density).toInt()),
                             dstSize = IntSize(maxOf(1,(b.number("width")*density).toInt()),maxOf(1,(b.number("height")*density).toInt())),
                             alpha = layout.number("opacity"), colorFilter = ColorFilter.tint(colors.text))
                     }
+                    val fade = layout.number("header_fade")*density
+                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.92f),
+                        .55f to colors.panel.copy(alpha=.92f), 1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
                 }
                 Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)

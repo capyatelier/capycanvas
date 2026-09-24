@@ -332,7 +332,7 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
     assert_eq!(layout.tiles[0].width, layout.tiles[1].width);
     for axis in [Axis::Horizontal, Axis::Vertical] {
         for size in [0., 1., 20., 36., 80., 200., f32::NAN, f32::INFINITY] {
-            let parts = toolbar_slider_layout(size, size, axis, 40.);
+            let parts = toolbar_slider_layout(size, size, axis);
             for b in parts {
                 assert!(
                     b.width.is_finite() && b.height.is_finite() && b.width >= 0. && b.height >= 0.
@@ -343,7 +343,11 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
             } else {
                 parts[1].height
             };
-            assert!(track >= 0., "tiny tracks become value-only launchers");
+            assert!(track >= 0.);
+            if size.is_finite() {
+                let leading = if axis == Axis::Horizontal { parts[1].x } else { parts[1].y };
+                assert_eq!(leading, size - leading - track, "equal slider end insets");
+            }
         }
     }
 }
@@ -1041,6 +1045,9 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
     assert_eq!(stamp.alpha[0], 0);
     let size = slider_preview_layout(ToolbarControl::BrushSizeSlider, 64., 180., 1.).unwrap();
     assert_eq!(size.stamp.width, 64.);
+    assert_eq!(size.stamp.y, size.stamp.x);
+    assert_eq!(size.viewport, Bounds { x: 0., y: 0., width: 180., height: 180. });
+    assert!(size.header_fade > 32.);
     assert_eq!(size.opacity, 1.);
     assert_eq!(size.text, "Size: 64 px");
     let opacity =

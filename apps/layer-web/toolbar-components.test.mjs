@@ -52,6 +52,7 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   }
   const centered = await evaluate(`(()=>{const r=document.querySelector('[data-toolbar-component=brush_size_slider]').getBoundingClientRect(),track=document.querySelector('[data-toolbar-component=brush_size_slider] .number-track').getBoundingClientRect();return {root:r.toJSON(),track:track.toJSON()}})()`);
   assert.ok(Math.abs(centered.root.x+centered.root.width/2-centered.track.x-centered.track.width/2)<2, JSON.stringify(centered));
+  assert.ok(Math.abs(centered.track.y-centered.root.y-(centered.root.bottom-centered.track.bottom))<2, 'equal slider end padding');
   await capture('sketch-sliders');
   await checkSliderBookmarks({ call, evaluate, settle, click, capture, send, slider });
   for (const device of ['mouse', 'touch', 'pen']) {
@@ -177,6 +178,14 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, capture, se
     for (const type of ['mousePressed','mouseReleased']) await call('Input.dispatchMouseEvent',{type,x:700,y:150,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
     await settle();
     assert.equal(await evaluate(`!!document.querySelector('${preview}')`), false, `${device}: outside dismiss`);
+  }
+  await send({type:'set_tool_setting',id:'size',value:2048});
+  await click('[data-toolbar-component=brush_size_slider] .toolbar-slider-cap');
+  assert.ok(await evaluate(`(()=>{const c=document.querySelector('${preview} canvas'),w=c.width,h=c.height,p=c.getContext('2d').getImageData(0,0,w,h).data;return [[1,h>>1],[w-2,h>>1],[w>>1,h-2]].every(([x,y])=>p[(y*w+x)*4+3]>0)})()`), 'large size stamp reaches every popup edge');
+  for (const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    assert.ok(await evaluate(`(()=>{const p=document.querySelector('${preview}'),c=p.querySelector('canvas'),bg=getComputedStyle(p).backgroundColor.match(/[\\d.]+/g).slice(0,3).map(Number),pixel=c.getContext('2d').getImageData(c.width>>1,4,1,1).data;return bg.every((v,i)=>Math.abs(v-pixel[i])<24)})()`), `${theme}: header fade follows the popup background`);
+    await capture(`size-edge-fill-${theme}`);
   }
   await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');
   const alpha = () => evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.reduce((n,v,i)=>n+(i%4===3?v:0),0)})()`);

@@ -394,13 +394,13 @@ fn finite_size(v: f32) -> f32 {
     if v.is_finite() { v.max(0.0) } else { 0.0 }
 }
 
-/// Measured value cap followed by the directly editable track. The cap is also
-/// the hold-to-reorder target; no separate grip consumes slider space.
-pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [Bounds; 2] {
+/// Equal end insets around the editable track. The empty leading inset remains
+/// a hold-to-reorder target without reserving space for a numeric readout.
+pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 2] {
     let width = finite_size(width);
     let height = finite_size(height);
     let vertical = axis == Axis::Vertical;
-    let cap = finite_size(cap).min(if vertical { height } else { width });
+    let cap = 8_f32.min(if vertical { height } else { width } / 2.);
     if vertical {
         [
             Bounds {
@@ -411,7 +411,7 @@ pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [
             Bounds {
                 y: cap,
                 width,
-                height: height - cap,
+                height: height - 2. * cap,
                 ..Bounds::default()
             },
         ]
@@ -424,7 +424,7 @@ pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis, cap: f32) -> [
             },
             Bounds {
                 x: cap,
-                width: width - cap,
+                width: width - 2. * cap,
                 height,
                 ..Bounds::default()
             },

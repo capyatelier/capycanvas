@@ -127,6 +127,8 @@ pub fn slider_bookmark_value(
 pub struct SliderPreviewLayout {
     pub side: f32,
     pub stamp: Bounds,
+    pub viewport: Bounds,
+    pub header_fade: f32,
     pub opacity: f32,
     pub text: String,
 }
@@ -159,10 +161,30 @@ pub fn slider_preview_layout(
         side,
         stamp: Bounds {
             x: (side - diameter) / 2.,
-            y: 36. + (available - diameter) / 2.,
+            y: if opacity {
+                36. + (available - diameter) / 2.
+            } else {
+                (side - diameter) / 2.
+            },
             width: diameter,
             height: diameter,
         },
+        viewport: if opacity {
+            Bounds {
+                x: 8.,
+                y: 36.,
+                width: side - 16.,
+                height: side - 44.,
+            }
+        } else {
+            Bounds {
+                x: 0.,
+                y: 0.,
+                width: side,
+                height: side,
+            }
+        },
+        header_fade: if opacity { 0. } else { 52. },
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",

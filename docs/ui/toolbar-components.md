@@ -25,11 +25,13 @@ They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s size and opacity settings and disable when unavailable.
 Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values; opacity tracks show transparency over
-a checkerboard. The tracks have no persistent numeric readout. Dragging opens a
-rounded floating stamp preview beside the slider, updates it continuously, and
+a checkerboard. Both orientations use equal end padding. The tracks have no
+persistent numeric readout. Dragging opens a rounded floating stamp preview
+beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
 outside tap or context change. Its header shows the value and units. Size uses
-the current tip at its document-pixel diameter, clipped for oversized tips;
+the current tip at its document-pixel diameter, filling the popup to its rounded
+edges for oversized tips. A background fade keeps the header legible;
 opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,
 grain and dual-tip texture come from the configured brush.
 

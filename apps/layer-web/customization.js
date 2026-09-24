@@ -255,7 +255,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       }
       // Color/brush updates also publish this region. Retain unchanged panel
       // DOM instead of rewriting attributes and forcing style work on every pick.
-      const viewKey = menuKey([config.content.kind, view]);
+      const viewKey = menuKey([config.content.kind, view, state().theme]);
       if (panelViewKeys.get(panel) === viewKey) continue;
       panelViewKeys.set(panel, viewKey);
       const toolbar = config.content.kind === "toolbar";

@@ -1598,6 +1598,12 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
                 .to_str()
                 .unwrap(),
         );
+        d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
+        pump(50);
+        capture_popover(
+            &popup.clone().downcast::<gtk::Popover>().unwrap(),
+            d.dir.join(format!("slider-stamp-large-{device}.png")).to_str().unwrap(),
+        );
         d.w.dispatch(UiAction::SetBrushSize { value: 3. });
         pump(50);
         drag(d, device, p, p, false);

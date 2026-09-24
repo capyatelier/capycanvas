@@ -1735,6 +1735,8 @@ class AndroidInteractionTest {
             val saved = state().getJSONObject("brush").number("diameter")
             tap(bounds("slider-bookmark").center); settle()
             captureToolbar("stamp-$device")
+            action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048f))
+            captureToolbar("stamp-large-$device")
             action(obj("type" to "set_tool_setting", "id" to "size", "value" to 3f))
             tap(slider.center); settle()
             assertEquals("Bookmark recalls exact value $device", saved, state().getJSONObject("brush").number("diameter"), .001f)

@@ -30,7 +30,6 @@ pub enum ToolbarUiRequest {
         width: f32,
         height: f32,
         axis: Axis,
-        cap: f32,
     },
     SliderSpec {
         control: ToolbarControl,
@@ -84,9 +83,8 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             width,
             height,
             axis,
-            cap,
         } => {
-            json!(toolbar_slider_layout(width, height, axis, cap))
+            json!(toolbar_slider_layout(width, height, axis))
         }
         ToolbarUiRequest::SliderSpec { control } => {
             json!(control.slider().ok_or("Not a slider")?.numeric())
