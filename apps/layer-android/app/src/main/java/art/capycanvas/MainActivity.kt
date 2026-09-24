@@ -115,6 +115,10 @@ class MainActivity : ComponentActivity() {
 internal fun CanvasHost.key(event: KeyEvent) {
     if (colorControlFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) return
     val key = when (event.keyCode) {
+            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> "shift"
+            KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> "alt"
+            KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> "control"
+            KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT -> "meta"
             KeyEvent.KEYCODE_SPACE -> " "
             KeyEvent.KEYCODE_ESCAPE -> "escape"
             KeyEvent.KEYCODE_ENTER -> "enter"

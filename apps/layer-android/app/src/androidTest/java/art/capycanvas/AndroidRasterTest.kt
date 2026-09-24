@@ -298,16 +298,13 @@ class AndroidRasterTest {
         invoke("quick_mask")
         assertTrue(view().getBoolean("quick_mask"))
         invoke("quick_mask"); assertFalse(view().getBoolean("has_selection")); invoke("quick_mask")
-        compose.onNodeWithTag("selection-mask-actions").assertIsDisplayed()
-        compose.onNodeWithTag("quick-mask-row").assertIsDisplayed()
-        assertEquals(0,host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").length())
-        compose.onNodeWithTag("selection-menu-overlay").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Red").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Overlay Protected Areas").assertIsDisplayed()
-        compose.onNodeWithText("Red").performClick()
-        compose.waitForIdle()
-        compose.waitUntil(10_000) { activity.window.decorView.hasWindowFocus() }
-        send(obj("type" to "close_settings"))
+        compose.onNodeWithTag("selection-mask-actions").assertDoesNotExist()
+        compose.onNodeWithTag("layer-row-0").assertIsDisplayed()
+        compose.waitUntil(30_000) { compose.onAllNodesWithTag("layer-thumbnail-0-false",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("layer-thumbnail-0-false",useUnmergedTree=true).assertIsDisplayed()
+        val properties=host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties")
+        assertEquals(4,properties.array("controls").length())
+        assertEquals(0,properties.array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value"))
         // Inject through Android's actual input dispatcher and CanvasSurfaceView.
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val camera = host.snapshot!!.getJSONObject("state").getJSONObject("camera")
@@ -326,8 +323,6 @@ class AndroidRasterTest {
             SystemClock.sleep(16)
         }
         compose.waitUntil(30_000) { !tick() }
-        invoke("swap_mask_colors")
-        assertEquals(1f,view().getJSONObject("mask_editing").number("gray"),0f)
         assertEquals(artColors,host.snapshot!!.getJSONObject("state").getJSONObject("colors").toString())
         for (theme in listOf("light","dark")) {
             send(obj("type" to "set_theme", "theme" to theme))
@@ -338,10 +333,24 @@ class AndroidRasterTest {
                 val x=(origin.x+viewport.getDouble(0)/2-100).toInt()
                 val y=(origin.y+viewport.getDouble(1)/2-45).toInt()
                 val pixels=IntArray(200*90); shot.getPixels(pixels,0,200,x,y,200,90)
-                assertTrue("$theme: protected mask reaches Vulkan presentation",pixels.count { android.graphics.Color.red(it)>android.graphics.Color.green(it)+40 && android.graphics.Color.red(it)>android.graphics.Color.blue(it)+40 }>100)
+                assertTrue("$theme: painted mask reaches Vulkan presentation",pixels.count { android.graphics.Color.red(it)>android.graphics.Color.green(it)+40 && android.graphics.Color.red(it)>android.graphics.Color.blue(it)+40 }>100)
             } finally { shot.recycle() }
         }
-        compose.onNodeWithTag("mask-done").performClick()
+        send(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+        if(compose.onAllNodesWithTag("layer-properties").fetchSemanticsNodes().isEmpty()) {
+            val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "properties" in it.array("panels").values() }.getInt("id")
+            send(obj("type" to "select_panel_tab", "group" to group, "panel" to "properties"))
+        }
+        compose.onNodeWithText("Color / transparent").performClick()
+        compose.onNodeWithText("Black / white").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value")==1 }
+        compose.onNodeWithText("Black / white").performClick()
+        compose.onNodeWithText("Color / transparent").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_painting" }.getJSONObject("value").getInt("value")==0 }
+        compose.waitForIdle()
+        automation.takeScreenshot()?.let { image -> try { File(activity.getExternalFilesDir(null),"quick-mask-properties.png").outputStream().use {image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)} } finally {image.recycle()} }
+        send(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to false)))
+        compose.onNodeWithTag("selection-load-0").performClick()
         compose.waitUntil(30_000) { !view().optBoolean("quick_mask") }
         assertTrue(view().getBoolean("has_selection"))
         invoke("save_selection_layer")
@@ -349,12 +358,37 @@ class AndroidRasterTest {
         val id=host.snapshot!!.getJSONObject("state").array("layers").objects().first {it.optBoolean("selection_layer")}.getLong("id")
         send(obj("type" to "selection", "action" to obj("op" to "edit_layer", "id" to id)))
         assertEquals(id,view().getJSONObject("mask_editing").getLong("layer"))
+        assertEquals("layer-brush-symbolic",host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("selection_icon"))
+        val thumb=compose.onNodeWithTag("layer-thumbnail-$id-false",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
+        val load=compose.onNodeWithTag("selection-load-$id").fetchSemanticsNode().boundsInRoot
+        assertTrue("Thumbnail $thumb and Load $load align",kotlin.math.abs(thumb.width-load.width)<=thumb.width*.1f && load.left>=thumb.right && load.left-thumb.right<20f)
+        val label=host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("label")
+        compose.onNodeWithText(label).performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { view().optLong("rename_layer",-1)==id }
+        send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
+        send(obj("type" to "selection", "action" to obj("op" to "begin_resize", "grow" to true, "layer" to id)))
+        compose.onNodeWithText("Grow Selection").assertIsDisplayed()
+        compose.onNodeWithText("Apply").performClick()
+        compose.waitUntil(30_000) { !tick() }
+        invoke("undo");invoke("redo")
         invoke("clear_selection_mask"); invoke("return_to_artwork")
         invoke("deselect")
         compose.onNodeWithTag("selection-load-$id").assertIsDisplayed().performClick()
         compose.waitUntil(30_000) { view().getBoolean("has_selection") }
         assertTrue("An explicitly empty selection is retained",view().getBoolean("has_selection"))
         assertEquals("Selection overlays never enter exported artwork",blank,hash(png("selection-overlay-export.png")))
+        invoke("rectangle_select");invoke("selection_new")
+        fun selected(command:String)=host.snapshot!!.getJSONObject("state").array("commands").objects().first { it.getString("id")==command }.getBoolean("selected")
+        for((meta,code,command) in listOf(
+            Triple(android.view.KeyEvent.META_SHIFT_ON,android.view.KeyEvent.KEYCODE_SHIFT_LEFT,"selection_add"),
+            Triple(android.view.KeyEvent.META_ALT_ON,android.view.KeyEvent.KEYCODE_ALT_LEFT,"selection_subtract"),
+            Triple(android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_ALT_ON,android.view.KeyEvent.KEYCODE_SHIFT_LEFT,"selection_intersect"))) {
+            val now=SystemClock.uptimeMillis()
+            assertTrue(automation.injectInputEvent(android.view.KeyEvent(now,now,android.view.KeyEvent.ACTION_DOWN,code,0,meta),true))
+            compose.waitUntil(10_000) { selected(command) }
+            assertTrue(automation.injectInputEvent(android.view.KeyEvent(now,SystemClock.uptimeMillis(),android.view.KeyEvent.ACTION_UP,code,0,0),true))
+            compose.waitUntil(10_000) { selected("selection_new") }
+        }
         assertNull(host.failure); assertNull(host.actionError)
         println("PASS Selection Brush GPU history, Android stylus Quick Mask, independent colors, saved masks and clean artwork export")
     }

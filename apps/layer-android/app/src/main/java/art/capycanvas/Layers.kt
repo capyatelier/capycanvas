@@ -177,14 +177,13 @@ internal class LayerSwipe {
                             selected=view.getBoolean("references_selected"),subtle=true,action=obj("type" to "layer","action" to obj("op" to "reference_selection")))
                     }
                 }
-                QuickMaskRow(host, view)
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("layer-rows"),state=list) {
                 items(layers,key={it.getLong("id")}) { layer ->
                     val id=layer.getLong("id")
                     val target=drag?.takeIf { it.target==id }
                     val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
-                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                    LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
                         held={contactHeld=it},
                         cancelContext={menuGeneration++; menu=null},
@@ -398,6 +397,14 @@ internal class LayerSwipe {
             }
         }
         thumb(false)
+        if(layer.optBoolean("selection_layer")) {
+            val load = obj("type" to "selection", "action" to obj("op" to "load_layer", "id" to id, "mode" to "new", "inverted" to false))
+            ActionTip(host,"Load selection",load,Modifier.size(30.dp)) {
+                Box(Modifier.fillMaxSize().testTag("selection-load-$id").clickable { host.dispatch(load) }, contentAlignment=Alignment.Center) {
+                    SharedIcon("selection-load", "Load selection", Modifier.size(24.dp))
+                }
+            }
+        }
         if(layer.getBoolean("has_mask")) {
             LayerButton(host,"link",if(layer.getBoolean("mask_linked"))"Unlink mask from layer" else "Link mask to layer",
                 Modifier.size(12.dp,24.dp).alpha(if(layer.getBoolean("mask_linked"))1f else .35f),
@@ -413,12 +420,11 @@ internal class LayerSwipe {
                     textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={finish()}))
                 LaunchedEffect(id) { focus.requestFocus() }
                 DisposableEffect(id) { onDispose { host.editingText=false } }
-            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
+            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={if(layer.optBoolean("can_rename"))host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=layer.getString("description")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
-        if (layer.optBoolean("selection_layer")) TextButton({ host.dispatch(obj("type" to "selection", "action" to obj("op" to "load_layer", "id" to id, "mode" to "new", "inverted" to false))) }, Modifier.heightIn(min=48.dp).testTag("selection-load-$id")) { Text("Load") }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
         SharedIcon("grip","Drag layer",Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
         }
