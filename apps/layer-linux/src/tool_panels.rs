@@ -8,7 +8,7 @@ use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
     ColorAction, ColorPanelLayout, ColorReadout, ColorShape, ColorSlot, ColorState,
     ColorWheelGeometry, Theme, ToolSetItem, ToolSetView, ToolSetting, ToolSettingAction, UiAction,
-    UiState,
+    ToolActionGroup, UiState,
 };
 
 /// Placement completion remains visible when the artist's workspace hides the
@@ -301,7 +301,7 @@ impl ToolSettings {
                     .iter()
                     .find(|c| c.id == action.command)
                     .expect("core command exists");
-                let mode = matches!(action.command, layer_ui::CommandId::SelectionNew | layer_ui::CommandId::SelectionAdd | layer_ui::CommandId::SelectionSubtract | layer_ui::CommandId::SelectionIntersect);
+                let mode = action.group().is_some_and(ToolActionGroup::segmented);
                 let widget: gtk::Widget = if mode {
                     let button = gtk::ToggleButton::new();
                     button.set_size_request(28, layer_ui::TILE_SIZE as i32);
@@ -325,7 +325,7 @@ impl ToolSettings {
                     button.upcast()
                 } else if action.checkable {
                     let check = gtk::CheckButton::new();
-                    let source_choice = matches!(action.command, layer_ui::CommandId::SelectionVisible | layer_ui::CommandId::SelectionEditing | layer_ui::CommandId::SelectionReference);
+                    let source_choice = action.group().is_some();
                     if source_choice {
                         if let Some(first) = &source_group { check.set_group(Some(first)); }
                         else { source_group = Some(check.clone()); }

@@ -34,6 +34,19 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_photo_flip_layout(platform);
+        if self == Self::Photographer && platform == crate::Platform::Gtk {
+            let flip = layout.panel(Panel::Commands).unwrap().tiles().iter()
+                .find(|t| t.control == ToolbarControl::Command {
+                    command: crate::CommandId::FlipHorizontal,
+                }).unwrap().id;
+            layout.remove_tool(Panel::Commands, flip).expect("Photo command default");
+        }
+        layout
+    }
+
+    /// Exact prior default, before removing Flip Image from Photo's top bar.
+    pub fn legacy_photo_flip_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_bottom_brush_controls_layout(platform);
         if self == Self::Painter && platform == crate::Platform::Gtk {
             let panel = layout.panels.iter().find(|p| {

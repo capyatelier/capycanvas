@@ -381,9 +381,7 @@ fn native_toolbar_components_input() {
             command: CommandId::SelectionNew,
         });
         pump(150);
-        d.click_name("toolbar-choice-selection-mode");
-        d.key(0xff54); // Down
-        d.key(0xff0d); // Enter
+        d.click_name("toolbar-segment-selection-mode-1");
         assert!(
             state(&d.w)
                 .commands
@@ -1522,6 +1520,127 @@ fn native_toolbar_rows_input() {
         d.key(0xff1b);
         assert_eq!(state(&d.w).brush.diameter, 51.);
         d.capture_canvas(&format!("toolbox-rows-{edge:?}.png"));
+    }
+    d.finish();
+}
+
+fn select_toolbar_segment(d: &mut Driver, device: &str, index: usize, command: CommandId) {
+    let button = d.named(&format!("toolbar-segment-selection-mode-{index}"));
+    assert!(button.is_mapped());
+    let p = d.point(&button);
+    drag(d, device, p, p, false);
+    let view = state(&d.w);
+    assert!(view.commands.iter().any(|c| c.id == command && c.selected));
+    for i in 0..4 {
+        let b = d.named(&format!("toolbar-segment-selection-mode-{i}"));
+        assert_eq!(
+            b.downcast_ref::<gtk::ToggleButton>().unwrap().is_active(),
+            i == index
+        );
+    }
+    assert_eq!(
+        d.named(&format!("toolbar-segment-selection-mode-{index}")),
+        button
+    );
+    assert!(view.customization.drawer.is_none());
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_segments_input"]
+fn native_toolbar_segments_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarSegments");
+    for theme in [Theme::Light, Theme::Dark] {
+        restore(&d, WorkspacePreset::Photographer);
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let mut workspace = state(&d.w).workspace;
+        let removed: Vec<_> = workspace.layout.panel(Panel::Commands).unwrap().tiles()
+            .iter().filter(|t| t.control.options_style().is_none()).map(|t| t.id).collect();
+        for tile in removed {
+            // Removing an item also collapses neighboring dividers.
+            if workspace.layout.panel(Panel::Commands).unwrap().tiles().iter().any(|t| t.id == tile) {
+                workspace.layout.remove_tool(Panel::Commands, tile).unwrap();
+            }
+        }
+        d.w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::RectangleSelect,
+        });
+        for edge in [Edge::Top, Edge::Left] {
+            d.w.dispatch(UiAction::MovePanel {
+                panel: Panel::Commands,
+                target: DockTarget::Edge { edge, outer: true },
+                viewport: [1600., 1000.],
+            });
+            for style in [
+                TileStyle::Small,
+                TileStyle::Medium,
+                TileStyle::Large,
+                TileStyle::MediumLabeled,
+                TileStyle::Labeled,
+            ] {
+                d.w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTileStyle {
+                        panel: Panel::Commands,
+                        style,
+                    },
+                });
+                pump(120);
+                let bar = d.named("toolbar-segments-selection-mode");
+                assert!(bar.has_css_class("linked") && bar.is_mapped());
+                let a = d
+                    .named("toolbar-segment-selection-mode-0")
+                    .compute_bounds(&d.w.window)
+                    .unwrap();
+                let b = d
+                    .named("toolbar-segment-selection-mode-3")
+                    .compute_bounds(&d.w.window)
+                    .unwrap();
+                if edge == Edge::Top {
+                    assert_eq!(a.y(), b.y());
+                    assert!((b.x() - a.x() - 3. * style.size()[0]).abs() <= 1.);
+                } else {
+                    assert_eq!(a.x(), b.x());
+                    assert!((b.y() - a.y() - 3. * style.size()[1]).abs() <= 1.);
+                }
+                select_toolbar_segment(&mut d, "mouse", 1, CommandId::SelectionAdd);
+                select_toolbar_segment(&mut d, "touch", 2, CommandId::SelectionSubtract);
+                select_toolbar_segment(&mut d, "touch", 2, CommandId::SelectionSubtract);
+                d.capture_canvas(&format!("segments-{theme:?}-{edge:?}-{style:?}.png"));
+            }
+        }
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::AutoSelect,
+        });
+        pump(120);
+        assert!(
+            d.named("toolbar-choice-selection-source")
+                .is::<gtk::DropDown>()
+        );
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_segments_pen_input --tablet"]
+fn native_toolbar_segments_pen_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarSegmentsPen");
+    restore(&d, WorkspacePreset::Photographer);
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::RectangleSelect,
+    });
+    pump(150);
+    for (i, command) in [
+        CommandId::SelectionNew,
+        CommandId::SelectionAdd,
+        CommandId::SelectionSubtract,
+        CommandId::SelectionIntersect,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        select_toolbar_segment(&mut d, "pen", i, command);
     }
     d.finish();
 }

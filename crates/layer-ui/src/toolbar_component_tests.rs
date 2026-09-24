@@ -852,3 +852,113 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
         assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file());
     }
 }
+
+#[test]
+fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    s.dispatch(UiAction::Invoke {
+        command: CommandId::AutoSelect,
+    })
+    .unwrap();
+    let options = s.state().tool_options();
+    let mode = options
+        .iter()
+        .find(|o| {
+            matches!(
+                o,
+                ToolOption::Choice {
+                    id: "selection-mode",
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let ToolOption::Choice {
+        segmented, items, ..
+    } = mode
+    else {
+        panic!()
+    };
+    assert!(*segmented);
+    assert_eq!(items.len(), 4);
+    for item in items {
+        s.dispatch(UiAction::ToolbarEdit {
+            context: s.state().toolbar_context(),
+            action: Box::new(item.action.clone()),
+        })
+        .unwrap();
+        let current = s.state().tool_options();
+        let current = current
+            .iter()
+            .find(|o| {
+                matches!(
+                    o,
+                    ToolOption::Choice {
+                        id: "selection-mode",
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(mode.same_schema(current));
+        let ToolOption::Choice {
+            items: selected, ..
+        } = current
+        else {
+            panic!()
+        };
+        assert_eq!(selected.iter().filter(|i| i.selected).count(), 1);
+        assert!(
+            selected
+                .iter()
+                .any(|i| i.selected && i.action == item.action)
+        );
+    }
+    assert!(options.iter().any(|o| matches!(
+        o,
+        ToolOption::Choice {
+            id: "selection-source",
+            segmented: false,
+            ..
+        }
+    )));
+    assert!(
+        options
+            .iter()
+            .filter(|o| matches!(
+                o,
+                ToolOption::Choice {
+                    segmented: true,
+                    ..
+                }
+            ))
+            .count()
+            == 1
+    );
+
+    let sizes = [[36., 36.], [36., 144.], [36., 36.]];
+    let full = tool_options_layout(36., 288., Axis::Vertical, &sizes, [36., 36.], 2.);
+    assert_eq!(full.fields[0].unwrap().height, 36.);
+    assert_eq!(full.fields[1].unwrap().y, 38.);
+    assert_eq!(full.fields[1].unwrap().height, 144.);
+    assert_eq!(full.fields[2].unwrap().y, 184.);
+    let short = tool_options_layout(36., 180., Axis::Vertical, &sizes, [36., 36.], 2.);
+    assert!(short.fields[0].is_some());
+    assert!(
+        short.fields[1..].iter().all(Option::is_none),
+        "overflow hides the entire bar"
+    );
+
+    let photo = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    let commands = photo.panel(Panel::Commands).unwrap().tiles();
+    assert!(!commands.iter().any(|t| t.control
+        == ToolbarControl::Command {
+            command: CommandId::FlipHorizontal
+        }));
+    assert!(
+        !commands
+            .windows(2)
+            .any(|p| p.iter().all(|t| t.control == ToolbarControl::Divider))
+    );
+}

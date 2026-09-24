@@ -172,7 +172,29 @@ mod imp {
                 let sizes: Vec<_> = children[1..]
                     .iter()
                     .map(|w| {
-                        if w.has_css_class("option-action") || self.vertical.get() {
+                        if w.has_css_class("option-segments") {
+                            let row = w.downcast_ref::<gtk::Box>().unwrap();
+                            let tile = self.style.get().size();
+                            let mut count = 0.;
+                            let mut child = row.first_child();
+                            while let Some(button) = child {
+                                count += 1.;
+                                child = button.next_sibling();
+                            }
+                            // Keep connected choices together; narrow side bars
+                            // stack them, wide toolboxes can retain the row.
+                            let stacked = self.vertical.get() && (width as f32) < tile[0] * count;
+                            row.set_orientation(if stacked {
+                                gtk::Orientation::Vertical
+                            } else {
+                                gtk::Orientation::Horizontal
+                            });
+                            if self.vertical.get() {
+                                [width as f32, tile[1] * if stacked { count } else { 1. }]
+                            } else {
+                                [tile[0] * count, tile[1]]
+                            }
+                        } else if w.has_css_class("option-action") || self.vertical.get() {
                             self.style.get().size()
                         } else {
                             [
@@ -317,11 +339,16 @@ impl ComponentBody {
             return;
         }
         for row in self.imp().children.borrow().iter().skip(1) {
-            row.set_valign(if vertical || row.has_css_class("option-action") {
-                gtk::Align::Fill
-            } else {
-                gtk::Align::Center
-            });
+            row.set_valign(
+                if vertical
+                    || row.has_css_class("option-action")
+                    || row.has_css_class("option-segments")
+                {
+                    gtk::Align::Fill
+                } else {
+                    gtk::Align::Center
+                },
+            );
             let mut child = row.first_child();
             while let Some(w) = child {
                 if w.has_css_class("option-label") {
@@ -352,7 +379,7 @@ impl ComponentBody {
                     dropdown.set_show_arrow(!vertical);
                     dropdown.set_factory(Some(&choice_factory(vertical && !labeled, true, 16)));
                 }
-                if row.has_css_class("option-action") {
+                if row.has_css_class("option-action") || row.has_css_class("option-segments") {
                     if let Some(image) = w
                         .clone()
                         .downcast::<gtk::Button>()
@@ -372,6 +399,7 @@ impl ComponentBody {
 enum Field {
     Numeric(NumberControl),
     Choice(gtk::DropDown),
+    Segments(Vec<gtk::ToggleButton>),
     Action(gtk::Button),
 }
 pub(super) struct Component {
@@ -575,22 +603,6 @@ impl Component {
                 .editor
                 .as_ref()
                 .unwrap()
-                .connect_interaction(glib::clone!(
-                    #[weak]
-                    component,
-                    move |_, phase| {
-                        match phase {
-                            ContactPhase::Down => {
-                                component.contact_context.set(component.context.get())
-                            }
-                            _ => component.contact_context.set(None),
-                        }
-                    }
-                ));
-            component
-                .editor
-                .as_ref()
-                .unwrap()
                 .connect_value_changed(glib::clone!(
                     #[weak]
                     component,
@@ -680,6 +692,11 @@ impl Component {
                             .position(|i| i.selected)
                             .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
                     ),
+                    (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
+                        for (button, item) in buttons.iter().zip(items) {
+                            button.set_active(item.selected);
+                        }
+                    }
                     (Field::Action(b), ToolOption::Action { state, .. }) => {
                         b.set_sensitive(state.enabled);
                         if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
@@ -759,7 +776,61 @@ impl Component {
                 row.append(&number);
                 Field::Numeric(number)
             }
-            ToolOption::Choice { id, label, items } => {
+            ToolOption::Choice {
+                id,
+                label,
+                segmented: true,
+                items,
+            } => {
+                row.add_css_class("linked");
+                row.add_css_class("selection-modes");
+                row.add_css_class("option-segments");
+                row.set_spacing(0);
+                row.set_homogeneous(true);
+                row.set_widget_name(&format!("toolbar-segments-{id}"));
+                row.update_property(&[gtk::accessible::Property::Label(label)]);
+                let mut buttons = Vec::new();
+                for (index, item) in items.iter().enumerate() {
+                    let button = gtk::ToggleButton::new();
+                    button.set_child(Some(&crate::icons::image(&format!(
+                        "layer-{}-symbolic",
+                        item.icon
+                    ))));
+                    button.add_css_class("tile-button");
+                    button.set_hexpand(true);
+                    button.set_vexpand(true);
+                    button.set_tooltip_text(Some(item.label));
+                    button.set_widget_name(&format!("toolbar-segment-{id}-{index}"));
+                    button.update_property(&[gtk::accessible::Property::Label(item.label)]);
+                    if let Some(first) = buttons.first() {
+                        button.set_group(Some(first));
+                    }
+                    let action = item.action.clone();
+                    button.connect_toggled(glib::clone!(
+                        #[weak(rename_to=component)]
+                        self,
+                        #[weak]
+                        w,
+                        move |button| {
+                            if !component.updating.get() && button.is_active() {
+                                w.dispatch(UiAction::ToolbarEdit {
+                                    context,
+                                    action: Box::new(action.clone()),
+                                });
+                            }
+                        }
+                    ));
+                    row.append(&button);
+                    buttons.push(button);
+                }
+                Field::Segments(buttons)
+            }
+            ToolOption::Choice {
+                id,
+                label,
+                segmented: false,
+                items,
+            } => {
                 // Store the core icon alongside each label in a native model.
                 let model = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();
                 for item in items {

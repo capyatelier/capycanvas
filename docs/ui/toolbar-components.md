@@ -74,6 +74,10 @@ standard gap, connector and corner treatment of other tool drawers. Multiple
 horizontal Tool Options components share remaining space in their lane. Vertical components shrink before moving to another column. Components stay
 atomic; child fields are never independent drop destinations.
 
+Segmented choices retain connected icon buttons (for example New/Add/Subtract/
+Intersect selection); list choices such as selection source remain dropdowns.
+The bar stacks on narrow side toolbars and moves into overflow as a whole.
+
 ## Ownership and implementation
 
 - `layer-ui/toolbar_components.rs` owns bindings, contextual form metadata,
@@ -133,7 +137,7 @@ its synthetic serials cannot authorize native popup grabs, so popup journeys
 run separately without that proxy.
 
 The Photo default's command/options band is outermost at the top, above both
-side columns. Only untouched included layouts migrate; custom layouts and their
+side columns, without a Flip Image tile. Only untouched included layouts migrate; custom layouts and their
 history remain intact. Compact top/bottom options use a preferred length of
 sixteen tiles (side options retain eight), then shrink to the available edge.
 `native_toolbar_rows_input` verifies stable readout bounds across range changes,

@@ -12,13 +12,16 @@ pub struct ToolSettingAction {
     pub checkable: bool,
 }
 
-/// Mutually exclusive actions share one choice in compact presentations.
+/// Mutually exclusive actions retain their bar or list presentation when compact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolActionGroup {
     SelectionMode,
     SelectionSource,
 }
 impl ToolActionGroup {
+    pub fn segmented(self) -> bool {
+        matches!(self, Self::SelectionMode)
+    }
     pub fn id(self) -> &'static str {
         match self {
             Self::SelectionMode => "selection-mode",

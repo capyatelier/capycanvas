@@ -11,6 +11,9 @@ fn toolbar_components_upgrade_only_untouched_gtk_defaults() {
     ] {
         let mut previous = vec![preset.legacy_toolbar_components_layout(Platform::Gtk)];
         previous.push(preset.legacy_bottom_brush_controls_layout(Platform::Gtk));
+        if preset == WorkspacePreset::Photographer {
+            previous.push(preset.legacy_photo_flip_layout(Platform::Gtk));
+        }
         if preset == WorkspacePreset::Painter {
             previous.push(WorkspacePreset::legacy_brush_controls_layout(Platform::Gtk));
         }
@@ -309,6 +312,7 @@ pub(super) fn updated_photographer_default(
     let layout = WorkspacePreset::Photographer.layout(platform);
     let previous_components = WorkspacePreset::Photographer.legacy_toolbar_components_layout(platform);
     let previous_inner_bar = WorkspacePreset::Photographer.legacy_bottom_brush_controls_layout(platform);
+    let previous_flip = WorkspacePreset::Photographer.legacy_photo_flip_layout(platform);
     let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
@@ -322,7 +326,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip) {
         return None;
     }
     let mut content = entity.content.clone();

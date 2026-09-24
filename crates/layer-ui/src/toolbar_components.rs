@@ -118,6 +118,7 @@ pub enum ToolOption {
     Choice {
         id: &'static str,
         label: &'static str,
+        segmented: bool,
         items: Vec<ToolSetItem>,
     },
     Action {
@@ -134,13 +135,20 @@ impl ToolOption {
             }
             (
                 Self::Choice {
-                    id: a, items: x, ..
+                    id: a,
+                    segmented: p,
+                    items: x,
+                    ..
                 },
                 Self::Choice {
-                    id: b, items: y, ..
+                    id: b,
+                    segmented: q,
+                    items: y,
+                    ..
                 },
             ) => {
                 a == b
+                    && p == q
                     && x.len() == y.len()
                     && x.iter()
                         .zip(y)
@@ -241,11 +249,16 @@ impl UiState {
                 .filter(|a| completion(a.command))
                 .filter_map(action),
         );
-        let choice = |id, label, items: Vec<ToolSetItem>| {
-            (items.len() > 1).then_some(ToolOption::Choice { id, label, items })
+        let choice = |id, label, segmented, items: Vec<ToolSetItem>| {
+            (items.len() > 1).then_some(ToolOption::Choice {
+                id,
+                label,
+                segmented,
+                items,
+            })
         };
         if !self.toolbar_context().operation {
-            options.extend(choice("tool", "Tool", self.tool_set.groups.clone()));
+            options.extend(choice("tool", "Tool", false, self.tool_set.groups.clone()));
             let (samples, variants): (Vec<_>, Vec<_>) = self
                 .tool_set
                 .subtools
@@ -259,8 +272,8 @@ impl UiState {
             } else {
                 "Variant"
             };
-            options.extend(choice("variant", label, variants));
-            options.extend(choice("sample-size", "Sample size", samples));
+            options.extend(choice("variant", label, false, variants));
+            options.extend(choice("sample-size", "Sample size", false, samples));
         }
         for group in [
             ToolActionGroup::SelectionMode,
@@ -279,7 +292,7 @@ impl UiState {
                     preview: None,
                 })
                 .collect();
-            options.extend(choice(group.id(), group.label(), items));
+            options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }
         options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
         options.extend(
@@ -317,45 +330,52 @@ pub fn tool_options_layout(
         width: finite_size(button[0]).min(width),
         height: finite_size(button[1]).min(height),
     };
-    let row_height = sizes
-        .iter()
-        .map(|s| finite_size(s[1]))
-        .fold(finite_size(button[1]), f32::max);
-    let (mut x, mut y) = (0., 0.);
-    let mut fitting = true;
-    let fields = sizes
-        .iter()
-        .map(|size| {
-            let w = finite_size(size[0]);
-            let h = finite_size(size[1]);
-            if x > 0. && x + w > width {
-                x = 0.;
-                y += row_height + gap;
+    let mut fields = vec![None; sizes.len()];
+    let (mut start, mut y) = (0, 0.);
+    while start < sizes.len() {
+        let (mut end, mut x) = (start, 0.);
+        let mut row_height = finite_size(button[1]);
+        // Measure each row separately: a stacked segmented choice must not
+        // stretch every other row to the height of its whole button bar.
+        while end < sizes.len() {
+            let [w, h] = sizes[end].map(finite_size);
+            if w == 0. || h == 0. || w > width {
+                break;
             }
-            // One-column vertical controls fill their tile. Wider toolboxes keep
-            // the same compact cells, packed left-to-right, then top-to-bottom.
-            let b = Bounds {
+            let w = if vertical && width < w * 2. + gap {
+                width
+            } else {
+                w
+            };
+            if x + w > width {
+                break;
+            }
+            fields[end] = Some(Bounds {
                 x,
                 y,
-                width: if vertical && width < w * 2. + gap {
-                    width
-                } else {
-                    w
-                },
-                height: row_height,
-            };
-            fitting &= w > 0.
-                && h > 0.
-                && w <= width
-                && y + row_height <= height
-                && !(b.y + b.height + gap > more.y && b.x + b.width + gap > more.x);
-            if !fitting {
-                return None;
+                width: w,
+                height: h,
+            });
+            row_height = row_height.max(h);
+            x += w + gap;
+            end += 1;
+        }
+        if end == start {
+            break;
+        }
+        for i in start..end {
+            let b = fields[i].as_mut().unwrap();
+            b.height = row_height;
+            if y + row_height > height
+                || (b.y + b.height + gap > more.y && b.x + b.width + gap > more.x)
+            {
+                fields[i..].fill(None);
+                return ToolOptionsLayout { fields, more };
             }
-            x += b.width + gap;
-            Some(b)
-        })
-        .collect();
+        }
+        start = end;
+        y += row_height + gap;
+    }
     ToolOptionsLayout { fields, more }
 }
 
