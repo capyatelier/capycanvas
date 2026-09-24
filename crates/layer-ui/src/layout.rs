@@ -15,6 +15,8 @@ pub use columns::{CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, Col
 mod tile_group_tests;
 
 pub const TILE_SIZE: f32 = 36.0;
+/// Squircle corner radius of panels, drawers and small-tile toolbars.
+pub const SURFACE_RADIUS: f32 = TILE_SIZE / 2.0;
 /// Six standard toolbar tiles, including their five two-pixel gaps.
 pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
 pub const PANEL_CONTENT_INSET: f32 = 8.0;

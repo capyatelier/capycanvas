@@ -170,11 +170,11 @@ impl DrawerPlacement {
         }
         let distances = [start - body_start, body_end - end];
         let radii = distances.map(|d| {
-            (d - if attached { 0.0 } else { 8.0 }).clamp(0.0, WORKSPACE_SPACING.min(depth))
+            (d - if attached { 0.0 } else { SURFACE_RADIUS }).clamp(0.0, WORKSPACE_SPACING.min(depth))
         });
         let mut square_corners = [false; 4];
         for (corner, distance) in corners.into_iter().zip(distances) {
-            square_corners[corner] = attached || distance < 8.0;
+            square_corners[corner] = attached || distance < SURFACE_RADIUS;
         }
         Some(DrawerConnection {
             bounds: if vertical {
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn drawer_joins_rotate_and_avoid_body_corners() {
         for direction in [Edge::Bottom, Edge::Top, Edge::Right, Edge::Left] {
-            for inset in [0.0_f32, 4.0, 8.0, 11.0, 14.0, 32.0] {
+            for inset in [0.0_f32, 4.0, 18.0, 21.0, 24.0, 32.0] {
                 let vertical = matches!(direction, Edge::Bottom | Edge::Top);
                 let anchor = Bounds {
                     x: 100.0,
@@ -908,10 +908,10 @@ mod tests {
                 let c = p.connection().unwrap();
                 assert_eq!(c.depth, 6.0);
                 assert_eq!(c.length, 36.0);
-                assert_eq!(c.radii, [(inset - 8.0).clamp(0.0, 6.0), 6.0]);
+                assert_eq!(c.radii, [(inset - SURFACE_RADIUS).clamp(0.0, 6.0), 6.0]);
                 assert_eq!(
                     c.square_corners.iter().filter(|v| **v).count(),
-                    usize::from(inset < 8.0)
+                    usize::from(inset < SURFACE_RADIUS)
                 );
                 let [xx, yx, xy, yy, tx, ty] = c.transform;
                 let world = |u, v| {

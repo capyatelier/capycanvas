@@ -27,6 +27,7 @@ mod preferences;
 mod previews;
 mod recovery;
 mod render_thread;
+mod squircle;
 mod system_status;
 mod tiles;
 #[cfg(test)]

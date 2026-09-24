@@ -42,7 +42,11 @@ mod imp {
                 .iter()
                 .filter(|c| c.is_visible() && c.is_child_visible())
             {
-                self.obj().snapshot_child(child, snapshot);
+                if child.is::<gtk::WindowControls>() {
+                    crate::squircle::snapshot_round(&*self.obj(), child, snapshot);
+                } else {
+                    self.obj().snapshot_child(child, snapshot);
+                }
             }
             if let Some(w) = self.owner.borrow().upgrade() {
                 w.header.snapshot(snapshot);

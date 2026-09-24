@@ -693,7 +693,7 @@ mod wheel {
                 self.obj().snapshot_child(intensity, snapshot);
             }
             for button in self.corners.borrow().iter() {
-                self.obj().snapshot_child(button, snapshot);
+                crate::squircle::snapshot_round(&*self.obj(), button, snapshot);
             }
             if let Some(menu) = self.menu.borrow().as_ref() {
                 self.obj().snapshot_child(menu, snapshot);

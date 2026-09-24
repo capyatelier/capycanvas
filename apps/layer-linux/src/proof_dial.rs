@@ -778,8 +778,9 @@ impl ProofDial {
         let r = g.disc_radius();
         let [x, y] = g.center;
         let bounds = gtk::graphene::Rect::new(x - r, y - r, 2. * r, 2. * r);
-        let outline = gtk::gsk::RoundedRect::from_rect(bounds, r);
-        snapshot.push_rounded_clip(&outline);
+        let disc = gtk::gsk::PathBuilder::new();
+        disc.add_circle(&gtk::graphene::Point::new(x, y), r);
+        snapshot.push_fill(&disc.to_path(), gtk::gsk::FillRule::Winding);
         if let Some(texture) = pattern_texture() {
             snapshot.append_texture(&texture, &bounds);
         } else {

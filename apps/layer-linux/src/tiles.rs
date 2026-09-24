@@ -146,6 +146,17 @@ mod imp {
         }
     }
 }
+pub fn set_size_class(widget: &impl IsA<gtk::Widget>, style: TileStyle, kind: &str) {
+    let size = match style {
+        TileStyle::Small => "small",
+        TileStyle::Medium | TileStyle::MediumLabeled => "medium",
+        TileStyle::Large | TileStyle::Labeled => "large",
+    };
+    for other in ["small", "medium", "large"].into_iter().filter(|other| *other != size) {
+        widget.remove_css_class(&format!("{other}-{kind}"));
+    }
+    widget.add_css_class(&format!("{size}-{kind}"));
+}
 glib::wrapper! {
     pub struct TileStrip(ObjectSubclass<imp::TileStrip>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;

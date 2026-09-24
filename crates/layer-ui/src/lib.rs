@@ -110,7 +110,8 @@ pub use layout::{
     WorkspacePreset,
 };
 pub use layout::{
-    DropHint, BRUSH_SETS_MIN_WIDTH, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
+    DropHint, BRUSH_SETS_MIN_WIDTH, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, SURFACE_RADIUS, TAB_BAR_HEIGHT,
+    TILE_SIZE,
     TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_content_height,
     toolbar_tile_layout,
 };

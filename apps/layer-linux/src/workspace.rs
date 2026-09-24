@@ -3,6 +3,7 @@
 
 use crate::{
     canvas::GpuCanvas,
+    squircle::concave_foot,
     tiles::{self, TileStrip},
 };
 use adw::prelude::*;
@@ -795,15 +796,6 @@ fn tab_joins(header: &gtk::Box) -> gtk::DrawingArea {
     joins
 }
 
-fn concave_foot(cr: &gtk::cairo::Context, x: f64, y: f64, radius: f64, direction: f64) {
-    let k = radius * 0.447_715;
-    cr.move_to(x, y - radius);
-    cr.line_to(x, y);
-    cr.line_to(x + direction * radius, y);
-    cr.curve_to(x + direction * k, y, x, y - k, x, y - radius);
-    cr.close_path();
-}
-
 pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
@@ -1039,7 +1031,7 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         let placement_actions = crate::tool_panels::PlacementActions::new();
         content.add_overlay(&placement_actions.root);
-        window.set_content(Some(&content));
+        window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
             window,
             area,
@@ -2782,6 +2774,11 @@ impl Workspace {
             } else {
                 view.root.remove_css_class("floating-panel");
             }
+            tiles::set_size_class(
+                &view.root,
+                layout.panel(group.active).expect("validated panel").tile_style,
+                "tiles",
+            );
             let name = format!("{:?}", group.active);
             if view.stack.child_by_name(&name).is_some() {
                 view.stack.set_visible_child_name(&name);

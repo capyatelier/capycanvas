@@ -68,6 +68,11 @@ impl TileStyle {
         };
         [w * TILE_SIZE, h * TILE_SIZE]
     }
+    /// Squircle radius shared by tiles and toolbars built from them.
+    pub fn corner_radius(self) -> f32 {
+        let [width, height] = self.size();
+        width.min(height) / 2.0
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Small => "Small Tiles",
@@ -1207,6 +1212,7 @@ pub struct PanelView {
     pub tab: TabPresentation,
     pub tile_style: TileStyle,
     pub tile_icon_size: u32,
+    pub tile_corner_radius: f32,
     pub tile_label_lines: u32,
     pub tile_label_bold: bool,
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
@@ -1289,6 +1295,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         tab: state.workspace.layout.tab_presentation(panel),
         tile_style: config.tile_style,
         tile_icon_size: config.tile_style.icon_size(),
+        tile_corner_radius: config.tile_style.corner_radius(),
         tile_label_lines: config.tile_style.label_lines(),
         tile_label_bold: config.tile_style == TileStyle::Labeled,
         toolbar_options: if panel.kind() == PanelKind::Tiles {

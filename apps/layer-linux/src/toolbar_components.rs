@@ -276,14 +276,7 @@ impl ComponentBody {
         if old_axis == vertical && old_style == style {
             return;
         }
-        for class in ["small-component", "medium-component", "large-component"] {
-            self.remove_css_class(class);
-        }
-        self.add_css_class(match style {
-            TileStyle::Small => "small-component",
-            TileStyle::Medium | TileStyle::MediumLabeled => "medium-component",
-            TileStyle::Large | TileStyle::Labeled => "large-component",
-        });
+        crate::tiles::set_size_class(self, style, "component");
         if vertical {
             self.add_css_class("vertical-component");
         } else {

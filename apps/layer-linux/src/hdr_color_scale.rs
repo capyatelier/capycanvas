@@ -103,7 +103,9 @@ mod imp {
                 *v = preview_gain(*v, obj.value().exp2());
             }
             p[3] = 1.;
-            snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(thumb, radius));
+            let disc = gtk::gsk::PathBuilder::new();
+            disc.add_circle(&gtk::graphene::Point::new(cx, cy), radius);
+            snapshot.push_fill(&disc.to_path(), gtk::gsk::FillRule::Winding);
             snapshot.append_texture(
                 &picker_texture(view, headroom, base.space, [1, 1], &[p]),
                 &thumb,
