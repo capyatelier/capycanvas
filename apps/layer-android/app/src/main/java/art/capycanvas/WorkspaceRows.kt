@@ -55,7 +55,7 @@ internal class WorkspaceRowInteraction {
     var generation = 0
     fun cancel() { generation++; menu = null; active = null; hint = null; valid = false }
     fun target() {
-        valid = area.contains(point)
+        valid = active != null && area.contains(point)
         val visible = order.mapNotNull { id -> rows[id]?.let { id to it } }
         val row = visible.firstOrNull { it.second.bottom > point.y } ?: visible.lastOrNull()
         if (!valid || row == null) { valid = false; hint = null; return }
