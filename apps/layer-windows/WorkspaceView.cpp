@@ -98,7 +98,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     TextBlock camera;
     Grid cameraSlot;
-    Button fitCamera{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
+    Button fitCamera{nullptr},zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
     Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -120,6 +120,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
+        zenCapy=button(data,L"Exit Zen mode",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"zen_mode")}}));});
+        zenCapy.Padding({0,0,0,0});zenCapy.Visibility(Visibility::Collapsed);Canvas::SetZIndex(zenCapy,1001);
+        AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");ToolTipService::SetToolTip(zenCapy,box_value(L"Exit Zen mode"));
+        root.Children().Append(zenCapy);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
@@ -286,7 +290,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -352,6 +356,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
+        updateZenCapy(snapshot);
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
         camera.Foreground(data->brush(L"text"));
         auto fit=find(array(data->state,L"commands"),L"id",L"fit_canvas");
@@ -691,6 +696,21 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }
+    void updateZenCapy(J const& snapshot){
+        bool keep=flag(snapshot,L"keep_zen_button");
+        auto header=object(snapshot,L"header");auto size=find(array(header,L"sizes"),L"id",str(object(header,L"model"),L"size"));double tile=num(size,L"tile",36);
+        auto command=find(array(data->state,L"commands"),L"id",L"zen_mode");
+        zenCapy.Width(tile);zenCapy.Height(tile);zenCapy.Background(headerSurface(data));zenCapy.CornerRadius({tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit});
+        zenCapy.Content(icon(str(command,L"icon",L"capy"),data->theme(),tile*440./512.));
+        Canvas::SetLeft(zenCapy,titlebar[0]+6);Canvas::SetTop(zenCapy,6);
+        zenCapy.Visibility(keep?Visibility::Visible:Visibility::Collapsed);
+        IJsonValue bounds=keep?IJsonValue(O({{L"x",N(titlebar[0]+6)},{L"y",N(6)},{L"width",N(tile)},{L"height",N(tile)}})):IJsonValue(JsonValue::CreateNullValue());
+        if(!data->chrome.HasKey(L"zen_button")||data->chrome.GetNamedValue(L"zen_button").Stringify()!=bounds.Stringify()){
+            data->chrome.Insert(L"zen_button",bounds);gestures->ChromeChanged();
+        }
+        if(!zenCapySource){zenCapySource=true;gestures->Source(zenCapy,{},O({{L"kind",S(L"zen_mode")}}),false);}
+    }
+    bool zenCapySource=false;
     void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
     void publishOverviews(){
         A slots;
