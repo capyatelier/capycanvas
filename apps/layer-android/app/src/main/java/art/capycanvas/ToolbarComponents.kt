@@ -78,7 +78,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     }
 }
 
-/** One host view for docked/floating toolbars, Zen strips and retained drawers. */
+/** One host view for docked/floating toolbars and retained drawers. */
 @Composable internal fun ToolbarComponent(host: CanvasHost, panel: JSONObject, tile: JSONObject,
     bounds: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier) {
     val model = tile.getJSONObject("component")

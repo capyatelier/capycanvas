@@ -417,8 +417,8 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                     dock.retiredContext = null
                 }
             }
-            // Non-draggable chrome (including Zen projections) still needs the
-            // original device when a child delivers its native long-click callback.
+            // Non-draggable chrome still needs the original device when a
+            // child delivers its native long-click callback.
             while (currentEvent.changes.any { it.pressed }) awaitPointerEvent(PointerEventPass.Final)
         } finally { dock.contactType = null }
     }
