@@ -98,10 +98,20 @@ impl NumberControl {
         row.prepend(&label);
         control
     }
-    /// Compact editable value for grouped components (e.g. a color wheel).
+    /// Fit a grouped value to its current readout; the editor shares that width.
     pub fn value_only(spec: NumericControl, title: &str) -> Self {
         let control = Self::inline(spec, title);
         control.set_halign(gtk::Align::Center);
+        let imp = control.imp();
+        if let Some(reserve) = imp.width_reserve.get() { reserve.set_visible(false); }
+        if let Some(label) = imp.value_label.get() {
+            label.set_width_chars(0);
+            label.set_max_width_chars(-1);
+        }
+        if let Some(entry) = imp.entry.get() {
+            entry.set_width_chars(1);
+            entry.set_max_width_chars(1);
+        }
         if let Some(slider) = control.imp().slider.get() {
             slider.set_visible(false);
         }

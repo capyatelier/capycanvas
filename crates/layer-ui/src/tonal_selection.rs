@@ -144,7 +144,7 @@ impl TonalOptions {
             let numeric = NumericControl {
                 soft_min: -12.,
                 soft_max: 6.,
-                ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 2)
+                ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 1)
             };
             for (id, label, value) in [
                 ("tonal_lower", "From", self.custom[0]),

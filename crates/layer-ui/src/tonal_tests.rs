@@ -192,6 +192,7 @@ mod tonal_checks {
         assert_eq!(s.state.tool_settings.len(), 4);
         for field in &s.state.tool_settings[..2] {
             assert!(field.numeric.unit.is_empty());
+            assert_eq!(field.numeric.digits, 1);
             assert!(field.tooltip().contains("stops relative to reference white"));
         }
         setting(&mut s, "tonal_lower", -4.);

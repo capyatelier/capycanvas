@@ -693,6 +693,7 @@ fn native_tonal_selection_input() {
         assert!(number.tooltip_text().unwrap().contains("stops relative to reference white"));
         let readout=find_css(&number,"number-readout").unwrap().downcast::<gtk::Label>().unwrap();
         assert!(!readout.text().contains("stop"),"units stay in label tooltips");
+        assert_eq!(readout.text().split('.').last().unwrap().len(),1,"one decimal in the endpoint readout");
     }
     let custom_height=settings_height(&d);
     assert!(custom_height<=170.,"custom controls use {custom_height}px");
@@ -703,6 +704,9 @@ fn native_tonal_selection_input() {
     let track=d.named("range-track-tonal").compute_bounds(&range).unwrap();
     let high=d.named("tool-setting-tonal_upper").compute_bounds(&range).unwrap();
     assert!(low.x()+low.width()<=track.x() && track.x()+track.width()<=high.x());
+    assert!(low.width()<=48. && high.width()<=48.,"endpoint boxes fit the displayed numbers: {} / {}",low.width(),high.width());
+    assert!(track.width()>=range.width() as f32*0.7,"track uses the space released by the endpoint boxes");
+    eprintln!("Tonal range widths: low {}px, track {}px, high {}px",low.width(),track.width(),high.width());
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
     d.key(b'q' as u32);wait_tonal(&d);

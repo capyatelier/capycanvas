@@ -23,8 +23,9 @@ a custom interval. The result applies immediately. **Softness** and **Feather**
 refine it. In the GTK panel and its overflow, **Custom** adds one interval slider
 with two movable ends, an editable low value on the left and high value on the
 right. There are no visible bound labels or unit suffixes; tooltips specify stops
-relative to reference white (0). Bounds stop at one another. The existing numeric
-editors retain typed expressions, and each native range handle supports keyboard
+relative to reference white (0). Endpoint boxes fit their one-decimal readouts,
+leaving the remaining row width to the track. Bounds stop at one another. The
+existing numeric editors retain typed expressions, and each native range handle supports keyboard
 and accessible adjustment. Escape during a drag restores that endpoint.
 The track normally spans −12 to +6 stops and expands to include typed or sampled
 values outside that interval, staying fixed during capture. Both ends remain
