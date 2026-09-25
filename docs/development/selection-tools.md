@@ -1,14 +1,14 @@
 # Selection tools
 
-GTK, Web, Android, macOS and iPadOS provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
+GTK, Web, Android, macOS, iPadOS and Windows provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
 Photo places these alongside Lasso and Auto select in its Tools toolbar. Sketch
 uses a Select title-bar command and a two-panel Tools → Tool drawer, matching
 the Eraser drawer. The Select command remembers the last chosen selection tool
-in the workspace. Windows retains its existing selection entry points.
-GTK, Web, Android, macOS and iPadOS also provide [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
+in the workspace.
+The same hosts also provide [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
 
-Preview-less tool rows match brush categories: at least 44 px on GTK/Web and
-48 dp on Android.
+Preview-less tool rows match brush categories: at least 44 px on GTK, Web and
+Windows, and 48 dp on Android.
 Select, Brush, and Sculpt opener icons follow their category's remembered tool,
 including while another category is active. Rust publishes the icon from shared
 workspace memory; hosts update their retained header and toolbar images.
@@ -50,7 +50,7 @@ and affine transforms consume the same cached mask. Pooled coverage uses alpha
 to preserve its precision through color-managed rendering. No selection
 classification or feathering runs per brush dab.
 
-The defaults apply to GTK, Web, Android, macOS and iPadOS. Shared migration recognizes only untouched
+The defaults apply to GTK, Web, Android, macOS, iPadOS and Windows. Shared migration recognizes only untouched
 included layouts and preserves working settings; customized history is retained.
 The new icons use the existing SVG bank, and native tool/header/toolbar buttons
 retain the application drag and reorder convention.
@@ -76,6 +76,16 @@ retain the application drag and reorder convention.
   colors, thumbnails and saved layers). `EditorLaunchTests/testSelectionMasks`
   runs the native journey on each target. Command-click a layer thumbnail to load
   it (Shift adds, Option subtracts); Control-click stays the context menu.
+- Windows: `apps/layer-windows/scripts/exercise-selection.ps1 -Executable
+  artifacts/windows/Release/CapyCanvas.exe` runs an isolated review. It covers
+  the Sketch Select drawer (eight tools, 44 DIP rows, remembered opener icon,
+  mode rows, Selection Actions and the compact Tonal range form) with mouse,
+  touch and pen. In Photo it checks presented outlines after a rectangle and an
+  Alt-latched Subtract, one-step Undo/Redo, Grow, the Tool Options range,
+  Quick Mask rows and colors, and a renamed Selection Layer with Load. Windows
+  migrates untouched Sketch/Photo defaults shipped before the rollout through
+  `WorkspacePreset::legacy_windows_without_selection_layouts`. Ctrl-click a
+  thumbnail to load it (Shift adds, Alt subtracts).
 - `native_selection_options_input` exercises mode controls on every tool,
   feather-radius entry, selection combinations, and single-step undo/redo.
 - `native_selection_tools_input` exercises GTK mouse/touch tool selection,

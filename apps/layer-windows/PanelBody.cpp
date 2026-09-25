@@ -113,7 +113,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
                 AutomationProperties::SetAutomationId(slot,L"tile-hit-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
-                pick.Content(icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16)));
+                auto tileIcon=icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16));
+                auto tileIconName=std::make_shared<hstring>(str(tile,L"icon",L"brush"));pick.Content(tileIcon);
                 ToolTipService::SetToolTip(pick,box_value(str(tile,L"tooltip")));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
@@ -132,9 +133,12 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     text.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(text,1);content.Children().Append(text);
                     pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.Content(content);
                 }
-                bindings.emplace_back([data=data,pick,panelId,id,picker]{
+                bindings.emplace_back([data=data,pick,panelId,id,picker,tileIcon,tileIconName]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
+                    if(auto name=str(current,L"icon",L"brush");name!=*tileIconName){
+                        *tileIconName=name;tileIcon.Source(icon(name,data->theme()).Source());
+                    }
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
                     pick.Background(flag(current,L"selected")?selected(data):clear());

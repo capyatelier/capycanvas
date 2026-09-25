@@ -6,12 +6,14 @@ struct ToolbarTileButton: View {
     let palette: EditorPalette
     let colors: JSON
     var drawerOpen = false
+    var drawerDirection: String?
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             ToolbarTileContent(panel: panel, tile: tile, palette: palette, colors: colors)
                 .contentShape(Rectangle())
-        }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool, drawerBackground: drawerOpen ? palette["panel"] : nil))
+        }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool, joinedEdge: drawerOpen ? drawerDirection : nil,
+            drawerBackground: drawerOpen ? palette["panel"] : nil, corner: .half))
             .foregroundStyle(palette["text"])
             .disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.36)
     }

@@ -25,7 +25,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     TranslateTransform swipeTransform;
     double swipeOffset=0;
     void swipe(double offset);
-    Button eye{nullptr},check{nullptr},content{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
+    Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
     Border indent,clip,dropMark;
     Grid contentTile,maskTile;
     Image contentImage,contentGlyph,maskImage,lockImage;
@@ -33,6 +33,8 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     TextBlock title{nullptr},meta{nullptr};
     TextBox rename;
     bool renaming=false,committing=false;
+    winrt::event_token renameFocus{};
+    void focusRename();
     hstring imageKey,iconKey;
     J model()const;
     bool current()const;
@@ -44,6 +46,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     void thumbnails(std::vector<LayerThumbnail>& visible);
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
+    bool loadThumbnail(bool mask);
     void highlight(int position);
 };
 struct ElementFactory : implements<ElementFactory,IElementFactory> {

@@ -154,7 +154,6 @@ bool rasterField(FieldRequest const& request,std::vector<uint8_t>& bytes){
     return request.hdr?capy_color_mapped_field(request.pixels,request.mapped.c_str(),bytes.data(),bytes.size())
         :capy_color_raster(request.pixels,request.hue,request.projection,request.rgbSpace,false,bytes.data(),bytes.size());
 }
-// One field raster in flight and one replaceable latest request.
 struct FieldWorker : std::enable_shared_from_this<FieldWorker> {
     Microsoft::UI::Dispatching::DispatcherQueue queue{Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread()};
     std::function<void(FieldResult)> deliver;
@@ -343,7 +342,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     bool previewing()const{return WorkspaceData::previewing(data->colorPreview);}
     J model()const{return previewing()?object(data->colorPreview,L"view"):object(data->model,L"color_panel");}
-    J paintColors()const{return previewing()?object(data->colorPreview,L"colors"):object(data->state,L"colors");}
+    J paintColors()const{return previewing()?object(data->colorPreview,L"colors"):displayColors(data->state);}
     static J geometry(double size,bool hdr){return colorUi(O({{L"type",S(L"layout")},{L"size",N(size)},{L"hdr",B(hdr)}})).GetObject();}
     J arcAt(double fraction)const{return colorUi(O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"fraction",N(fraction)}})).GetObject();}
     void pickIntensity(Point position){
@@ -353,12 +352,12 @@ struct View:std::enable_shared_from_this<View>{
         if(fraction.ValueType()==JsonValueType::Number)setIntensity(-2+8*fraction.GetNumber());
     }
     void setIntensity(double stops){send(O({{L"op",S(L"hdr_intensity")},{L"stops",N(std::clamp(stops,-2.,6.))}}));}
-    bool transparentSlot()const{return str(object(data->state,L"colors"),L"slot")==L"transparent";}
+    bool transparentSlot()const{return str(displayColors(data->state),L"slot")==L"transparent";}
     void endArc(bool restore){
         if(!arcPointer)return;arcPointer.reset();arcTrack.ReleasePointerCaptures();
         if(restore)setIntensity(arcOriginal);
     }
-    hstring editingContext()const{return str(model(),L"shape")+L"/"+str(object(data->state,L"colors"),L"paint_slot");}
+    hstring editingContext()const{return str(model(),L"shape")+L"/"+str(displayColors(data->state),L"paint_slot");}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
     void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,L"Ready");}
     void pick(Point position){
@@ -433,7 +432,6 @@ struct View:std::enable_shared_from_this<View>{
         edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
         stage.Children().Append(edit);
-        // Paint order also controls hit testing in the intentional swatch overlap.
         for(int i=0;i<2;i++){
             bool white=i==0;
             quick[i]=control(white?L"Paint with white":L"Paint with black",[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});

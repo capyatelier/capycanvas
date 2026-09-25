@@ -29,14 +29,14 @@ struct EditorView<Canvas: View>: View {
                     HStack {
                         Spacer()
                         CameraStatus(camera: store.camera).padding(.horizontal, 10).padding(.vertical, 3)
-                            .background(palette.chromeSurface, in: Capsule())
+                            .background(palette.chromeSurface, in: SquircleShape.tile)
                     }.placed(store.snapshot["layout"]["status"])
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
                 if store.snapshot["keep_zen_button"].bool {
                     let command = store.command("zen_mode")
                     IconTile(icon: command["icon"].string, label: command["tooltip"].string,
-                        enabled: command["enabled"].bool) { store.invoke("zen_mode") }
+                        enabled: command["enabled"].bool, corner: .half) { store.invoke("zen_mode") }
                         .frame(width: 36, height: 36)
                         .background(palette.chromeSurface, in: SquircleShape.tile)
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))

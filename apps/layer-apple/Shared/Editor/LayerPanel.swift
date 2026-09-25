@@ -214,7 +214,7 @@ private struct LayerRow: View {
                 perform { store.layer(["op": "toggle_selection", "id": id]) }
             }.accessibilityAddTraits(layer["selected"].bool ? .isSelected : [])
             HStack(spacing: 2) {
-                RoundedRectangle(cornerRadius: 1).fill(Color(red: 233/255, green: 153/255, blue: 165/255))
+                SquircleShape(1).fill(Color(red: 233/255, green: 153/255, blue: 165/255))
                     .frame(width: 3, height: 28).opacity(layer["clipped"].bool ? 1 : 0)
                 thumbnail(mask: false)
                 if layer["selection_layer"].bool {
@@ -286,7 +286,7 @@ private struct LayerRow: View {
                     }
                 }
             }.frame(width: 30, height: 30)
-                .background(!mask && layer["group"].bool ? Color.clear : palette["input"], in: RoundedRectangle(cornerRadius: 3))
+                .background(!mask && layer["group"].bool ? Color.clear : palette["input"], in: SquircleShape(3))
                 .overlay {
                     if mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool {
                         TargetCorners().stroke(.white, lineWidth: 1).shadow(color: .black, radius: 1).allowsHitTesting(false)

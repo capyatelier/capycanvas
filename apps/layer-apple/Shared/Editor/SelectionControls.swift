@@ -22,7 +22,8 @@ struct SelectionModeGroup: View {
                 Button { store.invoke(command["id"].string) } label: {
                     SharedIcon(name: command["icon"].string, size: 20)
                         .frame(maxWidth: .infinity, minHeight: height).contentShape(Rectangle())
-                }.buttonStyle(SelectionSegmentStyle(selected: command["selected"].bool))
+                }.buttonStyle(SelectionSegmentStyle(selected: command["selected"].bool,
+                    shape: SquircleShape.control.segment(index, of: actions.count)))
                     .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
                     .help(command["tooltip"].string)
                     .accessibilityLabel(command["label"].string)
@@ -30,7 +31,6 @@ struct SelectionModeGroup: View {
                     .accessibilityIdentifier("tool-action-" + command["id"].string)
             }
         }.fixedSize(horizontal: false, vertical: true)
-            .clipShape(SquircleShape.control)
             .overlay { SquircleShape.control.strokeBorder(palette["text"].opacity(0.2), lineWidth: 1).allowsHitTesting(false) }
             .accessibilityElement(children: .contain).accessibilityLabel("Selection mode")
     }
@@ -38,15 +38,17 @@ struct SelectionModeGroup: View {
 
 private struct SelectionSegmentStyle: ButtonStyle {
     let selected: Bool
-    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, selected: selected) }
+    let shape: SquircleShape
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, selected: selected, shape: shape) }
     private struct Face: View {
         let configuration: Configuration
         let selected: Bool
+        let shape: SquircleShape
         @Environment(\.editorPalette) private var palette
         var body: some View {
             configuration.label.background {
-                if selected { Rectangle().fill(palette.active) }
-                else if configuration.isPressed { Rectangle().fill(.foreground).opacity(0.16) }
+                if selected { shape.fill(palette.active) }
+                else if configuration.isPressed { shape.fill(.foreground).opacity(0.16) }
             }
         }
     }

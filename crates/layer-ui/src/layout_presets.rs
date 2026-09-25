@@ -178,6 +178,35 @@ impl WorkspacePreset {
         layout
     }
 
+    pub fn legacy_windows_without_selection_layouts(self) -> [DockLayout; 2] {
+        use crate::CommandId::*;
+        let platform = crate::Platform::Windows;
+        [self.layout(platform), self.legacy_without_picker_layout(platform)].map(|mut layout| {
+            if self == Self::Painter {
+                replace_tool(&mut layout, Select, Lasso);
+            } else if self == Self::Photographer {
+                let removed: Vec<u32> = layout.panel(Panel::Toolbar).unwrap().tiles().iter()
+                    .filter(|tile| matches!(tile.control, ToolbarControl::Command {
+                        command: RectangleSelect | EllipseSelect | PolygonSelect | ColorSelect,
+                    }))
+                    .map(|tile| tile.id)
+                    .collect();
+                for &tile in &removed {
+                    layout.remove_tool_raw(Panel::Toolbar, tile).expect("included selection tool");
+                }
+                for panel in &mut layout.panels {
+                    if let PanelContent::Toolbar { tiles, .. } = &mut panel.content {
+                        for tile in tiles {
+                            tile.id -= removed.iter().filter(|&&id| id < tile.id).count() as u32;
+                        }
+                    }
+                }
+                layout.next_tile_id -= removed.len() as u32;
+            }
+            layout
+        })
+    }
+
     pub fn legacy_drawers_without_selection_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_selection_layout(platform);
         if self == Self::Photographer && platform != crate::Platform::Generic {

@@ -79,7 +79,6 @@ fn pointer_button(sample: &CapyPointer) -> PointerButton {
     }
 }
 impl CapyHost {
-    /// Contacts the core has seen begin end with it; later samples wait for their own lift.
     fn cancel_contacts(&mut self) -> Result<(), String> {
         for (id, mut sample) in std::mem::take(&mut self.live_contacts) {
             sample.phase = 4;

@@ -6,6 +6,7 @@
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <microsoft.ui.xaml.window.h>
 #include <ShellScalingApi.h>
+#include <CommCtrl.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <algorithm>
@@ -55,6 +56,13 @@ CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint6
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))TraceState("ui-state","{}");
+}
+namespace {
+LRESULT CALLBACK AltKeyMenuFilter(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR){
+    if(message==WM_SYSCOMMAND&&(wparam&0xFFF0)==SC_KEYMENU&&lparam==0)return 0;
+    if(message==WM_NCDESTROY)RemoveWindowSubclass(window,AltKeyMenuFilter,id);
+    return DefSubclassProc(window,message,wparam,lparam);
+}
 }
 HWND CanvasWindow::Handle()const {
     HWND handle=nullptr;
@@ -177,7 +185,7 @@ void CanvasWindow::Open() {
                     // presenting another application. Preserve the idle placement
                     // across those transitions; visible app switches still blur.
                     if(IsIconic(owner)||(IsWindowVisible(foreground)&&GetAncestor(foreground,GA_ROOTOWNER)!=owner)){
-                        self->workspace->CancelGesture();self->heldKeys.clear();
+                        self->workspace->CancelGesture();self->heldKeys.clear();self->sentModifiers.store(0);
                         self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
                     }
                 }});
@@ -281,6 +289,7 @@ void CanvasWindow::Start() {
     host=capy_create(native.get(),desired.width,desired.height,desired.scale);
     if(!host) {status.Text(to_hstring(capy_error()));return;}
     capy_set_window(host,Handle());
+    SetWindowSubclass(Handle(),AltKeyMenuFilter,1,0);
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,SystemTheme().c_str());
     colorValues=uiSettings.ColorValuesChanged([weak=weak_from_this()](auto&&,auto&&){
@@ -340,6 +349,8 @@ void CanvasWindow::Start() {
         action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
         CapyUi::receiveImageDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
     }});
+    selectionDialog=std::make_unique<SelectionDialog>(send,model,root.XamlRoot(),
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
@@ -521,6 +532,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
     if(phase==1)dispatcher.TryEnqueue([weak=weak_from_this()]{
         if(auto self=weak.lock())if(!self->closing)self->canvasFocus.Focus(FocusState::Pointer);
     });
+    if(phase==1&&!SyncContactModifiers(e.KeyModifiers()))return;
     uint32_t deviceFlags=0;
     auto current=e.CurrentPoint();
     if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen) {
@@ -667,8 +679,22 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     input.Insert(L"repeat",JsonValue::CreateBooleanValue(pressed&&e.KeyStatus().WasKeyDown));
     input.Insert(L"editing",JsonValue::CreateBooleanValue(editing));
     input.Insert(L"modifiers",modifiers);
+    sentModifiers.store(((GetKeyState(VK_CONTROL)&0x8000)?1u:0u)|((GetKeyState(VK_SHIFT)&0x8000)?2u:0u)|((GetKeyState(VK_MENU)&0x8000)?4u:0u));
     Send(to_string(input.Stringify()),CanvasCommandKind::Input);
     if(!editing)e.Handled(true);
+}
+bool CanvasWindow::SyncContactModifiers(Windows::System::VirtualKeyModifiers held) {
+    using Mod=Windows::System::VirtualKeyModifiers;
+    uint32_t state=((held&Mod::Control)!=Mod::None?1u:0u)|((held&Mod::Shift)!=Mod::None?2u:0u)|((held&Mod::Menu)!=Mod::None?4u:0u);
+    uint32_t previous=sentModifiers.exchange(state);
+    for(auto [bit,name]:{std::pair{1u,"control"},std::pair{2u,"shift"},std::pair{4u,"alt"}}){
+        if(!((previous^state)&bit))continue;
+        auto json=std::string(R"({"type":"key","key":")")+name+R"(","pressed":)"+((state&bit)?"true":"false")+
+            R"(,"repeat":false,"editing":false,"modifiers":{"command":)"+((state&1)?"true":"false")+
+            R"(,"shift":)"+((state&2)?"true":"false")+R"(,"alt":)"+((state&4)?"true":"false")+"}}";
+        if(!SendIndependent(CanvasCommand{CanvasCommandKind::Input,std::move(json)}))return false;
+    }
+    return true;
 }
 
 int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
@@ -789,7 +815,7 @@ void CanvasWindow::Run() {
             }
             if(failed) break;
             if((!pending.empty()||hover)&&capy_chrome(host,0,0,0,false,menuOpen.load(),false)<0){Fail(capy_error());break;}
-            if(overflow&&capy_input(host,R"({"type":"blur"})")<0){Fail(capy_error());break;}
+            if(overflow){sentModifiers.store(0);if(capy_input(host,R"({"type":"blur"})")<0){Fail(capy_error());break;}}
             if(capy_device_lost(host))continue;
             auto now=Now();
             auto result=capy_frame(host,now,now);
@@ -983,6 +1009,7 @@ void CanvasWindow::RequestClose() {
     if(settings)settings->CommitEdits();
     Send(R"({"type":"close_settings"})");
     if(workspaceDialogs)workspaceDialogs->CancelAll();
+    if(selectionDialog)selectionDialog->CancelAll();
     if(workspaceManager)workspaceManager->CancelAll();
     CapyLifecycle("close_requested");
     Send(R"({"operation":"close"})",CanvasCommandKind::Document);
@@ -995,6 +1022,7 @@ void CanvasWindow::Stop() {
     if(settings)settings->Hide();
     if(documents)documents->Hide();
     if(workspaceDialogs)workspaceDialogs->Hide();
+    if(selectionDialog)selectionDialog->Hide();
     if(workspaceStorage)workspaceStorage->Hide();
     if(workspaceManager)workspaceManager->Hide();
     wake.notify_all();space.notify_all();
@@ -1015,7 +1043,7 @@ void CanvasWindow::Stop() {
 }
 void CanvasWindow::Finish() {
     if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
-    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen()))return;
+    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(selectionDialog&&selectionDialog->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen()))return;
     auto lifetime=shared_from_this(); // App may release its last reference below.
     finishing=true;
     CapyLifecycle("join_renderer");
@@ -1028,7 +1056,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("host_destroyed");
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
-    settings.reset();documents.reset();workspaceDialogs.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
+    settings.reset();documents.reset();workspaceDialogs.reset();selectionDialog.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
     canvasFocus=nullptr;panel=nullptr;status=nullptr;toolbar=nullptr;root=nullptr;
@@ -1082,14 +1110,15 @@ void CanvasWindow::ApplyDialogs() {
         dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
         return;
     }
-    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
+    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!selectionDialog||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
     applyingDialogs=true;
     struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
-    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen()&&!workspaceStorage->IsOpen()&&!workspaceManager->IsOpen())settings->Apply(lastModel);
-    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
-    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
-    workspaceStorage->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceManager->IsOpen());
-    workspaceManager->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceStorage->IsOpen());
+    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen()&&!selectionDialog->IsOpen()&&!workspaceStorage->IsOpen()&&!workspaceManager->IsOpen())settings->Apply(lastModel);
+    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
+    selectionDialog->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
+    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
+    workspaceStorage->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceManager->IsOpen());
+    workspaceManager->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen());
     UpdatePopup();
 }
 void CanvasWindow::Popup(bool open) {
@@ -1100,12 +1129,12 @@ void CanvasWindow::UpdatePopup() {
     auto storage=CapyUi::object(lastModel,L"windows_workspace");
     bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"close_requested"));
     unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
-    bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
+    bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(selectionDialog&&selectionDialog->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
     if(header){header->Root().IsHitTestVisible(!unavailable);header->SetBlocked(blocked);}
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
-        heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
+        heldKeys.clear();sentModifiers.store(0);Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||workspacePopupOpen||blocked;
     auto facts=workspace?workspace->ChromeFacts(headerPopupOpen||blocked):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});

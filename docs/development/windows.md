@@ -205,6 +205,14 @@ Panel measurements follow Web: inactive tabs of fitted groups are measured from
 offscreen copies that cannot dispatch, every non-toolbar panel except Color
 reports scroll metrics so the shared fitter can shrink it to four rows, and a
 fitted Color panel reports its natural height at the column width.
+Keys reach Rust from the XAML thread while pointer samples come from the input
+thread, so a contact start carries its own WinUI key modifiers: when they differ
+from the last key event, the host queues the modifier change ahead of the
+contact. Selection modes latched by Shift/Alt therefore match the pressed keys
+even when a key event is late. The window subclass drops the Alt-only keyboard
+menu (`SC_KEYMENU` without a character): Windows otherwise enters menu mode when
+Alt is released and stalls presentation until the next click. Alt+Space and
+Alt+F4 are unchanged.
 
 ## Validate
 
@@ -226,6 +234,7 @@ pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-toolbar-components.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-selection.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
 
 The document journey checks native import/save/export pickers, Unicode paths,

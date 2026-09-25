@@ -321,7 +321,7 @@ struct ToolbarSliderPreviewOverlay: View {
                     Button(action: content.bookmark) {
                         SharedIcon(name: content.selected ? "minus" : "plus", size: geometry["icon"].number)
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                    }.buttonStyle(EditorControlButtonStyle())
+                    }.buttonStyle(EditorControlButtonStyle(corner: .half))
                         .accessibilityLabel(content.selected ? "Remove bookmark" : "Bookmark this value")
                         .help(content.selected ? "Remove bookmark" : "Bookmark this value")
                         .accessibilityIdentifier("slider-bookmark")
@@ -415,15 +415,11 @@ private struct ToolOptionsMore: View {
     let panel: JSON
     let tile: JSON
     let item: JSON
-    private var direction: String? {
-        let drawer = store.state["customization"]["drawer"]
-        let anchor = drawer["anchor"]
-        guard anchor["kind"].string == "tile", anchor["panel"].string == panel["id"].string,
-              anchor["tile"].uint == tile["id"].uint else { return nil }
-        return store.contentDrawers.items["tool"]?.geometry["placement"]["direction"].string
-    }
     var body: some View {
-        let joined = direction
+        let source = store.contentDrawers.sources["tool"]
+        button(joined: source?.opens(tile: tile, in: panel) == true ? source?.direction : nil)
+    }
+    private func button(joined: String?) -> some View {
         Button {
             guard !store.workspace.input.contact.consumeClick() else { return }
             store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
@@ -431,7 +427,7 @@ private struct ToolOptionsMore: View {
             SharedIcon(name: "more", size: CGFloat(panel["tile_icon_size"].number))
                 .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(joinedEdge: joined,
-            drawerBackground: joined == nil ? nil : EditorPalette(source: store.state["palette"])["panel"]))
+            drawerBackground: joined == nil ? nil : EditorPalette(source: store.state["palette"])["panel"], corner: .half))
             .accessibilityLabel("More tool options").help("More tool options")
             .accessibilityIdentifier("toolbar-more-\(tile["id"].uint)")
             .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .tile, context: item))
@@ -466,7 +462,7 @@ private struct ToolOptionField: View {
             Button { store.toolbarEdit(component, ["type": "invoke", "command": command["id"].raw]) } label: {
                 SharedIcon(name: command["icon"].string, size: CGFloat(panel["tile_icon_size"].number))
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-            }.buttonStyle(EditorControlButtonStyle(selected: option["Action"]["checkable"].bool && command["selected"].bool))
+            }.buttonStyle(EditorControlButtonStyle(selected: option["Action"]["checkable"].bool && command["selected"].bool, corner: .half))
                 .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
                 .accessibilityLabel(command["label"].string).help(command["tooltip"].string)
                 .accessibilityIdentifier("toolbar-action-" + command["id"].string)
@@ -491,7 +487,8 @@ struct SegmentedChoiceBar: View {
             Button { send(item) } label: {
                 SharedIcon(name: item["icon"].string, size: iconSize)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(item["selected"].bool ? palette.active : palette["input"])
+                    .background(item["selected"].bool ? palette.active : palette["input"],
+                        in: shape.segment(index, of: items.count, stacked: stacked))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityLabel(item["label"].string).help(item["label"].string)
@@ -501,7 +498,7 @@ struct SegmentedChoiceBar: View {
         Group {
             if stacked { VStack(spacing: 0) { segments } } else { HStack(spacing: 0) { segments } }
         }.frame(height: height)
-            .clipShape(shape).accessibilityElement(children: .contain)
+            .accessibilityElement(children: .contain)
             .accessibilityLabel(choice["label"].string).accessibilityIdentifier("\(prefix)-segments-" + choice["id"].string)
     }
 }

@@ -2,9 +2,11 @@ import SwiftUI
 
 struct ColorSwatch: View {
     let rgba: JSON
+    var shape: SquircleShape?
     @Environment(\.editorPalette) private var palette
     var body: some View {
-        Canvas(colorMode: .extendedLinear) { [palette] graphics, size in
+        Canvas(colorMode: .extendedLinear) { [palette, shape] graphics, size in
+            if let shape { graphics.clip(to: shape.path(in: CGRect(origin: .zero, size: size))) }
             graphics.fillTransparencyChecker(size, palette: palette)
             graphics.fill(Path(CGRect(origin: .zero, size: size)), with: .color(rgba.paintColor))
         }.clipped()

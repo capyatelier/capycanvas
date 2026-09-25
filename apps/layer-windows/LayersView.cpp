@@ -101,6 +101,12 @@ void LayersView::init(){
     };
     footerButton(L"add-layer",L"New layer",L"layer-new",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(false)},{L"clipped",B(false)}}));});
     footerButton(L"folder",L"New group",L"layer-new-group",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(true)},{L"clipped",B(false)}}));});
+    auto selectionLayer=footerButton(L"selection-brush",L"New Selection Layer",L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
+        self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"new_selection_layer")}}));});
+    controls.emplace_back([data=data,selectionLayer](J,J){
+        auto command=find(array(data->state,L"commands"),L"id",L"new_selection_layer");
+        selectionLayer.IsEnabled(flag(command,L"enabled"));selectionLayer.Opacity(selectionLayer.IsEnabled()?1.:.36);
+    });
     auto mask=footerButton(L"mask",L"Add layer mask",L"layer-add-mask",[weak]{if(auto self=weak.lock()){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
@@ -115,7 +121,9 @@ void LayersView::init(){
     auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
     auto more=footerButton(L"more",L"Layer actions",L"layer-actions",[weak]{if(auto self=weak.lock()){
-        self->context(-1,false,self->footer);
+        auto editing=self->editing();
+        bool maskRow=flag(self->view(),L"quick_mask")||flag(editing,L"selection_layer");
+        self->context(maskRow?num(editing,L"id",-1):-1,false,self->footer);
     }});
     controls.emplace_back([more](J layer,J){more.IsEnabled(layer.Size()!=0);more.Opacity(more.IsEnabled()?1.:.36);});
     footer.Children().RemoveAtEnd();footer.Padding({0});

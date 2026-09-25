@@ -65,6 +65,10 @@ function Invoke([string]$Value,[switch]$Name){
     } "Missing action: $Value"
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
+function Expand([string]$Id){
+    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Type ([System.Windows.Automation.ControlType]::MenuItem);$null -ne $hit.item} "Missing submenu: $Id"
+    $hit.item.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+}
 function Focus([string]$Id){
     [CapyLayersCapture]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
     $item=Control $Id;$item.SetFocus();Wait-Until {$item.Current.HasKeyboardFocus} "Missing focus on $Id"
@@ -156,7 +160,7 @@ try {
     Invoke "layer-$created-name"
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content target not selected'
     foreach($target in @('name','content','mask')){foreach($shift in @($false,$true)){
-        $isMask=$target -eq 'mask';$command=if($isMask){'layer-menu-enable_mask'}else{'layer-menu-begin_rename'}
+        $isMask=$target -eq 'mask';$command=if($isMask){'layer-menu-enable_mask'}else{'menu-organize'}
         Focus "layer-$created-$target"
         [CapyLayersCapture]::Key($review.Id,($shift ? 0x79 : 0x5D),($shift ? 0x10 : 0))
         Wait-Until {$item=Find $command;$null -ne $item -and !$item.Current.IsOffscreen -and (Model).state.layer_tools.editing_layer.mask_selected -eq $isMask} "Keyboard opened the wrong layer context: $target, Shift=$shift"
@@ -187,14 +191,14 @@ try {
     Toggle-Flag 'layer-clip';Wait-Until {!(Model).state.layer_tools.editing_layer.clipped} 'Clipping not cleared'
     Toggle-Flag 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Reference selection not applied'
     Toggle-Flag 'layer-reference';Wait-Until {!(Model).state.layer_tools.references_selected} 'Reference selection not cleared'
-    Invoke 'layer-actions';Invoke 'layer-menu-duplicate'
+    Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-duplicate'
     Wait-Until {(Model).state.layers.Count -eq $count+2} 'Duplicate did not create a layer'
     Invoke 'layer-delete';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Delete selected did not remove duplicate'
     Invoke 'Undo' -Name;Wait-Until {(Model).state.layers.Count -eq $count+2} 'Undo did not restore duplicate'
     $duplicate=(Model).state.layer_tools.editing_layer.id
     Invoke "layer-$created-selection"
     Wait-Until {@((Model).state.layers|Where-Object selected).Count -eq 2} 'Group selection not ready'
-    Invoke 'layer-actions';Invoke 'layer-menu-group_selected'
+    Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-group_selected'
     Wait-Until {@((Model).state.layers|Where-Object {$_.group -and $_.selected}).Count -eq 1} 'Selected layers did not group'
     $group=((Model).state.layers|Where-Object {$_.group -and $_.selected}).id
     if((Model).state.layer_tools.editing_layer.id -ne $duplicate){throw 'Grouping changed the editing target'}
@@ -206,7 +210,7 @@ try {
     Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.47) -lt .000001} 'Hidden editing target lost opacity control'
     Invoke "layer-$group-content"
     Wait-Until {$null -ne (Find "layer-$created-name")} 'Group did not expand'
-    Invoke "layer-$group-name";Invoke 'layer-actions';Invoke 'layer-menu-ungroup'
+    Invoke "layer-$group-name";Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-ungroup'
     Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $group}).Count -eq 0} 'Ungroup did not remove container'
     if(@((Model).state.layers|Where-Object {$_.id -in @($created,$duplicate)}).Count -ne 2){throw 'Ungroup lost children'}
     $start=(Model).state.layers.Count
@@ -234,7 +238,9 @@ try {
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not close'
     Capture 'alternate-theme'
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document';Invoke 'Discard Changes' -Name
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
+    $discard=@{item=$null};try{Wait-Until {$discard.item=Find 'Discard Changes' -Name;$null -ne $discard.item -or $null -ne (Find 'document-width')} 'New drawing did not open' 5}catch{}
+    if($discard.item){$discard.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name
     Wait-Until {(Model).state.document_file.epoch -gt 0 -and !(Model).state.document_file.busy} 'New document did not replace layer state' 45
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document gate did not clear'

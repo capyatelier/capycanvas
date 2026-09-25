@@ -59,8 +59,7 @@ struct NumberControl: View {
                             numericEntry
                             stepButton(-1)
                             stepButton(1)
-                        }.background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
-                            .clipShape(RoundedRectangle(cornerRadius: 6)).fixedSize()
+                        }.background(palette["input"], in: SquircleShape.control).fixedSize()
                     } else if showsEntry || field.dirty {
                         numericEntry.fixedSize()
                     } else {
@@ -102,7 +101,7 @@ struct NumberControl: View {
             // Keep compact errors visible without expanding the layer header.
             .overlay {
                 if (inline || valueOnly) && field.error != nil {
-                    RoundedRectangle(cornerRadius: 6).stroke(.red, lineWidth: 1).allowsHitTesting(false)
+                    SquircleShape.control.stroke(.red, lineWidth: 1).allowsHitTesting(false)
                 }
             }
             .modifier(NumberControlMeasurement(id: key + ":value"))
@@ -155,11 +154,11 @@ struct NumberControl: View {
             .focusedValue(\.editorTextCommit, { _ = commit() })
             .frame(width: valueOnly || inline || toolbar != nil ? nil : slider ? 80 : 48)
             .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
-            .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
+            .background(palette["input"], in: SquircleShape.control)
             .modifier(NumberControlMeasurement(id: key + ":entry"))
             .accessibilityHint(field.error ?? "")
             .help(field.error ?? label)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(field.error == nil ? Color.clear : Color.red, lineWidth: 1)
+            .overlay(SquircleShape.control.stroke(field.error == nil ? Color.clear : Color.red, lineWidth: 1)
                 .allowsHitTesting(false))
             .onAppear { if showsEntry { editing = true } }
     }

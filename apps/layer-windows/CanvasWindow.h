@@ -5,6 +5,7 @@
 #include "SettingsView.h"
 #include "DocumentView.h"
 #include "WorkspaceDialogs.h"
+#include "SelectionDialog.h"
 #include "WorkspaceStorageView.h"
 #include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
@@ -59,9 +60,9 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
-    winrt::Microsoft::UI::Input::GestureRecognizer pickerHold{nullptr}; // input thread only
-    std::optional<uint32_t> holdContact; // input thread only
-    std::set<uint32_t> contacts; // input thread only
+    winrt::Microsoft::UI::Input::GestureRecognizer pickerHold{nullptr};
+    std::optional<uint32_t> holdContact;
+    std::set<uint32_t> contacts;
     // Captured together under mutex; never pair a new DPI with an old camera.
     float inputScale=1;
     uint64_t revision=0;
@@ -73,6 +74,7 @@ private:
     std::unique_ptr<SettingsView> settings;
     std::unique_ptr<DocumentView> documents;
     std::unique_ptr<WorkspaceDialogs> workspaceDialogs;
+    std::unique_ptr<SelectionDialog> selectionDialog;
     std::unique_ptr<WorkspaceStorageView> workspaceStorage;
     std::unique_ptr<WorkspaceManagerView> workspaceManager;
     winrt::Windows::Data::Json::JsonObject lastModel;
@@ -80,6 +82,7 @@ private:
     HWND workspaceOwnerWindow=nullptr;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};
+    std::atomic<uint32_t> sentModifiers{0};
     struct Hover {float x,y;bool leave,touch;};
     std::optional<Hover> pendingHover;
     std::unordered_set<uint64_t> consumedContacts; // render thread
@@ -128,6 +131,7 @@ private:
     void Send(std::string json, CanvasCommandKind kind=CanvasCommandKind::Action);
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
+    bool SyncContactModifiers(winrt::Windows::System::VirtualKeyModifiers held);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
     // Explicit smoke fixtures; only the input dispatcher touches replayTime.
     enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd };

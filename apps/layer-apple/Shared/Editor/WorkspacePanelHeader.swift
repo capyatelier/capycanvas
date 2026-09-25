@@ -68,21 +68,20 @@ struct WorkspaceTabLabel: View {
     }
 }
 
-/// The shared tab silhouette: round upper corners and concave lower shoulders.
-/// The shoulders extend into adjacent slots; the strip clips its outer edges.
+/// The shared tab silhouette: squircle upper corners and concave lower feet.
+/// The feet extend into adjacent slots; the strip clips its outer edges.
 private struct WorkspaceTabShape: Shape {
     func path(in rect: CGRect) -> Path {
-        let r: CGFloat = 6, w = rect.width, h = rect.height
+        let w = rect.width, h = rect.height, r = min(SquircleShape.surfaceRadius, w / 2, h), f: CGFloat = 6
         var path = Path()
-        path.move(to: CGPoint(x: 0, y: h - r))
+        path.move(to: CGPoint(x: r, y: 0)); path.addLine(to: CGPoint(x: w - r, y: 0))
+        path.squircle(center: CGPoint(x: w - r, y: r), start: CGVector(dx: 0, dy: -r), end: CGVector(dx: r, dy: 0))
+        path.addLine(to: CGPoint(x: w, y: h - f))
+        path.squircle(center: CGPoint(x: w + f, y: h - f), start: CGVector(dx: -f, dy: 0), end: CGVector(dx: 0, dy: f))
+        path.addLine(to: CGPoint(x: -f, y: h))
+        path.squircle(center: CGPoint(x: -f, y: h - f), start: CGVector(dx: 0, dy: f), end: CGVector(dx: f, dy: 0))
         path.addLine(to: CGPoint(x: 0, y: r))
-        path.addArc(center: CGPoint(x: r, y: r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
-        path.addLine(to: CGPoint(x: w - r, y: 0))
-        path.addArc(center: CGPoint(x: w - r, y: r), radius: r, startAngle: .degrees(270), endAngle: .degrees(360), clockwise: false)
-        path.addLine(to: CGPoint(x: w, y: h - r))
-        path.addArc(center: CGPoint(x: w + r, y: h - r), radius: r, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
-        path.addLine(to: CGPoint(x: -r, y: h))
-        path.addArc(center: CGPoint(x: -r, y: h - r), radius: r, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+        path.squircle(center: CGPoint(x: r, y: r), start: CGVector(dx: -r, dy: 0), end: CGVector(dx: 0, dy: -r))
         path.closeSubpath()
         return path.offsetBy(dx: rect.minX, dy: rect.minY)
     }

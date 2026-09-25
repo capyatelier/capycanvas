@@ -69,7 +69,7 @@ import SwiftUI
                 .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":NSNull()])))
             if editing {
                 ForEach(0..<3, id: \.self) { zone in
-                    RoundedRectangle(cornerRadius: 6).stroke(palette["text"].opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3,3]))
+                    SquircleShape(radius).stroke(palette["text"].opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3,3]))
                         .placed(geometry["zones"][zone]).allowsHitTesting(false)
                 }
             } else {
@@ -265,8 +265,8 @@ private struct HeaderItemControl: View {
     private var radius: CGFloat { size["tile"].number / 2 }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var drawerOpen: Bool {
-        let anchor = store.state["customization"]["drawer"]["anchor"]
-        return !editing && anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
+        guard !editing, let anchor = store.contentDrawers.sources["tool"]?.anchor else { return false }
+        return anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
     }
     var body: some View {
         Group {
@@ -367,13 +367,14 @@ private struct HeaderEditorBank: View {
                 Button("Cancel") { header.action(["type":"cancel"]) }.accessibilityIdentifier("header-cancel")
                 Button("Done") { header.action(["type":"edit", "editing":false]) }.accessibilityIdentifier("header-done")
             }.frame(height: 36)
-        }.padding(6).background(EditorPalette(source: store.state["palette"])["panel"])
+        }.padding(6).background(EditorPalette(source: store.state["palette"])["panel"], in: SquircleShape.surface)
+            .padding(.horizontal, 6)
             .accessibilityElement(children: .contain).accessibilityIdentifier("header-editor")
     }
     private func chip(_ label: String, source: JSON) -> some View {
         HStack(spacing: 6) { SharedIcon(name: "grip", size: 12); Text(label).lineLimit(1) }
             .padding(.horizontal, 10).frame(height: 36)
-            .background(EditorPalette(source: store.state["palette"])["bg"], in: RoundedRectangle(cornerRadius: 6))
+            .background(EditorPalette(source: store.state["palette"])["bg"], in: SquircleShape.control)
             .contentShape(Rectangle()).accessibilityElement(children: .ignore).accessibilityLabel(label)
             .accessibilityIdentifier("header-component-" + (source["kind"].string == "tools" ? "tools" : source["value"]["kind"].string))
             .modifier(HeaderSourceMeasurement(source: source))

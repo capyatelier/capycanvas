@@ -16,10 +16,21 @@ struct SquircleShape: InsettableShape {
     init(topLeading: CGFloat = 0, topTrailing: CGFloat = 0, bottomTrailing: CGFloat = 0, bottomLeading: CGFloat = 0) {
         corners = [.radius(topLeading), .radius(topTrailing), .radius(bottomTrailing), .radius(bottomLeading)]
     }
-    static func tile(joined edge: String?) -> SquircleShape {
-        func corner(_ edges: String...) -> Corner { edges.contains(edge ?? "") ? .radius(0) : .half }
+    static func tile(joined edge: String?) -> SquircleShape { joined(edge, corner: .half) }
+    static func joined(_ edge: String?, corner rounded: Corner) -> SquircleShape {
+        func corner(_ edges: String...) -> Corner { edges.contains(edge ?? "") ? .radius(0) : rounded }
         return SquircleShape(corners: [corner("top", "left"), corner("top", "right"),
             corner("bottom", "right"), corner("bottom", "left")])
+    }
+    init(_ radius: CGFloat, square: [Bool]) {
+        corners = (0..<4).map { square.indices.contains($0) && square[$0] ? .radius(0) : .radius(radius) }
+    }
+    static let fit: CGFloat = 0.54
+    var fittedClip: FittedCorners { FittedCorners(corners: corners) }
+    func segment(_ index: Int, of count: Int, stacked: Bool = false) -> SquircleShape {
+        let first = index == 0, last = index == count - 1
+        let kept = [first, stacked ? first : last, last, stacked ? last : first]
+        return SquircleShape(corners: corners.indices.map { kept[$0] ? corners[$0] : .radius(0) })
     }
 
     func inset(by amount: CGFloat) -> SquircleShape {
@@ -54,6 +65,21 @@ struct SquircleShape: InsettableShape {
     }
 }
 
+struct FittedCorners: Shape {
+    let corners: [SquircleShape.Corner]
+    func path(in rect: CGRect) -> Path {
+        let radii = corners.map { corner -> CGFloat in
+            switch corner {
+            case .radius(let value): value * SquircleShape.fit
+            case .half: min(rect.width, rect.height) / 2 * SquircleShape.fit
+            }
+        }
+        if Set(radii).count == 1 { return Path(roundedRect: rect, cornerRadius: radii[0]) }
+        return Path(roundedRect: rect, cornerRadii: RectangleCornerRadii(topLeading: radii[0], bottomLeading: radii[3],
+            bottomTrailing: radii[2], topTrailing: radii[1]))
+    }
+}
+
 extension Path {
     static let squircleSegments = 24
     static func squircleCorner(center: CGPoint, start: CGVector, end: CGVector) -> [CGPoint] {
@@ -66,5 +92,41 @@ extension Path {
     mutating func squircle(center: CGPoint, start: CGVector, end: CGVector) {
         guard start != .zero || end != .zero else { return }
         for point in Path.squircleCorner(center: center, start: start, end: end) { addLine(to: point) }
+    }
+}
+
+struct DrawerSource: Equatable {
+    let direction: String
+    let bounds: CGRect
+    var anchor = JSON()
+    init(direction: String, bounds: CGRect, anchor: JSON = JSON()) { self.direction = direction; self.bounds = bounds; self.anchor = anchor }
+    init?(placement: JSON, anchor: JSON) {
+        guard !placement.isNull, !placement["anchor"].isNull else { return nil }
+        self.init(direction: placement["direction"].string, bounds: placement["anchor"].rect, anchor: anchor)
+    }
+    static func == (a: Self, b: Self) -> Bool {
+        a.direction == b.direction && a.bounds == b.bounds && a.anchor.stableKey == b.anchor.stableKey
+    }
+    func opens(tile: JSON, in panel: JSON) -> Bool {
+        anchor["kind"].string == "tile" && anchor["panel"].string == panel["id"].string && anchor["tile"].uint == tile["id"].uint
+    }
+    static func square(_ container: CGRect, radius: CGFloat, sources: [DrawerSource], joined: JSON = JSON()) -> [Bool] {
+        let corners = [CGPoint(x: container.minX, y: container.minY), CGPoint(x: container.maxX, y: container.minY),
+            CGPoint(x: container.maxX, y: container.maxY), CGPoint(x: container.minX, y: container.maxY)]
+        return corners.indices.map { index in
+            let point = corners[index]
+            return joined[index].bool || sources.contains { source in
+                let facing: [Int] = switch source.direction {
+                case "top": [0, 1]
+                case "right": [1, 2]
+                case "bottom": [2, 3]
+                default: [0, 3]
+                }
+                let vertical = source.direction == "top" || source.direction == "bottom"
+                let reachX = vertical ? radius : 0.5, reachY = vertical ? 0.5 : radius, a = source.bounds
+                return facing.contains(index) && point.x >= a.minX - reachX && point.x <= a.maxX + reachX
+                    && point.y >= a.minY - reachY && point.y <= a.maxY + reachY
+            }
+        }
     }
 }

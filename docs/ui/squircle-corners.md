@@ -77,6 +77,20 @@ Android uses `SquircleShape`, a Compose `CornerBasedShape`, through
 `TileShape`, `SurfaceShape` and `ControlShape`; custom paths share
 `squircleCorner`. Compose pointer input already uses whole bounds.
 
+macOS and iPadOS use `SquircleShape`, an `InsettableShape` with `.tile`,
+`.surface` and `.control` tokens and per-corner radii; tab, expanded-panel and
+drawer-bridge paths share `Path.squircle`. SwiftUI's continuous rounded
+rectangle is a different curve and is not used. Panel groups, collapsed
+columns, drawers and segmented controls draw the exact squircle as their fill
+and shadow, and clip content only with the fitted circular radius. Core
+Animation applies circular clips directly; a squircle path clip is an
+offscreen mask on every composited frame, which halved the Mac ink rate
+beside a live canvas. Clipping does not narrow SwiftUI hit testing, and
+squircled controls use their whole bounds or the same shape as their content
+shape. Open drawers publish their source bounds and
+direction, and panel groups, collapsed columns and drawer bodies square the
+same corners as `DrawerPlacement::source_corners`.
+
 ## Validation
 
 - GTK: `tools/performance/workspace-motion.sh gtk` with
@@ -88,6 +102,12 @@ Android uses `SquircleShape`, a Compose `CornerBasedShape`, through
   is unchanged by the conversion.
 - Web: `apps/layer-web/test.mjs` with `--drawer-style`, `--toolbar-components`,
   `--compact-workspaces`, `--tab-styles` and `--title-bar-state`.
+- Apple: `bash apps/layer-apple/scripts/test-project-files.sh
+  apps/layer-apple/tests/squircle-geometry.swift` checks the corner formula,
+  clamping, joined drawer sources and source-corner flattening; the Mac and
+  iPad `testToolbarComponents`, `testColumnStacks`, `testTitleBarToolDrawers`
+  and `testColorPicker` journeys attach the drawer, column and title-bar
+  captures.
 - Android: `AndroidInteractionTest` `drawerButtonsAndBridgesKeepTheirColors`,
   `drawerTabsKeepActiveColorsAndPadding`,
   `collapsedIconsKeepTheirSourceWhenDrawerTabsAreVisible` and

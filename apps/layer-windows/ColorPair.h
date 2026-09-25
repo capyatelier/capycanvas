@@ -3,10 +3,6 @@
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 namespace CapyUi {
-inline J paintColors(std::shared_ptr<WorkspaceData> const& data){
-    auto masked=object(object(object(data->state,L"layer_tools"),L"mask_editing"),L"colors");
-    return masked.Size()?masked:object(data->state,L"colors");
-}
 struct ColorPair {
     Viewbox root;
     Microsoft::UI::Xaml::Shapes::Ellipse foreground,background;
@@ -22,7 +18,7 @@ struct ColorPair {
     }
     void Update(std::shared_ptr<WorkspaceData> const& data,double size){
         root.Width(size);root.Height(size);
-        auto colors=paintColors(data);
+        auto colors=displayColors(data->state);
         A pair;pair.Append(object(colors,L"foreground"));pair.Append(object(colors,L"background"));
         auto next=pair.Stringify();if(next==key)return;key=next;
         auto previews=colorUi(O({{L"type",S(L"preview")},{L"colors",pair}}));

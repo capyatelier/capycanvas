@@ -137,9 +137,15 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
             pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             Border swatch;swatch.CornerRadius({4,4,4,4});pick.Content(swatch);anchors.insert_or_assign(L"brush_color",pick);
             AutomationProperties::SetAutomationId(pick,L"configure-brush-color");
-            bindings.emplace_back([data=data,swatch]{auto rgba=array(object(data->state,L"brush"),L"color");
-                if(rgba.Size()==4)swatch.Background(fill({uint8_t(std::round(rgba.GetNumberAt(3)*255)),
-                    uint8_t(std::round(rgba.GetNumberAt(0)*255)),uint8_t(std::round(rgba.GetNumberAt(1)*255)),uint8_t(std::round(rgba.GetNumberAt(2)*255))}));});
+            bindings.emplace_back([data=data,swatch,key=std::make_shared<hstring>()]{
+                auto colors=displayColors(data->state);
+                A paint;paint.Append(object(colors,str(colors,L"slot")==L"background"?L"background":L"foreground"));
+                if(auto next=paint.Stringify();next!=*key){
+                    *key=next;auto previews=colorUi(O({{L"type",S(L"preview")},{L"colors",paint}}));
+                    if(previews.ValueType()==JsonValueType::Array&&previews.GetArray().Size()==1)
+                        swatch.Background(fill(displayColor(previews.GetArray().GetObjectAt(0))));
+                }
+            });
             return pick;
         }
         if(kind==L"layer_actions"){
