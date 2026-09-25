@@ -161,7 +161,10 @@ try {
  $null=$review.Handle;Write-Output "HDR review $($review.Id), $Depth, $run"
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'HDR app did not start' 60
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+ $title=(Control 'drawing-title').Current.Name
+ if($title -notmatch ' · \d+ × \d+$' -or (Find 'drawing-tab-1') -or (Find 'drawing-selector')){throw "One drawing did not show the plain title: $title"}
  Button 'Test pen';Wait-Until {(Model).state.document_file.modified} 'Initial drawing did not become dirty' 60
+ Wait-Until {$review.Refresh();$review.MainWindowTitle.StartsWith('• ')} 'Window title lacks the unsaved marker'
  Command 'new_document' 'File';Set-Text 'document-width' '128';Set-Text 'document-height' '96'
  Select-Choice 'document-depth' $(if($Depth -eq 'F32'){'32-bit float HDR'}else{'16-bit float HDR'})
  Button 'Create';Idle
@@ -170,6 +173,15 @@ try {
  if(@((Model).windows_tabs.tabs).Count -ne 2 -or !(Model).windows_tabs.tabs[0].modified){throw 'New did not retain the dirty first drawing'}
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1300
  Wait-Until {(Find 'drawing-tab-1') -and (Find 'drawing-tab-2') -and (Model).windows_tabs.available} 'Full native drawing strip did not appear'
+ if(!(Control 'drawing-tab-1').Current.Name.StartsWith('• ')){throw 'Dirty tab lacks the unsaved marker'}
+ (Control 'drawing-tab-2').SetFocus()
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x21)
+ Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Ctrl+PgUp did not select the previous drawing' 60
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x22)
+ Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Ctrl+PgDn did not return to the HDR drawing' 60
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x41)
+ Wait-Until {(Find 'drawing-list') -and (Find 'drawing-row-close-1')} 'Ctrl+Shift+A did not open the drawing selector'
+ [CapyRowPointer]::Key([uint32]$review.Id,0x1B);Wait-Until {!(Find 'drawing-list')} 'Drawing selector did not close'
  $tabWidget=(Control 'drawing-tab-1').GetRuntimeId() -join ':'
  foreach($device in @('mouse','touch','pen')){
   Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"

@@ -664,7 +664,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     // Releases still clear shared held state when focus moves during a gesture.
     bool button=focused&&bool(focused.try_as<Primitives::ButtonBase>());
     bool ownedKeys=false;
-    if(key==VirtualKey::Space||key==VirtualKey::Enter||((key==VirtualKey::Z||key==VirtualKey::Y)&&(GetKeyState(VK_CONTROL)&0x8000)))
+    if(key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Delete||((key==VirtualKey::Z||key==VirtualKey::Y)&&(GetKeyState(VK_CONTROL)&0x8000)))
         for(auto node=focused.try_as<DependencyObject>();node&&!ownedKeys;node=VisualTreeHelper::GetParent(node))
             if(auto element=node.try_as<FrameworkElement>())if(auto tag=element.Tag().try_as<Windows::Data::Json::JsonObject>())ownedKeys=CapyUi::flag(tag,L"native_keys");
     bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
@@ -1236,7 +1236,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
-    if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
+    if(tabs.Size())window.Title((flag(object(state,L"document_file"),L"modified")?hstring(L"• "):hstring())+str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
     header->Apply(model);ApplyDialogs();
     // Workspace theme replacement must not take focus from retained Preferences.
     if(retheme&&focus)dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,

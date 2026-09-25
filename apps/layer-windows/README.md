@@ -411,6 +411,15 @@ supports independent working RGB, U8/U16 precision, background, defaults and
 named presets. Open accepts native drawings and retained photos through the
 shared import service; a photo gets a separate editable master on Save.
 
+A window keeps its drawings as tabs in the title bar. One drawing shows the
+plain title and dimensions, which also drags the window. Several drawings show
+tabs, or the compact selector when tabs would fall below 140 pixels. Unsaved
+drawings are marked • in tabs, selector rows and the window title. Ctrl+Tab,
+Ctrl+PgUp and Ctrl+PgDn switch drawings, and Ctrl+Shift+A opens the selector.
+On a focused tab, arrows, Home and End select, Ctrl+Shift+Left/Right reorder
+and Delete closes. Selector rows add Delete and Ctrl+Shift+Up/Down. Alt+F4
+closes the window; GTK's Ctrl+Shift+W is left to that Windows convention.
+
 The native SDR renderer preserves integer U8/U16 artwork with Float32 processing.
 Tagged effect/gradient colors and the wheel use shared color projection. Precise
 color editing opens from Edit Color… in the color readout and swatch context

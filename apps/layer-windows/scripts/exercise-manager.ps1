@@ -49,7 +49,10 @@ function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
 function HeaderChoice([string]$Id){
     $choice=(Model).windows_workspace.switcher_display|Where-Object id -eq $Id
     if(!$choice){throw "Workspace $Id is missing from the header model"}
-    Control ('workspace-switch-'+$choice.key)
+    $found=@{item=$null};Wait-Until {$found.item=Find ('workspace-switch-'+$choice.key);$found.item -or (Find 'header-workspace-menu')} "Missing workspace-switch-$($choice.key)"
+    if($found.item){return $found.item}
+    Invoke 'header-workspace-menu'
+    Control $choice.name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
 }
 function Invoke([string]$Value,[switch]$Name,$Within=$root){
     (Control $Value -Name:$Name -Within $Within).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

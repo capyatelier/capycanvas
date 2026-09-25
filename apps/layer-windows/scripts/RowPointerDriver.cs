@@ -192,6 +192,15 @@ public static class CapyRowPointer {
   var up=new Input{type=1,keyboard=new Keyboard{key=key,flags=2}};
   if(SendInput(2,new[]{down,up},40)!=2)throw new Win32Exception(Marshal.GetLastWin32Error());
  }
+ public static void Chord(uint process,ushort[] modifiers,ushort key) {
+  uint foreground;GetWindowThreadProcessId(GetForegroundWindow(),out foreground);
+  if(foreground!=process)throw new Exception("Review does not own foreground input.");
+  var inputs=new System.Collections.Generic.List<Input>();
+  foreach(var modifier in modifiers)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifier}});
+  inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key}});inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key,flags=2}});
+  for(int i=modifiers.Length-1;i>=0;i--)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifiers[i],flags=2}});
+  if(SendInput((uint)inputs.Count,inputs.ToArray(),40)!=inputs.Count)throw new Win32Exception(Marshal.GetLastWin32Error());
+ }
  public static void Dispose() {
   try{lock(gate)ReleaseHeld();Cancel();}finally{
    if(pulse!=null){

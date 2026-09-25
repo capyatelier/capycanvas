@@ -99,7 +99,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(handledRequests.contains(id))continue;
             auto kind=object(request,L"kind");auto type=str(kind,L"type");
             if(type==L"drawings"&&drawings){
-                handledRequests.insert(id);drawings->show(document);complete(id);
+                handledRequests.insert(id);showDrawings();complete(id);
             }else if(type==L"set_fullscreen"){
                 handledRequests.insert(id);
                 try{if(flag(kind,L"fullscreen")!=fullscreenActive)fullscreen();complete(id);}
@@ -329,11 +329,18 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(presses)presses->listen(pick);
         return pick;
     }
+    static bool shown(FrameworkElement element){
+        if(!element||!element.IsLoaded()||element.ActualWidth()<=0)return false;
+        for(auto node=element.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))
+            if(auto item=node.try_as<UIElement>();item&&item.Visibility()!=Visibility::Visible)return false;
+        return true;
+    }
+    void showDrawings(FrameworkElement anchor=nullptr){drawings->show(shown(anchor)?anchor:shown(document)?FrameworkElement(document):FrameworkElement(root));}
     void activate(uint32_t id,FrameworkElement anchor=nullptr){
         auto it=items.find(id);if(it==items.end())return;
         auto kind=str(object(it->second.entry,L"item"),L"kind");
         if(kind==L"capy"||kind==L"settings"){data->dispatch(invoke(kind==L"capy"?L"zen_mode":L"settings"));return;}
-        if(kind==L"document_title"){drawings->show(anchor?anchor:document);return;}
+        if(kind==L"document_title"){showDrawings(anchor);return;}
         if(kind==L"tool"){data->dispatch(O({{L"type",S(L"activate_header_item")},{L"id",N(id)}}));return;}
         if(kind==L"menu"||kind==L"menu_labels"||kind==L"workspaces"){
             auto flyout=kind==L"workspaces"?workspaceOverflow.Flyout():primary.Flyout();
@@ -478,7 +485,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto kind=str(object(native.entry,L"item"),L"kind");double natural=tile,compact=tile;
             if(kind==L"menu_labels")natural=menuWidth;
             else if(kind==L"workspaces")natural=switchWidth;
-            else if(kind==L"document_title"){natural=std::clamp(double(array(object(data->model,L"windows_tabs"),L"tabs").Size())*180.,180.,720.);compact=140.;}
+            else if(kind==L"document_title"){
+                if(drawings->single()){natural=textWidth(drawings->plainTitle(),false,true)+16;compact=std::min(natural,80.);}
+                else{natural=std::clamp(double(array(object(data->model,L"windows_tabs"),L"tabs").Size())*180.,180.,720.);compact=140.;}
+            }
             else if(kind==L"clock")natural=fullscreenActive||editing?textWidth(editing&&!fullscreenActive?L"Clock":systemStatus->Clock().Child().as<TextBlock>().Text())+12:0;
             else if(kind==L"battery")natural=editing||(fullscreenActive&&systemStatus->HasBattery())?tile:0;
             if(kind==L"clock"||kind==L"battery")compact=natural;
@@ -614,7 +624,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         };
         for(auto const& [id,item]:items){
             auto kind=str(object(item.entry,L"item"),L"kind");
-            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space")take(item.frame);
+            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space"&&!(kind==L"document_title"&&drawings->single()))take(item.frame);
         }
         for(auto item:overflow)take(item);take(recovery);
         std::sort(controls.begin(),controls.end());float next=leftInset,limit=float(width)/scale-rightInset;
@@ -644,8 +654,12 @@ void HeaderView::SetFullscreen(bool active){
 }
 void HeaderView::SetBlocked(bool blocked){impl->data->externalPopup=blocked;if(blocked)impl->input->Cancel();}
 bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
-    if(pressed&&e.Key()==Windows::System::VirtualKey::Tab&&(GetKeyState(VK_CONTROL)&0x8000)&&impl->drawings&&impl->drawings->available()){
-        e.Handled(true);impl->drawings->send(O({{L"op",S(L"adjacent")},{L"forward",B(!(GetKeyState(VK_SHIFT)&0x8000))}}));return true;
+    using Windows::System::VirtualKey;auto key=e.Key();bool shift=GetKeyState(VK_SHIFT)&0x8000;
+    if(pressed&&(GetKeyState(VK_CONTROL)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)&&impl->drawings&&impl->drawings->available()){
+        if(key==VirtualKey::Tab||key==VirtualKey::PageDown||key==VirtualKey::PageUp){
+            e.Handled(true);impl->drawings->send(O({{L"op",S(L"adjacent")},{L"forward",B(key==VirtualKey::PageDown||(key==VirtualKey::Tab&&!shift))}}));return true;
+        }
+        if(key==VirtualKey::A&&shift){e.Handled(true);impl->showDrawings();return true;}
     }
     return impl->input->Key(e,pressed);
 }
