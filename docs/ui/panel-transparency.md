@@ -3,41 +3,60 @@
 [Workspace and UI](README.md) · [Theme colors](theme-colors.md)
 
 **Appearance → Panel transparency** offers Off, Low (the default), Medium and
-High. It is a shared setting (`Settings::transparency`); only GTK presents it so
-far. The other levels show a blurred copy of the artwork behind panels, tab
+High. It is a shared setting (`Settings::transparency`) presented by GTK, Web and
+Android. The other levels show a blurred copy of the artwork behind panels, tab
 strips, drawers, their connectors and title-bar controls. Controls inside
 panels, such as inputs, lists and sliders, stay opaque.
 
 Off keeps the opaque theme. Title-bar controls, the zoom readout and the Zen
 button are opaque too, rather than the earlier translucent fill with no blur.
+At Off every `GlassPalette` color equals its opaque role, so hosts apply the
+glass colors in every mode and gate only the blur.
 
 Each option is drawn as a circle. Off is a solid disc. The other levels are
 glass discs over a faint checkerboard with a soft highlight. The tint uses the
-level's real alpha, so more of the checkerboard shows at higher levels.
+level's real alpha, so more of the checkerboard shows at higher levels. The
+preference row publishes each level's light and dark alpha
+(`ChoicePresentation::Circles`).
 
-## Why the canvas worker draws the blur
+## Why the presenter draws the blur
 
-On GTK the canvas is an app-owned Vulkan subsurface below the GTK window. GTK
-never has those pixels, so CSS or GSK blur cannot sample them. Mutter implements
-no compositor blur protocol, and importing the canvas into GTK every frame would
-make GTK redraw its panels on every canvas frame.
+No host can blur the canvas with its toolkit:
 
-Instead, GTK draws translucent fills and the canvas worker blurs its own
-presented image beneath them:
+- On GTK the canvas is an app-owned Vulkan subsurface below the GTK window. GTK
+  never has those pixels, and Mutter implements no compositor blur protocol.
+- On Android the canvas is a `SurfaceView` beneath Compose; `RenderEffect`
+  cannot sample it.
+- On Web a CSS `backdrop-filter` over the continuously repainting WebGPU canvas
+  makes the browser compositor re-blur every canvas frame.
 
-1. `DockSurface::snapshot` walks each child's render nodes for backgrounds whose
-   color exactly matches one of the palette's glass surface colors
-   (`GlassPalette::surfaces`). Each match becomes a region: its bounds clipped by
-   enclosing clip nodes, and the corner radii of its enclosing rounded clip.
-   Radii use the same superellipse conversion as the
-   [squircle](squircle-corners.md) converter. Once a surface is found, nodes
-   inside it are skipped, so panel content is not visited.
-2. Drawer and column connectors are Cairo drawings, so their rectangle and
-   concave feet come from the shared `DrawerConnection` geometry.
-3. The worker presents the viewport, runs a dual-Kawase blur restricted to the
-   regions' neighborhoods, and writes the result inside each region's
-   superellipse or concave shape. Navigator overviews are drawn afterwards, so
-   they are neither blurred nor used as blur input.
+Instead, hosts draw translucent fills and publish each fill's bounds and corner
+radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
+
+- GTK: `DockSurface::snapshot` walks each child's render nodes for backgrounds
+  whose color exactly matches one of the palette's glass surface colors
+  (`GlassPalette::surfaces`). Each match becomes a region: its bounds clipped
+  by enclosing clip nodes, and the corner radii of its enclosing rounded clip.
+  Radii use the same superellipse conversion as the
+  [squircle](squircle-corners.md) converter. Nodes inside a found surface are
+  skipped, so panel content is not visited.
+- Web: `glass.js` measures the translucent DOM surfaces and their CSS radii in
+  the canvas frame, and `set_glass` scales them to device pixels. Layout,
+  theme and Zen changes queue a new measurement for the next canvas frame.
+- Android: `Modifier.glass(shape, color)` draws the fill and registers its
+  surface-pixel bounds and radii. `CanvasHost` sends all regions once per layout
+  pass through `Native.glassRegions`.
+- Drawer and column connectors add their rectangle and concave feet from the
+  shared `DrawerConnection::glass` geometry.
+
+The presenter renders the artwork again at quarter resolution, with a camera of
+four times the pixel footprint, into a dual-Kawase pyramid and caches the
+finished half-resolution blur. It draws the glass in its own pass, above the
+cursor and color picker and below Navigator overviews, which are neither blurred
+nor used as blur input. Each region's fully covered interior (the cross of a
+5×5 grid through its corners) takes one texture tap, and the viewport skips
+those pixels. Corner blocks and the antialiased outline are drawn with the
+region's superellipse or concave coverage.
 
 ## Colors
 
@@ -99,38 +118,72 @@ look slightly darker at High than the opaque theme.
 
 ## Cost
 
-The blur is cached. The presenter reports the damage that affects the blur input:
-composite, selection paint, picker and per-segment cursor bounds, excluding
-Navigator overviews. The expensive passes rerun only when that damage is within
-the blur reach of a glass region, when the camera changes, or when a region
-moves beyond a 96-pixel slack. Otherwise only the final masked pass runs. Idle
-windows present nothing.
+The blur is cached. Its input is the composite repaint plus selection paint;
+cursor, picker and overviews do not affect it. When that damage lies within the
+blur reach of cached glass, only the glass within reach of the damage is
+recomputed, from its own reach of artwork. New regions, regions that move beyond
+a 96-pixel slack, and camera changes recompute whole regions. Retained targets,
+such as Android's front buffer, repaint only glass that changed. Idle views
+present nothing.
 
-These costs were measured on an RTX PRO 6000 (Mutter headless, 120 Hz) for the
-default Paint layout. Cost is per presented frame.
+GPU time per presented frame on an RTX PRO 6000 (`backdrop_blur_cost`, the
+default Paint layout's glass):
 
-| Surface | Full recompute | Cached frame | Viewport present |
+| Surface (glass share) | Viewport only | Cached glass | Moving camera, Low / High |
 | --- | --- | --- | --- |
-| 1600×1000 @1× | 0.025 ms | 0.009 ms | 0.011 ms |
-| 3200×2000 @2× | 0.042 ms | 0.019 ms | 0.034 ms |
-| 5120×2880 @2× | 0.051 ms | 0.022 ms | 0.067 ms |
+| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.041 / 0.046 ms |
+| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.072 / 0.078 ms |
+| 3840×2160 @1× (15%) | 0.045 ms | 0.044 ms | 0.077 / 0.082 ms |
+| 5120×2880 @2× (23%) | 0.071 ms | 0.070 ms | 0.109 / 0.117 ms |
 
-`native_frame_pacing` at Medium, compared with Off:
+Cached glass costs no more than the plain viewport, because its interiors
+replace viewport pixels. A moving camera recomputes every frame.
 
-- Pan and Hand stay at 120 fps. The camera changes every frame, so the blur
-  recomputes each frame: about +0.1 ms GPU and +0.1 ms worker CPU.
-- Brush strokes keep their frame rate and reuse 35–65% of blurs in this
-  near-panel stress stroke.
-- G-Pen shows a small tail: about 0.2% more late frames, concentrated in
-  occasional bursts.
-- During floating-panel drags, 95–99% of canvas frames reuse the blur. GTK's
-  drag frame rate is unchanged.
+The Huion tablet (Mali-G57) sets the tight budget. Its pen measurements compare
+the same build at each level with the previous main, drawing an 18 px round
+brush on a 1024 px document with replayed OS pen input.
+
+Web, Chrome on the tablet, a stroke across the fitted document (3–6 runs of 5 s):
+
+| Level | Updates/s | Input → submit p50 / p95 / p99 |
+| --- | --- | --- |
+| Previous main | 85.9 | 27.8 / 31.5 / 32.9 ms |
+| Off | 83.7 | 28.3 / 31.7 / 33.2 ms |
+| Low | 85.1 | 27.8 / 31.6 / 32.9 ms |
+| Medium | 83.5 | 28.4 / 32.1 / 33.5 ms |
+| High | 80.9 | 28.3 / 31.8 / 33.7 ms |
+
+Low and Medium reuse the cached blur on every frame of this stroke. High's
+139-pixel reach touches the panels, so it recomputes about half of its frames.
+
+Android, front-buffer presentation, submission to GPU completion of each
+presentation:
+
+| Stroke | Previous main p50 / p95 | Low | Medium | High |
+| --- | --- | --- | --- | --- |
+| Across the fitted document | 1.77 / 4.38 ms | 1.64 / 4.34 ms | — | 3.34 / 5.82 ms |
+| Zoomed 2×, beside the panels | 2.78 / 4.95 ms | 3.10 / 7.40 ms | 3.34 / 7.67 ms | 5.15 / 9.45 ms |
+
+A stroke beside the panels must refresh the glass it blurs into, so this cost
+cannot be cached away. Two things set its size on the tablet: contact brushes
+report composite damage in 256-pixel document pages, so each frame refreshes
+the glass near whole pages rather than near the dab; and each refresh runs
+four render passes at Low and Medium, and six at High, on a tile-based GPU where
+every pass carries a fixed cost.
 
 ## Known limitations
 
-- The canvas subsurface is desynchronized from GTK, so while a panel moves its
-  blur follows about one frame behind.
+- The GTK canvas subsurface is desynchronized from GTK, so while a panel moves
+  its blur follows about one frame behind. Web and Android place glass in the
+  canvas frame that follows the layout.
 - Popovers, menus and tooltips are separate surfaces and stay opaque.
+- Near the panels, Android pen completion slows as measured above. Exact
+  visual damage from the brush engine, which would also speed up ordinary
+  front-buffer repaint, or refreshing glass less often than ink, would reduce it.
+- Drawer shadows are cut only beneath connectors. Beneath a translucent source
+  toolbar or column they can darken it by about one level; drawer-style tests
+  therefore run at Off, as on GTK.
+- Web Zen glass follows the chosen visibility, not the fade animation.
 
 ## Validation
 
@@ -143,9 +196,18 @@ LAYER_NATIVE_CAPTURE_DIR="$PWD/artifacts/glass" LAYER_GLASS_LEVEL=medium \
 LAYER_PACING_TRANSPARENCY=medium \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_frame_pacing
 LAYER_MOTION_TRANSPARENCY=medium bash tools/performance/workspace-motion.sh gtk --workspace-motion
+bash tools/performance/workspace-motion.sh web --preferences
 ```
 
 The capture test paints bands across the window and captures the Paint, Sketch
 (header drawer) and Photo (column drawer) workspaces and Preferences.
 `LAYER_GLASS_THEME=light` and `LAYER_GLASS_LEVEL=off|low|medium|high` select
 the variant.
+
+For tablet pen timing, `LAYER_PEN_TRANSPARENCY=off|low|medium|high` selects the
+level in the [Web pen harness](../development/web-pen-huion-2026-09-20.md), and
+each run reports recomputed and reused glass frames. The Android viewport
+benchmark takes `-e transparency low`, `-e zoomSteps 2` and `-e strokeOffset 0.25`
+(a fraction of the work area toward the right-hand panels) alongside the
+[front-buffer benchmark arguments](../development/android-front-buffer-results-2026-09-20.md);
+`android-viewport-report.py` reports `completion_ms`.
