@@ -114,17 +114,18 @@ impl FilterPreviews {
         })
     }
     pub(crate) fn note_frame(&mut self, packet: FramePacket<'_>, epoch: u64) {
-        if self.request.is_some() {
+        if let Some(request) = &self.request {
             self.cancelled |= self
                 .key
                 .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent)
                 || self.capture_background != packet.view.background_rgba_linear
-                || self.source_layers.len() != packet.layers.len()
-                || self
-                    .source_layers
-                    .iter()
-                    .zip(packet.layers)
-                    .any(|(old, layer)| *old != PreviewMetadata::new(layer));
+                || source_scope(packet.layers, request.target).is_none_or(|scope| {
+                    scope.len() != self.source_layers.len()
+                        || scope
+                            .iter()
+                            .zip(&self.source_layers)
+                            .any(|((layer, _), old)| *old != PreviewMetadata::new(layer))
+                });
         }
     }
     fn start(
@@ -187,7 +188,10 @@ impl FilterPreviews {
             self.rows.clear();
             self.size = request.size;
         }
-        let source_layers: Vec<_> = request.layers.iter().map(PreviewMetadata::new).collect();
+        let source_layers: Vec<_> = source_scope(&request.layers, request.target)
+            .map_or_else(Vec::new, |scope| {
+                scope.into_iter().map(|(layer, _)| PreviewMetadata::new(layer)).collect()
+            });
         let changed = self.key != Some(key) || self.source_layers != source_layers || resized;
         // The common UI driver retains delivered rows. Keep only the current
         // bounded request here, rather than a second catalog-sized pixel cache.
@@ -702,6 +706,37 @@ impl FilterPreviews {
         }))
     }
 }
+// Keep only the insertion scope and its ancestors. An excluded global
+// effect above the target must not force a full-document dependency.
+fn source_scope(layers: &[Layer], target: LayerId) -> Option<Vec<(&Layer, bool)>> {
+    let index = layers.iter().position(|l| l.id == target)?;
+    let parent = layers[index].properties.parent;
+    let mut ancestors = Vec::new();
+    let mut ancestor = parent;
+    while let Some(id) = ancestor {
+        ancestors.push(id);
+        ancestor = layers
+            .iter()
+            .find(|l| l.id == id)
+            .and_then(|l| l.properties.parent);
+    }
+    let scope = layers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, layer)| {
+            if ancestors.contains(&layer.id) {
+                return Some((layer, true));
+            }
+            let mut root = i;
+            while layers[root].properties.parent != parent {
+                let id = layers[root].properties.parent?;
+                root = layers.iter().position(|l| l.id == id)?;
+            }
+            (root >= index).then_some((layer, false))
+        })
+        .collect();
+    Some(scope)
+}
 impl Scene {
     fn capture_filter_source(
         &mut self,
@@ -711,40 +746,20 @@ impl Scene {
         region: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let index = request
-            .layers
-            .iter()
-            .position(|l| l.id == request.target)
+        let scope = source_scope(&request.layers, request.target)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
-        let parent = request.layers[index].properties.parent;
-        // Keep only the insertion scope and its ancestors. An excluded global
-        // effect above the target must not force a full-document dependency.
-        let mut ancestors = Vec::new();
-        let mut ancestor = parent;
-        while let Some(id) = ancestor {
-            ancestors.push(id);
-            ancestor = request
-                .layers
-                .iter()
-                .find(|l| l.id == id)
-                .and_then(|l| l.properties.parent);
-        }
-        let layers: Vec<_> = request
-            .layers
+        let parent = scope
             .iter()
-            .enumerate()
-            .filter_map(|(i, layer)| {
-                if ancestors.contains(&layer.id) {
-                    let mut ancestor = layer.clone();
-                    ancestor.effect = None;
-                    return Some(ancestor);
+            .find(|(layer, _)| layer.id == request.target)
+            .and_then(|(layer, _)| layer.properties.parent);
+        let layers: Vec<_> = scope
+            .into_iter()
+            .map(|(layer, ancestor)| {
+                let mut layer = layer.clone();
+                if ancestor {
+                    layer.effect = None;
                 }
-                let mut root = i;
-                while request.layers[root].properties.parent != parent {
-                    let id = request.layers[root].properties.parent?;
-                    root = request.layers.iter().position(|l| l.id == id)?;
-                }
-                (root >= index).then(|| layer.clone())
+                layer
             })
             .collect();
         self.jobs.clear();
@@ -916,7 +931,7 @@ mod tests {
             layers: layers.iter().map(Layer::composite_snapshot).collect(),
             filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
         };
-        r.request_filter_previews(request(&layers, 1)).unwrap();
+        r.request_filter_previews(request(&layers[1..], 1)).unwrap();
         let p = r.filter_previews.as_ref().unwrap();
         assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
         assert!(p.request.is_some());
