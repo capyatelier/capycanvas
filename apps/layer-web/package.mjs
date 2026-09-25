@@ -49,7 +49,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "pkg/layer_web.js", "app.js"];
+  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js" && path !== "proof-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -107,6 +107,7 @@ export function fingerprintAssets(directory) {
   publish("effects.js", effects);
   publish("tooltips.js");
   publish("pen-scroll.js");
+  publish("palettes.js");
   let worker = read(join(directory, "workspace-worker.js"));
   for (const path of ["pkg/layer_web.js", "workspace-store.js"])
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
