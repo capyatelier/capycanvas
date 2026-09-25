@@ -12083,7 +12083,7 @@ fn native_tab_slide_input() {
     w.window.maximize();
     w.window.present();
     pump(1200);
-    let original = state(&w).workspace;
+    let original = layer_ui::WorkspaceState::default();
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
     let mut perform = |events: serde_json::Value| {

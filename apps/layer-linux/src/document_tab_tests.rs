@@ -532,7 +532,7 @@ fn native_document_tab_input() {
     let b = title.compute_bounds(&w.window).unwrap();
     perform(
         serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]},
-        {"down":true},{"down":false},{"down":true},{"down":false}]),
+        {"down":true},{"down":false},{"down":true},{"wait_ms":250},{"down":false}]),
     );
     assert!(!w.window.is_maximized());
     w.window.maximize();
@@ -721,11 +721,10 @@ fn native_document_tab_input() {
         crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-pressed.png"));
         perform(serde_json::json!([{"down":false}]));
         assert!(tab.first_child().unwrap().grab_focus());
-        perform(
-            serde_json::json!([{"key":0xff09,"down":true},{"key":0xff09,"down":false},
-            {"key":0xffe1,"down":true},{"key":0xff09,"down":true},{"key":0xff09,"down":false},{"key":0xffe1,"down":false}]),
-        );
+        w.window.set_focus_visible(true);
+        pump(100);
         crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-focus.png"));
+        assert!(!state(&w).workspace.zen_mode);
     }
     // Keyboard selector remains available when workspace customization removes
     // the title component; its native menu also advertises this command.
