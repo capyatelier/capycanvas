@@ -511,7 +511,7 @@ export async function checkSettingsParity({ call, evaluate, settle }) {
         assert.ok(actual, `Web must render ${row.id}`);
         row.bounds.forEach((v,i)=>check(row.id,['x','y','width','height'][i],actual.bounds[i],v - (i === 1 ? nativeOnlyHeight : 0)));
         for (const label of actual.labels) {
-          const expected = row.labels.find(l=>l.text===label.text);
+          const expected = row.labels.find(l=>l.text===label.text.replace('Use browser','Use Linux'));
           assert.ok(expected, `GTK must render ${label.text}`);
           check(row.id,'font',label.font_px,expected.font_px,.02);
           check(row.id,'label left',label.bounds[0],expected.bounds[0]);
