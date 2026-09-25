@@ -118,9 +118,20 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
       await send({type:"invoke",command:"redo_workspace"});assert.deepEqual(await snapshot(),after,"redo restores the drop");
       assert.equal(await evaluate("document.querySelectorAll('.tab-slide-overlay,.dragged-tab-source').length"),0);
     }
+    await send({type:'preferences',action:{type:'edit',id:'transparency',value:1}});
+    await send({type:"restore_workspace",workspace:fixture});await send({type:"move_group",group:43,target:{kind:"float",position:[550,220]}});
+    await evaluate("window.glassProbe={set:layerApp.app.set_glass,boxes:[]};layerApp.app.set_glass=(boxes,...rest)=>{glassProbe.boxes=Array.from(boxes);return glassProbe.set.call(layerApp.app,boxes,...rest);}");
+    const grip=await evaluate(`(()=>{const r=document.querySelector('.dock-group[data-group="43"] .dock-tabs > .panel-grip').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    held="mouse";await input("down",grip);
+    for(let i=1;i<=6;i++){await input("move",{x:grip.x-12*i,y:grip.y+9*i});await settle();}
+    await settle();
+    const glass=await evaluate(`(()=>{const c=layerApp.canvas.getBoundingClientRect(),r=document.querySelector('.dock-group[data-group="43"] .panel-preview').getBoundingClientRect(),boxes=glassProbe.boxes;return{panel:[r.x-c.x,r.y-c.y,r.width,r.height],boxes:Array.from({length:boxes.length/8},(_,i)=>boxes.slice(i*8,i*8+4))}})()`);
+    await input("up");held=null;await wait();
+    await evaluate("layerApp.app.set_glass=glassProbe.set;delete window.glassProbe");
+    assert.ok(glass.boxes.some(b=>b.every((v,i)=>Math.abs(v-glass.panel[i])<1)),`Panel glass follows a dragged float: ${JSON.stringify(glass)}`);
     await mkdir("artifacts/workspace-motion",{recursive:true});
     await writeFile("artifacts/workspace-motion/web.json",JSON.stringify(results,null,2));
-    console.log("PASS: native mouse/touch motion, retained models, matching geometry, drop, undo and redo");
+    console.log("PASS: native mouse/touch motion, retained models, matching geometry, drop, undo and redo, glass following a dragged float");
   } finally {
     await evaluate("if(window.motionProbe){motionProbe.running=false;for(const[k,v]of Object.entries(motionProbe.original))layerApp.app[k]=v;window.requestAnimationFrame=motionProbe.raf;}");
     if(held){await input("up");held=null;}

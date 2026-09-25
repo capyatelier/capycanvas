@@ -966,6 +966,7 @@ workspace.addEventListener("scroll", () => { if (workspaceGesture) workspaceGest
 const workspacePlacements = new Map();
 const deviceAligned = value => Math.round(value * devicePixelRatio) / devicePixelRatio;
 function clearWorkspacePlacement() {
+  if (workspacePlacements.size) glass?.queue();
   for (const [node, original] of workspacePlacements) {
     node.style.removeProperty("transform");
     node.style.width = original.width;
@@ -1004,12 +1005,12 @@ function flushWorkspacePresentation() {
         const x = deviceAligned(moving.bounds.x) - base.x + (edge?.includes("right") ? dw : 0);
         const y = deviceAligned(moving.bounds.y) - base.y + (edge?.includes("bottom") ? dh : 0);
         const transform = `translate(${x}px, ${y}px)`;
-        if (node.style.transform !== transform) node.style.transform = transform;
+        if (node.style.transform !== transform) { node.style.transform = transform; glass?.queue(); }
         // Freeze native allocation too, without scaling the retained controls.
         const width = `${parseFloat(original.width) + (!edge || edge === "top" || edge === "bottom" ? dw : 0)}px`;
         const height = `${parseFloat(original.height) + (!edge || edge === "left" || edge === "right" ? dh : 0)}px`;
-        if (node.style.width !== width) node.style.width = width;
-        if (node.style.height !== height) node.style.height = height;
+        if (node.style.width !== width) { node.style.width = width; glass?.queue(); }
+        if (node.style.height !== height) { node.style.height = height; glass?.queue(); }
         if (!edge) {
           const bodyHeight = `${moving.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`;
           if (node.style.getPropertyValue("--panel-body-height") !== bodyHeight) node.style.setProperty("--panel-body-height", bodyHeight);
