@@ -14410,17 +14410,22 @@ fn native_workspace_menu_input() {
             if visit > 0 {
                 assert_eq!(state(&w).brush.diameter, 73.);
             }
-            // Medium toolbar drawers remain reachable with no docked panels.
-            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
-                let layout = state(&w).workspace.layout;
-                let tile = layout
-                    .panels
-                    .iter()
-                    .flat_map(|p| p.tiles())
-                    .find(|t| t.control == ToolbarControl::Panel { panel })
-                    .unwrap();
+            // Window-bar drawers remain reachable with no docked panels.
+            let layout = state(&w).workspace.layout;
+            let drawers: Vec<_> = layout
+                .header
+                .entries()
+                .filter_map(|e| match e.item {
+                    HeaderItem::Tool {
+                        control: ToolbarControl::Panel { panel },
+                    } => Some((e.id, panel)),
+                    _ => None,
+                })
+                .collect();
+            assert!(drawers.iter().any(|(_, panel)| *panel == Panel::Layers));
+            for (id, panel) in drawers {
                 let button =
-                    find_named(w.surface.upcast_ref(), &format!("tile-{}", tile.id)).unwrap();
+                    find_named(w.header.root.upcast_ref(), &format!("header-item-{id}")).unwrap();
                 let bounds = button.compute_bounds(&w.window).unwrap();
                 let point = [
                     bounds.x() + bounds.width() / 2.,
