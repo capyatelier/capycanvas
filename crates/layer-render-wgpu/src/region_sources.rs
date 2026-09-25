@@ -25,7 +25,7 @@ pub(super) struct RawRegions {
     #[cfg(test)]
     pub streaming_control: bool,
     tonal_cache: Option<TonalCache>,
-    empty_cache: wgpu::TextureView,
+    empty_cache: [wgpu::TextureView; 4],
     tonal_parameters: wgpu::Buffer,
     pub(super) tonal_statistics: wgpu::Buffer,
     tile_pipeline: Deferred<wgpu::ComputePipeline>,
@@ -200,9 +200,11 @@ impl RawRegions {
             #[cfg(test)]
             streaming_control: false,
             tonal_cache: None,
-            empty_cache: cache_texture(device, 0).create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                ..Default::default()
+            empty_cache: std::array::from_fn(|_| {
+                cache_texture(device, 0).create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..Default::default()
+                })
             }),
             tonal_parameters: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tonal parameters"),
@@ -669,7 +671,7 @@ impl RawRegions {
                     resource: wgpu::BindingResource::TextureView(
                         self.tonal_cache
                             .as_ref()
-                            .map_or(&self.empty_cache, |c| &c.views[i]),
+                            .map_or(&self.empty_cache[i], |c| &c.views[i]),
                     ),
                 })
                 .collect()
