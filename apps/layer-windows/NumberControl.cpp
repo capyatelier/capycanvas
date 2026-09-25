@@ -122,9 +122,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto track=fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),
         uint8_t((int(panelColor.G)+textColor.G)/2),uint8_t((int(panelColor.B)+textColor.B)/2)});
     for(auto key:{L"SliderTrackValueFill",L"SliderTrackValueFillPointerOver",L"SliderTrackValueFillPressed",L"SliderTrackValueFillDisabled"})
-        slider.Resources().Insert(box_value(key),preference?fill({255,53,132,228}):track);
+        slider.Resources().Insert(box_value(key),preference?accent(data):track);
     for(auto key:{L"SliderThumbBackground",L"SliderThumbBackgroundPointerOver",L"SliderThumbBackgroundPressed"})
-        slider.Resources().Insert(box_value(key),preference?fill({255,53,132,228}):data->brush(L"thumb"));
+        slider.Resources().Insert(box_value(key),preference?accent(data):data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
     auto commit=[data,local,spec,get,set,setText,identity=presentation.identity,weak=make_weak(entry)](bool cancel){

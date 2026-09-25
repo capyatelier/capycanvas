@@ -97,7 +97,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         if(!open||(searchDraft&&query==*searchDraft))searchDraft.reset();
         if(!searchDraft&&search.Text()!=query)search.Text(query);
         if(open&&!wasOpen)search.Focus(FocusState::Programmatic);
-        auto markSelected=[&]{for(auto const& row:previews){bool active=row.id==str(picker,L"selected");row.button.Background(active?selected():clear());AutomationProperties::SetItemStatus(row.button,active?L"Selected":L"");}};
+        auto markSelected=[&]{for(auto const& row:previews){bool active=row.id==str(picker,L"selected");row.button.Background(active?selected(data):clear());AutomationProperties::SetItemStatus(row.button,active?L"Selected":L"");}};
         auto choices=array(data->state,L"adjustments");auto next=choices.Stringify();if(next==listKey){markSelected();return;}listKey=next;
         rows.Children().Clear();previews.clear();hstring section;
         for(auto value:choices){
@@ -177,7 +177,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
         auto selectedCategory=str(object(data->state,L"filter_picker"),L"category");
         for(uint32_t i=0;i<categories.Size();++i){
             bool active=str(categories.GetObjectAt(i),L"id")==selectedCategory;
-            state->buttons[i].Background(active?selected():clear());
+            state->buttons[i].Background(active?selected(data):clear());
             AutomationProperties::SetItemStatus(state->buttons[i],active?L"Selected":L"");
         }
     });

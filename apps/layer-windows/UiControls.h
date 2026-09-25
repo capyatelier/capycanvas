@@ -63,7 +63,7 @@ inline Windows::UI::Color color(hstring const& hex){
 }
 inline SolidColorBrush fill(Windows::UI::Color value){return SolidColorBrush(value);}
 inline SolidColorBrush clear(){return fill({0,0,0,0});}
-inline SolidColorBrush selected(){return fill({56,53,132,228});}
+
 inline void place(FrameworkElement const& element,J const& rect){
     Canvas::SetLeft(element,num(rect,L"x"));Canvas::SetTop(element,num(rect,L"y"));
     element.Width(num(rect,L"width"));element.Height(num(rect,L"height"));
@@ -120,9 +120,11 @@ struct WorkspaceData {
         return closed;
     }
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
+    mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
     void refreshPalette(){
         auto palette=object(state,L"palette");
         for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
+        for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
     }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
     void dispatchDocument(J const& action,hstring const& epoch) const {
@@ -133,18 +135,18 @@ struct WorkspaceData {
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
         return paletteBrushes.emplace(role,fill(color(str(object(state,L"palette"),role,L"#414141")))).first->second;
     }
+    SolidColorBrush tint(wchar_t const* role,uint8_t alpha)const{
+        auto key=std::make_pair(std::wstring(role),alpha);
+        if(auto found=tintBrushes.find(key);found!=tintBrushes.end())return found->second;
+        auto value=color(str(object(state,L"palette"),role,L"#414141"));value.A=alpha;
+        return tintBrushes.emplace(key,fill(value)).first->second;
+    }
     double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
 };
-// Shared button color is a tint; native Android/Web apply 13/255 opacity.
-inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){
-    auto tint=color(str(object(data->state,L"palette"),L"button"));tint.A=13;return fill(tint);
-}
-// Light headers use the shared half-opacity surround surface over the canvas.
-inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){
-    auto tint=color(str(object(data->state,L"palette"),L"bg"));
-    if(data->theme()==L"light")tint.A=128;
-    return fill(tint);
-}
+inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
+inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"bg",191);}
+inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"selection");}
+inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
@@ -154,16 +156,14 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const&
 }
 template<typename T>
 inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result){
-    auto ink=color(str(object(data->state,L"palette"),L"text"));
-    auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
     hstring prefix=std::is_same_v<T,Primitives::ToggleButton>?L"ToggleButton":L"Button";
-    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),fill(hover));
-    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),fill(pressed));
+    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),data->tint(L"text",20));
+    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),data->tint(L"text",41));
     result.Resources().Insert(box_value(prefix+L"BackgroundDisabled"),clear());
-    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),fill(disabled));
+    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),data->tint(L"text",92));
     if constexpr(std::is_same_v<T,Primitives::ToggleButton>)
         for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-            result.Resources().Insert(box_value(role),selected());
+            result.Resources().Insert(box_value(role),selected(data));
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){

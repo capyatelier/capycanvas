@@ -35,10 +35,10 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn system_accent(self) -> bool {
-        matches!(self, Self::Gtk | Self::Android)
+        matches!(self, Self::Gtk | Self::Android | Self::Windows)
     }
     pub fn swatch_preferences(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows)
     }
 }
 
@@ -1665,7 +1665,7 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Windows).is_err());
+        assert!(settings.field(PreferenceId::Accent, Platform::Mac).is_err());
         let PreferenceKind::Swatches { swatches, selected, .. } =
             settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
         else {
@@ -1717,7 +1717,7 @@ mod copy_tests {
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
             assert!(matches!(
-                rows(&settings, Platform::Windows).into_iter().find(|r| r.id == id).unwrap().kind,
+                rows(&settings, Platform::Mac).into_iter().find(|r| r.id == id).unwrap().kind,
                 PreferenceKind::Text { .. }
             ));
         }

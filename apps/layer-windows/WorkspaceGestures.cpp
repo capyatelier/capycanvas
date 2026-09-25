@@ -388,8 +388,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto bounds=object(value,L"bounds");
         if(!bounds.Size()){hint.Visibility(Visibility::Collapsed);return;}
         bool body=str(object(value,L"target"),L"kind")==L"tab"&&num(bounds,L"width")>3&&num(bounds,L"height")>3;
-        auto accent=selected();auto tint=accent.Color();tint.A=255;accent.Color(tint);tint.A=64;
-        hint.Background(body?fill(tint):accent);hint.BorderBrush(accent);
+        hint.Background(body?data->tint(L"accent",64):accent(data));hint.BorderBrush(accent(data));
         hint.BorderThickness(body?Thickness{2,2,2,2}:Thickness{});
         hint.CornerRadius(body?CornerRadius{}:CornerRadius{2,2,2,2});
         place(hint,bounds);hint.Visibility(Visibility::Visible);

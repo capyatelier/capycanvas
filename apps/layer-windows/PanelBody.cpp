@@ -32,7 +32,7 @@ Grid PanelBody::sizes(double width){
             auto text=label(data,to_hstring(int(value)));text.TextAlignment(TextAlignment::Center);content.Children().Append(text);
             pick.Content(content);Grid::SetColumn(pick,int(i)%columns);Grid::SetRow(pick,row);grid.Children().Append(pick);
             bindings.emplace_back([data=data,pick,value]{
-                pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected():clear());
+                pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected(data):clear());
             });
         }
         auto weak=make_weak(grid);auto last=std::make_shared<int>(columns);
@@ -129,7 +129,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     auto current=findId(array(currentPanel,L"tiles"),id);
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
-                    pick.Background(flag(current,L"selected")?selected():clear());
+                    pick.Background(flag(current,L"selected")?selected(data):clear());
                     ToolTipService::SetToolTip(pick,box_value(str(current,L"tooltip")));
                 });
             }

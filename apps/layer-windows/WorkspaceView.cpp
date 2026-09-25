@@ -8,6 +8,7 @@
 #include "OverviewOcclusion.h"
 #include "WorkspaceShadow.h"
 #include "WorkspaceDrawers.h"
+#include <set>
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
 #include "ColorView.h"
@@ -49,6 +50,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceExpansion> expansion;
     struct Measurement {double tab=36,content=320;J scroll;};
     std::map<std::wstring,Measurement> measurements;
+    struct Offscreen {std::wstring key;std::unique_ptr<PanelBody> body;};
+    std::map<std::wstring,Offscreen> offscreen;
+    Canvas measureHost;
     hstring lastMeasurements;
     bool measurementQueued=false;
     std::array<float,3> titlebar{};
@@ -112,12 +116,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
         ToolTipService::SetToolTip(fitCamera,box_value(L"Fit canvas"));
-        Border surface;surface.Child(fitCamera);surface.Background(data->brush(L"bg"));surface.CornerRadius({20,20,20,20});
+        Border surface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
+        measureHost.IsHitTestVisible(false);measureHost.Opacity(0);Canvas::SetLeft(measureHost,-100000);root.Children().Append(measureHost);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
@@ -267,6 +272,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
+            measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -483,6 +489,31 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             measurements[std::wstring(str(group.geometry,L"active"))].scroll=group.body->ScrollMetrics();
             double height=group.body->ContentHeight();
             if(std::isfinite(height)&&height>=0)measurements[std::wstring(str(group.geometry,L"active"))].content=stable(height);
+        }
+        std::set<std::wstring> keep;
+        auto fitted=array(object(object(data->state,L"workspace"),L"layout"),L"fit_height_groups");
+        for(auto const& [id,group]:groups){
+            bool fit=false;for(auto value:fitted)fit=fit||uint32_t(value.GetNumber())==id;
+            if(!fit||group.hidden)continue;
+            double width=num(object(group.geometry,L"bounds"),L"width");auto active=str(group.geometry,L"active");
+            for(auto value:array(group.geometry,L"panels")){
+                auto panelId=value.GetString();if(panelId==active)continue;
+                auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size())continue;
+                std::wstring name(panelId);keep.insert(name);auto& copy=offscreen[name];
+                auto key=std::wstring(panelStructure(panel).Stringify())+L"@"+std::to_wstring(width);
+                if(copy.key!=key){
+                    if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
+                    copy.key=key;copy.body=std::make_unique<PanelBody>(data,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
+                    copy.body->Root().Width(width);measureHost.Children().Append(copy.body->Root());copy.body->Apply(true);
+                }
+                double height=copy.body->ContentHeight();
+                if(std::isfinite(height)&&height>=0&&measurements.contains(name))measurements[name].content=stable(height);
+            }
+        }
+        for(auto it=offscreen.begin();it!=offscreen.end();){
+            if(keep.contains(it->first)){++it;continue;}
+            uint32_t at=0;if(it->second.body&&measureHost.Children().IndexOf(it->second.body->Root(),at))measureHost.Children().RemoveAt(at);
+            it=offscreen.erase(it);
         }
         if(drawers)for(auto value:drawers->PanelMeasurements()){
             auto item=value.GetObject();auto panel=std::wstring(str(item,L"panel"));

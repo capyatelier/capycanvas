@@ -116,7 +116,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             if(previous!=key){previous=key;rebuild(items,group);}
             auto const& buttons=group?groupButtons:subtoolButtons;
             for(uint32_t i=0;i<items.Size();i++){
-                bool active=flag(items.GetObjectAt(i),L"selected");buttons[i].Background(active?selected():clear());
+                bool active=flag(items.GetObjectAt(i),L"selected");buttons[i].Background(active?selected(data):clear());
                 AutomationProperties::SetItemStatus(buttons[i],active?L"Selected":L"");
             }
         }

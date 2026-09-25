@@ -298,15 +298,15 @@ struct View:std::enable_shared_from_this<View>{
         result.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.VerticalContentAlignment(VerticalAlignment::Stretch);
         return result;
     }
-    static Imaging::WriteableBitmap checker(double logical,double scale){
+    static Imaging::WriteableBitmap checker(double logical,double scale,winrt::Windows::UI::Color light,winrt::Windows::UI::Color dark){
         int size=int(std::ceil(logical*scale));
         Imaging::WriteableBitmap result(size,size);uint8_t* bytes=nullptr;
         check_hresult(result.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
         for(int y=0;y<size;y++)for(int x=0;x<size;x++){
             // Match the shared repeating conic gradient, including its quadrant boundaries.
             double dx=std::fmod((x+.5)/scale,10.)-5,dy=std::fmod((y+.5)/scale,10.)-5;
-            auto value=uint8_t(dx==0||dx*dy<0?204:140);auto p=bytes+(y*size+x)*4;
-            p[0]=p[1]=p[2]=value;p[3]=255;
+            auto value=dx==0||dx*dy<0?dark:light;auto p=bytes+(y*size+x)*4;
+            p[0]=value.B;p[1]=value.G;p[2]=value.R;p[3]=255;
         }
         result.Invalidate();return result;
     }
@@ -417,7 +417,7 @@ struct View:std::enable_shared_from_this<View>{
         ArcSegment arc;arc.Point({float(half-clipRadius),float(half)});arc.Size({float(clipRadius),float(clipRadius)});
         arc.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(arc);line(0,float(half));
         PathGeometry geometry;geometry.Figures().Append(figure);readoutHit.Data(geometry);
-        auto ink=focused?fill(color(L"#3584e4")):data->brush(L"text");
+        auto ink=focused?accent(data):data->brush(L"text");
         double labelFont=std::clamp(panelSize*.044,9.,12.);
         labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(GlyphRasterizer::fontSize(labelFont));
         labelMetrics.Measure({1000,1000});
@@ -498,7 +498,7 @@ struct View:std::enable_shared_from_this<View>{
             for(int i=0;i<3;i++){
                 auto swatchBox=array(layout,slots[i]);placeBox(swatches[i],swatchBox);
                 double pad=i==1?3:1;swatchChecks[i].Margin({pad,pad,pad,pad});swatchPaint[i].Margin({pad,pad,pad,pad});
-                ImageBrush pixels;pixels.ImageSource(checker(swatchBox.GetNumberAt(2)-2*pad,scale));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
+                ImageBrush pixels;pixels.ImageSource(checker(swatchBox.GetNumberAt(2)-2*pad,scale,color(str(object(data->state,L"palette"),L"checker_light")),color(str(object(data->state,L"palette"),L"checker_dark"))));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
             }
         }
         auto icons=data->theme()+array(view,L"other_shapes").Stringify();
@@ -506,7 +506,7 @@ struct View:std::enable_shared_from_this<View>{
             iconKey=icons;swapGlyph.Source(icon(L"color-swap",data->theme()).Source());
             for(int i=0;i<2;i++){
                 auto shape=array(view,L"other_shapes").GetStringAt(i);Grid content;Shapes::Ellipse hit;hit.Fill(clear());content.Children().Append(hit);
-                auto glyph=colorIcon(shape,shapeHovered[i]?fill(color(L"#3584e4")):data->brush(L"text"));
+                auto glyph=colorIcon(shape,shapeHovered[i]?accent(data):data->brush(L"text"));
                 RotateTransform rotation;rotation.CenterX(8);rotation.CenterY(8);rotation.Angle(array(layout,L"shape_rotations").GetNumberAt(i));
                 for(auto child:glyph.Children())child.as<Shapes::Path>().Data().Transform(rotation);
                 content.Children().Append(glyph);shapes[i].Content(content);shapeGlyphs[i]=glyph;
@@ -514,7 +514,7 @@ struct View:std::enable_shared_from_this<View>{
                 AutomationProperties::SetName(shapes[i],title);ToolTipService::SetToolTip(shapes[i],box_value(title));
             }
         }
-        for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?fill(color(L"#3584e4")):data->brush(L"text"));
+        for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?accent(data):data->brush(L"text"));
         auto swapInk=color(str(object(data->state,L"palette"),L"text"));swapInk.A=swapHovered?31:0;swapFill.Fill(fill(swapInk));
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
