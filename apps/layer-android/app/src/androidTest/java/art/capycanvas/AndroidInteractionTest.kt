@@ -1269,6 +1269,7 @@ class AndroidInteractionTest {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         try { for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme)); restore()
+            waitFor("previous drawer closes") { !exists("column-drawer-41") }; settle()
             val docked = bounds("tab-brushes")
             val name = bounds("tab-name-brushes")
             val icon = bounds("tab-icon-brushes")

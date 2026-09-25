@@ -58,7 +58,7 @@ import org.json.JSONObject
                 } catch (e: Exception) { error = e.message ?: "Could not create the drawing" }
                 finally { saving = false }
             }
-        }) { Text("Create") } }, dismissButton = { TextButton(onDismiss, enabled = !saving) { Text("Cancel") } },
+        }) { Text("Create") } }, dismissButton = { TextButton(onDismiss, Modifier.testTag("new-document-cancel"), enabled = !saving) { Text("Cancel") } },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val presets = model.getJSONArray("presets")

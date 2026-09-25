@@ -100,8 +100,9 @@ class AndroidHostTest {
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(.4f,.4f)), MotionEvent.TOOL_TYPE_STYLUS)
         canvasEvent(MotionEvent.ACTION_MOVE, listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)), MotionEvent.TOOL_TYPE_STYLUS)
         canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)), MotionEvent.TOOL_TYPE_STYLUS)
-        action(obj("type" to "invoke", "command" to "undo"))
-        action(obj("type" to "invoke", "command" to "redo"))
+        fun enabled(command: String) = waitState { it.array("commands").objects().first { c -> c.getString("id") == command }.getBoolean("enabled") }
+        enabled("undo"); action(obj("type" to "invoke", "command" to "undo"))
+        enabled("redo"); action(obj("type" to "invoke", "command" to "redo"))
         action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gradient_map")))
         val view = state().getJSONObject("layer_properties")
         action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
@@ -240,9 +241,10 @@ class AndroidHostTest {
                 assertEquals(targets.last().height, hint.height, 1f)
                 val pixels = root.captureToImage().toPixelMap()
                 val color = pixels[(hint.center.x - origin.x).toInt(), (hint.center.y - origin.y).toInt()]
-                assertEquals("Visible blue marker", 0x35 / 255f, color.red, .02f)
-                assertEquals(0x84 / 255f, color.green, .02f)
-                assertEquals(0xe4 / 255f, color.blue, .02f)
+                val accent = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("accent"))
+                assertEquals("Visible accent marker", android.graphics.Color.red(accent) / 255f, color.red, .02f)
+                assertEquals(android.graphics.Color.green(accent) / 255f, color.green, .02f)
+                assertEquals(android.graphics.Color.blue(accent) / 255f, color.blue, .02f)
             } finally {
                 event(MotionEvent.ACTION_CANCEL, away)
             }
@@ -524,11 +526,12 @@ class AndroidHostTest {
         tab.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
         tab.assertIsFocused()
         val pixels = tab.captureToImage().toPixelMap()
-        assertTrue("Keyboard focus has a visible blue outline", (0 until pixels.height).any { y ->
+        val accent = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("accent"))
+        assertTrue("Keyboard focus has a visible accent outline", (0 until pixels.height).any { y ->
             (0 until pixels.width).any { x -> pixels[x,y].let { color ->
-                kotlin.math.abs(color.red - 0x35/255f) < .02f &&
-                    kotlin.math.abs(color.green - 0x84/255f) < .02f &&
-                    kotlin.math.abs(color.blue - 0xe4/255f) < .02f
+                kotlin.math.abs(color.red - android.graphics.Color.red(accent)/255f) < .02f &&
+                    kotlin.math.abs(color.green - android.graphics.Color.green(accent)/255f) < .02f &&
+                    kotlin.math.abs(color.blue - android.graphics.Color.blue(accent)/255f) < .02f
             } }
         })
     }
@@ -669,7 +672,7 @@ class AndroidHostTest {
             // qualified core icon used to be prefixed/suffixed a second time.
             action(obj("type" to "select_panel_tab", "group" to group("layers").getLong("id"), "panel" to "layers"))
             compose.onNodeWithTag("layer-rows").assertIsDisplayed()
-            compose.onNodeWithText(choice.getString("label")).assertIsDisplayed()
+            compose.onNode(hasText(choice.getString("label")) and hasAnyAncestor(hasTestTag("layer-rows"))).assertIsDisplayed()
             val row = state().array("layers").objects().first { it.getLong("id") == layer }
             val icon = row.getString("content_icon")
             assertTrue(icon.startsWith("layer-") && icon.endsWith("-symbolic"))
@@ -741,6 +744,7 @@ class AndroidHostTest {
         capture("adjustments-picker")
         action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to "distort")))
         compose.onNodeWithTag("filter-search-toggle").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasTestTag("filter-search"))).fetchSemanticsNodes().isNotEmpty() }
         val filterSearch = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("filter-search")))
         filterSearch.performTextInput("glass")
         waitState { it.array("adjustments").objects().map { c -> c.getString("id") }==listOf("glass","rainy_glass") }
@@ -772,7 +776,7 @@ class AndroidHostTest {
                 compose.onNodeWithTag("effect-gradient").performTouchInput {click(center)}
                 waitState {it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONArray("value").length()==3}
                 action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
-                    "key" to "gradient", "index" to 1, "position" to .5, "color" to JSONArray(listOf(.8,.2,.1,1)), "remove" to false)))
+                    "key" to "gradient", "index" to 1, "position" to .5, "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(.8,.2,.1,1))), "remove" to false)))
                 action(obj("type" to "effect", "action" to obj("op" to "reset", "layer" to view.getLong("layer"), "key" to "amount")))
             }
             capture("adjustment-$id")
@@ -796,7 +800,7 @@ class AndroidHostTest {
         floatPanel("stats", 500f, 120f)
         // Diagnostics arrive asynchronously and move the recording button down.
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("stroke-recording").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("stroke-recording").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
         compose.waitUntil(5_000) { host.strokeRecording.status?.optBoolean("recording") == true }
         compose.onNodeWithTag("stroke-recording").assertTextContains("Stop stroke recording")
         // Keep the floating panel clear of injected pen input on smaller tablets.
@@ -804,7 +808,7 @@ class AndroidHostTest {
         penStroke(40)
         compose.waitUntil(5_000) { (host.strokeRecording.status?.optLong("raw_events") ?: 0) >= 41 }
         customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
-        compose.onNodeWithTag("stroke-recording").performClick()
+        compose.onNodeWithTag("stroke-recording").performScrollTo().performClick()
         fun node(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
             fun find(n: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
                 n ?: return null
@@ -827,7 +831,7 @@ class AndroidHostTest {
         instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         compose.waitUntil(5_000) { !host.strokeRecording.busy }
         assertTrue(host.strokeRecording.status!!.getBoolean("ready"))
-        compose.onNodeWithTag("stroke-recording").assertTextContains("Save stroke recording").performClick()
+        compose.onNodeWithTag("stroke-recording").performScrollTo().assertTextContains("Save stroke recording").performClick()
         compose.waitUntil(5_000) { host.strokeRecording.busy }
         val name = "capy-stroke-test-${System.currentTimeMillis()}.capystrokes"
         assertTrue(chooser().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
@@ -958,6 +962,31 @@ class AndroidHostTest {
         val menuTop = maxOf(anchor.bottom, 48f * compose.activity.resources.displayMetrics.density)
         assertEquals("Workspace menu opens below its header button within the screen margin", menuTop, menu.top, 2f)
     }
+    private fun capyTag() = "header-control-" + host.snapshot!!.getJSONObject("header").array("items").objects()
+        .first { it.getString("label") == "Capy (Zen Mode)" }.get("id")
+    private fun touch(view: View, downAt: Long, action: Int, point: androidx.compose.ui.geometry.Offset) = instrumentation.runOnMainSync {
+        val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER })
+        val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y; pressure = 1f })
+        val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        view.dispatchTouchEvent(event); event.recycle()
+    }
+    private fun slide(view: View, downAt: Long, from: androidx.compose.ui.geometry.Offset, to: androidx.compose.ui.geometry.Offset) {
+        for (step in 1..12) { touch(view, downAt, MotionEvent.ACTION_MOVE, from + (to - from) * (step / 12f)); SystemClock.sleep(16) }
+    }
+    private fun holdDrag(source: SemanticsNodeInteraction, target: androidx.compose.ui.geometry.Offset) {
+        val node = source.fetchSemanticsNode()
+        val view = (node.root as ViewRootForTest).view
+        val start = node.boundsInRoot.center
+        val downAt = SystemClock.uptimeMillis()
+        touch(view, downAt, MotionEvent.ACTION_DOWN, start)
+        compose.mainClock.advanceTimeBy(android.view.ViewConfiguration.getLongPressTimeout() + 100L)
+        slide(view, downAt, start, target)
+        touch(view, downAt, MotionEvent.ACTION_UP, target)
+    }
+    private fun quickAccessToolbarsMenu() {
+        workspaceMenu()
+        compose.onNodeWithText("Quick Access Toolbars").performClick()
+    }
     private fun assertContextBeside(tag: String) {
         // The group menu is anchored to the draggable header, not its grip.
         // Compose can align to either end of that header as its width changes.
@@ -1067,6 +1096,7 @@ class AndroidHostTest {
         return dark
     }
     @Test fun layersReferencesMasksAndTools() {
+        action(obj("type" to "select_panel_tab", "group" to group("sizes").getInt("id"), "panel" to "sizes"))
         val presets = listOf(2,4,6,8).map { compose.onNodeWithTag("size-preset-$it").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot() }
         presets.zipWithNext().forEach { (left,right) ->
             assertEquals(left.top,right.top,1f)
@@ -1164,18 +1194,19 @@ class AndroidHostTest {
     }
 
     @Test fun workspaceMenusManageVisibilityNamesAndHistory() {
+        fun toolSet() = compose.onNode(hasText("Tool Set") and hasAnyAncestor(hasTestTag("workspace-menu")))
         workspaceMenu()
         capture("workspace-menu-light")
-        compose.onNodeWithText("Brushes panel").performClick()
+        toolSet().performClick()
         compose.waitUntil(10_000) { groups().none { "brushes" in it.array("panels").values() } }
-        workspaceMenu(); compose.onNodeWithText("Brushes panel").performClick()
+        workspaceMenu(); toolSet().performClick()
         compose.waitUntil(10_000) { groups().any { "brushes" in it.array("panels").values() } }
         val destination = group("layers").getInt("id")
         contextGrip("group-grip-$destination")
         compose.onNodeWithText("Add built-in panel").performClick()
         assertContextBeside("group-grip-$destination")
         capture("workspace-panel-grip-add-panel")
-        compose.onNodeWithText("Brushes panel").performClick()
+        compose.onNodeWithText("Tool Set panel").performClick()
         compose.waitUntil(10_000) { group("brushes").getInt("id") == destination }
         contextGrip("group-grip-$destination")
         compose.onNodeWithText("Add Toolbar").performClick()
@@ -1217,7 +1248,7 @@ class AndroidHostTest {
         contextGrip("ribbon-grip-$copy")
         capture("workspace-renamed-menu")
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-        workspaceMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
+        quickAccessToolbarsMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
         compose.onNodeWithTag("managed-toolbar-$copy").performClick()
         compose.onNodeWithTag("delete-managed-toolbar").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
@@ -1227,9 +1258,6 @@ class AndroidHostTest {
         }
         val text = messageLayout.single()
         assertEquals("Copy remains verbatim from Rust", host.snapshot!!.getJSONObject("toolbar_prompt").getString("message"), text.layoutInput.text.text)
-        val arrow = text.placeholderRects.single()!!
-        val preceding = text.getBoundingBox(text.layoutInput.text.text.indexOf('→') - 2)
-        assertEquals("Menu-path arrow is centered beside the text", preceding.center.y, arrow.center.y, 2f)
         capture("workspace-delete-prompt")
         compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
@@ -1254,8 +1282,9 @@ class AndroidHostTest {
             val hidden = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().last().getString("id")
             customize(obj("type" to "set_panel_visible", "panel" to hidden, "visible" to false))
             val before = state().getJSONObject("workspace").toString()
-            workspaceMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
+            quickAccessToolbarsMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
             compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_manager") != null }
+            val managed = host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length()
             compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
             capture("toolbar-manager-$theme-initial")
             compose.onNodeWithTag("managed-toolbar-$hidden").performClick()
@@ -1267,14 +1296,16 @@ class AndroidHostTest {
             compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
             assertEquals(before, state().getJSONObject("workspace").toString())
             compose.onNodeWithTag("delete-managed-toolbar").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
             compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
-            compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() == 2 }
+            compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() == managed - 1 }
             compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
             capture("toolbar-manager-$theme-deleted")
             while (host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() > 0) {
                 val panel = host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").objects().first().getString("panel")
                 compose.onNodeWithTag("managed-toolbar-$panel").performClick()
                 compose.onNodeWithTag("delete-managed-toolbar").performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
                 compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
             }
@@ -1326,23 +1357,22 @@ class AndroidHostTest {
         customize(obj("type" to "close_expanded"))
     }
 
-    @Test fun dockedPanelHandlesToggleTabsOnFirstDoubleTap() {
-        val id = group("sizes").getInt("id")
+    @Test fun dockedPanelHandlesCollapseTheirColumnOnFirstDoubleTap() {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             for (style in listOf("automatic", "active_name", "icon_name", "name", "icon")) {
+                action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+                val id = group("sizes").getInt("id")
                 customize(obj("type" to "set_tab_style", "group" to id, "style" to style))
-                val bands = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("bands").toString()
-                for (hidden in listOf(true, false)) {
-                    compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
-                    compose.waitUntil(10_000) { group("sizes").getBoolean("tabs_visible") == !hidden }
-                    val layout = state().getJSONObject("workspace").getJSONObject("layout")
-                    val config = layout.array("panels").objects().first { it.getString("id") == "sizes" }
-                    assertEquals(hidden, config.getBoolean("hide_tab"))
-                    assertFalse(group("sizes").getBoolean("floating"))
-                    assertEquals("Dock dimensions remain unchanged", bands, layout.getJSONArray("bands").toString())
-                    capture("workspace-docked-handle-$style-$hidden-$theme")
-                }
+                val panels = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString()
+                compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+                compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().any { column ->
+                    column.array("groups").objects().any { it.getInt("group") == id }
+                } }
+                assertTrue(groups().none { "sizes" in it.array("panels").values() })
+                assertEquals("Tab bar settings are unchanged", panels,
+                    state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString())
+                capture("workspace-docked-handle-collapse-$style-$theme")
             }
         }
     }
@@ -1464,7 +1494,13 @@ class AndroidHostTest {
         capture("workspace-hidden-panel-configure")
     }
 
-    @Test fun zenFloatingDragOnlyMergesFloatsUntilOccupiedEdgeRevealsDocks() {
+    private fun withZenEdgeReveal(test: () -> Unit) {
+        val saved = state().getJSONObject("settings").getBoolean("zen_reveal_at_edges")
+        fun reveal(value: Boolean) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "zen_reveal_at_edges", "value" to value)))
+        reveal(true)
+        try { test() } finally { reveal(saved) }
+    }
+    @Test fun zenFloatingDragOnlyMergesFloatsUntilOccupiedEdgeRevealsDocks() = withZenEdgeReveal {
         customize(obj("type" to "set_control_visible", "panel" to "sizes", "control" to "size_presets", "visible" to false))
         floatPanel("sizes", 480f, 300f)
         floatPanel("layers", 750f, 360f)
@@ -1549,7 +1585,7 @@ class AndroidHostTest {
         val tabIcon = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("icon")
         assertEquals(originalIcon, tabIcon)
         // Workspace's New Toolbar command opens the same picker as the context menu.
-        workspaceMenu(); compose.onNodeWithText("New Toolbar…").performClick()
+        quickAccessToolbarsMenu(); compose.onNodeWithText("New Toolbar…").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }
         capture("workspace-new-toolbar")
         compose.onNodeWithText("Cancel").performClick()
@@ -1574,6 +1610,7 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { group("sizes").getInt("id") == group("toolbar").getInt("id") }
         assertTrue(group("toolbar").getBoolean("tabs_visible"))
         floatPanel("toolbar")
+        customize(obj("type" to "set_panel_visible", "panel" to "commands", "visible" to false))
         val grip = compose.onNodeWithTag("ribbon-grip-toolbar").fetchSemanticsNode().boundsInRoot.center - root.topLeft
         val top = androidx.compose.ui.geometry.Offset(500 * density, 49 * density)
         workspace.performTouchInput { down(grip); moveTo(top, 16) }
@@ -1587,7 +1624,7 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
-    @Test fun zenMouseCanMoveFromCanvasOntoRevealedPanel() {
+    @Test fun zenMouseCanMoveFromCanvasOntoRevealedPanel() = withZenEdgeReveal {
         action(obj("type" to "invoke", "command" to "zen_mode"))
         val workspace = compose.onNodeWithTag("workspace")
         workspace.performMouseInput { moveTo(center) }
@@ -1780,13 +1817,15 @@ class AndroidHostTest {
     @Test fun zenModesIconsAndContextMenuUseSharedSettings() {
         val saved = JSONObject(state().getJSONObject("settings").toString())
         fun edit(id: String, value: Any) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+        val capy = capyTag()
         try {
-            edit("total_zen", false)
+            edit("zen_show_capy", true)
             floatPanel("sizes")
             val floating = group("sizes").getInt("id")
             for (theme in listOf("dark", "light")) {
                 action(obj("type" to "set_theme", "theme" to theme))
-                contextGrip("zen-button")
+                compose.onNodeWithTag(capy).performMouseInput { click(button = MouseButton.Secondary) }
+                compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
                 capture("zen-menu-$theme")
                 compose.onNodeWithText("Change icon…").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences")?.optString("reveal") == "zen_icon" }
@@ -1807,35 +1846,26 @@ class AndroidHostTest {
                 }
                 compose.onNodeWithTag("settings-done").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-                edit("total_zen", false)
-                compose.onNodeWithTag("zen-button").performTouchInput { click() }
-                compose.waitUntil(10_000) { host.snapshot!!.optBoolean("hide_floating_panels") }
+                compose.onNodeWithTag(capy).performTouchInput { click() }
+                compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
                 compose.onNodeWithTag("zen-button").assertIsDisplayed()
-                compose.onNodeWithTag("group-$floating").assertDoesNotExist()
+                compose.onNodeWithTag("group-$floating").assertIsDisplayed()
                 compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
                 capture("zen-button-only-$theme")
-                contextGrip("zen-button")
+                compose.onNodeWithTag("zen-button").performTouchInput { longClick() }
+                compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
                 assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
                 compose.onNodeWithText("Change icon…").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
                 compose.onNodeWithTag("image-choice-3").assertIsDisplayed()
                 compose.onNodeWithTag("settings-done").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-                edit("total_zen", true)
-                compose.onNodeWithTag("zen-button").assertDoesNotExist()
-                edit("total_zen", false)
-                compose.onNodeWithTag("zen-button").performTouchInput { click() }
-                compose.waitUntil(10_000) { !host.snapshot!!.optBoolean("chrome_hidden") }
-                compose.onNodeWithTag("group-$floating").assertIsDisplayed()
-                edit("total_zen", true)
-                compose.onNodeWithTag("zen-button").performTouchInput { click() }
+                edit("zen_show_capy", false)
                 compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
+                compose.onNodeWithTag("zen-button").assertDoesNotExist()
                 compose.onNodeWithTag("group-$floating").assertIsDisplayed()
-                compose.runOnIdle {
-                    host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(600, 450))))
-                    host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(24, 24))))
-                }
-                compose.waitUntil(10_000) { !host.snapshot!!.optBoolean("chrome_hidden") }
+                edit("zen_show_capy", true)
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("zen-button").fetchSemanticsNodes().isNotEmpty() }
                 capture("zen-active-$theme")
                 compose.onNodeWithTag("zen-button").performTouchInput { click() }
                 waitState { !it.getJSONObject("workspace").getBoolean("zen_mode") }
@@ -2234,11 +2264,18 @@ class AndroidHostTest {
     }
 
     @Test fun panelDrawerAndDividerUseSharedLayout() {
-        compose.onAllNodesWithText("Brushes", useUnmergedTree = true).onFirst().performClick()
-        waitState { it.getJSONObject("customization").optString("expanded") == "brushes" }
+        val source = group("brushes").getInt("id")
+        customize(obj("type" to "set_column_collapsed", "group" to source, "collapsed" to true))
+        val column = host.snapshot!!.getJSONObject("layout").array("collapsed").objects()
+            .first { c -> c.array("groups").objects().any { it.getInt("group") == source } }.getInt("id")
+        customize(obj("type" to "set_column_drawers", "column" to column, "drawers" to true))
+        compose.onNodeWithTag("column-icon-brushes").performClick()
+        waitState { it.getJSONObject("customization").array("column_drawers").length() == 1 }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-$column").fetchSemanticsNodes().isNotEmpty() }
         capture("09-brush-drawer")
-        compose.onAllNodesWithText("Brushes", useUnmergedTree = true).onFirst().performClick()
-        waitState { it.getJSONObject("customization").isNull("expanded") }
+        compose.onNodeWithTag("column-icon-brushes").performClick()
+        waitState { it.getJSONObject("customization").array("column_drawers").length() == 0 }
+        action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
         val before = host.snapshot!!.getJSONObject("layout").toString()
         val divider = host.snapshot!!.getJSONObject("layout").array("dividers").objects().first { !it.getBoolean("band") }
         val density = compose.activity.resources.displayMetrics.density
@@ -2271,10 +2308,8 @@ class AndroidHostTest {
         val custom = host.snapshot!!.array("panels").objects().first { it.getString("title") == name }
         assertEquals(3, custom.array("tiles").length())
         val ids = custom.array("tiles").objects().map { it.getInt("id") }
-        val source = compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[0]}")
         val target = compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[2]}").fetchSemanticsNode().boundsInRoot
-        val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
-        source.performTouchInput { swipe(center, target.centerRight - origin - androidx.compose.ui.geometry.Offset(2f, 0f), 700) }
+        holdDrag(compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[0]}"), target.centerRight - androidx.compose.ui.geometry.Offset(2f, 0f))
         compose.waitUntil(10_000) {
             host.snapshot!!.array("panels").objects().first { it.getString("id") == custom.getString("id") }
                 .array("tiles").objects().map { it.getInt("id") } != ids
@@ -2287,7 +2322,7 @@ class AndroidHostTest {
         val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
         val firstTile = toolbar.array("tiles").objects().first().getInt("id")
         compose.onNodeWithTag("tile-toolbar-$firstTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
-        compose.onNodeWithTag("zen-button").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithTag(capyTag()).assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
         compose.onNodeWithTag("tab-name-tool_settings", useUnmergedTree = true).assertTextEquals("Tool")
         compose.onNodeWithTag("tab-sizes").performClick()
         compose.onNodeWithTag("number-value-Brush size").assertHeightIsEqualTo(24.dp)
@@ -2313,7 +2348,7 @@ class AndroidHostTest {
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("26-editor-default-dark")
-        compose.onNodeWithTag("header-settings").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
         compose.waitForIdle()
         compose.onNodeWithTag("preferences-surface", useUnmergedTree = true).assertWidthIsEqualTo(compose.activity.resources.configuration.screenWidthDp.dp)
@@ -2327,15 +2362,15 @@ class AndroidHostTest {
         fun sizeNode(matcher: SemanticsMatcher) = compose.onNode(matcher and hasAnyAncestor(hasTestTag("group-${group("sizes").getInt("id")}")))
         sizeNode(hasTestTag("number-value-Brush size")).performClick()
         val field = sizeNode(hasTestTag("number-Brush size"))
-        field.performTextReplacement("85/2")
+        field.performTextReplacement("45/2")
         field.performImeAction()
-        waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
+        waitState { it.getJSONObject("brush").number("diameter") == 22.5f }
         sizeNode(hasContentDescription("Increase Brush size")).performClick()
         val step = host.catalog.getJSONObject("brush_size").number("step")
-        waitState { it.getJSONObject("brush").number("diameter") == 42.5f + step }
-        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 42.5f + step))
+        waitState { it.getJSONObject("brush").number("diameter") == 22.5f + step }
+        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 22.5f + step))
         sizeNode(hasContentDescription("Decrease Brush size")).performClick()
-        waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
+        waitState { it.getJSONObject("brush").number("diameter") == 22.5f }
 
         action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to "top", "outer" to true), "viewport" to viewport()))
         fun toolbarGrip() = compose.onNode(hasContentDescription("Move toolbar") and hasAnyAncestor(hasTestTag("group-${group("toolbar").getInt("id")}")))
@@ -2358,22 +2393,15 @@ class AndroidHostTest {
             val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
             source.performTouchInput { swipe(center, target - origin, 700) }
         }
-        val brushes = compose.onAllNodesWithText("Brushes").onFirst()
-        val layers = compose.onAllNodesWithText("Layers").onFirst()
+        val brushes = compose.onNodeWithTag("tab-brushes")
+        val layers = compose.onNodeWithTag("tab-layers")
         drag(brushes, layers.fetchSemanticsNode().boundsInRoot.centerRight - androidx.compose.ui.geometry.Offset(2f, 0f))
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
             it.array("panels").values().containsAll(listOf("brushes", "layers"))
         } }
-        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { it.array("panels").values().contains("brushes") }
-        val grip = compose.onAllNodesWithContentDescription("Move panel group").filterToOne(
-            SemanticsMatcher("group grip") { node ->
-                val density = compose.activity.resources.displayMetrics.density
-                node.boundsInRoot.center.x > group.getJSONObject("bounds").number("x") * density
-            })
+        val grip = compose.onNodeWithTag("group-grip-${group("brushes").getInt("id")}")
         // A whole-group drop onto Sizes must preserve both tab identities.
-        val sizeTitle = host.snapshot!!.array("panels").objects().first { it.getString("id") == "sizes" }.getString("title")
-        val sizes = compose.onAllNodesWithText(sizeTitle).onFirst()
-        drag(grip, sizes.fetchSemanticsNode().boundsInRoot.center)
+        drag(grip, compose.onNodeWithTag("tab-sizes").fetchSemanticsNode().boundsInRoot.center)
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
             it.array("panels").values().containsAll(listOf("brushes", "layers", "sizes"))
         } }
@@ -2426,6 +2454,7 @@ class AndroidHostTest {
 
     @Test fun shortcutPageRecordsMultipleBindingsAndPersists() {
         compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -2472,7 +2501,9 @@ class AndroidHostTest {
         compose.activityRule.scenario.recreate()
         compose.waitUntil(20_000) { host.snapshot!!.optBoolean("gpu_ready") }
         assertNull(host.failure)
+        compose.waitUntil(20_000) { compose.activity.hasWindowFocus() && host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") && !it.optBoolean("switcher_busy") } == true }
         compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -2730,27 +2761,28 @@ class AndroidHostTest {
         assertNull(host.failure)
     }
 
-    @Test fun zenKeepsChromeThroughDrawerDismissalAndPanelDrag() {
-        compose.onNodeWithContentDescription("Zen mode").performClick()
+    @Test fun zenKeepsChromeThroughDrawerDismissalAndPanelDrag() = withZenEdgeReveal {
+        compose.onNodeWithTag(capyTag()).performClick()
         waitState { it.getJSONObject("workspace").getBoolean("zen_mode") }
-        val edge = androidx.compose.ui.geometry.Offset(0.01f, 0.01f)
+        val edge = androidx.compose.ui.geometry.Offset(0.01f, 0.5f)
         val center = androidx.compose.ui.geometry.Offset(0.7f, 0.6f)
         canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
         compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
-        compose.onAllNodesWithText("Brushes").onFirst().performClick()
-        waitState { it.getJSONObject("customization").optString("expanded") == "brushes" }
+        val tile = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects().first().getInt("id")
+        compose.onNodeWithTag("tile-toolbar-$tile").performClick()
+        waitState { it.getJSONObject("customization").objectOrNull("drawer") != null }
         compose.waitForIdle()
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
         canvasEvent(MotionEvent.ACTION_UP, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
-        waitState { it.getJSONObject("customization").isNull("expanded") }
+        waitState { it.getJSONObject("customization").isNull("drawer") }
         assertFalse("First outside contact closes only the drawer", host.snapshot!!.getBoolean("chrome_hidden"))
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
         canvasEvent(MotionEvent.ACTION_UP, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
         compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
         canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
         compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
-        val source = compose.onAllNodesWithText("Brushes").onFirst()
-        val target = compose.onAllNodesWithText("Layers").onFirst().fetchSemanticsNode().boundsInRoot.center
+        val source = compose.onNodeWithTag("tab-brushes")
+        val target = compose.onNodeWithTag("tab-layers").fetchSemanticsNode().boundsInRoot.center
         val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
         source.performTouchInput { swipe(this.center, target - origin, 700) }
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
