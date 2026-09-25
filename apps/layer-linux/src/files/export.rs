@@ -916,13 +916,22 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             move |_| refresh()
         });
     }
-    // Gain-map previews decode the actual selected quality.
-    for row in dimensions.iter().chain([&quality]) {
+    for row in &dimensions {
         row.connect_value_notify({
             let refresh = refresh_preview.clone();
             move |_| refresh()
         });
     }
+    // Gain-map previews decode the actual selected quality.
+    quality.connect_value_notify({
+        let refresh = refresh_preview.clone();
+        let read_recipe = read_recipe.clone();
+        move |_| {
+            if read_recipe().is_ok_and(|recipe| recipe.format.gainmap().is_some()) {
+                refresh();
+            }
+        }
+    });
     dialog.connect_closed(
         glib::clone!(
             #[weak]
