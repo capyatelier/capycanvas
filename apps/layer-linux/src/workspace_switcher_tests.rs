@@ -461,7 +461,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
                 find_named(w.window.upcast_ref(), "workspace-item-choice").is_none(),
                 "deleting the active workspace should not require a replacement picker"
             );
-            if let Some(button) = find_button(w.window.upcast_ref(), "Delete") {
+            if let Some(button) = dialog_button(&w, "Delete") {
                 break button;
             }
             assert!(
@@ -506,9 +506,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
                     .deleted_at_ms
                     .is_none()
             );
-            find_button(w.window.upcast_ref(), "Cancel")
-                .unwrap()
-                .emit_clicked();
+            dialog_button(&w, "Cancel").unwrap().emit_clicked();
             pump(300);
         }
     }
@@ -590,6 +588,11 @@ fn at(w: &Workspace, widget: &gtk::Widget, x: f32, y: f32) -> [f32; 2] {
 }
 fn row(w: &Workspace, id: &str) -> gtk::Widget {
     find_named(w.window.upcast_ref(), &format!("workspace-row-{id}")).unwrap()
+}
+fn dialog_button(w: &Workspace, label: &str) -> Option<gtk::Button> {
+    w.window
+        .visible_dialog()
+        .and_then(|dialog| find_button(dialog.upcast_ref(), label))
 }
 fn click(w: &Workspace, dir: &std::path::Path, step: &mut usize, widget: &gtk::Widget) {
     send(
@@ -891,9 +894,7 @@ fn native_workspace_switcher_input() {
         &w,
         &dir,
         &mut step,
-        find_button(w.window.upcast_ref(), "Cancel")
-            .unwrap()
-            .upcast_ref(),
+        dialog_button(&w, "Cancel").unwrap().upcast_ref(),
     );
     assert_eq!(
         durable_layout(&state(&w).workspace.layout),
@@ -1071,9 +1072,7 @@ fn native_workspace_switcher_input() {
         &w,
         &dir,
         &mut step,
-        find_button(w.window.upcast_ref(), "Cancel")
-            .unwrap()
-            .upcast_ref(),
+        dialog_button(&w, "Cancel").unwrap().upcast_ref(),
     );
     let saved_order = manager.workspace_ids();
     let custom_button = find_named(

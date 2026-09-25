@@ -14790,7 +14790,11 @@ fn native_named_workspace_manager_library_and_history() {
                     entry.downcast::<gtk::Entry>().unwrap().set_text(name);
                 }
                 if let Some(confirm) = &confirm {
-                    let Some(button) = find_button(w.window.upcast_ref(), confirm) else {
+                    let Some(button) = w
+                        .window
+                        .visible_dialog()
+                        .and_then(|dialog| find_button(dialog.upcast_ref(), confirm))
+                    else {
                         return glib::ControlFlow::Continue;
                     };
                     // Match a real confirmation click: move focus off the name
