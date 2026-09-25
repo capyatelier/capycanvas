@@ -10522,6 +10522,23 @@ fn native_cursor_vectors() {
         Some("none")
     );
     let mut report = Vec::new();
+    let hover = || PenEvent {
+        device_id: 123,
+        sequence: 1,
+        timestamp_ns: 1_000_000_000_000,
+        view_revision: state(&w).camera.revision,
+        surface_position: Point {
+            x: 600.0 * scale,
+            y: 460.0 * scale,
+        },
+        pressure: 0.0,
+        tilt_radians: [0.3, 0.6],
+        twist_radians: 0.5,
+        distance: 0.0,
+        phase: PenPhase::Hover,
+        tool: ToolKind::Pen,
+        flags: SampleFlags::PRIMARY,
+    };
     for (preset, label) in [
         (layer_core::DefaultBrushPreset::GPen, "round"),
         (layer_core::DefaultBrushPreset::TexturedFlat, "flat"),
@@ -10530,23 +10547,7 @@ fn native_cursor_vectors() {
         w.dispatch(UiAction::SelectBrush { id: preset as u32 });
         w.dispatch(UiAction::SetBrushSize { value: 512.0 });
         pump(150);
-        w.cursor_input(Some(PenEvent {
-            device_id: 123,
-            sequence: 1,
-            timestamp_ns: 1_000_000_000_000,
-            view_revision: state(&w).camera.revision,
-            surface_position: Point {
-                x: 600.0 * scale,
-                y: 460.0 * scale,
-            },
-            pressure: 0.0,
-            tilt_radians: [0.3, 0.6],
-            twist_radians: 0.5,
-            distance: 0.0,
-            phase: PenPhase::Hover,
-            tool: ToolKind::Pen,
-            flags: SampleFlags::PRIMARY,
-        }));
+        w.cursor_input(Some(hover()));
         let shape = w
             .gpu
             .borrow_mut()
@@ -10606,6 +10607,7 @@ fn native_cursor_vectors() {
     capture_reference(&w, "../../artifacts/ui/cursors/gtk-input-settings.png", 1.0);
     w.dispatch(UiAction::CloseSettings);
     pump(200);
+    w.cursor_input(Some(hover()));
     for kind in [PointerKind::Mouse, PointerKind::Pen] {
         for end in [ContactPhase::Up, ContactPhase::Cancel] {
             let contact = |phase| w.interact(UiInput::Pointer {
