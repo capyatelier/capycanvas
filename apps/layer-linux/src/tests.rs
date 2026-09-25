@@ -85,6 +85,15 @@ fn pump(ms: u64) {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+fn next_workspace_frame(w: &Workspace) {
+    let clock = w.surface.frame_clock().unwrap();
+    let frame = clock.frame_counter();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while clock.frame_counter() == frame {
+        assert!(Instant::now() < deadline, "workspace frame");
+        pump(5);
+    }
+}
 fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
 }
@@ -1478,6 +1487,7 @@ fn native_collapsed_drop_and_resize() {
                 _ => col.empty.y + 20.,
             };
             w.workspace_drag_input(ContactPhase::Move, [x, y], None);
+            next_workspace_frame(&w);
             let hint = w
                 .drop_hint
                 .borrow()
@@ -1495,9 +1505,9 @@ fn native_collapsed_drop_and_resize() {
                     ),
                     _ => matches!(
                         hint.target,
-                        DockTarget::Split {
-                            group: 6,
-                            edge: Edge::Bottom
+                        DockTarget::StackColumn {
+                            column: 4,
+                            before: false
                         }
                     ),
                 },
@@ -1784,6 +1794,7 @@ fn native_collapsed_canvas_side_drop() {
                 c.bounds.y + c.bounds.height * 0.5,
             ];
             w.workspace_drag_input(ContactPhase::Move, point, None);
+            next_workspace_frame(&w);
             assert_eq!(
                 w.drop_hint.borrow().as_ref().unwrap().target,
                 DockTarget::BesideBand { band: band.id }
