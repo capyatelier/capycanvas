@@ -13,7 +13,7 @@ struct ApplicationMenus: View {
     }
     static func naturalWidth(_ menus: [JSON], textSize: Double) -> CGFloat {
         menus.reduce(0) { $0 + EditorTextMetrics.width($1["label"].string, size: textSize, weight: .medium) + 16 }
-            + 8 + 2 * CGFloat(max(0, menus.count - 1))
+            + 10 + 2 * CGFloat(max(0, menus.count - 1))
     }
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -28,7 +28,7 @@ struct ApplicationMenus: View {
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.padding(4).frame(height: 34).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
+            }.padding(5).frame(height: 36).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
                 .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)

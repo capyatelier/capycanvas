@@ -372,7 +372,7 @@ private struct ToolOptionsComponent: View {
         let sizes = options.map { fieldSize($0, tile: tileSize) }
         let layout = ToolbarUI.cached(["type": "options_layout", "width": size.width, "height": size.height,
             "axis": vertical ? "vertical" : "horizontal", "sizes": sizes.map { [$0.width, $0.height] },
-            "button": style["size"].raw, "gap": vertical ? 2 : 10])
+            "button": style["size"].raw, "gap": vertical ? style["gap"].number : 10])
         ZStack(alignment: .topLeading) {
             Color.clear.contentShape(Rectangle())
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .tile, context: item, canDrag: false))

@@ -40,7 +40,7 @@ extension XCTestCase {
         let clock = app.staticTexts["system-clock"]
         let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
         let sceneID = scenes.firstMatch.identifier
-        let points = [CGPoint(x: 0.45, y: 0.5), CGPoint(x: 0.5, y: 0.6), CGPoint(x: 0.6, y: 0.55)]
+        let points = [CGPoint(x: 0.48, y: 0.55), CGPoint(x: 0.51, y: 0.58), CGPoint(x: 0.54, y: 0.6)]
         func expectPaper(blue: Bool) {
             expectation(for: NSPredicate { _, _ in
                 let samples = self.editorPixelSamples(in: app, at: points, size: 8)
