@@ -8459,7 +8459,7 @@ fn native_panel_customization() {
         let group = resolved.groups.iter().find(|g| g.active == many).unwrap();
         let tiles = &group.tiles.as_ref().unwrap().tiles;
         assert_eq!(tiles.len(), 80);
-        assert!(tiles.last().unwrap().y >= group.bounds.height - TAB_BAR_HEIGHT);
+        assert_eq!(tiles.last().unwrap().height, 0.);
         capture_reference(&w, &format!("{dir}/clipped-ribbon-{theme:?}.png"), 1.0);
         w.dispatch(UiAction::MovePanel {
             panel: many,
