@@ -81,8 +81,11 @@ macOS and iPadOS use `SquircleShape`, an `InsettableShape` with `.tile`,
 `.surface` and `.control` tokens and per-corner radii; tab, expanded-panel and
 drawer-bridge paths share `Path.squircle`. SwiftUI's continuous rounded
 rectangle is a different curve and is not used. Panel groups, collapsed
-columns, drawers and segmented controls draw the exact squircle as their fill
-and shadow, and clip content only with the fitted circular radius. Core
+columns, drawers and segmented controls draw the exact squircle as their fill,
+with a cached shadow outside it, and clip content only with the fitted circular
+radius. Tabbed groups draw their strip and body as separate squircle segments,
+and glass regions publish the same design radii with `BackdropRegion::SQUIRCLE`.
+Core
 Animation applies circular clips directly; a squircle path clip is an
 offscreen mask on every composited frame, which halved the Mac ink rate
 beside a live canvas. Clipping does not narrow SwiftUI hit testing, and

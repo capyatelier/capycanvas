@@ -6,8 +6,12 @@ struct WorkspacePanelHeader: View {
     @ObservedObject var store: EditorStore
     let group: JSON
     var drawer = false
+    var glass = false
     @Environment(\.workspaceClip) private var clip
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var navigator: Bool { group["active"].string == "navigator" }
+    private var strip: Color { glass || drawer ? .clear : palette[navigator ? "panel" : "tabbar"] }
+    private var tab: Color? { drawer || (glass && navigator) ? nil : glass ? palette.glassTab : palette["panel"] }
     var body: some View {
         HStack(spacing: 0) {
             GeometryReader { viewport in
@@ -18,12 +22,12 @@ struct WorkspacePanelHeader: View {
                     .clipped()
             }
             WorkspaceGroupGrip(store: store, group: group["id"], drawer: drawer).frame(width: 20, height: 36)
-        }.frame(height: 36).background(palette[drawer || group["active"].string == "navigator" ? "panel" : "tabbar"])
+        }.frame(height: 36).background(strip)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw]),
                 context: JSON(["kind": "group", "group": group["id"].raw])))
     }
     private func tabs(available: CGFloat) -> some View {
-        WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer, available: available)
+        WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer, available: available, fill: tab)
     }
 }
 
@@ -33,6 +37,7 @@ private struct WorkspacePanelTabs: View {
     let group: JSON
     let drawer: Bool
     let available: CGFloat
+    let fill: Color?
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var automatic: Bool {
         func style(_ node: JSON) -> String? {
@@ -62,7 +67,7 @@ private struct WorkspacePanelTabs: View {
             Button {
                 if !store.workspace.input.contact.consumeClick() { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) }
             } label: {
-                WorkspaceTabLabel(tab: tab, selected: selected, palette: palette).contentShape(Rectangle())
+                WorkspaceTabLabel(tab: tab, selected: selected, palette: palette, fill: fill).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
                 .accessibilityIdentifier((drawer ? "drawer-tab-" : "panel-tab-") + tab["id"].string)
                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -79,6 +84,7 @@ struct WorkspaceTabLabel: View {
     let tab: JSON
     let selected: Bool
     let palette: EditorPalette
+    var fill: Color?? = .none
     var body: some View {
         HStack(spacing: 6) {
             if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
@@ -86,7 +92,7 @@ struct WorkspaceTabLabel: View {
         }.padding(.horizontal, 8)
             .frame(width: tab["tab"]["show_name"].bool ? nil : 36, height: 36)
             .fixedSize(horizontal: true, vertical: false)
-            .background { if selected { WorkspaceTabShape().fill(palette["panel"]) } }
+            .background { if selected, let color = fill ?? palette["panel"] { WorkspaceTabShape().fill(color) } }
     }
 }
 

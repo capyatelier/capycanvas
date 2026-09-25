@@ -164,6 +164,23 @@ struct SettingsView: View {
                         .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
                 }
             }.padding(.vertical, 6)
+        } else if kind["presentation"]["type"].string == "circles" {
+            let dark = store.state["theme"].string == "dark"
+            HStack(spacing: 10) {
+                Text(row["title"].string).layoutPriority(1)
+                Spacer(minLength: 8)
+                ForEach(kind["options"].array.indices, id: \.self) { index in
+                    let selected = index == Int(kind["selected"].number)
+                    Button { edit(row, index) } label: {
+                        TransparencyCircle(alpha: kind["presentation"]["alphas"][index][dark ? 1 : 0].number, dark: dark, selected: selected)
+                            .frame(width: 28, height: 28).contentShape(Circle())
+                    }.buttonStyle(.plain)
+                        .overlay { if selected { Circle().strokeBorder(Color.primary, lineWidth: 2).padding(-4).allowsHitTesting(false) } }
+                        .help(kind["options"][index].string).accessibilityLabel(kind["options"][index].string)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                        .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
+                }
+            }
         } else {
             Picker(row["title"].string, selection: Binding(get: { Int(kind["selected"].number) }, set: { edit(row, $0) })) {
                 ForEach(kind["options"].array.indices, id: \.self) { index in
@@ -306,3 +323,40 @@ private struct CenteredFlow: Layout {
     }
 }
 
+
+private struct TransparencyCircle: View {
+    let alpha: Double
+    let dark: Bool
+    let selected: Bool
+    var body: some View {
+        Canvas { context, size in
+            let rect = CGRect(origin: .zero, size: size), circle = Path(ellipseIn: rect)
+            context.clip(to: circle)
+            if alpha < 1 {
+                let cell = size.width / 4
+                for row in 0..<4 {
+                    for column in 0..<4 {
+                        context.fill(Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell)),
+                            with: .color(Color(white: (row + column) % 2 == 0 ? 0.94 : 0.28)))
+                    }
+                }
+            }
+            context.fill(circle, with: .color(Color(white: dark ? 0.55 : 0.80).opacity(alpha)))
+            if alpha < 1 {
+                let center = CGPoint(x: size.width * 0.32, y: size.height * 0.26)
+                context.fill(circle, with: .radialGradient(Gradient(colors: [.white.opacity(min(1, 0.25 + 1.2 * (1 - alpha))), .white.opacity(0)]),
+                    center: center, startRadius: 0, endRadius: size.width * 0.5))
+            }
+            context.stroke(circle, with: .color(Color(white: 0.5).opacity(0.45)), lineWidth: 1)
+            if selected {
+                var check = Path()
+                check.move(to: CGPoint(x: size.width * 0.3, y: size.height * 0.52))
+                check.addLine(to: CGPoint(x: size.width * 0.44, y: size.height * 0.66))
+                check.addLine(to: CGPoint(x: size.width * 0.71, y: size.height * 0.36))
+                let caps = { (width: CGFloat) in StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round) }
+                context.stroke(check, with: .color(Color(white: dark ? 0 : 1).opacity(0.45)), style: caps(size.width * 4 / 28))
+                context.stroke(check, with: .color(Color(white: dark ? 1 : 0.18)), style: caps(size.width * 2 / 28))
+            }
+        }
+    }
+}

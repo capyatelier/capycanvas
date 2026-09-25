@@ -74,8 +74,7 @@ Title-bar controls use the chosen base at 75% opacity in both themes, and the
 workspace switcher's well uses the tab-bar color at 75%. Joined bars and Menu
 Labels share one surface behind their members; standalone controls carry their
 own. Hover, press and selection feedback composite over this surface. Header text
-has no outline; no host adds a toolkit backdrop blur. macOS and iPadOS use the
-translucent fill directly. GTK, Web and Android follow the
+has no outline; no host adds a toolkit backdrop blur. Every host follows the
 [panel transparency](panel-transparency.md) setting instead: title-bar controls
 are opaque when it is Off and frosted glass, blurred in the canvas renderer,
 otherwise.

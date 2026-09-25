@@ -122,9 +122,10 @@ The [toolbar component capture](../../tools/visual/README.md#toolbar-components)
 compares all five styles with Chrome using actual SwiftUI controls and shared
 vector assets, without launching an editor or automating window/menu controls.
 Component evidence supplements the full-editor visual and physical input gates.
-Icon, toolbar and tool-choice selections use the shared palette's opaque
-`selection` role (title-bar tools and the switcher use `header_selection`) and one
-disabled-opacity step over the whole button. Both roles follow the Accent color
+Icon, toolbar and tool-choice selections use the shared palette's `selection`
+role (title-bar tools and the switcher use `header_selection`), in its glass
+variant inside panels, columns and drawers, and one disabled-opacity step over
+the whole button. Both roles follow the Accent color
 setting; on Mac an unset accent follows the system accent. The [control-color matrix](../../tools/visual/README.md#editor-control-colors)
 compares enabled/selected combinations in both themes and retains full raw
 pixel differences; UIKit rendering and full-editor acceptance remain separate.
@@ -640,9 +641,10 @@ fullscreen notifications. Neither observation requests an iPad fullscreen change
 Small, Medium and Large use shared tile/icon dimensions. Adjacent icon controls
 join the shared geometry's bars with no gaps; separate items keep six-point gaps.
 Bars, menu labels, the title or drawing-tab strip, clock, battery and status
-readouts use the canvas surround at 75% opacity with the tile's squircle radius,
-and the selector's well uses the tab-bar color at 75%; gaps retain the live
-canvas. Color shows the live foreground/background paints as overlapping circles. The retired text/icon halo renderer is removed. See the
+readouts use the [Panel transparency](../../docs/ui/panel-transparency.md) chip
+with the tile's squircle radius, and the selector's well uses the switcher
+glass: opaque at Off, and frosted over artwork at the other levels. Gaps retain
+the live canvas. Color shows the live foreground/background paints as overlapping circles. The retired text/icon halo renderer is removed. See the
 [header comparison](../../tools/visual/README.md#complete-header-components)
 for native/Web captures and recorded host differences.
 

@@ -427,7 +427,7 @@ private struct ToolOptionsMore: View {
             SharedIcon(name: "more", size: CGFloat(panel["tile_icon_size"].number))
                 .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(joinedEdge: joined,
-            drawerBackground: joined == nil ? nil : EditorPalette(source: store.state["palette"])["panel"], corner: .half))
+            drawerBackground: joined == nil ? nil : .clear, corner: .half))
             .accessibilityLabel("More tool options").help("More tool options")
             .accessibilityIdentifier("toolbar-more-\(tile["id"].uint)")
             .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .tile, context: item))
@@ -472,6 +472,7 @@ private struct ToolOptionField: View {
 
 /// Connected icon choices shared by Tool Options and the Tool settings panel.
 struct SegmentedChoiceBar: View {
+    @Environment(\.editorPalette) private var surface
     let choice: JSON
     let prefix: String
     let height: CGFloat?
@@ -487,7 +488,7 @@ struct SegmentedChoiceBar: View {
             Button { send(item) } label: {
                 SharedIcon(name: item["icon"].string, size: iconSize)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(item["selected"].bool ? palette.active : palette["input"],
+                    .background(item["selected"].bool ? surface.active : palette["input"],
                         in: shape.segment(index, of: items.count, stacked: stacked))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain)

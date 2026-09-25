@@ -19,6 +19,7 @@ struct BrushColorButton: View {
 }
 
 struct PanelControls: View {
+    @Environment(\.editorPalette) private var surface
     @ObservedObject var store: EditorStore
     let panel: JSON
     var scrollable = true
@@ -120,7 +121,7 @@ struct PanelControls: View {
                         Circle().frame(width: min(27, 2 + sqrt(size) * 1.2), height: min(27, 2 + sqrt(size) * 1.2)).frame(height: 28)
                         Text(String(Int(size))).frame(height: lineHeight)
                     }.padding(2).frame(maxWidth: .infinity).frame(height: 36 + lineHeight)
-                        .background(size == store.state["brush"]["diameter"].number ? palette.active : Color.clear, in: SquircleShape.control)
+                        .background(size == store.state["brush"]["diameter"].number ? surface.active : Color.clear, in: SquircleShape.control)
                 }.buttonStyle(.plain).padding(3)
             }
         }

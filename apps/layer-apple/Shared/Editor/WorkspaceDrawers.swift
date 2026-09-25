@@ -6,8 +6,9 @@ struct WorkspaceCollapsedColumns: View {
         ForEach(store.snapshot["layout"]["collapsed"].array, id: \.workspaceColumnID) { column in
             ForEach(column["open"]["connections"].array.indices, id: \.self) { index in
                 let connection = column["open"]["connections"][index]
-                DrawerBridge(connection: connection[1]).fill(EditorPalette(source: store.state["palette"])["panel"])
+                DrawerBridge(connection: connection[1]).fill(EditorPalette(source: store.state["palette"]).glassPanel)
                     .placed(connection[1]["bounds"]).allowsHitTesting(false).zIndex(159)
+                    .modifier(GlassConnection(key: "column:\(column["id"].uint):\(connection[0].string)", connection: connection[1]))
                     .accessibilityIdentifier("column-connection-\(column["id"].uint)-\(connection[0].string)")
             }
             WorkspaceCollapsedColumn(store: store, column: column).placed(column["bounds"])
@@ -72,9 +73,10 @@ private struct WorkspaceCollapsedColumn: View {
                     context: JSON(["kind": "column", "column": column["id"].raw]), openOnTap: true))
                 .placed(column["grip"].relative(to: base)).accessibilityIdentifier("column-grip-\(column["id"].uint)")
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect, fill: palette["panel"],
-                shadow: 6, extra: openSources))
-            .accessibilityElement(children: .contain).accessibilityIdentifier("collapsed-column-\(column["id"].uint)")
+            .environment(\.editorPalette, palette.glassy)
+            .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect,
+                cuts: column["open"]["connections"].array.map { $0[1]["bounds"].rect }, fill: palette.glassPanel,
+                shadow: 6, extra: openSources, identifier: "collapsed-column-\(column["id"].uint)"))
     }
 
 }
@@ -98,7 +100,10 @@ private struct WorkspaceContentDrawer: View {
         let placement = drawer.geometry["placement"], connection = drawer.geometry["connection"]
         if !placement.isNull {
             ZStack(alignment: .topLeading) {
-                if !connection.isNull { DrawerBridge(connection: connection).fill(palette["panel"]).placed(connection["bounds"]) }
+                if !connection.isNull {
+                    DrawerBridge(connection: connection).fill(palette.glassPanel).placed(connection["bounds"])
+                        .modifier(GlassConnection(key: "drawer:" + drawer.id, connection: connection))
+                }
                 ZStack(alignment: .topLeading) {
                     ForEach(placement["columns"].array.indices, id: \.self) { index in
                         let bounds = placement["columns"][index]
@@ -125,8 +130,11 @@ private struct WorkspaceContentDrawer: View {
                         }.placed(bounds)
                     }
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
+                    .environment(\.editorPalette, palette.glassy)
                     .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: placement["bounds"].rect,
-                        fill: palette["panel"], shadow: 12, joined: connection["square_corners"], excluding: drawer.id))
+                        cuts: connection.isNull ? [] : [connection["bounds"].rect],
+                        fill: palette.glassPanel, shadow: 12, joined: connection["square_corners"], excluding: drawer.id,
+                        identifier: drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id))
                     .modifier(NavigatorReveal())
                     .background(GeometryReader { body in
                         Color.clear.preference(key: ColumnDrawerMeasurements.self,
@@ -134,8 +142,6 @@ private struct WorkspaceContentDrawer: View {
                                 ? [drawer.model["tabs"]["group"].uint: body.frame(in: .named("editor-workspace"))] : [:])
                     })
                     .placed(placement["bounds"])
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id)
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 // This view observes the drawer itself. Reading interactive in
                 // the parent list left a reopened drawer with stale disabled
@@ -181,17 +187,25 @@ private struct DrawerHeights: PreferenceKey {
 private struct DrawerContainerSurface: ViewModifier {
     @ObservedObject var drawers: ContentDrawersPresentation
     let bounds: CGRect
+    var cuts: [CGRect] = []
     let fill: Color
     let shadow: CGFloat
     var joined = JSON()
     var excluding: String?
     var extra: [DrawerSource] = []
+    let identifier: String
     func body(content: Content) -> some View {
         let sources = drawers.sources.filter { $0.key != excluding }.map(\.value) + extra
         let shape = SquircleShape(SquircleShape.surfaceRadius,
             square: DrawerSource.square(bounds, radius: SquircleShape.surfaceRadius, sources: sources, joined: joined))
-        content.clipShape(shape.fittedClip)
-            .background { shape.fill(fill).shadow(color: .black.opacity(0.22), radius: shadow, y: 2) }
+        ZStack(alignment: .topLeading) {
+            OutsideShadow(shape: shape, opacity: 0.22, radius: shadow, y: 2,
+                cuts: cuts.map { $0.offsetBy(dx: -bounds.minX, dy: -bounds.minY) })
+            content.clipShape(shape.fittedClip)
+                .background { shape.fill(fill) }
+                .modifier(GlassRegistration(shape: shape))
+                .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
+        }
     }
 }
 private struct DrawerBridge: Shape {

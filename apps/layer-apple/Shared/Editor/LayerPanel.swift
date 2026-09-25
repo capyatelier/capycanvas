@@ -198,6 +198,7 @@ private struct LayerButton: View {
 }
 
 private struct LayerRow: View {
+    @Environment(\.editorPalette) private var surface
     @ObservedObject var store: EditorStore
     let layer: JSON
     @ObservedObject var previews: LayerThumbnails
@@ -248,7 +249,7 @@ private struct LayerRow: View {
                     .accessibilityLabel("Move layer").accessibilityIdentifier("layer-grip-\(id)")
             }
         }.padding(.horizontal, 6).padding(.vertical, 2).frame(minHeight: 40)
-            .background((layer["selected"].bool ? palette.active : Color.clear)
+            .background((layer["selected"].bool ? surface.active : Color.clear)
                 .contentShape(Rectangle()).onTapGesture {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
                 })

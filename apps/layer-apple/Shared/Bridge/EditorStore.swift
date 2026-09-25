@@ -59,6 +59,7 @@ import SwiftUI
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
     lazy var strokeRecording = StrokeRecording(store: self)
+    lazy var glass = GlassRegistry(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
     var displayColors: JSON {

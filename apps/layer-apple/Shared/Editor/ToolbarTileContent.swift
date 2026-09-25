@@ -13,7 +13,7 @@ struct ToolbarTileButton: View {
             ToolbarTileContent(panel: panel, tile: tile, palette: palette, colors: colors)
                 .contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool, joinedEdge: drawerOpen ? drawerDirection : nil,
-            drawerBackground: drawerOpen ? palette["panel"] : nil, corner: .half))
+            drawerBackground: drawerOpen ? .clear : nil, corner: .half))
             .foregroundStyle(palette["text"])
             .disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.36)
     }

@@ -41,7 +41,7 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn transparency_preference(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios)
     }
 }
 
@@ -1763,6 +1763,23 @@ mod copy_tests {
                 PreferenceKind::Text { .. }
             ));
         }
+    }
+
+    #[test]
+    fn panel_transparency_rows_follow_the_presenting_hosts() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows, Platform::Generic] {
+            let row = Settings::default().pages(platform)[0].groups.iter()
+                .flat_map(|g| g.rows.clone()).find(|r| r.id == PreferenceId::Transparency);
+            assert_eq!(row.is_some(), platform.transparency_preference(), "{platform:?}");
+            if let Some(row) = row {
+                let json = serde_json::to_value(&row.kind).unwrap();
+                assert_eq!(json["presentation"]["type"], "circles");
+                assert_eq!(json["presentation"]["alphas"].as_array().unwrap().len(), 4);
+                assert_eq!(json["selected"], 1, "Low is the default");
+            }
+        }
+        assert!(Platform::Mac.transparency_preference() && Platform::Ios.transparency_preference());
+        assert!(!Platform::Windows.transparency_preference());
     }
 
     #[test]

@@ -96,19 +96,37 @@ private struct WorkspacePanelGroup: View {
         !group["tiles"].isNull && !group["tabs_visible"].bool ? active["tile_corner_radius"].number : SquircleShape.surfaceRadius
     }
     var body: some View {
-        Group {
-            if expansion.isNull {
-                let sources = Array(store.contentDrawers.sources.values)
-                let shape = SquircleShape(radius, square: DrawerSource.square(group["bounds"].rect, radius: radius, sources: sources))
-                content.clipShape(shape.fittedClip)
-                    .background { shape.fill(palette["panel"]).shadow(color: .black.opacity(0.16), radius: 4, y: 2) }
-            } else {
-                content.background(palette["panel"])
-                    .clipShape(WorkspacePanelShape(expansion: expansion, radius: radius, square: []))
-                    .shadow(color: .black.opacity(0.4), radius: 12, y: 8)
+        let sources = Array(store.contentDrawers.sources.values)
+        let square = DrawerSource.square(group["bounds"].rect, radius: radius, sources: sources)
+        let shape = SquircleShape(radius, square: square)
+        ZStack(alignment: .topLeading) {
+            if expansion.isNull { OutsideShadow(shape: shape, opacity: 0.16, radius: 4, y: 2) }
+            Group {
+                if expansion.isNull {
+                    content.clipShape(shape.fittedClip)
+                        .environment(\.editorPalette, palette.glassy)
+                        .background { surface(radius: radius, square: square) }
+                        .modifier(GlassRegistration(shape: shape))
+                } else {
+                    content.background(palette["panel"])
+                        .clipShape(WorkspacePanelShape(expansion: expansion, radius: radius, square: []))
+                        .shadow(color: .black.opacity(0.4), radius: 12, y: 8)
+                }
+            }.modifier(NavigatorReveal())
+                .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
+        }
+    }
+    @ViewBuilder private func surface(radius: CGFloat, square: [Bool]) -> some View {
+        if group["tabs_visible"].bool && group["active"].string != "navigator" {
+            let strip = SquircleShape(topLeading: square[0] ? 0 : radius, topTrailing: square[1] ? 0 : radius)
+            let body = SquircleShape(bottomTrailing: square[2] ? 0 : radius, bottomLeading: square[3] ? 0 : radius)
+            VStack(spacing: 0) {
+                strip.fill(palette.glassStrip).frame(height: 36)
+                body.fill(palette.glassPanel)
             }
-        }.modifier(NavigatorReveal())
-            .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
+        } else {
+            SquircleShape(radius, square: square).fill(palette.glassPanel)
+        }
     }
     private var content: some View {
         Group {
@@ -123,7 +141,7 @@ private struct WorkspacePanelGroup: View {
     }
     private func preview(tiles: JSON) -> some View {
         VStack(spacing: 0) {
-            if group["tabs_visible"].bool { WorkspacePanelHeader(store: store, group: group) }
+            if group["tabs_visible"].bool { WorkspacePanelHeader(store: store, group: group, glass: expansion.isNull) }
             if !tiles.isNull { WorkspaceToolbar(store: store, panel: active, geometry: tiles, vertical: group["axis"].string == "vertical") }
             else {
                 PanelControls(store: store, panel: active)
