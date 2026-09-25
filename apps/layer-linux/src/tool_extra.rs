@@ -50,17 +50,16 @@ impl ExtraField {
         else {
             unreachable!("additional tool choice")
         };
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let title = gtk::Label::new(Some(label));
-        title.set_xalign(0.);
-        root.append(&title);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.update_property(&[gtk::accessible::Property::Label(label)]);
         let grid = gtk::FlowBox::builder()
-            .column_spacing(8)
+            .column_spacing(4)
             .homogeneous(true)
             .min_children_per_line(1)
             .max_children_per_line(2)
             .selection_mode(gtk::SelectionMode::None)
             .build();
+        grid.add_css_class("tool-choices");
         let updating = Rc::new(Cell::new(false));
         let mut buttons: Vec<gtk::CheckButton> = Vec::new();
         for (index, item) in items.iter().enumerate() {
@@ -68,7 +67,7 @@ impl ExtraField {
                 .property("label", item.label)
                 .build()
                 .upcast::<gtk::CheckButton>();
-            check.set_size_request(-1, 36);
+            check.set_size_request(-1, 30);
             check.set_widget_name(&format!("tool-choice-{id}-{index}"));
             if let Some(first) = buttons.first() {
                 check.set_group(Some(first));

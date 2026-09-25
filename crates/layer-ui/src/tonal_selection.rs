@@ -398,7 +398,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .into_iter()
                 .map(|index| ToolSetItem {
                     label: TonalOptions::NAMES[index],
-                    icon: "color-select",
+                    icon: "tonal-select",
                     action: UiAction::Tonal {
                         action: TonalAction::Preset { index },
                     },

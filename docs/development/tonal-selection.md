@@ -5,6 +5,10 @@ selections and saved selection masks. The shared Rust model supplies the same
 choice, numeric and selection-mode controls to the GTK panel and Tool Options bar.
 The panel presents the tones as a visible radio group; a narrow bar uses a compact
 native choice and offers the complete radio group in its overflow panel.
+GTK uses compact radio rows without a separate heading, and a reusable numeric
+row with the label, slider and editable value on one line. The Select command
+list also uses compact rows so it does not force the adjacent panel to be taller.
+The shared `tonal-select` icon shows tonal bands inside a dashed selection border.
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
 a custom interval. The result applies immediately. **Softness** and **Feather**

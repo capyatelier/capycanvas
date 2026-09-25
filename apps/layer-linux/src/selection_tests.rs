@@ -654,6 +654,15 @@ fn native_tonal_selection_input() {
     d.number(&d.named("tool-setting-tonal_softness"),"50");wait_tonal(&d);
     d.number(&d.named("tool-setting-selection_feather"),"2");wait_tonal(&d);
     let refined=selection(&d).unwrap();
+    let settings_height=|d:&Driver| {
+        let panel=d.named("drawer-panel-ToolSettings");
+        let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
+        let feather=d.named("tool-setting-selection_feather").compute_bounds(&panel).unwrap();
+        feather.y()+feather.height()-modes.y()
+    };
+    let preset_height=settings_height(&d);
+    assert!(preset_height<=250.,"preset controls use {preset_height}px");
+    eprintln!("Tonal preset: controls {preset_height}px; drawer {}px",d.named("tool-drawer").height());
     assert_shared_icons(&d.named("tool-drawer"));
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-presets.png")).unwrap();
     d.click_name(&opener);
@@ -665,6 +674,9 @@ fn native_tonal_selection_input() {
     assert_eq!(state(&d.w).tool_settings.len(),4,"Custom adds just two bounds");
     assert!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value < -5.);
     assert!(d.named("tool-choice-tonal-tones-7").downcast_ref::<gtk::CheckButton>().unwrap().is_active());
+    let custom_height=settings_height(&d);
+    assert!(custom_height<=320.,"custom controls use {custom_height}px");
+    eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
     d.key(b'q' as u32);wait_tonal(&d);
     assert!(state(&d.w).layer_tools.quick_mask);

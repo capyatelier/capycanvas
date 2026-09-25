@@ -4569,7 +4569,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
             let mut edges=self.selection_tools.options.edge_controls();
-            for field in &mut edges {field.group="";}
+            for field in &mut edges {
+                field.group="";
+                if self.tonal_active() {field.label="Feather";}
+            }
             self.state.tool_settings.extend(edges);
         }
         self.state.tool_extra=self.tonal_extra();

@@ -142,6 +142,10 @@ impl ToolSet {
         }
         let rebuild = !same(&previous.subtools, &view.subtools);
         if rebuild {
+            // Short selection command rows must not set a tall minimum for
+            // the adjacent settings panel.
+            let selection = view.subtools.iter().any(|i| matches!(i.action,
+                UiAction::Invoke {command: layer_ui::CommandId::TonalSelect}));
             while let Some(child) = self.list.first_child() {
                 self.list.remove(&child);
             }
@@ -165,7 +169,7 @@ impl ToolSet {
                     preview
                 });
                 if preview.is_none() {
-                    button.set_size_request(-1, TOOL_ROW_HEIGHT);
+                    button.set_size_request(-1, if selection {32} else {TOOL_ROW_HEIGHT});
                     if let UiAction::Invoke { command } = item.action {
                         button.set_widget_name(&format!("tool-choice-{command:?}"));
                     }
@@ -257,8 +261,17 @@ impl ToolSettings {
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
         let picking = state.layer_tools.tool.picks_color();
+        let compact = state.layer_tools.tool.selection_tool() == Some(layer_ui::SelectionTool::Tonal);
         self.form.set_visible(!picking);
-        self.extra.set_visible(!picking);
+        self.extra.set_visible(!picking && !state.tool_extra.is_empty());
+        // Use one outer inset and a small gap between sections, instead of
+        // stacking each section's top and bottom body margins.
+        let inset=layer_ui::PANEL_CONTENT_INSET as i32;
+        self.mode_container.set_margin_bottom(if compact {4} else {inset});
+        self.extra.set_margin_top(if compact {0} else {inset});
+        self.extra.set_margin_bottom(if compact {4} else {inset});
+        self.form.set_margin_top(if compact {0} else {inset});
+        self.form.set_spacing(if compact {2} else {6});
         self.mode_container.set_visible(state.layer_tools.tool.selection_tool().is_some());
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
@@ -300,6 +313,8 @@ impl ToolSettings {
             fields.clear();
             actions.clear();
             let mut group = "";
+            let inline_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+            let inline_values=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             for control in controls {
                 if group != control.group {
                     group = control.group;
@@ -313,7 +328,9 @@ impl ToolSettings {
                         self.form.append(&title);
                     }
                 }
-                let input = NumberControl::new(control.numeric.clone(), control.label, "");
+                let input = if compact {
+                    NumberControl::labeled_inline(control.numeric.clone(), control.label, &inline_labels, &inline_values)
+                } else { NumberControl::new(control.numeric.clone(), control.label, "") };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(

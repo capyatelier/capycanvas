@@ -76,6 +76,25 @@ impl NumberControl {
     pub fn inline(spec: NumericControl, title: &str) -> Self {
         Self::build(spec, title, "", true, false)
     }
+    /// Panel row with its label, slider and editable value on one line.
+    pub fn labeled_inline(
+        spec: NumericControl,
+        title: &str,
+        labels: &gtk::SizeGroup,
+        values: &gtk::SizeGroup,
+    ) -> Self {
+        let control = Self::inline(spec, title);
+        let label = gtk::Label::new(Some(title));
+        label.set_xalign(0.);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(14);
+        label.set_tooltip_text(Some(title));
+        let row=control.first_child().and_downcast::<gtk::Box>().unwrap();
+        labels.add_widget(&label);
+        values.add_widget(&row.last_child().unwrap());
+        row.prepend(&label);
+        control
+    }
     /// Compact editable value for grouped components (e.g. a color wheel).
     pub fn value_only(spec: NumericControl, title: &str) -> Self {
         let control = Self::inline(spec, title);
