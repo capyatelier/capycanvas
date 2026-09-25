@@ -1013,9 +1013,14 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
     for preset in [layer_ui::WorkspacePreset::Illustrator,layer_ui::WorkspacePreset::Photographer] {
         let mut workspace=state(&w).workspace;
         workspace.layout=preset.layout(layer_ui::Platform::Gtk);
+        let proof=workspace.layout.panel_group(Panel::Proof).unwrap();
+        assert_eq!(workspace.layout.panel_group(Panel::Navigator),Some(proof));
+        if workspace.layout.collapsed_column_for_group(proof).is_some() {
+            workspace.layout.set_column_collapsed(proof,false,[1600.,1000.]).unwrap();
+        }
         w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});pump(200);
         invoke(&w,CommandId::SdrRendition);pump(300);
-        assert_eq!(state(&w).workspace.layout.panel_group(Panel::Proof),state(&w).workspace.layout.panel_group(Panel::Color));
+        assert_eq!(state(&w).workspace.layout.panel_group(Panel::Proof),Some(proof));
         assert!(w.window.visible_dialog().is_none());
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
