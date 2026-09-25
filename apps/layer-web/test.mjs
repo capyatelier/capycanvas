@@ -476,7 +476,7 @@ try {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {
-    await checkPreferences({ call, evaluate, settle });
+    await checkPreferences({ call, evaluate, settle, errors });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--parity")) {
     await checkParity({ call, evaluate, settle });

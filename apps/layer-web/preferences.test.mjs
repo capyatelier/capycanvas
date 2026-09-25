@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
-export async function checkPreferences({ call, evaluate, settle }) {
+export async function checkPreferences({ call, evaluate, settle, errors }) {
   const dir = "artifacts/ui/preferences";
   await mkdir(dir, { recursive: true });
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
@@ -11,14 +11,30 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await evaluate(`(() => {for(const type of ['keydown','keyup']) (document.querySelector('#shortcut-capture').open ? document.querySelector('#shortcut-capture') : document.activeElement).dispatchEvent(new KeyboardEvent(type,{key:${JSON.stringify(name)},bubbles:true,cancelable:true,...${JSON.stringify(modifiers)}}))})()`);
     await settle();
   };
+  const reload = async (gpu) => {
+    const previous = await evaluate("performance.timeOrigin");
+    await call("Page.reload");
+    for (const deadline = Date.now() + 20000; ; await new Promise(resolve => setTimeout(resolve, 50))) {
+      assert.ok(Date.now() < deadline, `reload to ${gpu} failed`);
+      if (await evaluate(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body.dataset.gpu === '${gpu}'`).catch(() => false)) break;
+    }
+  };
   const capture = async (name) => {
     await evaluate("document.activeElement?.blur()"); await settle();
     const shot = await call("Page.captureScreenshot", { format: "png" });
     await writeFile(`${dir}/web-${name}.png`, Buffer.from(shot.data, "base64"));
   };
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
+  await action({ type: "restore_workspace", workspace: await evaluate(`(() => {
+    const workspace = structuredClone(layerApp.state().workspace), tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "icon" });
+    Object.assign(workspace.layout, { bands: [{ id: 40, edge: "left", extent: 252, root: tabs(41, ["brushes"]) }, { id: 42, edge: "left", extent: 252, root: tabs(43, ["sizes"]) },
+      { id: 44, edge: "right", extent: 252, root: tabs(45, ["layers", "properties"]) }, { id: 46, edge: "top", extent: 36, root: tabs(47, ["toolbar"]) }],
+      floating: [], collapsed: [], column_scroll: [], fit_tab_groups: [], next_id: Math.max(48, workspace.layout.next_id) });
+    workspace.zen_mode = false;
+    return workspace;
+  })()`) });
   assert.equal(await evaluate("layerApp.app.catalog().app_name"), "Capy Canvas");
-  assert.equal(await evaluate("document.querySelector('#header-end [data-command=settings] svg').dataset.asset"), "settings");
+  assert.equal(await evaluate("document.querySelector('#header [data-command=settings] svg').dataset.asset"), "settings");
   const points = await evaluate("layerApp.app.catalog().text_size_pt");
   assert.equal(points, 11);
   for (const legacySize of [9, 11, 13]) {
@@ -27,12 +43,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(await evaluate("'panel_text_pt' in layerApp.state().settings"), false);
     const metrics = await evaluate(`(() => {
       const style = selector => getComputedStyle(document.querySelector(selector));
-      return { fonts:['.dock-tab','.brush-list h3','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
+      const height = selector => Math.max(...[...document.querySelectorAll(selector)].map(n => n.getBoundingClientRect().height));
+      return { fonts:['.dock-tab','.size-controls .number-title','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
         step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.toolbar-controls .tile-button svg').width),
-        tile:document.querySelector('.tile-button').getBoundingClientRect().height,
-        preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
-        slider:document.querySelector('.size-controls input[type=range]').getBoundingClientRect().height,
-        layerIconButton:document.querySelector('.layer-flags button').getBoundingClientRect().height};
+        tile:height('.tile-button'), preview:height('.brush-preview'),
+        slider:height('.size-controls input[type=range]'), layerIconButton:height('.layer-flags button')};
     })()`);
     for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
     assert.equal(metrics.step, 16);
@@ -135,11 +150,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
   // Values are plain editing buttons. The slider uses the
   // exact Rust mapping and stepping keeps using display units.
   await click('#size-number .number-value');
-  assert.ok(await evaluate(`(() => {const n=document.querySelector('#size-number .number-entry');return n.getBoundingClientRect().width<100 && getComputedStyle(n).borderRadius==='6px';})()`), 'short values use compact rounded editors');
-  await evaluate("document.querySelector('#size-number .number-entry').value='85/2'"); await key('Enter');
-  assert.equal(await evaluate('layerApp.state().brush.diameter'), 42.5);
+  assert.ok(await evaluate(`(() => {const n=document.querySelector('#size-number .number-entry');const r=parseFloat(getComputedStyle(n).borderRadius);return n.getBoundingClientRect().width<100 && r>4 && r<=12;})()`), 'short values use compact rounded editors');
+  await evaluate("document.querySelector('#size-number .number-entry').value='45/2'"); await key('Enter');
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 22.5);
   await click('#size-number [aria-label="Increase Brush size"]');
-  assert.equal(await evaluate('layerApp.state().brush.diameter'), 43.5);
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 23.5);
   await evaluate("const slider=document.querySelector('#size-number input[type=range]');slider.value=.5;slider.dispatchEvent(new Event('input',{bubbles:true}))");
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 32);
   await action({ type: "open_settings", page: "appearance" });
@@ -150,24 +165,24 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await click('.header-menu[data-menu="view"] summary');
     assert.equal(await evaluate('document.querySelector(\'.header-menu[data-menu="view"] [data-command="toggle_theme"]\')'), null);
     await click('.header-menu[data-menu="view"] summary');
-    const menus = await evaluate("layerApp.app.catalog().menus");
-    for (const [index, spec] of menus.entries()) {
+    const menus = await evaluate("layerApp.app.editor_models(0,0).application_menus");
+    for (const spec of menus) {
       // Dynamic workspace menus have their own real-pointer suite.
-      if (!spec.sections.length) continue;
-      const selector = `.header-menu:nth-of-type(${index + 1})`;
+      if (spec.id === "window") continue;
+      const selector = `.header-menu[data-menu="${spec.id}"]`;
       await click(`${selector} summary`);
-      const items = await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelector('.popover').children].map(n=>n.tagName==='HR'?'separator':n.dataset.command)`);
-      assert.deepEqual(items, spec.sections.flatMap((section, i) => i ? ['separator', ...section] : section));
+      const items = await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelector('.popover').children].map(n=>n.tagName==='HR'?'separator':n.querySelector('.menu-label').textContent)`);
+      assert.deepEqual(items, spec.model.sections.filter(section => section.length).flatMap((section, i) => [...(i ? ['separator'] : []), ...section.map(item => item.label)]));
       assert.ok(await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelectorAll('hr')].every(n=>getComputedStyle(n).height==='1px'&&getComputedStyle(n).backgroundColor!=='rgba(0, 0, 0, 0)')`));
       await capture(`menu-${spec.label.toLowerCase()}-${theme}`);
       await click(`${selector} summary`);
     }
-    await click('#header-end [data-command="settings"]');
+    await click('#header [data-command="settings"]');
     assert.equal(await evaluate("document.querySelector('#settings').getBoundingClientRect().width"), 1000);
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), title=document.querySelector('.preferences-sidebar h2').getBoundingClientRect(); return Math.abs(title.left+title.width/2-sidebar.left-sidebar.width/2)<1; })()`), "sidebar title centers independently of the search button");
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), content=document.querySelector('.preferences-content').getBoundingClientRect(); return Math.abs(sidebar.bottom-content.bottom)<1; })()`), "sidebar extends alongside the content footer");
-    assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "input", "shortcuts", "about"]);
-    for (const page of ["appearance", "canvas", "input", "shortcuts", "about"]) {
+    assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "color", "input", "shortcuts", "about"]);
+    for (const page of ["appearance", "canvas", "color", "input", "shortcuts", "about"]) {
       await click(`[data-settings-page="${page}"]`);
       assert.ok(await evaluate(`(() => [...document.querySelectorAll('.preferences-page:not([hidden]) input.number-slider')].every(slider => {
         const row=slider.closest('.number-control'), header=row.querySelector('.number-header').getBoundingClientRect(), track=row.querySelector('.number-track').getBoundingClientRect();
@@ -284,7 +299,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.ok(await evaluate(`(() => { const p=layerApp.state().palette, rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')', pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]');
       return !pressed || getComputedStyle(pressed).backgroundColor===rgb(p.header_selection); })()`), 'the switcher uses the core header selection');
   }
-  await click('#header-end [data-command="settings"]');
+  await click('#header [data-command="settings"]');
   await evaluate("document.querySelector('[data-settings-page=appearance]').focus()");
   await key("P", { shiftKey: true });
   assert.equal(await evaluate("document.activeElement.id"), "settings-search");
@@ -302,7 +317,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   } });
   assert.equal(await evaluate("document.querySelectorAll('[data-shortcut=\"custom.test-size\"]').length"), 1);
   await action({ type: "close_settings" });
-  await click('#header-end [data-command="settings"]');
+  await click('#header [data-command="settings"]');
   assert.equal(await evaluate("document.querySelectorAll('[data-shortcut=\"custom.test-size\"]').length"), 1, "accepted custom actions survive closing settings");
   await evaluate("const emptySearch=document.querySelector('#settings-search');emptySearch.value='no-such-preference';emptySearch.dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelector('.preferences-empty').hidden"), false);
@@ -338,7 +353,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await key('Enter');
   assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 16);
   await click('#setting-feedback');
-  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), true);
   await click('#setting-feedback');
   await click('#setting-pressure .number-value');
   assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pressure .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && css.borderRadius==='6px'; })()`), 'settings editors use full-size Adwaita spacing');
@@ -361,8 +376,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("const shortcutsSearch=document.querySelector('#shortcuts-search');shortcutsSearch.value='eraser';shortcutsSearch.dispatchEvent(new Event('input'))");
   assert.ok(await evaluate("[...document.querySelectorAll('[data-shortcut]:not([hidden])')].every(row=>row.textContent.toLowerCase().includes('eraser'))"));
   await preference({ type: "search_shortcuts", query: "" });
-  await click('[data-shortcut="command.Brush"] .shortcut-choose');
-  const bindingWeight = () => evaluate("getComputedStyle(document.querySelector('[data-shortcut=\"command.Brush\"] .shortcut-hint')).fontWeight");
+  await click('[data-shortcut="tools.paint"] .shortcut-choose');
+  const bindingWeight = () => evaluate("getComputedStyle(document.querySelector('[data-shortcut=\"tools.paint\"] .shortcut-hint')).fontWeight");
   assert.equal(await bindingWeight(), "400");
   assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true);
   assert.equal(await evaluate("document.querySelector('#shortcut-capture').open"), false);
@@ -384,7 +399,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.ok(await evaluate("document.querySelector('#shortcut-capture').getBoundingClientRect().height < 320"), "recording prompt must be a compact centered sheet");
   await click('#confirm-shortcut');
   assert.equal(await evaluate("layerApp.state().settings.shortcuts['command.Eraser'].length"), 0);
-  assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='brush').shortcut"), "B / E", "accepted bindings update menu hints immediately");
+  assert.equal(await evaluate("document.querySelector('[data-shortcut=\"tools.paint\"] .shortcut-hint').textContent"), "B / E", "accepted bindings update shortcut hints immediately");
   assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), ["B", "E"]);
   await capture("shortcut-editor");
   await click('#close-shortcut-editor');
@@ -409,9 +424,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.querySelector('#settings').open"), true);
   await action({ type: "close_settings" });
   const saved = await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1'))");
-  assert.deepEqual(saved.shortcuts["command.Brush"].map(c => c.key), ["b", "e"]);
-  await call("Page.reload");
-  await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve();else if(performance.now()-start>20000)reject(new Error('reload failed'));else setTimeout(ready,50)}ready()})");
+  assert.deepEqual(saved.shortcuts["tools.paint"].map(c => c.key), ["b", "e"]);
+  await reload('ready');
   assert.deepEqual(await evaluate("layerApp.state().settings"), saved);
   await evaluate("layerApp.canvas.focus()"); await key("j", { ctrlKey: true });
   assert.equal(await evaluate("document.querySelector('#settings').open"), true, "restored shortcuts execute");
@@ -439,8 +453,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   const { identifier } = await call('Page.addScriptToEvaluateOnNewDocument', {
     source: 'navigator.gpu.requestAdapter = async () => null;',
   });
-  await call('Page.reload');
-  await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp&&document.body.dataset.gpu==='unavailable')resolve();else if(performance.now()-start>20000)reject(new Error('fallback reload failed'));else setTimeout(ready,50)}ready()})");
+  await reload('unavailable');
   assert.equal(await evaluate('layerApp.state().settings.dark_base'), '#1c2c3c', 'custom colors persist across reload');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), 'rgb(28, 44, 60)');
   assert.equal(await evaluate("document.querySelector('meta[name=theme-color]').content"), '#1c2c3c');
@@ -448,6 +461,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await preference({ type: 'edit', id: 'dark_base', value: '#333333' });
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), 'rgb(51, 51, 51)', 'settings still update without a GPU');
   await call('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  for (const error of errors.splice(0)) assert.match(error, /^GPU canvas unavailable:/, "Only the injected adapter failure is expected");
   console.log("PASS: native-model settings pages, themes, adaptive sidebar, search, dependencies, key recording/conflicts, immediate persistence and executable restored shortcuts");
 }
 

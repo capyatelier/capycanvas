@@ -9889,11 +9889,11 @@ fn native_preferences_and_shortcuts() {
         )
         .unwrap();
         let controllers = row.observe_controllers();
-        let hold = (0..controllers.n_items())
-            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
-            .find(|c| c.name().as_deref() == Some("preference-context-hold"))
+        let secondary = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+            .find(|c| c.name().as_deref() == Some("preference-context-click"))
             .unwrap();
-        hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
+        secondary.emit_by_name::<()>("pressed", &[&1i32, &20.0f64, &20.0f64]);
         pump(100);
         let popup: gtk::PopoverMenu =
             find_named(w.preferences.dialog.upcast_ref(), "preference-context-menu")
@@ -9910,7 +9910,7 @@ fn native_preferences_and_shortcuts() {
         capture_popover(popup.upcast_ref(), &format!("{dir}/gtk-reset-{suffix}.png"));
         popup.activate_action("field.reset", None).unwrap();
         assert_eq!(state(&w).palette.bg, theme.default_base());
-        hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
+        secondary.emit_by_name::<()>("pressed", &[&1i32, &20.0f64, &20.0f64]);
         pump(100);
         let reset = find_menu_item(popup.upcast_ref(), &reset_label).unwrap();
         assert!(!reset.is_sensitive());
