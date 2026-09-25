@@ -307,9 +307,6 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tile-label { width: 72px; min-width: 0; padding-right: 4px; line-height: 18px; font-weight: var(--tile-label-weight); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--tile-label-lines); -webkit-box-orient: vertical; }
 .panel-measure { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; contain: layout style; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
-.brush-list { display: flex; flex-direction: column; gap: 2px; }
-.brush-list h3 { align-self: flex-start; margin: 8px; font-size: inherit; line-height: 18px; font-weight: 700; opacity: .55; }
-.panel .brush-choice { width: 100%; display: flex; flex-direction: column; align-items: stretch; text-align: right; padding: 3px 6px; font-size: inherit; line-height: 18px; }
 .brush-preview { width: 100%; height: 40px; object-fit: fill; border-radius: 3px; }
 .sizes-panel { container-type: inline-size; }
 .size-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
@@ -659,18 +656,20 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 /* Editor panels share the native host's logical sizing and models. */
 #header-start { min-width:0; }
 .header-menu .popover { max-height:calc(100dvh - 60px); overflow:auto; }
-.tool-groups { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.tool-groups { display:flex; flex-wrap:wrap; gap:2px; margin-bottom:6px; }
 .tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; touch-action:manipulation; }
 .tool-choice-label { display:flex; align-items:center; gap:6px; }
 .tool-choice-button svg, .tool-choice-label svg { flex-shrink:0; }
 .tool-setting-action { display:flex; align-items:center; gap:6px; touch-action:manipulation; }
-.tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
+.tool-groups .tool-choice-button { width:calc(3 * 36px + 2 * 2px); min-width:0; min-height:36px; flex:none; gap:6px; padding:0 6px; line-height:18px; }
+.tool-groups .tool-choice-label { flex:1; min-width:0; justify-content:flex-end; }
+.tool-groups .tool-choice-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tool-subtools { display:flex; flex-direction:column; gap:2px; }
 .brush-sets-control .tool-groups, .sculpt-sets-control .tool-groups { flex-direction:column; flex-wrap:nowrap; gap:2px; margin-bottom:0; }
-.brush-sets-control .tool-choice-button, .sculpt-sets-control .tool-choice-button { width:100%; min-width:0; min-height:44px; flex:none; flex-direction:row; font-size:inherit; padding:6px; }
-.brush-sets-control .tool-choice-label, .sculpt-sets-control .tool-choice-label { min-width:0; }
+.brush-sets-control .tool-choice-button, .sculpt-sets-control .tool-choice-button { width:100%; min-height:44px; gap:8px; padding:6px; }
+.brush-sets-control .tool-choice-label, .sculpt-sets-control .tool-choice-label { justify-content:flex-start; }
 .brush-sets-control .tool-choice-name, .sculpt-sets-control .tool-choice-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.tool-subtools .tool-choice-button { flex-direction:column; align-items:stretch; gap:0; padding:3px 6px; }
+.tool-subtools .tool-choice-button { flex-direction:column; align-items:stretch; gap:0; padding:3px 6px; line-height:18px; }
 .tool-subtools .tool-choice-button:not([data-brush]) { min-height:44px; justify-content:center; }
 .tool-subtools .tool-choice-label { width:100%; min-width:0; }
 .tool-subtools .tool-choice-name { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
