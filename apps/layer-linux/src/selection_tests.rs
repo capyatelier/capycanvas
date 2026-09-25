@@ -430,6 +430,7 @@ fn native_selection_pen_input() {
         assert!(button.downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
         assert!(state(&d.w).commands.iter().any(|c| c.id == command && c.selected));
     }
+    let mut select_icon = CommandId::RectangleSelect.icon().unwrap();
     for (command, choice, icon) in [
         (CommandId::DrawingBrush, "brush-set-pencil", "pencil"),
         (CommandId::Sculpt, "sculpt-set-liquify", "liquify"),
@@ -440,7 +441,10 @@ fn native_selection_pen_input() {
         let p = d.point(&d.named(choice));
         d.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         d.header_icon(command, icon);
-        d.header_icon(CommandId::Select, "color-select");
+        if command == CommandId::Select {
+            select_icon = icon;
+        }
+        d.header_icon(CommandId::Select, select_icon);
     }
     d.header_icon(CommandId::DrawingBrush, "pencil");
     d.header_icon(CommandId::Sculpt, "liquify");
