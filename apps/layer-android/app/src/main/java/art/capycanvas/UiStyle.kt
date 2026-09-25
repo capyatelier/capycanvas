@@ -89,6 +89,8 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val headerActive = role("header_selection")
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")
+    val checkerLight = role("checker_light")
+    val checkerDark = role("checker_dark")
     val divider = text.copy(alpha = .12f)
     val settingsBackground = role("settings")
     val settingsCard = role("card")

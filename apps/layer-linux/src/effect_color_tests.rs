@@ -72,7 +72,8 @@ fn assert_gradient_pixels(w: &Rc<Workspace>, bar: &gtk::Widget, stops: &[Gradien
         let rgba: [f64; 4] =
             std::array::from_fn(|c| f64::from(a[c]) * (1. - t) + f64::from(b[c]) * t);
         let encoded = space.convert(w.view_color().space(), rgba[..3].try_into().unwrap());
-        let checker = if ((x - 6) / 8) % 2 == 0 { 0.94 } else { 0.80 };
+        let cell = layer_ui::TRANSPARENCY_CHECKER_CELL as usize;
+        let checker = f64::from(crate::display_color::checker_linear()[(x - 6) / cell % 2]);
         let expected: [f64; 3] = encoded.map(|c| {
             let view = w.view_color().space();
             view.encode(view.decode(c) * rgba[3] + checker * (1. - rgba[3]))

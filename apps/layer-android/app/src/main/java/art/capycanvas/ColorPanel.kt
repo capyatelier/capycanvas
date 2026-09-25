@@ -247,7 +247,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             clipPath(field) {
                 val tile = 5.dp.toPx()
                 for (y in 0..ceil(size.height / tile).toInt()) for (x in 0..ceil(size.width / tile).toInt()) {
-                    drawRect(if ((x + y) % 2 == 0) Color(0xffcccccc) else Color(0xff8c8c8c), Offset(padding + x * tile, padding + y * tile), Size(tile, tile))
+                    drawRect(if ((x + y) % 2 == 0) colors.checkerLight else colors.checkerDark, Offset(padding + x * tile, padding + y * tile), Size(tile, tile))
                 }
                 drawRect(swatch.array("rgba").color())
             }

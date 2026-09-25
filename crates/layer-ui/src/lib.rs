@@ -131,7 +131,10 @@ pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
-pub use theme::{ACCENTS, DEFAULT_ACCENT, HexColor, Theme, ThemePalette};
+pub use theme::{
+    ACCENTS, DEFAULT_ACCENT, HexColor, TRANSPARENCY_CHECKER, TRANSPARENCY_CHECKER_CELL, Theme,
+    ThemePalette,
+};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     durable_layout, layout_change_description,
