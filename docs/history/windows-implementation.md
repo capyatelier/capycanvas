@@ -2765,3 +2765,53 @@ workspace suites pass again (26/367/103/85); unchanged core/engine coverage brin
 the ordinary total to 675. Strict Clippy, normal Release, and complete native
 editor/manager/restart checks pass. The packaged production milestone remains
 110a434; the later shared-header integration is not included in those archives.
+
+### Upstream port through c65e145 (2026-09-25)
+
+This round integrates upstream through c65e145 and closes most of the gaps
+found by the September Windows port audit.
+
+Shader compilation. The Windows host fell back to the system FXC compiler
+because no DXC shipped. Cold startup needed about 60 seconds to finish the
+shader set, with single pipelines up to 9.5 seconds. A transform or brush
+change inside that window waited behind the compiler, and the shared host
+dropped the deferred contact, so an early Scale/rotate drag did not move the
+selection. The build now copies `dxcompiler.dll` from the pinned
+`Microsoft.Direct3D.DXC` package (internal validator, no `dxil.dll`), and the
+host selects it explicitly with FXC as the fallback. On the development GPU
+the startup shader set finishes in about 13 seconds, with no pipeline above
+0.7 seconds. The extracted portable package loads the packaged compiler.
+
+Workspace and chrome:
+- Standalone Zen Capy, mouse pressure, right-drag panning and a pan cursor.
+- A floating image-placement bar.
+- Collapsed-column drawer sources stay joined, and glass corners match.
+- Preferences: shortcut groups, defaults and modified markers; search empty
+  state and focus; page icons. Space and Enter are recorded as shortcuts.
+- Layer rename limits and state-aware accessible names.
+- The Filter Types visibility setting is honored.
+- Ctrl+Alt shortcuts work after toolbar clicks.
+- Header focus follows folded menus.
+- Tooltips no longer open on touch holds.
+- Tool Set group rows match upstream's 112x36 layout.
+- Proof is measured as fixed-height content.
+
+Files:
+- Drawings open from drops on the canvas or tab strip, from launch
+  arguments, from the MSIX .capy association and from multi-select Open.
+  A native queue opens them one at a time.
+- Export remembers per-destination recipes and suggests the drawing name.
+- Paste keeps PNG alpha and names the layer "Pasted image".
+- Restore works while the current drawing is modified.
+- Diagnostics saves stroke recordings, compressing them off the UI and
+  render threads.
+
+Frames that run without new input, such as filter loading or animations,
+now wait for the next display refresh. Input-driven frames still present
+immediately.
+
+Fixture updates for current shared layouts bring canvas editing, documents,
+switcher, Navigator, expansion, drawers, tab drag, HDR and the Photo header
+back to passing. New fixtures cover tooltips and stroke recording. The touch
+tab-pickup case still fails identically on the 980d4aa6 baseline: the
+workspace loses capture while the torn-off tab is reparented.

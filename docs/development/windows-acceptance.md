@@ -1,5 +1,7 @@
 # Windows acceptance status
 
+2026-09-25: the [upstream port through c65e145](../history/windows-implementation.md#upstream-port-through-c65e145-2026-09-25) records app-local DXC shader compilation, file workflows, stroke recording, touch-safe tooltips, input-free frame pacing and the fixtures that still fail on the baseline.
+
 2026-09-22: [new shared features and brush measurement](windows-features-20260922.md) records the Sketch drawer port, native command/GPU validation, and remaining input qualification.
 
 2026-09-19 implementation update: see the [fresh Windows feature-gap review](windows-feature-parity-progress.md) for proofing, shared-core integration and current validation. The historical acceptance below is not automatically extended to the new workflows.
