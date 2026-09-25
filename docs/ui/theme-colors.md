@@ -8,10 +8,10 @@ stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.
 System/Light/Dark selection remains independent of both colors.
 
-GTK shows each base color inline on its title row as four grey circles and a
-Custom circle that slides in a hex entry beside them: dark `#1f1f1f`,
-`#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`, `#cccccc`,
-`#dedede`. Other hosts still show hex text fields.
+GTK, Web and Android show each base color inline on its title row as four grey
+circles and a Custom circle that reveals a hex entry beside them: dark
+`#1f1f1f`, `#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`,
+`#cccccc`, `#dedede`. Apple and Windows still show hex text fields.
 
 ## Inventory and existing relationships
 
@@ -54,7 +54,7 @@ in the table is transformed per channel using the same rule as a grey.
 | Checkbox/radio outlines, separators, scroll thumbs, disabled controls | Foreground overlays, usually 10–35%; disabled opacity 36–50% | Same pattern | Keep opacity, recomposite |
 | Web preference row divider | `#80808026` | Same | Keep translucent neutral |
 | Settings slider inactive track / inactive switch | Text at 12% / 20% | Same | Keep overlay |
-| Accent, focus, links, checked controls, drop indicators | Resolved accent: GTK saved or system accent; Web/Android `#3584e4` (drop hint currently separate blue) | Same | Not derived from the base |
+| Accent, focus, links, checked controls, drop indicators | Resolved accent: saved, else system (GTK, Android 12+), else `#3584e4` (drop hint currently separate blue) | Same | Not derived from the base |
 | Panel and toolbar selection | Accent tint of reference grey 82, same as the title bar | Accent tint of reference grey 213 (`#c0d7f6`) | See [Accent color](#accent-color) |
 | Error / warning text, invalid numeric border | Web `#ff7b63` / `#e5a50a`, border `#ee5555`; native semantic roles | Web `#c01c28` / `#9c5700`, same border; native semantic roles | Fixed semantic colors per mode |
 | Shadows, inset shades, modal dimming | Black with existing opacities; panel 16%, expanded drawer 40%, web modal 8/15 | Same shadows; web modal 2/15 | Keep; already blends over new surfaces |
@@ -80,20 +80,22 @@ hosts use the translucent fill without backdrop blur.
 
 ## Accent color
 
-Below the base colors, GTK Appearance offers **Accent color**: System, libadwaita's nine accent colors
+Below the base colors, GTK, Web and Android Appearance offer **Accent color**: System, libadwaita's nine accent colors
 (Blue `#3584e4`, Teal, Green, Yellow, Orange, Red, Pink, Purple, Slate) and a
 Custom circle that reveals a `#RRGGBB` entry prefilled with the current accent.
 The entry commits on Enter or when it loses focus after an edit; invalid hex is
 rejected in Rust like the base colors. Selecting a circle commits immediately.
 Settings store only a chosen color; an absent value follows the system accent
 that the host reports with `SystemThemeChanged`, and hosts without one use Blue.
-On those hosts choosing Blue stores nothing, so Reset stays disabled. Web and
-Android do not show the row yet and still derive their selection colors in CSS
-and Compose.
+GTK reports libadwaita's accent; Android 12 and later report Material You's
+`system_accent1_500`. The web has no System circle, and there choosing Blue
+stores nothing, so Reset stays disabled.
 
 The resolved accent is published as `palette.accent`. GTK assigns it to
 `--accent-bg-color`, so libadwaita switches, checks, suggested buttons and
-focus rings follow it, and derives `--accent-color` from it as usual.
+focus rings follow it, and derives `--accent-color` from it as usual. Web binds
+the palette roles to `--accent`, `--selection`, `--header-selection` and
+`--header-selection-hover`; Android reads the same roles into its palette.
 
 Selection tints keep only the accent's OKLCH hue. Each tint takes the OKLab
 lightness of a base-relative reference grey (computed with the same transform as

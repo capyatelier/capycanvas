@@ -13,6 +13,7 @@ import android.view.PointerIcon
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.boundsInRoot
@@ -2016,12 +2017,17 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
-    @Test fun baseColorsAreValidatedTextAndDriveTheNativePalette() {
+    @Test fun baseColorsAreSwatchesWithValidatedCustomHexAndDriveTheNativePalette() {
         compose.onNodeWithContentDescription("Settings").performClick()
         for ((theme, color) in listOf("dark" to "#1C2C3C", "light" to "#C0B49C")) {
             compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to theme)) }
             waitState { it.getString("theme") == theme }
             compose.onNodeWithTag("settings-category-appearance").performClick()
+            compose.onNodeWithTag("setting-${theme}_base-swatch-0").performScrollTo().performClick()
+            val first = if (theme == "dark") "#1f1f1f" else "#a4a4a4"
+            waitState { it.getJSONObject("palette").getString("bg") == first }
+            compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-" + theme + "_base"))).assertCountEquals(0)
+            compose.onNodeWithTag("setting-${theme}_base-swatch-4").performClick()
             val input = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-" + theme + "_base")))
             input.performScrollTo().performTextReplacement("invalid")
             input.performImeAction()
@@ -2045,6 +2051,36 @@ class AndroidHostTest {
             host.preference(obj("type" to "edit", "id" to "light_base", "value" to "#b8b8b8"))
         }
         waitState { it.getJSONObject("settings").getString("light_base") == "#b8b8b8" }
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
+    @Test fun accentSwatchesFollowSystemPresetsAndCustomHex() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("settings-category-appearance").performClick()
+        compose.onNodeWithTag("preference-accent").performScrollTo()
+        compose.onNodeWithTag("setting-accent-swatch-0").assertContentDescriptionEquals("System").assertIsSelected()
+        val system = state().getJSONObject("palette").getString("accent")
+        compose.onNodeWithTag("setting-accent-swatch-6").performClick()
+        waitState { it.getJSONObject("palette").getString("accent") == "#e62d42" }
+        assertEquals("#e62d42", state().getJSONObject("settings").getString("accent"))
+        compose.waitForIdle()
+        val red = compose.onNodeWithTag("setting-accent-swatch-6").assertIsSelected().captureToImage().toPixelMap()
+        val fill = (0 until red.width).flatMap { x -> (0 until red.height).map { y -> red[x, y].toArgb() } }
+            .groupingBy { it }.eachCount().maxBy { it.value }.key
+        val (r, g, b) = Triple(fill shr 16 and 0xff, fill shr 8 and 0xff, fill and 0xff)
+        assertTrue("Red swatch fill #%06x".format(fill and 0xffffff), r > 190 && g < 70 && b < 90)
+        compose.onNodeWithTag("setting-accent-swatch-10").performClick()
+        val input = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-accent")))
+        input.assertTextContains("#e62d42")
+        input.performTextReplacement("#12ab56")
+        input.performImeAction()
+        waitState { it.getJSONObject("palette").getString("accent") == "#12ab56" }
+        compose.onNodeWithTag("setting-accent-swatch-10").assertIsSelected()
+        capture("41-accent-custom")
+        compose.onNodeWithTag("setting-accent-swatch-0").performClick()
+        waitState { it.getJSONObject("settings").isNull("accent") || !it.getJSONObject("settings").has("accent") }
+        assertEquals(system, state().getJSONObject("palette").getString("accent"))
+        compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-accent"))).assertCountEquals(0)
         compose.onNodeWithTag("settings-done").performClick()
     }
 
@@ -2120,6 +2156,7 @@ class AndroidHostTest {
         label.performTouchInput { longClick() }
         compose.onNodeWithTag("preference-reset").assertIsNotEnabled()
         instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("setting-dark_base-swatch-4").performClick()
         val text = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-dark_base")))
         text.performTextReplacement("#335577")
         text.performImeAction()

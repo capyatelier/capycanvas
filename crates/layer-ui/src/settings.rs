@@ -35,7 +35,10 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn system_accent(self) -> bool {
-        matches!(self, Self::Gtk)
+        matches!(self, Self::Gtk | Self::Android)
+    }
+    pub fn swatch_preferences(self) -> bool {
+        matches!(self, Self::Gtk | Self::Web | Self::Android)
     }
 }
 
@@ -1044,7 +1047,7 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
-        if matches!(platform, Platform::Gtk) {
+        if platform.swatch_preferences() {
             let rows = &mut groups[0][0].rows;
             let light = rows.iter().position(|r| r.id == LightBase).unwrap();
             rows.insert(light + 1, self.accent_row(platform));
@@ -1086,7 +1089,7 @@ impl Settings {
             crate::Theme::Dark => (PreferenceId::DarkBase, "Dark theme base color", self.dark_base),
             crate::Theme::Light => (PreferenceId::LightBase, "Light theme base color", self.light_base),
         };
-        if platform != Platform::Gtk {
+        if !platform.swatch_preferences() {
             return row(
                 id,
                 title,
@@ -1657,19 +1660,29 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Web).is_err());
+        assert!(settings.field(PreferenceId::Accent, Platform::Windows).is_err());
+        let PreferenceKind::Swatches { swatches, selected, .. } =
+            settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
+        else {
+            unreachable!()
+        };
+        assert_eq!((swatches[0].label.as_str(), selected), ("Blue", 0), "the web has no system accent");
+        let mut web = Settings::default();
+        let blue = PreferenceValue::Text(DEFAULT_ACCENT.to_string());
+        let mut state = PreferencesState::default();
+        state.edit(&mut web, PreferenceAction::Edit { id: PreferenceId::Accent, value: blue }, Platform::Web);
+        assert_eq!(web.accent, None, "Blue is the web default");
     }
 
     #[test]
-    fn base_colors_are_inline_grey_swatches_above_the_accent_on_gtk() {
+    fn base_colors_are_inline_grey_swatches_above_the_accent() {
         let rows = |settings: &Settings, platform| -> Vec<PreferenceRow> {
             settings.pages(platform)[0].groups[0].rows.clone()
         };
-        let ids: Vec<_> = rows(&Settings::default(), Platform::Gtk).iter().map(|r| r.id).collect();
-        assert_eq!(
-            ids,
-            [PreferenceId::Theme, PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]
-        );
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let ids: Vec<_> = rows(&Settings::default(), platform).iter().map(|r| r.id).collect();
+            assert_eq!(&ids[ids.len() - 3..], [PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]);
+        }
         let mut state = PreferencesState::default();
         let mut settings = Settings::default();
         for theme in [crate::Theme::Dark, crate::Theme::Light] {
@@ -1699,7 +1712,7 @@ mod copy_tests {
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
             assert!(matches!(
-                rows(&settings, Platform::Web).into_iter().find(|r| r.id == id).unwrap().kind,
+                rows(&settings, Platform::Windows).into_iter().find(|r| r.id == id).unwrap().kind,
                 PreferenceKind::Text { .. }
             ));
         }

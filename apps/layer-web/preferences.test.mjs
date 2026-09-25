@@ -204,8 +204,12 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await action({ type: 'set_theme', theme });
     await action({ type: 'open_settings', page: 'appearance' });
     const selector = `#setting-${theme}-base`;
-    await click(selector);
-    await evaluate(`document.querySelector('${selector}').focus()`);
+    const custom = `[data-preference=${theme}_base] .swatch[data-swatch="4"]`;
+    assert.equal(await evaluate(`document.querySelector('${selector}').hidden`), true, 'the hex entry waits for Custom');
+    assert.ok(await evaluate(`(() => { const row=document.querySelector('[data-preference=${theme}_base]'), circle=document.querySelector('${custom}'); return circle.getBoundingClientRect().height < row.getBoundingClientRect().height; })()`), 'base circles share the title row');
+    await click(custom);
+    assert.equal(await evaluate(`document.activeElement===document.querySelector('${selector}')`), true);
+    assert.equal(await evaluate(`document.querySelector('${selector}').value`), theme === 'dark' ? '#333333' : '#b8b8b8');
     await evaluate(`document.querySelector('${selector}').value='invalid'`); await key('Enter');
     assert.ok(await evaluate('layerApp.app.preferences().error'));
     await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
@@ -240,16 +244,46 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(await evaluate("document.querySelector('#preference-context-menu [data-reset]').disabled"), true);
     await key('Escape');
     assert.equal(await evaluate("document.querySelector('#settings').open"), true, 'Escape only closes the context menu');
-    await click(selector); await evaluate(`document.querySelector('${selector}').focus();document.querySelector('${selector}').value='${color}'`); await key('Enter');
+    assert.equal(await evaluate(`document.querySelector('${selector}').hidden`), true, 'a preset hides the entry');
+    await click(custom); await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
     await evaluate(`document.querySelector('${selector}').value=''`);
     assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), color.toLowerCase());
     await key('Enter');
     assert.equal(await evaluate(`document.querySelector('${selector}').value`), defaultColor);
-    await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
+    await click(`[data-preference=${theme}_base] .swatch[data-swatch="0"]`);
+    assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), theme === 'dark' ? '#1f1f1f' : '#a4a4a4');
+    await click(custom); await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
     await action({ type: 'close_settings' });
     await capture(`custom-workspace-${theme}`);
   }
   await action({ type: 'restore_settings', settings: { ...await evaluate('layerApp.state().settings'), dark_base: '#333333', light_base: '#b8b8b8' } });
+  for (const theme of ['dark', 'light']) {
+    await action({ type: 'set_theme', theme });
+    await action({ type: 'open_settings', page: 'appearance' });
+    const swatch = index => `[data-preference=accent] .swatch[data-swatch="${index}"]`;
+    assert.deepEqual(await evaluate("[...document.querySelector('[data-page=appearance] .preference-group').children].map(l=>l.dataset.preference).slice(-3)"),
+      ['dark_base', 'light_base', 'accent']);
+    assert.equal(await evaluate(`document.querySelector('${swatch(0)}').getAttribute('aria-label')`), 'Blue', 'the web has no system accent');
+    assert.equal(await evaluate(`document.querySelector('${swatch(0)}').getAttribute('aria-checked')`), 'true');
+    assert.ok(await evaluate(`(() => { const row=document.querySelector('[data-preference=accent]').getBoundingClientRect(), a=document.querySelector('${swatch(0)}').getBoundingClientRect(), b=document.querySelector('${swatch(9)}').getBoundingClientRect(); return Math.abs((a.left-row.left)-(row.right-b.right))<=2; })()`), 'accent circles are centered');
+    await click(swatch(5));
+    assert.equal(await evaluate('layerApp.state().settings.accent'), '#e62d42');
+    assert.ok(await evaluate(`(() => { const p=layerApp.state().palette, rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
+      return p.accent==='#e62d42' && getComputedStyle(document.body).getPropertyValue('--accent').trim()===p.accent
+        && getComputedStyle(document.querySelector('${swatch(5)}')).backgroundColor===rgb('#e62d42'); })()`));
+    await click(swatch(9));
+    assert.equal(await evaluate('document.activeElement.id'), 'setting-accent');
+    await evaluate("document.querySelector('#setting-accent').value='#12ab56'"); await key('Enter');
+    assert.equal(await evaluate('layerApp.state().palette.accent'), '#12ab56');
+    assert.equal(await evaluate(`document.querySelector('${swatch(9)}').getAttribute('aria-checked')`), 'true');
+    await capture(`accent-custom-${theme}`);
+    await click(swatch(0));
+    assert.equal(await evaluate('layerApp.state().settings.accent ?? null'), null, 'Blue is the web default');
+    assert.equal(await evaluate("document.querySelector('#setting-accent').hidden"), true);
+    await action({ type: 'close_settings' });
+    assert.ok(await evaluate(`(() => { const p=layerApp.state().palette, rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')', pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]');
+      return !pressed || getComputedStyle(pressed).backgroundColor===rgb(p.header_selection); })()`), 'the switcher uses the core header selection');
+  }
   await click('#header-end [data-command="settings"]');
   await evaluate("document.querySelector('[data-settings-page=appearance]').focus()");
   await key("P", { shiftKey: true });

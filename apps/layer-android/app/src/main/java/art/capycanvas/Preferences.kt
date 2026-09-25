@@ -14,6 +14,10 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlin.math.roundToInt
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -351,6 +355,14 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
         }
         return
     }
+    if (type == "swatches" && !kind.getBoolean("inline")) {
+        Column(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id"))
+            .padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(row.getString("title"), fontWeight = FontWeight.Medium)
+            SwatchSelector(host, row, kind, enabled)
+        }
+        return
+    }
     if (type == "number") {
         Box(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id")).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.TopCenter) {
             NumericSetting(row.getString("title"), kind.number("value"), kind.getJSONObject("control"),
@@ -382,6 +394,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii, autoCorrectEnabled = false),
                     onCommit = { host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it)) })
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
+                "swatches" -> SwatchSelector(host, row, kind, enabled)
                 "choice" -> {
                     val id = row.getString("id")
                     val selected = kind.getInt("selected")
@@ -434,6 +447,60 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun SwatchSelector(host: CanvasHost, row: JSONObject, kind: JSONObject, enabled: Boolean) {
+    val colors = LocalPalette.current
+    val id = row.getString("id")
+    val swatches = kind.array("swatches").objects()
+    val inline = kind.getBoolean("inline")
+    val value = kind.getString("value")
+    val custom = kind.getString("custom")
+    val customIndex = swatches.indexOfFirst { it.getBoolean("custom") }
+    var editing by remember(id) { mutableStateOf(false) }
+    var saved by remember(id) { mutableStateOf(value) }
+    if (saved != value) { saved = value; editing = false }
+    var focusRequest by remember(id) { mutableLongStateOf(0L) }
+    val active = if (editing) customIndex else kind.getInt("selected")
+    fun JSONObject.color(key: String) = if (isNull(key)) null else Color(android.graphics.Color.parseColor(getString(key)))
+    val circles = @Composable {
+        swatches.forEachIndexed { index, swatch ->
+            val selected = index == active
+            val glyph = if (swatch.isNull("icon")) "check".takeIf { selected } else swatch.getString("icon")
+            Box(Modifier.size(if (inline) 36.dp else 40.dp).clip(CircleShape)
+                .then(if (selected) Modifier.border(2.dp, colors.text, CircleShape) else Modifier)
+                .selectable(selected, enabled = enabled, role = Role.RadioButton) {
+                    editing = swatch.getBoolean("custom")
+                    if (editing) focusRequest = System.nanoTime()
+                    else host.preference(obj("type" to "edit", "id" to id, "value" to swatch.getString("value")))
+                }
+                .semantics { contentDescription = swatch.getString("label") }
+                .testTag("setting-$id-swatch-$index")
+                .padding(4.dp).clip(CircleShape)
+                .background(swatch.color("color") ?: colors.text.copy(alpha = .1f))
+                .border(1.dp, colors.text.copy(alpha = .15f), CircleShape),
+                contentAlignment = Alignment.Center) {
+                glyph?.let { SharedIcon(it, null, Modifier.size(16.dp), tint = swatch.color("foreground") ?: colors.text) }
+            }
+        }
+    }
+    val entry = @Composable {
+        if (active == customIndex) CoreTextField(custom, {}, Modifier.width(120.dp).testTag("setting-text-$id"),
+            height = 44.dp, enabled = enabled, maxLength = 7, focusRequest = focusRequest,
+            placeholder = { Text(kind.getString("placeholder")) },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii, autoCorrectEnabled = false),
+            onCommit = { if (it.trim() != custom) host.preference(obj("type" to "edit", "id" to id, "value" to it)) })
+    }
+    if (inline) Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically) { entry(); circles() }
+    else Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) { circles() }
+        entry()
     }
 }
 

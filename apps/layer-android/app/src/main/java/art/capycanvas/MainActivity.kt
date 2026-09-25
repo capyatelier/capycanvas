@@ -52,7 +52,9 @@ class MainActivity : ComponentActivity() {
     }
     private fun updateTheme(config: Configuration) {
         host.dispatch(obj("type" to "system_theme_changed", "theme" to
-            if (config.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES) "dark" else "light"))
+            if (config.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES) "dark" else "light",
+            "accent" to if (android.os.Build.VERSION.SDK_INT >= 31)
+                "#%06x".format(getColor(android.R.color.system_accent1_500) and 0xffffff) else null))
     }
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
