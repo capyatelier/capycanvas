@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct NumberControl: View {
+    struct Toolbar: Equatable { var slider: Bool }
     @ObservedObject var store: EditorStore
     let label: String
     let value: Double
@@ -8,6 +9,7 @@ struct NumberControl: View {
     var identifier = ""
     var valueOnly = false
     var inline = false
+    var toolbar: Toolbar? = nil
     var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
@@ -24,7 +26,12 @@ struct NumberControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if inline {
+            if let toolbar {
+                HStack(spacing: 4) {
+                    if toolbar.slider { sliderTrack.frame(width: 56) }
+                    if showsEntry || field.dirty { numericEntry } else { valueButton }
+                }
+            } else if inline {
                 HStack(spacing: 4) {
                     sliderTrack
                     InlineNumberValueLayout(entrySize: showsEntry || field.dirty ? min(10, max(3, formatted["edit"].string.count)) : nil) {
@@ -81,7 +88,7 @@ struct NumberControl: View {
     private var valueButton: some View {
         Button { showsEntry = true } label: {
             Text(formatted["text"].string).monospacedDigit()
-                .frame(maxWidth: inline ? .infinity : nil, alignment: .trailing)
+                .frame(maxWidth: inline || toolbar != nil ? .infinity : nil, alignment: .trailing)
                 .padding(.horizontal, 6).frame(height: 24)
         }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36)
             // An asynchronous rejection can arrive after text entry closes.
@@ -139,7 +146,7 @@ struct NumberControl: View {
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
             .focusedValue(\.editorTextCommit, { _ = commit() })
-            .frame(width: valueOnly || inline ? nil : slider ? 80 : 48)
+            .frame(width: valueOnly || inline || toolbar != nil ? nil : slider ? 80 : 48)
             .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
             .modifier(NumberControlMeasurement(id: key + ":entry"))
@@ -176,17 +183,24 @@ struct NumberControl: View {
     }
     private func format() {
         do {
-            formatted = try store.resolveNumber(control, value: field.value, operation: ["type": "format"])
+            formatted = try resolveNumber(value: field.value, operation: ["type": "format"])
             if !field.dirty && !editing { field.text = formatted[slider ? "edit" : "text"].string }
         } catch { field.error = error.localizedDescription }
     }
     private func measureInlineRange() {
         guard inline else { return }
         do {
-            let minimum = try store.resolveNumber(control, value: control["min"].number, operation: ["type": "format"])["text"].string
-            let maximum = try store.resolveNumber(control, value: control["max"].number, operation: ["type": "format"])["text"].string
+            let minimum = try resolveNumber(value: control["min"].number, operation: ["type": "format"])["text"].string
+            let maximum = try resolveNumber(value: control["max"].number, operation: ["type": "format"])["text"].string
             inlineMeasure = (minimum.count >= maximum.count ? minimum : maximum).map { $0.isNumber ? "8" : String($0) }.joined()
         } catch { field.error = error.localizedDescription }
+    }
+    private func resolveNumber(value: Double, operation: [String: Any]) throws -> JSON {
+        guard toolbar != nil else { return try store.resolveNumber(control, value: value, operation: operation) }
+        let result = ToolbarUI.resolve(["type": "number", "request": ["control": control.raw, "value": value, "operation": operation],
+            "compact": true, "units": true])
+        if !result["error"].isNull { throw HostFailure(message: result["error"].string) }
+        return result
     }
     @discardableResult private func commit() -> Bool {
         guard field.dirty else { return true }
@@ -207,7 +221,7 @@ struct NumberControl: View {
     }
     @discardableResult private func resolve(_ operation: [String: Any], phase: String? = nil) -> Bool {
         do {
-            let result = try store.resolveNumber(control, value: field.value, operation: operation)
+            let result = try resolveNumber(value: field.value, operation: operation)
             field.dirty = false; field.error = nil
             field.text = result["edit"].string
             let next = result["value"].number

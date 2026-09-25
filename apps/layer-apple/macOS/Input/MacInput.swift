@@ -50,7 +50,7 @@ import QuartzCore
         if tablet(event), event.buttonNumber != 0 { return }
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
-            store.layerSwipe.close()
+            store.layerSwipe.close(); store.workspace.dismissTransients(at: nil)
             guard contact == nil else { return }
             view?.window?.makeFirstResponder(view)
             nextContact &+= 1
@@ -82,6 +82,7 @@ import QuartzCore
             // subtypes, including pressure changes before the first drag.
             guard let view, view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return }
             view.window?.makeFirstResponder(view)
+            store.workspace.dismissTransients(at: nil)
             nextContact &+= 1
             let value = Contact(id: nextContact, device: event.deviceID,
                 tool: tools[event.deviceID] ?? 0, button: 0, nativeButton: 0,

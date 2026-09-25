@@ -37,9 +37,9 @@ import SwiftUI
         // particular, a Pencil dismissal must never fall through into paint.
         if !menu.isNull { return nil }
         closeMenu()
-        guard let workspace, let (id, source) = workspace.hitSource(at: point),
+        guard let workspace, let (id, source) = workspace.hitSource(at: point), source.surface != .control,
               let item = try? JSON.decode(source.item) else { return nil }
-        return ReorderTarget(id: id, surface: source.surface,
+        return ReorderTarget(id: id, surface: source.surface, canDrag: source.canDrag,
             valid: { [weak self, weak workspace] dragging in
                 guard let self, let workspace, self.enabled else { return false }
                 if dragging { return workspace.contains(item) }

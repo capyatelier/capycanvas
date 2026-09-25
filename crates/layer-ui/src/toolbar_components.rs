@@ -20,7 +20,7 @@ impl Default for ToolOptionsStyle {
 
 impl ToolbarControl {
     pub fn components_available(platform: Platform) -> bool {
-        matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Generic)
+        matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Generic)
     }
     pub const TOOL_OPTIONS: Self = Self::ToolOptions {
         style: ToolOptionsStyle {

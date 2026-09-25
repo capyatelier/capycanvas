@@ -57,7 +57,7 @@ each restore their own last selection and settings, including after switching
 workspaces or restarting. Other hosts
 retain their previous entry points until their native projections are added.
 
-The GTK/Web/Android **Select** button replaces the Sketch Lasso entry and remembers the last
+The GTK/Web/Android/macOS/iPadOS **Select** button replaces the Sketch Lasso entry and remembers the last
 selection tool. Its two-panel **Tools → Tool** drawer contains Rectangle select,
 Ellipse select, Lasso selection, Polygonal lasso, Auto select (the contiguous
 magic wand), and Select by color. Choosing a tool retains the drawer; its right
@@ -70,7 +70,7 @@ Select by color uses the existing GPU color tolerance and sampling sources,
 including disconnected matching regions. Expansion and edge smoothing apply to
 all matching regions; gap closing remains specific to the contiguous tool.
 
-Photo on these three hosts adds the four new tools to the existing selection group in the Tools
+Photo on these hosts adds the four new tools to the existing selection group in the Tools
 toolbar. Untouched included Sketch/Photo layouts upgrade automatically;
 customized workspaces retain their layout and can use Restore Starting Layout.
 Other platforms retain their existing selection defaults. The SVGs use the shared
@@ -98,12 +98,12 @@ the canvas on all six hosts. The strip starts closed, with Auto-hide and Open
 individual panels off. Paint retains its original expanded left panels and
 initially open right stack.
 
-On GTK, Web and Android, Paint's Color and Navigator groups take their content
-height. Color follows its SDR or HDR wheel and footer; Navigator follows the
+On GTK, Web, Android, macOS and iPadOS, Paint's Color and Navigator groups take
+their content height. Color follows its SDR or HDR wheel and footer; Navigator follows the
 document shape, from a 4:1 strip up to a square. Tool Set and Tool share the
 rest of the left column evenly, and Properties and Layers keep their 30:45 split.
 Untouched Paint workspaces upgrade; customized ones keep their arrangement until
-Restore Starting Layout. Other hosts keep the proportional columns. Check with
+Restore Starting Layout. Windows keeps the proportional columns. Check with
 `bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted_columns`,
 `node apps/layer-web/device.test.mjs --paint-columns` on a tablet origin, and
 `AndroidTitleBarTest#paintColorAndNavigatorFitTheirContent`.

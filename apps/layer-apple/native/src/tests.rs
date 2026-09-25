@@ -47,6 +47,8 @@ mod workspace;
 mod workspace_library;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
+#[path = "toolbar_component_tests.rs"]
+mod toolbar_component;
 
 type RasterSamples = (
     std::collections::BTreeMap<

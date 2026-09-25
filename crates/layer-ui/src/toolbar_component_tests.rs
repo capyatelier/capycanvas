@@ -181,7 +181,7 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
 
 #[test]
 fn toolbar_component_defaults_round_trip_on_supported_hosts() {
-    for (preset, platform) in WorkspacePreset::ALL.into_iter().flat_map(|p| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (p, platform))) {
+    for (preset, platform) in WorkspacePreset::ALL.into_iter().flat_map(|p| [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios].map(|platform| (p, platform))) {
         let layout = preset.layout(platform);
         layout.validate().unwrap();
         let loaded: DockLayout =
@@ -229,16 +229,10 @@ fn toolbar_component_defaults_round_trip_on_supported_hosts() {
                 ToolbarControl::TOOL_OPTIONS
             );
         }
-        for platform in [
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
-            assert_eq!(
-                preset.layout(platform),
-                preset.legacy_selection_drawers_layout(platform)
-            );
-        }
+        assert_eq!(
+            preset.layout(Platform::Windows),
+            preset.legacy_selection_drawers_layout(Platform::Windows)
+        );
     }
     let mut header = HeaderLayout::default();
     assert!(

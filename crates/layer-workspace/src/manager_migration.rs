@@ -60,7 +60,7 @@ fn toolbar_components_upgrade_only_untouched_supported_defaults() {
     for (index, preset, platform) in [
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
-    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (i, p, platform))) {
+    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios].map(|platform| (i, p, platform))) {
         let mut previous = vec![preset.legacy_toolbar_components_layout(platform)];
         previous.push(preset.legacy_bottom_brush_controls_layout(platform));
         if preset == WorkspacePreset::Photographer {

@@ -8,6 +8,7 @@ import SwiftUI
     private let motion: WorkspaceMotion
     var dropHint: JSON { tileHint["hint"].isNull ? motion.dropHint : tileHint["hint"] }
     let tabSlide: WorkspaceTabSlide
+    let sliderPreview = ToolbarSliderPreview()
     var tabFrames: [String: WorkspaceTabFrame] = [:]
     private weak var store: EditorStore?
     private var shownPanel: String?
@@ -141,7 +142,11 @@ import SwiftUI
             "expanded_panel": expansion.raw, "content_drawer": tool["placement"]["bounds"].raw,
             "drawer_connection": tool["connection"]["bounds"].raw])
     }
+    func dismissTransients(at point: CGPoint?) { sliderPreview.dismiss(outside: point) }
     func chrome(_ event: [String: Any]) {
+        if event["kind"] as? String == "contact", let position = event["position"] as? [CGFloat], position.count == 2 {
+            dismissTransients(at: CGPoint(x: position[0], y: position[1]))
+        }
         guard let store, !store.snapshot["layout"]["viewport"].isNull else { return }
         store.input(["type": "chrome", "event": event, "facts": facts.raw, "viewport": store.snapshot["layout"]["viewport"].raw])
     }
@@ -254,6 +259,7 @@ struct WorkspaceDrag: ViewModifier {
     let item: JSON
     var surface = ReorderSurface.handle
     var context: JSON? = nil
+    var canDrag = true
     var openOnTap = false
     var doubleClick: (() -> Void)? = nil
     @State private var sourceID = UUID().uuidString
@@ -264,7 +270,7 @@ struct WorkspaceDrag: ViewModifier {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: WorkspaceSources.self,
                 value: enabled ? [sourceID: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip),
-                    layer: layer, item: item.stableKey, surface: surface, context: context?.stableKey)] : [:])
+                    layer: layer, item: item.stableKey, surface: surface, context: context?.stableKey, canDrag: canDrag)] : [:])
         })
         .simultaneousGesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
             guard !workspace.input.contact.consumeClick() else { return }
@@ -303,6 +309,21 @@ struct WorkspaceSource: Equatable {
     let item: String
     let surface: ReorderSurface
     let context: String?
+    var canDrag = true
+}
+struct WorkspaceControlSurface: ViewModifier {
+    let workspace: WorkspacePresentation
+    @State private var sourceID = UUID().uuidString
+    @Environment(\.workspaceGesturesEnabled) private var enabled
+    @Environment(\.workspaceLayer) private var layer
+    @Environment(\.workspaceClip) private var clip
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { allocation in
+            Color.clear.preference(key: WorkspaceSources.self,
+                value: enabled ? [sourceID: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip),
+                    layer: layer, item: "control:" + sourceID, surface: .control, context: nil, canDrag: false)] : [:])
+        })
+    }
 }
 struct WorkspaceSources: PreferenceKey {
     static var defaultValue: [String: WorkspaceSource] { [:] }
