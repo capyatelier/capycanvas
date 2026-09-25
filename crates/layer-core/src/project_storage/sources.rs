@@ -1,13 +1,7 @@
 //! Immutable source indices share tile payloads with the archive. Profiles are
 //! binary payloads, never large JSON byte arrays or reconstructed display names.
 use super::*;
-use crate::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
-
-#[derive(Clone, Serialize, Deserialize)]
-enum ProfileReference {
-    Builtin(RgbSpace),
-    Embedded(usize),
-}
+use crate::color::{ColorProfile, SampleDepth, ProfileReference, source::*};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImageRecord {

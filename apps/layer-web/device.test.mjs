@@ -1,4 +1,5 @@
 import {checkTonalSelections} from './tonal-selection.test.mjs';
+import {checkBinaryTransfer} from './binary-transfer.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkToolbarComponents} from './toolbar-components.test.mjs';
@@ -104,7 +105,9 @@ try {
     workspaceIsolation={original,created,capture,theme};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--tonal-selection")) {
+  if (process.argv.includes("--binary-transfer")) {
+    await checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL); assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--tonal-selection")) {
     await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--toolbar-components")) {
     await checkToolbarComponents({call,evaluate,settle}); assert.deepEqual(errors,[]);

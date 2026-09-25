@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 mod sources;
 use sources::SourceIndex;
 mod selections;
-use selections::SelectionIndex;
+pub use selections::SelectionIndex;
 #[cfg(test)]
 mod native_color;
 

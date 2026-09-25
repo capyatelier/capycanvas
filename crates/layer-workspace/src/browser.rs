@@ -13,6 +13,7 @@ pub struct BrowserDatabase {
     schema: u32,
     items: BTreeMap<String, BrowserRecord>,
     fences: BTreeMap<String, String>,
+    #[serde(with = "crate::component_text")]
     components: BTreeMap<String, Vec<u8>>,
     receipts: BTreeMap<String, (String, CommitReceipt)>,
     acknowledged: Vec<String>,

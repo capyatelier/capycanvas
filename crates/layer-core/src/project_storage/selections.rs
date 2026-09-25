@@ -62,6 +62,25 @@ mod tests {
             document,
             assets: Default::default(),
         };
+        let mut transferred = project.document.clone();
+        let mut blocks = Vec::new();
+        let index = SelectionIndex::detach(&mut transferred, |pixels, range| {
+            let mut bytes = vec![0; CHUNK_BYTES];
+            for (word, dest) in pixels.words()[range].iter().zip(bytes.chunks_exact_mut(4)) {
+                dest.copy_from_slice(&word.to_le_bytes());
+            }
+            blocks.push(bytes); Ok(blocks.len() - 1)
+        }).unwrap();
+        assert!(serde_json::to_vec(&transferred).unwrap().len() < 4096);
+        assert!(serde_json::to_vec(&index).unwrap().len() < 128 * 1024);
+        assert!(index.attach(&mut transferred.clone(), ProjectLimits {
+            raster_bytes: 1024, ..Default::default()
+        }, |id| Ok(blocks[id].clone())).is_err());
+        index.attach(&mut transferred, Default::default(), |id| Ok(std::mem::take(&mut blocks[id]))).unwrap();
+        assert_eq!(transferred.selection, project.document.selection);
+        let SelectionShape::Pixels(current) = &transferred.selection.as_ref().unwrap().shape else { panic!() };
+        let SelectionShape::Pixels(saved) = &transferred.layers[0].selection.as_ref().unwrap().shape else { panic!() };
+        assert!(Arc::ptr_eq(current, saved));
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
         let metadata_bytes = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
@@ -174,7 +193,7 @@ enum Target {
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SelectionIndex {
+pub struct SelectionIndex {
     pixels: Vec<PixelsRecord>,
     bindings: Vec<Binding>,
 }
@@ -197,6 +216,26 @@ fn selections(document: &mut Document) -> impl Iterator<Item = (Target, &mut Sel
 }
 
 impl SelectionIndex {
+    /// Fixed-size little-endian word blocks, with zero padding in the last block.
+    pub const CHUNK_BYTES: usize = CHUNK_BYTES;
+
+    /// Private worker input uses raw blocks so compression stays off the editor
+    /// thread. Archive input uses the same index and validation with LZ4 blocks.
+    pub fn attach(
+        &self, document: &mut Document, limits: ProjectLimits,
+        read: impl FnMut(usize) -> Result<Vec<u8>, String>,
+    ) -> Result<(), String> {
+        self.check_version(document, false)?;
+        let mut chunks = BTreeSet::new();
+        self.validate_index(document, limits, |id| {
+            if !chunks.insert(id) || chunks.len() > limits.tiles {
+                return Err("Duplicate or excessive selection transfer blocks".into());
+            }
+            Ok(())
+        })?;
+        self.restore_with(document, read)
+    }
+
     pub(super) fn check_version(
         &self,
         document: &mut Document,
@@ -217,9 +256,28 @@ impl SelectionIndex {
         blob_ids: &mut BTreeMap<[u8; 32], usize>,
         tile_count: &mut usize,
     ) -> Result<Self, String> {
+        let mut bytes = vec![0; CHUNK_BYTES];
+        Self::detach(document, |pixels, range| {
+            bytes.fill(0);
+            for (word, destination) in pixels.words()[range].iter().zip(bytes.chunks_exact_mut(4)) {
+                destination.copy_from_slice(&word.to_le_bytes());
+            }
+            let blob = Arc::new(TileBlob::encode(color::PixelDescriptor::COVERAGE8, &bytes)?);
+            let id = *blob_ids.entry(blob.digest).or_insert_with(|| {
+                let id = blobs.len(); blobs.push(blob); id
+            });
+            *tile_count += 1;
+            Ok(id)
+        })
+    }
+
+    /// Detach shared masks once; the host decides how to transport their blocks.
+    pub fn detach(
+        document: &mut Document,
+        mut chunk: impl FnMut(&Arc<SelectionPixels>, std::ops::Range<usize>) -> Result<usize, String>,
+    ) -> Result<Self, String> {
         let mut result = Self::default();
         let mut masks = BTreeMap::new();
-        let mut bytes = vec![0; CHUNK_BYTES];
         for (target, selection) in selections(document) {
             let SelectionShape::Pixels(pixels) = &selection.shape else {
                 continue;
@@ -229,20 +287,8 @@ impl SelectionIndex {
                 *index
             } else {
                 let mut chunks = Vec::new();
-                for words in pixels.words().chunks(CHUNK_BYTES / 4) {
-                    bytes.fill(0);
-                    for (word, destination) in words.iter().zip(bytes.chunks_exact_mut(4)) {
-                        destination.copy_from_slice(&word.to_le_bytes());
-                    }
-                    let blob =
-                        Arc::new(TileBlob::encode(color::PixelDescriptor::COVERAGE8, &bytes)?);
-                    let id = *blob_ids.entry(blob.digest).or_insert_with(|| {
-                        let id = blobs.len();
-                        blobs.push(blob);
-                        id
-                    });
-                    chunks.push(id);
-                    *tile_count += 1;
+                for start in (0..pixels.words().len()).step_by(CHUNK_BYTES / 4) {
+                    chunks.push(chunk(pixels, start..(start + CHUNK_BYTES / 4).min(pixels.words().len()))?);
                 }
                 let index = result.pixels.len();
                 result.pixels.push(PixelsRecord {
@@ -272,6 +318,20 @@ impl SelectionIndex {
         limits: ProjectLimits,
         referenced: &mut BTreeSet<usize>,
         tile_count: &mut usize,
+    ) -> Result<(), String> {
+        self.validate_index(document, limits, |id| {
+            if blobs.get(id).is_none_or(|b| b.descriptor != color::PixelDescriptor::COVERAGE8) {
+                return Err("Invalid selection chunk descriptor".into());
+            }
+            referenced.insert(id);
+            *tile_count += 1;
+            Ok(())
+        })
+    }
+
+    fn validate_index(
+        &self, document: &Document, limits: ProjectLimits,
+        mut chunk: impl FnMut(usize) -> Result<(), String>,
     ) -> Result<(), String> {
         if self.bindings.len() > document.layers.len() * 2 + 1
             || self.pixels.len() > self.bindings.len()
@@ -324,14 +384,7 @@ impl SelectionIndex {
                 return Err("Selection coverage exceeds the project memory limit".into());
             }
             for id in &pixels.chunks {
-                if blobs
-                    .get(*id)
-                    .is_none_or(|b| b.descriptor != color::PixelDescriptor::COVERAGE8)
-                {
-                    return Err("Invalid selection chunk descriptor".into());
-                }
-                referenced.insert(*id);
-                *tile_count += 1;
+                chunk(*id)?;
             }
         }
         Ok(())
@@ -342,6 +395,13 @@ impl SelectionIndex {
         tiles: &[RasterTile],
         document: &mut Document,
     ) -> Result<(), String> {
+        self.restore_with(document, |id| tiles[id].wait_backing()?.decode())
+    }
+
+    fn restore_with(
+        &self, document: &mut Document,
+        mut read: impl FnMut(usize) -> Result<Vec<u8>, String>,
+    ) -> Result<(), String> {
         let mut masks = Vec::with_capacity(self.pixels.len());
         for record in &self.pixels {
             let count = record.words() as usize;
@@ -350,7 +410,8 @@ impl SelectionIndex {
                 .try_reserve_exact(count)
                 .map_err(|_| "Selection allocation failed")?;
             for id in &record.chunks {
-                let bytes = tiles[*id].wait_backing()?.decode()?;
+                let bytes = read(*id)?;
+                if bytes.len() != CHUNK_BYTES { return Err("Invalid selection block length".into()); }
                 let remaining = count - words.len();
                 let used = bytes.len().min(remaining * 4);
                 if bytes[used..].iter().any(|v| *v != 0) {

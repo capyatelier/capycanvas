@@ -44,6 +44,7 @@ struct Package {
     metadata: Metadata,
     content: serde_json::Value,
     working: Option<layer_ui::WorkspaceWorkingState>,
+    #[serde(with = "crate::component_text")]
     components: BTreeMap<String, Vec<u8>>,
 }
 pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
@@ -65,7 +66,7 @@ pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
     let content = protocol::pack(value, &mut components)?;
     let bytes = serde_json::to_vec(&Package {
         format: "capycanvas-workspace".into(),
-        version: 1,
+        version: 2,
         kind: PackageKind::for_entity(entity),
         metadata,
         content,
@@ -87,7 +88,7 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
     }
     let header: serde_json::Value = serde_json::from_slice(bytes)?;
     if header.get("format").and_then(|v| v.as_str()) != Some("capycanvas-workspace")
-        || header.get("version").and_then(|v| v.as_u64()) != Some(1)
+        || !matches!(header.get("version").and_then(|v| v.as_u64()), Some(1 | 2))
     {
         return Err(StoreError::new(
             ErrorKind::UnsupportedSchema,

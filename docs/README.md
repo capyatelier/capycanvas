@@ -40,7 +40,7 @@ These documents assume familiarity with the concept guides above.
 
 | Area | References |
 | --- | --- |
-| Document files | [Project format](reference/project-format.md). |
+| Document files | [Project format](reference/project-format.md), [binary payload boundaries](development/binary-payloads.md). |
 | Brushes | [Dab layout and raster rules](brush-renderer.md), [GPU brush stages](reference/gpu-brush-engine.md), [painterly paint state](reference/painterly-paint-state.md). |
 | Input | [Stroke feedback and platform mapping](reference/instant-stroke-feedback.md). |
 | UI | [Shared UI contract](ui/shared-ui.md), [panel customization](ui/panel-customization.md), [numeric controls](ui/numeric-controls.md), [theme colors](ui/theme-colors.md). |

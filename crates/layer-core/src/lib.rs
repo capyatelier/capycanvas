@@ -10,6 +10,7 @@ mod atomic_file;
 pub use atomic_file::{atomic_write, atomic_write_checked};
 
 pub mod color;
+pub mod binary_payload;
 mod image_metadata;
 pub use image_metadata::{ImageResolution, ResolutionUnit};
 mod contact;
@@ -36,6 +37,7 @@ mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
 mod project;
 mod project_storage;
+pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;
 mod color_edit;
 mod color_history;

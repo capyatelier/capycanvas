@@ -4,7 +4,7 @@
 use super::*;
 use layer_core::{
     Document, LayerId, Project, ProjectAsset, ProjectAssetFormat, ProjectLimits,
-    color::PixelDescriptor,
+    color::{PixelDescriptor, ProfileReference},
     raster::{RasterData, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey},
 };
 use std::{
@@ -30,7 +30,9 @@ struct Metadata {
     document: Document,
     // Document's generic serde intentionally skips persisted proof metadata;
     // the native archive owns its profile table. Carry it across worker heaps.
-    proof: Option<layer_core::color::ProofRecipe>,
+    proof: Option<layer_core::color::ProofRecipe<ProfileReference>>,
+    profiles: Vec<Vec<usize>>,
+    selections: layer_core::ProjectSelections,
     rasters: Vec<Raster>,
     blobs: Vec<Blob>,
     sources: Vec<Source>,
@@ -61,13 +63,13 @@ struct Original {
     kind: layer_core::color::source::SourceKind,
     extent: [u32; 2],
     resolution: Option<layer_core::ImageResolution>,
-    interpretation: layer_core::color::source::SourceInterpretation,
+    interpretation: layer_core::color::source::SourceInterpretation<ProfileReference>,
     tiles: Vec<([u32; 2], usize)>,
 }
-struct Part {
-    bytes: Option<Arc<[u8]>>,
-    tile: Option<Arc<TileBlob>>,
-    range: Range<usize>,
+enum Part {
+    Bytes(Arc<[u8]>, Range<usize>),
+    Tile(Arc<TileBlob>),
+    Selection(Arc<layer_core::SelectionPixels>, Range<usize>),
 }
 
 pub(super) async fn wait_backing(project: &Project) -> Result<(), JsValue> {
@@ -105,15 +107,23 @@ pub(super) async fn wait_backing(project: &Project) -> Result<(), JsValue> {
 fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     let project = project.pruned()?;
     project.validate(limits(ProjectLimits::default().dimension))?;
+    let mut document = project.document.clone();
+    let mut parts = Vec::new();
+    let selections = layer_core::ProjectSelections::detach(&mut document, |pixels, range| {
+        let index = parts.len();
+        parts.push(Part::Selection(pixels.clone(), range));
+        Ok(index)
+    })?;
+    let mut profile_bytes = Vec::new();
+    let proof = document.proof.as_ref().map(|p| p.clone().with_profile(
+        ProfileReference::detach(&p.profile, &mut profile_bytes)));
     let mut metadata = Metadata {
-        document: project.document.clone(),
-        proof: project.document.proof.clone(),
+        document, proof, selections, profiles: Vec::new(),
         rasters: Vec::new(),
         blobs: Vec::new(),
         sources: Vec::new(),
         originals: Vec::new(),
     };
-    let mut parts = Vec::new();
     let mut dedup = BTreeMap::new();
     for layer in &project.document.layers {
         for (target, root) in std::iter::once((layer.id, &layer.raster))
@@ -147,20 +157,16 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
             originals.insert(identity, metadata.originals.len());
             metadata.originals.push(Original {
                 layers: vec![layer.id], kind: source.kind, extent: source.extent,
-                resolution: source.resolution, interpretation: source.interpretation.clone(), tiles,
+                resolution: source.resolution, interpretation: source.interpretation.clone().with_profile(
+                    ProfileReference::detach(&source.interpretation.profile, &mut profile_bytes)), tiles,
             });
         }
     }
+    for bytes in profile_bytes {
+        metadata.profiles.push(push_bytes(bytes, &mut parts));
+    }
     for (id, asset) in &project.assets {
-        let mut data = Vec::new();
-        for start in (0..asset.bytes.len()).step_by(BLOCK) {
-            data.push(parts.len());
-            parts.push(Part {
-                bytes: Some(asset.bytes.clone()),
-                tile: None,
-                range: start..(start + BLOCK).min(asset.bytes.len()),
-            });
-        }
+        let data = push_bytes(asset.bytes.clone(), &mut parts);
         metadata.sources.push(Source {
             id: id.clone(),
             extent: asset.extent,
@@ -171,12 +177,20 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     Ok((metadata, parts))
 }
 
+fn push_bytes(bytes: Arc<[u8]>, parts: &mut Vec<Part>) -> Vec<usize> {
+    (0..bytes.len()).step_by(BLOCK).map(|start| {
+        let index = parts.len();
+        parts.push(Part::Bytes(bytes.clone(), start..(start + BLOCK).min(bytes.len())));
+        index
+    }).collect()
+}
+
 fn push_blob(blob: &Arc<TileBlob>, blobs: &mut Vec<Blob>, parts: &mut Vec<Part>,
     dedup: &mut BTreeMap<[u8; 32], usize>) -> usize {
     *dedup.entry(blob.digest).or_insert_with(|| {
         let index = blobs.len();
         blobs.push(Blob { descriptor: blob.descriptor, digest: blob.digest, data: parts.len() });
-        parts.push(Part { bytes: None, tile: Some(blob.clone()), range: 0..blob.compressed_len() });
+        parts.push(Part::Tile(blob.clone()));
         index
     })
 }
@@ -187,16 +201,26 @@ pub(super) async fn pack(project: Project) -> Result<JsValue, JsValue> {
     let buffers = js_sys::Array::new();
     let mut copied = 0;
     for part in parts {
-        let bytes = if let Some(tile) = part.tile {
-            let deadline = js_sys::Date::now() + 30_000.;
-            while !tile.compressed_ready().map_err(js)? {
-                if js_sys::Date::now() > deadline { return Err(js("Parked drawing read timed out")); }
-                documents::yield_browser().await?;
+        let buffer = match part {
+            Part::Tile(tile) => {
+                let deadline = js_sys::Date::now() + 30_000.;
+                while !tile.compressed_ready().map_err(js)? {
+                    if js_sys::Date::now() > deadline { return Err(js("Parked drawing read timed out")); }
+                    documents::yield_browser().await?;
+                }
+                js_sys::Uint8Array::from(tile.compressed().map_err(js)?.as_ref())
             }
-            tile.compressed().map_err(js)?
-        } else { part.bytes.unwrap() };
-        copied += part.range.len();
-        buffers.push(&js_sys::Uint8Array::from(&bytes[part.range]));
+            Part::Bytes(bytes, range) => js_sys::Uint8Array::from(&bytes[range]),
+            Part::Selection(pixels, range) => {
+                let mut bytes = vec![0; layer_core::ProjectSelections::CHUNK_BYTES];
+                for (word, dest) in pixels.words()[range].iter().zip(bytes.chunks_exact_mut(4)) {
+                    dest.copy_from_slice(&word.to_le_bytes());
+                }
+                js_sys::Uint8Array::from(bytes.as_slice())
+            }
+        };
+        copied += buffer.length() as usize;
+        buffers.push(&buffer);
         if copied >= BLOCK {
             copied = 0;
             documents::yield_browser().await?;
@@ -238,12 +262,32 @@ pub(super) async fn unpack(
         document: metadata.document,
         assets: BTreeMap::new(),
     };
-    project.document.proof = metadata.proof;
     let budget = limits(ProjectLimits::default().dimension);
     if metadata.blobs.len() > budget.tiles || metadata.rasters.len() > budget.layers * 2
-        || metadata.originals.len() > budget.layers {
+        || metadata.originals.len() > budget.layers || metadata.profiles.len() > budget.layers + 1 {
         return Err(js("Oversized project worker index"));
     }
+    let mut profiles = Vec::<Arc<[u8]>>::new();
+    let mut profile_bytes = 0usize;
+    for indices in metadata.profiles {
+        let mut bytes = Vec::new();
+        for index in indices {
+            let block = part(&buffers, index)?;
+            profile_bytes = profile_bytes.checked_add(block.len())
+                .filter(|n| *n as u64 <= budget.asset_bytes)
+                .ok_or_else(|| js("Project profile budget exceeded"))?;
+            if bytes.len() + block.len() > layer_core::color::source::MAX_PROFILE_BYTES {
+                return Err(js("Oversized project profile"));
+            }
+            bytes.extend_from_slice(&block);
+            documents::yield_browser().await?;
+        }
+        profiles.push(bytes.into());
+    }
+    project.document.proof = metadata.proof.map(|p| {
+        let profile = p.profile.resolve(&profiles)?;
+        Ok::<_, String>(p.with_profile(profile))
+    }).transpose().map_err(js)?;
     let mut tiles = Vec::new();
     let mut copied = 0;
     for blob in metadata.blobs {
@@ -261,6 +305,8 @@ pub(super) async fn unpack(
             documents::yield_browser().await?;
         }
     }
+    metadata.selections.attach(&mut project.document, budget, |index|
+        part(&buffers, index).map_err(|e| format!("{e:?}"))).map_err(js)?;
     let mut seen = BTreeSet::new();
     for raster in metadata.rasters {
         if !seen.insert(raster.target) {
@@ -308,9 +354,10 @@ pub(super) async fn unpack(
     }
     let mut source_layers = BTreeSet::new();
     for original in metadata.originals {
+        let profile = original.interpretation.profile.resolve(&profiles).map_err(js)?;
         let mut source = layer_core::color::source::SourceImage {
             kind: original.kind, extent: original.extent, resolution: original.resolution,
-            interpretation: original.interpretation, tiles: BTreeMap::new(),
+            interpretation: original.interpretation.with_profile(profile), tiles: BTreeMap::new(),
         };
         for (coordinate, index) in original.tiles {
             let tile = tiles.get(index).ok_or_else(|| js("Missing original source tile"))?;

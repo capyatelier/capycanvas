@@ -6,7 +6,7 @@ pub use rgb::RgbSpace;
 mod value;
 pub use value::RgbColor;
 mod profile;
-pub use profile::{ColorProfile, ConversionOptions, SampleDepth, ProfileChannels, RenderingIntent};
+pub use profile::{ColorProfile, ProfileReference, ConversionOptions, SampleDepth, ProfileChannels, RenderingIntent};
 mod output;
 pub use output::{OutputDither, OutputEncoding};
 mod proof;

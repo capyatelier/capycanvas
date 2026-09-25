@@ -46,6 +46,30 @@ pub enum ColorProfile {
     Icc(Arc<[u8]>),
 }
 
+/// Metadata reference into a transport's binary ICC table.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProfileReference {
+    Builtin(RgbSpace),
+    Embedded(usize),
+}
+impl ProfileReference {
+    pub fn detach(profile: &ColorProfile, payloads: &mut Vec<Arc<[u8]>>) -> Self {
+        match profile {
+            ColorProfile::Builtin(space) => Self::Builtin(*space),
+            ColorProfile::Icc(bytes) => Self::Embedded(payloads.iter().position(|p| p == bytes)
+                .unwrap_or_else(|| { payloads.push(bytes.clone()); payloads.len() - 1 })),
+        }
+    }
+    pub fn resolve(&self, payloads: &[Arc<[u8]>]) -> Result<ColorProfile, String> {
+        match self {
+            Self::Builtin(space) => Ok(ColorProfile::Builtin(*space)),
+            Self::Embedded(index) => payloads.get(*index)
+                .filter(|p| !p.is_empty() && p.len() <= super::source::MAX_PROFILE_BYTES)
+                .cloned().map(ColorProfile::Icc).ok_or_else(|| "Missing or oversized ICC payload".into()),
+        }
+    }
+}
+
 impl Default for ColorProfile {
     fn default() -> Self {
         Self::Builtin(RgbSpace::Srgb)
