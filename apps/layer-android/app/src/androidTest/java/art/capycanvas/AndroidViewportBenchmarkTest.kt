@@ -39,6 +39,8 @@ class AndroidViewportBenchmarkTest {
         val strokeOffset = args.getString("strokeOffset", "0")!!.toDouble()
         val zoomSteps = args.getString("zoomSteps", "0")!!.toInt()
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
+        val motion = args.getString("motion", "stroke")!!
+        check(motion in listOf("stroke", "pan", "pinch"))
         try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -117,6 +119,38 @@ class AndroidViewportBenchmarkTest {
                     }
                 }
             }
+            fun gesture(milliseconds: Int) {
+                val properties = Array(2) { index -> android.view.MotionEvent.PointerProperties().apply {
+                    id = index + 11; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+                } }
+                val coords = Array(2) { android.view.MotionEvent.PointerCoords().apply { this.pressure = 1f; this.size = .1f } }
+                val down = SystemClock.uptimeMillis()
+                fun send(action: Int, count: Int, t: Double) {
+                    val phase = t / 2 * 2 * PI
+                    val (x, y, spread) = if (motion == "pan") Triple(cx + radius * .8 * sin(phase), cy + radius * .5 * sin(2 * phase), 150.0)
+                        else Triple(cx, cy, 150 * exp(.4 * sin(phase)))
+                    for (i in 0..1) {
+                        coords[i].x = (x + (if (i == 0) -spread else spread)).toFloat() + host.surfaceOrigin.x
+                        coords[i].y = y.toFloat() + host.surfaceOrigin.y
+                    }
+                    val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, count, properties, coords,
+                        0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                    try { check(instrumentation.uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
+                }
+                val pointer = android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT
+                val began = System.nanoTime()
+                send(android.view.MotionEvent.ACTION_DOWN, 1, 0.0)
+                send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl pointer), 2, 0.0)
+                val count = (milliseconds / interval).toInt()
+                for (i in 1..count) {
+                    val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
+                    if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
+                    send(android.view.MotionEvent.ACTION_MOVE, 2, i * interval / 1000.0 * speed)
+                }
+                val end = count * interval / 1000.0 * speed
+                send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
+                send(android.view.MotionEvent.ACTION_UP, 1, end)
+            }
             stroke(0, 1500); SystemClock.sleep(800)
             val info = obj("label" to label, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
@@ -132,7 +166,7 @@ class AndroidViewportBenchmarkTest {
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
                 activePresent = present
                 val began = System.nanoTime()
-                stroke(run + 1, duration)
+                if (motion == "stroke") stroke(run + 1, duration) else gesture(duration)
                 activePresent = null
                 SystemClock.sleep(500)
                 val ended = System.nanoTime()
@@ -141,7 +175,7 @@ class AndroidViewportBenchmarkTest {
                 val afterRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
                 assertNull(host.failure)
                 assertNull(host.actionError)
-                assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
+                if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 val data = report(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })
@@ -150,6 +184,10 @@ class AndroidViewportBenchmarkTest {
                 assertTrue("GPU timestamps must be collected", (0 until present.length()).sumOf { present.getJSONArray(it).length() } > 100)
                 File(output, "$label-$run.json").writeText(data.toString())
                 println("VIEWPORT $label run=$run frames=${data.getJSONArray("frames").length()} renderer=${data.getJSONObject("renderer").getJSONArray("rows")}")
+                if (motion != "stroke") {
+                    scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
+                    SystemClock.sleep(1500)
+                }
             }
             assertNull(host.failure)
             native { Native.presentationTimings(it, false) }

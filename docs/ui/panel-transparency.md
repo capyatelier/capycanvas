@@ -65,8 +65,12 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
   shared `DrawerConnection::glass` geometry.
 
 The presenter renders the artwork again at quarter resolution, with a camera of
-four times the pixel footprint, into a dual-Kawase pyramid and caches the
-finished half-resolution blur. It draws the glass in its own pass, above the
+four times the pixel footprint, into a dual-Kawase pyramid (Low and Medium go
+down to 1/8, High to 1/16). The last upsample writes the finished
+quarter-resolution blur straight into a cache, over the glass interiors only.
+Stopping at quarter resolution rather than half removes the most expensive
+pass and a copy; Low and Medium use Kawase offsets of 2.9 and 3.4 so the blur
+keeps its earlier width. It draws the glass in its own pass, above the
 cursor and color picker and below Navigator overviews, which are neither blurred
 nor used as blur input. Each region's fully covered interior (the cross of a
 5×5 grid through its corners) takes one texture tap, and the viewport skips
@@ -146,7 +150,9 @@ The blur is cached. Its input is the composite repaint plus selection paint;
 cursor, picker and overviews do not affect it. When that damage lies within the
 blur reach of cached glass, only the glass within reach of the damage is
 recomputed, from its own reach of artwork. New regions, regions that move beyond
-a 96-pixel slack, and camera changes recompute whole regions. While a brush
+a 96-pixel slack, and camera changes recompute whole regions. Glass recomputed
+on consecutive camera frames keeps no slack, since the next frame recomputes it
+anyway. While a brush
 stroke is in progress (`has_active_stroke`), artwork damage leaves the cached
 blur in place; the first frame after the stroke refreshes the glass it
 reached, so pen latency never includes a glass refresh. Retained targets, such
@@ -158,17 +164,32 @@ default Paint layout's glass):
 
 | Surface (glass share) | Viewport only | Cached glass | Moving camera, Low / High |
 | --- | --- | --- | --- |
-| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.041 / 0.046 ms |
-| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.072 / 0.078 ms |
-| 3840×2160 @1× (15%) | 0.045 ms | 0.044 ms | 0.077 / 0.082 ms |
-| 5120×2880 @2× (23%) | 0.071 ms | 0.070 ms | 0.109 / 0.117 ms |
+| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.026 / 0.031 ms |
+| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.048 / 0.054 ms |
+| 3840×2160 @1× (15%) | 0.044 ms | 0.044 ms | 0.055 / 0.060 ms |
+| 5120×2880 @2× (23%) | 0.070 ms | 0.069 ms | 0.081 / 0.089 ms |
 
 Cached glass costs no more than the plain viewport, because its interiors
 replace viewport pixels. A moving camera recomputes every frame.
 
-The Huion tablet (Mali-G57) sets the tight budget. Its pen measurements compare
-the same build at each level, drawing an 18 px round brush on a 1024 px
-document with replayed OS pen input.
+The Huion tablet (Mali-G57 MC2, 2400×1600) sets the tight budget. For
+navigation, two injected fingers pan or pinch a 1024 px document at 205% for
+3×5 s (`AndroidViewportBenchmarkTest` with `motion`); the latency runs from each
+frame's newest input to its GPU completion (p50):
+
+| Motion | Off | Low | Medium | High |
+| --- | --- | --- | --- | --- |
+| Pan, half-resolution blur | 25.7 ms | 31.1 ms | 30.7 ms | 32.2 ms |
+| Pan, quarter-resolution blur | 25.8 ms | 27.4 ms | 27.1 ms | 28.1 ms |
+| Pinch, half-resolution blur | 29.5 ms | 41.5 ms | 40.2 ms | 42.5 ms |
+| Pinch, quarter-resolution blur | 29.4 ms | 36.8 ms | 37.5 ms | 37.9 ms |
+
+Panning at Low now presents 88 frames/s against 89 at Off (76 before). A pinch
+already keeps this GPU nearly busy at Off while display mips follow the zoom,
+so even the smaller recompute makes it GPU-bound and queues a frame.
+
+The tablet's pen measurements compare the same build at each level, drawing an
+18 px round brush on a 1024 px document with replayed OS pen input.
 
 Android, front-buffer presentation, submission to GPU completion of each
 presentation (p50 / p95):
@@ -193,7 +214,7 @@ Web, Chrome on the tablet, a stroke across the fitted document (3–6 runs of
 | Medium | 75.8 | 28.0 / 32.0 / 34.3 ms |
 | High | 77.3 | 28.3 / 32.2 / 33.6 ms |
 
-Every level reuses the cached blur for the whole stroke; High, whose 139-pixel
+Every level reuses the cached blur for the whole stroke; High, whose 123-pixel
 reach touches the panels, refreshes it once when the stroke ends.
 
 Apple Release builds, the synthetic `ink` workload (2048 px document, 24 px
@@ -266,5 +287,7 @@ level in the [Web pen harness](../development/web-pen-huion-2026-09-20.md), and
 each run reports recomputed and reused glass frames. The Android viewport
 benchmark takes `-e transparency low`, `-e zoomSteps 2` and `-e strokeOffset 0.25`
 (a fraction of the work area toward the right-hand panels) alongside the
-[front-buffer benchmark arguments](../development/android-front-buffer-results-2026-09-20.md);
-`android-viewport-report.py` reports `completion_ms`.
+[front-buffer benchmark arguments](../development/android-front-buffer-results-2026-09-20.md).
+`-e motion pan` or `-e motion pinch` replaces the stroke with two injected
+fingers. `android-viewport-report.py` reports `completion_ms` and
+`input_to_completion_ms`, from each frame's newest input to its GPU completion.

@@ -150,6 +150,11 @@ fn cached_blur_is_reused_until_the_camera_or_a_long_move() {
     assert_eq!(presenter.backdrop_frames(), [2, 2], "a long move recomputes");
     present(&r, &mut presenter, &surface, 8.);
     assert_eq!(presenter.backdrop_frames(), [3, 2], "camera changes recompute");
+    present(&r, &mut presenter, &surface, 16.);
+    assert_eq!(presenter.backdrop_frames(), [4, 2], "continued camera motion recomputes");
+    place(&mut presenter, 324.);
+    present(&r, &mut presenter, &surface, 16.);
+    assert_eq!(presenter.backdrop_frames(), [5, 2], "glass blurred during camera motion keeps no slack");
 }
 
 #[test]
@@ -206,22 +211,24 @@ fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
 #[test]
 fn local_refresh_matches_a_full_blur() {
     let size = [256, 128];
-    let mut r = document(size);
-    let surface = texture(&r, size);
     let glass = [region([140., 32., 96., 64.], [12.; 4])];
-    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
-    presenter.set_backdrop(&r, &glass, Default::default(), false);
-    let before = present(&r, &mut presenter, &surface, 0.);
-    paint_near_glass(&mut r, size);
-    let local = present(&r, &mut presenter, &surface, 0.);
-    assert_eq!(presenter.backdrop_frames(), [2, 0], "paint within reach refreshes the cached blur");
-    let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
-    fresh.set_backdrop(&r, &glass, Default::default(), false);
-    let full = present(&r, &mut fresh, &surface, 0.);
-    let worst = local.iter().zip(&full).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-    assert!(worst <= 1, "local refresh differs from a full blur by {worst}");
-    let at = |bytes: &[u8]| bytes[((64 * 256 + 150) * 4) as usize];
-    assert!(at(&local) < at(&before), "the nearby dab darkens the glass");
+    for style in [BackdropBlurStyle { levels: 3, offset: 2.9 }, BackdropBlurStyle::default(), BackdropBlurStyle { levels: 4, offset: 2.5 }] {
+        let mut r = document(size);
+        let surface = texture(&r, size);
+        let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+        presenter.set_backdrop(&r, &glass, style, false);
+        let before = present(&r, &mut presenter, &surface, 0.);
+        paint_near_glass(&mut r, size);
+        let local = present(&r, &mut presenter, &surface, 0.);
+        assert_eq!(presenter.backdrop_frames(), [2, 0], "paint within reach refreshes the cached blur");
+        let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
+        fresh.set_backdrop(&r, &glass, style, false);
+        let full = present(&r, &mut fresh, &surface, 0.);
+        let worst = local.iter().zip(&full).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "{style:?}: local refresh differs from a full blur by {worst}");
+        let at = |bytes: &[u8]| bytes[((64 * 256 + 144) * 4) as usize];
+        assert!(at(&local) < at(&before), "{style:?}: the nearby dab darkens the glass");
+    }
 }
 
 #[test]
@@ -374,7 +381,7 @@ fn backdrop_blur_cost() {
         });
         let regions = layout(scale, extent);
         let area: f32 = regions.iter().map(|r| r.bounds[2] * r.bounds[3]).sum();
-        for style in [BackdropBlurStyle { levels: 3, offset: 2.5 }, BackdropBlurStyle { levels: 3, offset: 3. }, BackdropBlurStyle { levels: 4, offset: 2.5 }] {
+        for style in [BackdropBlurStyle { levels: 3, offset: 2.9 }, BackdropBlurStyle { levels: 3, offset: 3.4 }, BackdropBlurStyle { levels: 4, offset: 2.5 }] {
             let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
             presenter.set_backdrop(&r, &regions, style, false);
             let mut cpu = Vec::new();

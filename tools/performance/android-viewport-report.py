@@ -2,6 +2,7 @@
 """Summarize pulled AndroidViewportBenchmarkTest JSON files (directory argument)."""
 
 import argparse
+import bisect
 import json
 from pathlib import Path
 
@@ -17,6 +18,17 @@ def quantiles(values):
             for name, fraction in [("p50", 0.5), ("p95", 0.95), ("p99", 0.99)]
         },
     }
+
+
+def input_to_completion(run, duration):
+    inputs = sorted(run.get("inputs", []), key=lambda row: row[2])
+    started = [row[2] for row in inputs]
+    for row in run.get("completions", []):
+        if not run["begin_ns"] <= row[1] < run["begin_ns"] + duration * 1e9:
+            continue
+        index = bisect.bisect_right(started, row[1]) - 1
+        if index >= 0:
+            yield (row[2] - inputs[index][0]) / 1e6
 
 
 def summarize(directory):
@@ -55,6 +67,9 @@ def summarize(directory):
                 for run in runs
                 for row in run.get("completions", [])
                 if run["begin_ns"] <= row[1] < run["begin_ns"] + duration * 1e9
+            ),
+            "input_to_completion_ms": quantiles(
+                value for run in runs for value in input_to_completion(run, duration)
             ),
             "cpu_callback_ms": quantiles(frame[10] / 1e6 for frame in submitted),
             "owner_cpu_ms": quantiles(frame[17] / 1e6 for frame in submitted),

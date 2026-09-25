@@ -2,6 +2,7 @@ struct Pass {
     inverse_target: vec2<f32>,
     half_texel: vec2<f32>,
     offset: f32,
+    surface_uv: vec2<f32>,
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -50,7 +51,7 @@ fn up(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 
 @fragment
 fn fill(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let blurred = tap(position.xy * pass_data.half_texel);
+    let blurred = tap(position.xy * pass_data.surface_uv);
     return vec4<f32>(blurred.rgb / max(blurred.a, 1e-4), 1.);
 }
 
@@ -116,7 +117,7 @@ fn region_fragment(in: Region) -> @location(0) vec4<f32> {
     coverage *= concave_coverage(p, b.xy + vec2<f32>(b.z, 0.), in.radii.y, n);
     coverage *= concave_coverage(p, b.xy + b.zw, in.radii.z, n);
     coverage *= concave_coverage(p, b.xy + vec2<f32>(0., b.w), in.radii.w, n);
-    let blurred = tap(p * pass_data.half_texel);
+    let blurred = tap(p * pass_data.surface_uv);
     let color = blurred.rgb / max(blurred.a, 1e-4);
     return vec4<f32>(color, 1.) * coverage;
 }

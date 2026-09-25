@@ -53,16 +53,16 @@ pub struct BackdropBlurStyle {
 
 impl Default for BackdropBlurStyle {
     fn default() -> Self {
-        Self { levels: 3, offset: 3. }
+        Self { levels: 3, offset: 3.4 }
     }
 }
 
 impl BackdropBlurStyle {
     fn reach(self) -> u32 {
         let levels = self.levels as f32;
-        let down = (0.5 * self.offset + 1.) * (levels.exp2() - 1.);
-        let up = (self.offset + 1.) * ((levels + 1.).exp2() - 2.);
-        (down + up).ceil() as u32
+        let down = (0.5 * self.offset + 1.) * (levels.exp2() - 4.);
+        let up = (self.offset + 1.) * ((levels + 1.).exp2() - 8.);
+        (12. + down + up).ceil() as u32
     }
 }
 
@@ -91,7 +91,7 @@ pub(crate) struct BackdropBlur {
     fill: wgpu::RenderPipeline,
     region: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
-    scratch: Option<wgpu::Texture>,
+    cache: Option<(wgpu::Texture, wgpu::BindGroup)>,
     levels: Vec<(wgpu::Texture, wgpu::BindGroup)>,
     extent: [u32; 2],
     regions: Vec<BackdropRegion>,
@@ -101,6 +101,7 @@ pub(crate) struct BackdropBlur {
     valid: Vec<PixelRect>,
     hold: bool,
     held: Vec<PixelRect>,
+    moving: bool,
     edges: u32,
     region_buffer: Option<wgpu::Buffer>,
     uploaded: bool,
@@ -217,7 +218,7 @@ impl BackdropBlur {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            scratch: None,
+            cache: None,
             levels: Vec::new(),
             extent: [0; 2],
             regions: Vec::new(),
@@ -227,6 +228,7 @@ impl BackdropBlur {
             valid: Vec::new(),
             hold: false,
             held: Vec::new(),
+            moving: false,
             edges: 0,
             region_buffer: None,
             uploaded: false,
@@ -243,7 +245,7 @@ impl BackdropBlur {
     }
 
     pub fn set_style(&mut self, style: BackdropBlurStyle) {
-        let style = BackdropBlurStyle { levels: style.levels.clamp(2, 6), ..style };
+        let style = BackdropBlurStyle { levels: style.levels.clamp(3, 6), ..style };
         if self.style != style {
             self.style = style;
             self.levels.clear();
@@ -335,41 +337,37 @@ impl BackdropBlur {
         )
     }
 
-    fn level_size(&self, level: usize) -> [u32; 2] {
-        if level == 0 {
-            self.extent
-        } else {
-            let size = self.levels[level - 1].0.size();
-            [size.width, size.height]
-        }
+    fn level_size(&self, shift: u32) -> [u32; 2] {
+        self.extent.map(|v| v.div_ceil(1 << shift).max(1))
     }
 
     fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, extent: [u32; 2]) {
-        if self.extent != extent || self.levels.len() != self.style.levels as usize {
+        let levels = self.style.levels;
+        if self.extent != extent || self.levels.len() + 1 != levels as usize {
             self.extent = extent;
-            let texture = |level: u32| {
+            let format = self.format;
+            let texture = |shift: u32| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("backdrop blur level"),
                     size: wgpu::Extent3d {
-                        width: extent[0].div_ceil(1 << level).max(1),
-                        height: extent[1].div_ceil(1 << level).max(1),
+                        width: extent[0].div_ceil(1 << shift).max(1),
+                        height: extent[1].div_ceil(1 << shift).max(1),
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: self.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_SRC
-                        | wgpu::TextureUsages::COPY_DST,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 })
             };
-            self.scratch = Some(texture(1));
-            self.levels = (1..=self.style.levels)
-                .map(|level| {
-                    let texture = texture(level);
+            let cache = texture(2);
+            let group = self.bind(device, &cache);
+            self.cache = Some((cache, group));
+            self.levels = (2..=levels)
+                .map(|shift| {
+                    let texture = texture(shift);
                     let group = self.bind(device, &texture);
                     (texture, group)
                 })
@@ -380,9 +378,9 @@ impl BackdropBlur {
         if self.uploaded {
             return;
         }
-        let levels = self.style.levels as usize;
-        let mut data = vec![0u8; PASS_STRIDE as usize * (2 * levels)];
-        let mut write = |index: usize, target: [u32; 2], source: [u32; 2]| {
+        let mut data = vec![0u8; PASS_STRIDE as usize * (2 * levels as usize - 3)];
+        let quarter = self.level_size(2);
+        let mut write = |index: u32, target: [u32; 2], source: [u32; 2]| {
             let values = [
                 1. / target[0] as f32,
                 1. / target[1] as f32,
@@ -390,19 +388,19 @@ impl BackdropBlur {
                 0.5 / source[1] as f32,
                 self.style.offset,
                 0.,
-                0.,
-                0.,
+                0.25 / quarter[0] as f32,
+                0.25 / quarter[1] as f32,
             ];
             let bytes: Vec<u8> = values.iter().flat_map(|v: &f32| v.to_ne_bytes()).collect();
-            data[index * PASS_STRIDE as usize..][..bytes.len()].copy_from_slice(&bytes);
+            data[index as usize * PASS_STRIDE as usize..][..bytes.len()].copy_from_slice(&bytes);
         };
-        for level in 3..=levels {
-            write(level - 1, self.level_size(level), self.level_size(level - 1));
+        write(0, extent, quarter);
+        for shift in 3..=levels {
+            write(shift - 2, self.level_size(shift), self.level_size(shift - 1));
         }
-        for level in (1..levels).rev() {
-            write(levels + level - 1, self.level_size(level), self.level_size(level + 1));
+        for shift in 2..levels {
+            write(levels + shift - 3, self.level_size(shift), self.level_size(shift + 1));
         }
-        write(0, self.level_size(0), self.level_size(1));
         queue.write_buffer(&self.uniforms, 0, &data);
         self.interiors.clear();
         let mut edges = Vec::with_capacity(8 * self.placed.len());
@@ -476,8 +474,10 @@ impl BackdropBlur {
             repaint.append(&mut self.drawn);
             self.interiors.clear();
             self.levels.clear();
+            self.cache = None;
             self.valid.clear();
             self.held.clear();
+            self.moving = false;
             self.extent = [0; 2];
             return false;
         }
@@ -506,6 +506,8 @@ impl BackdropBlur {
                 Some(all)
             }
         };
+        let slack = if damage.is_none() && self.moving { 0 } else { SLACK };
+        self.moving = damage.is_none();
         let old = if damage.is_some() { std::mem::take(&mut self.valid) } else { Vec::new() };
         let cached_before = |b: &PixelRect| old.iter().any(|v| contains(*v, *b));
         let (local, stale): (Vec<PixelRect>, Vec<PixelRect>) = damage.into_iter().flatten().partition(|d| {
@@ -527,7 +529,7 @@ impl BackdropBlur {
         }
         let (cached, fresh): (Vec<PixelRect>, Vec<PixelRect>) = bounds.iter().partition(|b| valid.iter().any(|v| contains(*v, **b)));
         let changed: Vec<PixelRect> = local.iter().map(|d| d.expand(reach, extent)).collect();
-        let whole = self.work_for(&fresh, reach + SLACK);
+        let whole = self.work_for(&fresh, reach + slack);
         valid.extend(whole.iter().map(|w| self.interior(*w)).filter(|v| !v.is_empty()));
         valid.dedup();
         self.valid = valid;
@@ -556,15 +558,15 @@ impl BackdropBlur {
         viewport: impl Fn(&mut wgpu::RenderPass),
         timestamps: Option<wgpu::RenderPassTimestampWrites>,
     ) {
-        let levels = self.style.levels as usize;
-        let pass = |encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, shift: u32, timestamps: Option<wgpu::RenderPassTimestampWrites>, draw: &dyn Fn(&mut wgpu::RenderPass)| {
+        let levels = self.style.levels;
+        let pass = |encoder: &mut wgpu::CommandEncoder,
+                    texture: &wgpu::Texture,
+                    rects: &[PixelRect],
+                    shift: u32,
+                    load: wgpu::LoadOp<wgpu::Color>,
+                    timestamps: Option<wgpu::RenderPassTimestampWrites>,
+                    draw: &dyn Fn(&mut wgpu::RenderPass)| {
             let size = texture.size();
-            let areas: Vec<PixelRect> = work
-                .iter()
-                .map(|rect| PixelRect::new(rect.min_x() >> shift, rect.min_y() >> shift,
-                    rect.max_x().div_ceil(1 << shift).min(size.width), rect.max_y().div_ceil(1 << shift).min(size.height)))
-                .filter(|a| !a.is_empty())
-                .collect();
             let view = texture.create_view(&Default::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("backdrop blur"),
@@ -572,51 +574,51 @@ impl BackdropBlur {
                     view: &view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: timestamps,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            for area in areas {
-                pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());
-                draw(&mut pass);
+            for rect in rects {
+                let area = PixelRect::new(rect.min_x() >> shift, rect.min_y() >> shift,
+                    rect.max_x().div_ceil(1 << shift).min(size.width), rect.max_y().div_ceil(1 << shift).min(size.height));
+                if !area.is_empty() {
+                    pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());
+                    draw(&mut pass);
+                }
             }
         };
-        let filter = |pipeline: &wgpu::RenderPipeline, source: &wgpu::BindGroup, uniform: usize, pass: &mut wgpu::RenderPass| {
+        let filter = |pipeline: &wgpu::RenderPipeline, source: &wgpu::BindGroup, uniform: u32, pass: &mut wgpu::RenderPass| {
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, source, &[(uniform as u64 * PASS_STRIDE) as u32]);
+            pass.set_bind_group(0, source, &[uniform * PASS_STRIDE as u32]);
             pass.draw(0..3, 0..1);
         };
-        let scratch = self.scratch.as_ref().unwrap();
-        pass(encoder, &self.levels[1].0, 2, timestamps, &viewport);
-        for level in 3..=levels {
-            pass(encoder, &self.levels[level - 1].0, level as u32, None, &|p| filter(&self.down, &self.levels[level - 2].1, level - 1, p));
+        let level = |shift: u32| &self.levels[shift as usize - 2];
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        pass(encoder, &level(2).0, work, 2, clear, timestamps, &viewport);
+        for shift in 3..=levels {
+            pass(encoder, &level(shift).0, work, shift, clear, None, &|p| filter(&self.down, &level(shift - 1).1, shift - 2, p));
         }
-        for level in (1..levels).rev() {
-            let into = if level == 1 { scratch } else { &self.levels[level - 1].0 };
-            pass(encoder, into, level as u32, None, &|p| filter(&self.up, &self.levels[level].1, levels + level - 1, p));
+        for shift in (3..levels).rev() {
+            pass(encoder, &level(shift).0, work, shift, clear, None, &|p| filter(&self.up, &level(shift + 1).1, levels + shift - 3, p));
         }
-        for interior in work.iter().map(|w| self.interior(*w)) {
-            let area = PixelRect::new(interior.min_x().div_ceil(2), interior.min_y().div_ceil(2), interior.max_x() >> 1, interior.max_y() >> 1);
-            if area.is_empty() {
-                continue;
-            }
-            let origin = wgpu::Origin3d { x: area.min_x(), y: area.min_y(), z: 0 };
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo { texture: scratch, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyTextureInfo { texture: &self.levels[0].0, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },
-                wgpu::Extent3d { width: area.width(), height: area.height(), depth_or_array_layers: 1 },
-            );
-        }
+        let finished: Vec<PixelRect> = work
+            .iter()
+            .map(|w| self.interior(*w))
+            .filter(|i| !i.is_empty())
+            .map(|i| i.expand(4, self.extent))
+            .collect();
+        let cache = &self.cache.as_ref().unwrap().0;
+        pass(encoder, cache, &finished, 2, wgpu::LoadOp::Load, None, &|p| filter(&self.up, &level(3).1, levels - 1, p));
     }
 
     pub fn draw(&self, pass: &mut wgpu::RenderPass, repaint: PixelRect) {
         if self.drawn.is_empty() {
             return;
         }
-        pass.set_bind_group(0, &self.levels[0].1, &[0]);
+        pass.set_bind_group(0, &self.cache.as_ref().unwrap().1, &[0]);
         pass.set_pipeline(&self.fill);
         for area in self.interiors.iter().map(|i| i.intersect(repaint)).filter(|a| !a.is_empty()) {
             pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());

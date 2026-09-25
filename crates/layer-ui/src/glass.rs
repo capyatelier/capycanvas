@@ -38,8 +38,8 @@ impl Transparency {
     pub const fn blur(self) -> BlurStyle {
         match self {
             Self::Off => BlurStyle { levels: 0, offset: 0. },
-            Self::Low => BlurStyle { levels: 3, offset: 2.5 },
-            Self::Medium => BlurStyle { levels: 3, offset: 3. },
+            Self::Low => BlurStyle { levels: 3, offset: 2.9 },
+            Self::Medium => BlurStyle { levels: 3, offset: 3.4 },
             Self::High => BlurStyle { levels: 4, offset: 2.5 },
         }
     }
