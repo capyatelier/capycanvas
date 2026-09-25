@@ -737,6 +737,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.validate_edit(edit)
     }
 
+    pub fn refine_selection(&mut self, target: layer_core::SelectionTarget, coverage: layer_core::Selection, revision: u64) -> Result<(), DocumentError> {
+        self.flush_pending_edits()?;
+        self.editor.refine_selection(target, coverage, revision)
+    }
+
     fn require_renderer_color(&self, color: layer_core::color::DocumentColor) -> Result<(), DocumentError> {
         if color != self.document().color || self.backend.document_color() != color {
             return Err(DocumentError::InvalidLayerOperation(

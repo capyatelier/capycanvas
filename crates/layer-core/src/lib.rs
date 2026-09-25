@@ -1909,6 +1909,33 @@ impl Editor {
         self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET).map(|_| ())
     }
 
+    /// Refine the last selection operation without accumulating slider steps.
+    /// The exact document revision and target guard against unrelated edits,
+    /// navigation, and Undo/Redo. Retain the original inverse and admit both
+    /// directions before publishing the replacement.
+    pub fn refine_selection(&mut self, target: SelectionTarget, coverage: Selection, revision: u64) -> Result<(), DocumentError> {
+        let previous = self.undo.last().filter(|entry| match (&entry.edit, target) {
+            (Edit::SetSelection(_), SelectionTarget::Current) => true,
+            (Edit::SetSavedSelection { id, .. }, SelectionTarget::Saved(target)) => *id == target,
+            _ => false,
+        }).ok_or(DocumentError::InvalidLayerOperation("The selection operation has changed"))?;
+        if self.document.revision != revision || !self.redo.is_empty() {
+            return Err(DocumentError::InvalidLayerOperation("The selection operation has changed"));
+        }
+        let edit = self.document.selection_edit(target, coverage)?;
+        let (candidate, _) = self.prepare_history_edit(edit, history_budget::BYTE_BUDGET)?;
+        if history_budget::Accounting::new(&candidate).charge(previous) > history_budget::BYTE_BUDGET {
+            return Err(DocumentError::InvalidLayerOperation("This edit exceeds the Undo/Redo memory limit"));
+        }
+        self.document = candidate;
+        if matches!(target, SelectionTarget::Saved(_)) {
+            self.checkpoint = self.next_checkpoint;
+            self.next_checkpoint = self.next_checkpoint.checked_add(1).expect("document history exhausted");
+        }
+        self.trim_history(history_budget::BYTE_BUDGET);
+        Ok(())
+    }
+
     fn prepare_history_edit(&self, edit: Edit, budget: usize) -> Result<(Document, HistoryEntry), DocumentError> {
         let mut candidate = self.document.clone();
         let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
