@@ -738,6 +738,19 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_saved_before_palettes_restore_the_default_registry() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            for preset in WorkspacePreset::ALL {
+                let layout = preset.legacy_without_palettes_layout(platform);
+                let mut saved = serde_json::to_value(&layout).unwrap();
+                saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+                let restored: DockLayout = serde_json::from_value(saved).unwrap();
+                assert_eq!(restored, layout, "{platform:?} {}", preset.name());
+            }
+        }
+    }
+
+    #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
         assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");

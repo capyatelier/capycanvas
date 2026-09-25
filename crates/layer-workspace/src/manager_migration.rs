@@ -17,7 +17,9 @@ fn gtk_palettes_upgrade_only_untouched_paint_and_photo_defaults() {
             updated_photographer_default,
         ),
     ] {
-        let old = preset.legacy_without_palettes_layout(Platform::Gtk);
+        let mut saved = serde_json::to_value(preset.legacy_without_palettes_layout(Platform::Gtk)).unwrap();
+        saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+        let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
         let mut entity = Entity::workspace(
             preset.name(),
             WorkspaceCapture {

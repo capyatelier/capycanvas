@@ -1060,7 +1060,8 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
     let mut panels = Vec::<PanelConfig>::deserialize(d)?;
     // Newly available built-ins start hidden in saved workspaces. Keep every
     // existing dock, custom toolbar, tab order and user configuration intact.
-    for default in PanelConfig::defaults() {
+    let defaults = PanelConfig::defaults();
+    for (index, default) in defaults.iter().enumerate() {
         if matches!(
             default.id,
             Panel::Adjustments
@@ -1077,7 +1078,11 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::Proof
         ) && !panels.iter().any(|p| p.id == default.id)
         {
-            panels.push(default);
+            let at = defaults[index + 1..]
+                .iter()
+                .find_map(|next| panels.iter().position(|p| p.id == next.id))
+                .unwrap_or(panels.len());
+            panels.insert(at, default.clone());
         }
     }
     Ok(panels)
