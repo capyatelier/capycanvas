@@ -24,7 +24,8 @@ export async function checkDeviceFullscreen({call,evaluate,settle}) {
   assert.equal(await evaluate('document.querySelector("#system-clock").textContent'),
     await evaluate('new Intl.DateTimeFormat(navigator.languages,{hour:"numeric",minute:"2-digit"}).format(new Date())'));
   if(process.env.LAYER_TEST_ARTIFACTS) {
-    const {writeFile} = await import("node:fs/promises");
+    const {mkdir,writeFile} = await import("node:fs/promises");
+    await mkdir(process.env.LAYER_TEST_ARTIFACTS,{recursive:true});
     const shot = await call("Page.captureScreenshot",{format:"png"});
     await writeFile(`${process.env.LAYER_TEST_ARTIFACTS}/tablet-web-fullscreen.png`,Buffer.from(shot.data,"base64"));
   }
@@ -65,7 +66,8 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   }
   await checkHeaderSpacing(evaluate);
   if (process.env.LAYER_TEST_ARTIFACTS) {
-    const {writeFile} = await import("node:fs/promises");
+    const {mkdir,writeFile} = await import("node:fs/promises");
+    await mkdir(process.env.LAYER_TEST_ARTIFACTS,{recursive:true});
     const shot = await call("Page.captureScreenshot",{format:"png"});
     await writeFile(`${process.env.LAYER_TEST_ARTIFACTS}/web-fullscreen.png`,Buffer.from(shot.data,"base64"));
   }
