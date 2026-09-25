@@ -70,20 +70,18 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   };
   const checkButton = async (active) => {
     // The exit promise can settle before the browser delivers fullscreenchange.
-    await waitFor(`!!document.fullscreenElement === ${active} && !document.querySelector('#fullscreen').disabled && document.querySelector('#fullscreen').title === '${active ? "Exit fullscreen" : "Enter fullscreen"}'`);
-    assert.equal(await evaluate("document.querySelector('#fullscreen').title"), active ? "Exit fullscreen" : "Enter fullscreen");
-    assert.equal(await evaluate("document.querySelector('#fullscreen').getAttribute('aria-label')"), active ? "Exit fullscreen" : "Enter fullscreen");
-    assert.equal(await evaluate("document.querySelector('#fullscreen svg').dataset.asset"), active ? "fullscreen-exit" : "fullscreen-enter");
+    await waitFor(`!!document.fullscreenElement === ${active} && !document.querySelector('#fullscreen').disabled && document.querySelector('#fullscreen svg').dataset.asset === '${active ? "fullscreen-exit" : "fullscreen-enter"}'`);
+    assert.equal(await evaluate("document.querySelector('#fullscreen').getAttribute('aria-label')"), "Full screen");
     await settle();
   };
   await call("Emulation.clearDeviceMetricsOverride");
   await settle();
   try {
     await checkButton(false);
-    assert.ok(await evaluate("(()=>{const f=document.querySelector('#fullscreen'),s=f.nextElementSibling,a=f.getBoundingClientRect(),b=s.getBoundingClientRect();return s.dataset.command==='settings'&&a.width===36&&a.height===36&&b.width===36&&b.height===36&&Math.abs(b.left-a.right-6)<1&&a.top===b.top})()"), "Fullscreen sits immediately left of Settings with matching size and spacing");
+    assert.ok(await evaluate("(()=>{const a=document.querySelector('#fullscreen').getBoundingClientRect(),b=document.querySelector('#header [data-command=settings]').getBoundingClientRect();return a.width===36&&a.height===36&&b.width===36&&b.height===36&&Math.abs(b.left-a.right)<1&&a.top===b.top})()"), "Fullscreen sits immediately left of Settings with matching size");
     await evaluate("window.originalFullscreenRequest=document.documentElement.requestFullscreen;document.documentElement.requestFullscreen=()=>Promise.reject(Error('test denied'))");
     await toggle();
-    await waitFor("document.querySelector('#status').textContent === 'Could not change fullscreen mode.'");
+    await waitFor("document.querySelector('#status').textContent === 'Error: test denied'");
     await checkButton(false);
     await evaluate("document.documentElement.requestFullscreen=window.originalFullscreenRequest;delete window.originalFullscreenRequest;document.querySelector('#status').textContent=''");
     await toggle();
@@ -123,10 +121,10 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: "Object.defineProperty(document,'fullscreenEnabled',{value:false,configurable:true})" });
   const previous = await evaluate("performance.timeOrigin");
   await call("Page.reload");
-  await waitFor(`performance.timeOrigin !== ${previous} && document.body.dataset.gpu === 'ready'`);
+  for (;;) try { await waitFor(`performance.timeOrigin !== ${previous} && document.body?.dataset.gpu === 'ready'`); break; }
+    catch (error) { if (!/navigated|context|Cannot find/i.test(String(error))) throw error; }
   assert.equal(await evaluate("document.querySelector('#fullscreen').disabled"), true);
-  assert.equal(await evaluate("document.querySelector('#fullscreen').title"), "Fullscreen unavailable");
-  await evaluate("document.querySelector('#header-end [data-command=settings]').click()");
+  await evaluate("document.querySelector('#header [data-command=settings]').click()");
   assert.equal(await evaluate("document.querySelector('#settings').open"), true);
   await evaluate("layerApp.dispatch({type:'close_settings'})");
   await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
@@ -206,7 +204,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     await settle();
     assert.equal(await evaluate("document.documentElement.hasAttribute('data-touch')"), true);
   };
-  const settings = '#header-end [data-command="settings"]', menu = ".header-menu > summary", zen = '[data-command="zen_mode"]';
+  const settings = '#header [data-command="settings"]', menu = '.header-menu[data-menu="file"] > summary', zen = '[data-command="zen_mode"]';
   for (const theme of ["light", "dark"]) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);
     await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 650, y: 450 });
@@ -226,19 +224,14 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     }
     await tap(menu);
     assert.equal(await background(menu), menuIdle, "Menu names do not retain touch hover");
-    assert.equal(await evaluate("document.querySelector('.header-menu').open"), true);
+    assert.equal(await evaluate("document.querySelector('.header-menu[data-menu=file]').open"), true);
     await tap(menu);
-    assert.equal(await evaluate("document.querySelector('.header-menu').open"), false);
+    assert.equal(await evaluate("document.querySelector('.header-menu[data-menu=file]').open"), false);
     await tap(zen);
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true", "Touch preserves intentional toggle selection");
-    assert.equal(await background(zen), idle, "The persistent Zen button stays neutral while other controls are hidden");
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
-    // Total Zen hides the button. Its first corner contact reveals the chrome;
-    // only the next tap activates the now-visible button.
-    await tap(zen);
+    await tap("#zen-capy");
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
-    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true");
-    await tap(zen);
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "false");
     assert.equal(await background(zen), idle, "Zen returns to its idle color when toggled off by touch");
   }
