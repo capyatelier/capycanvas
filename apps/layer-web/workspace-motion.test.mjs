@@ -27,6 +27,8 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
   const wait=async()=>{await settle();await evaluate("new Promise(r=>setTimeout(r,220))");};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
   await evaluate("new Promise(resolve=>{const poll=()=>layerApp.startupTimes.complete?resolve():setTimeout(poll,50);poll();})");
+  const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
+  await send({type:'preferences',action:{type:'edit',id:'transparency',value:0}});
   const results=[];
   let held=null, point;
   const nativeEvent=(type,p)=>held==="touch"?{touch:type,point:[p.x,p.y]}:
@@ -123,6 +125,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
     await evaluate("if(window.motionProbe){motionProbe.running=false;for(const[k,v]of Object.entries(motionProbe.original))layerApp.app[k]=v;window.requestAnimationFrame=motionProbe.raf;}");
     if(held){await input("up");held=null;}
     await send({type:"restore_workspace",workspace:saved});
+    await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});
     if(native)await writeFile(`${inputDir}/finished`,"finished");
   }
 }
