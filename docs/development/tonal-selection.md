@@ -20,7 +20,7 @@ The shared `tonal-select` icon shows tonal bands inside a dashed selection borde
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
 a custom interval. The result applies immediately. **Softness** and **Feather**
-refine it. In the GTK panel and its overflow, **Custom** adds one interval slider
+refine it. In the GTK panel, horizontal Tool Options and its overflow, **Custom** adds one interval slider
 with two movable ends, an editable low value on the left and high value on the
 right. There are no visible bound labels or unit suffixes; tooltips specify stops
 relative to reference white (0). Endpoint boxes fit their one-decimal readouts,
@@ -29,8 +29,12 @@ existing numeric editors retain typed expressions, and each native range handle 
 and accessible adjustment. Escape during a drag restores that endpoint.
 The track normally spans −12 to +6 stops and expands to include typed or sampled
 values outside that interval, staying fixed during capture. Both ends remain
-separately reachable when the interval is zero. The same shared bound settings
-continue to drive numeric Tool Options components.
+separately reachable when the interval is zero. The shared Tool Options schema
+groups the bounds into one field, rendered by the same GTK range component.
+Its horizontal toolbar row reserves 280 pixels for the compact values and track;
+the entire field moves into overflow when it cannot fit. The existing toolbar
+slider-visibility preference hides the track while retaining both editable values.
+Horizontal preset bars retain the standard 24-pixel form-control height.
 There is no Apply/Cancel workflow, source
 selector, range manager, destination label, or selection-actions menu in this
 panel. Invert remains an independent selection/mask action in existing menus.
@@ -112,6 +116,10 @@ cannot activate the removed editor.
   actual outline/shading pixels, both mask destinations, sampling and undo/redo.
 - `native_tonal_toolbar_input` checks horizontal and vertical Tool Options and
   the same segmented bar and numeric form in overflow.
+- `native_tonal_toolbar_range_input` checks the inline interval's mouse/touch
+  handles, keyboard and numeric edits, Quick Mask context, narrow-bar overflow,
+  and retirement on tool changes. `native_tonal_toolbar_range_pen_input --tablet`
+  checks immediate pen adjustment of both inline ends.
 - `native_tonal_range_input` checks both slider ends with mouse and touch,
   keyboard adjustment, drag cancellation, typed
   bounds outside the usual track domain, coincident handles and one-step history.

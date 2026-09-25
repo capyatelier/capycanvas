@@ -119,6 +119,12 @@ impl ToolbarNumericBinding {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ToolOption {
     Numeric(ToolSetting),
+    /// One atomic interval field; endpoint edits use the existing setting IDs.
+    Range {
+        id: &'static str,
+        label: &'static str,
+        bounds: [ToolSetting; 2],
+    },
     Choice {
         id: &'static str,
         label: &'static str,
@@ -137,6 +143,11 @@ impl ToolOption {
         match (self, other) {
             (Self::Numeric(a), Self::Numeric(b)) => {
                 a.id == b.id && a.label == b.label && a.numeric == b.numeric
+            }
+            (Self::Range { id: a, label: x, bounds: p }, Self::Range { id: b, label: y, bounds: q }) => {
+                a == b && x == y && p.iter().zip(q).all(|(a, b)| {
+                    a.id == b.id && a.label == b.label && a.numeric == b.numeric
+                })
             }
             (
                 Self::Choice {
@@ -327,7 +338,18 @@ impl UiState {
             options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }
         options.extend(self.tool_extra.iter().cloned());
-        options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
+        let mut fields = self.tool_settings.iter().peekable();
+        while let Some(field) = fields.next() {
+            if field.id == "tonal_lower" && fields.peek().is_some_and(|f| f.id == "tonal_upper") {
+                options.push(ToolOption::Range {
+                    id: "tonal",
+                    label: "Range in stops relative to reference white (0)",
+                    bounds: [field.clone(), fields.next().unwrap().clone()],
+                });
+            } else {
+                options.push(ToolOption::Numeric(field.clone()));
+            }
+        }
         options.extend(
             self.tool_actions
                 .iter()

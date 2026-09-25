@@ -55,7 +55,7 @@ bookmarks do not create workspace-layout history entries.
 
 Rust derives the ordered form from existing tool settings, subtools and actions:
 completion actions first, tool/variant choices, independent eyedropper sample
-size, tool-specific fields (including tonal sources and bands), selection
+size, tool-specific fields (including tonal presets and intervals), selection
 combination and sampling-source choices, numeric fields, then
 remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
@@ -80,6 +80,9 @@ put the icon beside the label and value; the other styles stack icon and value.
 Text follows the shared 11 pt typography; form icons stay 16px. Units sit
 beside values on the same baseline and hide when space is tight. Only oversized
 numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
+GTK's tonal interval is one atomic field using the panel's two-ended range
+component: compact one-decimal low/high values surround a wide track. Units are
+in tooltips. Narrow bars expose the complete interval through existing overflow.
 Floating toolboxes and side toolbars wider than one tile fill rows left-to-right.
 Dividers span the full width; the options component occupies its own full-width
 row and packs its compact controls in the same order. Drawer height measurement

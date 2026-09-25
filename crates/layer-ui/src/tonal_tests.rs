@@ -190,6 +190,11 @@ mod tonal_checks {
         .unwrap();
         reply(&mut s, None, 0xff804020);
         assert_eq!(s.state.tool_settings.len(), 4);
+        let options = s.state.tool_options();
+        let range = options.iter().find(|o| matches!(o, ToolOption::Range { .. })).unwrap().clone();
+        let ToolOption::Range { bounds, .. } = &range else { unreachable!() };
+        assert_eq!(bounds.as_slice(), &s.state.tool_settings[..2]);
+        assert!(!options.iter().any(|o| matches!(o, ToolOption::Numeric(f) if f.id == "tonal_lower" || f.id == "tonal_upper")));
         for field in &s.state.tool_settings[..2] {
             assert!(field.numeric.unit.is_empty());
             assert_eq!(field.numeric.digits, 1);
@@ -197,6 +202,7 @@ mod tonal_checks {
         }
         setting(&mut s, "tonal_lower", -4.);
         reply(&mut s, None, 0xff804020);
+        assert!(s.state.tool_options().iter().any(|next| range.same_schema(next)), "endpoint edits retain the interval editor");
         assert!(
             s.state
                 .tool_extra

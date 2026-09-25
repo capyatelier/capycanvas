@@ -1,6 +1,7 @@
 //! Retained GTK toolbar editors. Binding, context and fitting policy is shared.
 use super::*;
 use crate::number_control::NumberControl;
+use crate::range_control::RangeControl;
 
 /// One retained item for both docked strips and toolbar drawers. The root owns
 /// layout/hit bounds; the opener anchors drawers and popup arrows.
@@ -186,7 +187,7 @@ mod imp {
                             } else {
                                 [tile[0] * count, tile[1]]
                             }
-                        } else if w.has_css_class("option-action") || self.vertical.get() {
+                        } else if !w.has_css_class("option-range") && (w.has_css_class("option-action") || self.vertical.get()) {
                             self.style.get().size()
                         } else {
                             [
@@ -383,6 +384,7 @@ struct BrushPreview {
 
 enum Field {
     Numeric(NumberControl),
+    Range(Rc<RangeControl>),
     Choice(gtk::DropDown),
     Segments(Vec<gtk::ToggleButton>),
     Action(gtk::Button),
@@ -612,7 +614,11 @@ impl Component {
                     rows.push(row);fields.push(field);
                 }
                 for (_,field,row) in old.into_iter().flatten() {
-                    if let Field::Numeric(number) = field {number.cancel_edit();}
+                    match field {
+                        Field::Numeric(number) => number.cancel_edit(),
+                        Field::Range(range) => range.retire(),
+                        _ => (),
+                    }
                     row.unparent();
                 }
                 let mut previous = self.root.imp().children.borrow().first().cloned();
@@ -629,6 +635,9 @@ impl Component {
                 match (field, option) {
                     (Field::Numeric(number), ToolOption::Numeric(f)) => {
                         number.set_value(f.value as f64)
+                    }
+                    (Field::Range(range), ToolOption::Range { bounds, .. }) => {
+                        range.set_values(bounds.each_ref().map(|f| f.value as f64));
                     }
                     (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
                         items
@@ -1054,6 +1063,32 @@ impl Component {
         row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
         let field = match option {
+            ToolOption::Range { id, label, bounds } => {
+                let ids = bounds.each_ref().map(|f| f.id);
+                let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), glib::clone!(
+                    #[weak(rename_to=component)] self,
+                    #[weak] w,
+                    move |index, value| {
+                        if !component.updating.get() {
+                            w.dispatch(UiAction::ToolbarEdit {
+                                context,
+                                action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }),
+                            });
+                        }
+                    }
+                ));
+                row.add_css_class("option-range");
+                let sliders = self.root.imp().options.get().sliders;
+                range.set_slider_visible(sliders);
+                // Keep a useful track length; fitting moves the complete range
+                // into overflow instead of clipping or separating its ends.
+                if sliders { range.root.set_size_request(280, -1); }
+                for (input, id) in range.inputs.iter().zip(ids) {
+                    input.set_widget_name(&format!("toolbar-setting-{id}"));
+                }
+                row.append(&range.root);
+                Field::Range(range)
+            }
             ToolOption::Numeric(f) => {
                 let label = gtk::Label::new(Some(f.label));
                 label.add_css_class("option-label");

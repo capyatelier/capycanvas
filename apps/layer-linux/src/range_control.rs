@@ -153,6 +153,10 @@ impl RangeControl {
     pub fn retire(&self) {
         self.updating.set(true);
         self.contact.borrow_mut().take();
+        for input in &self.inputs { input.cancel_edit(); }
+    }
+    pub fn set_slider_visible(&self, visible: bool) {
+        self.track.set_visible(visible);
     }
     fn move_to(&self, x: f64) {
         let Some(c) = self.contact.borrow().clone() else { return; };
