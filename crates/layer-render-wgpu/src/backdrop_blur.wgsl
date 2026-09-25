@@ -48,6 +48,12 @@ fn up(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     return upsample(position.xy * pass_data.inverse_target);
 }
 
+@fragment
+fn fill(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let blurred = tap(position.xy * pass_data.half_texel);
+    return vec4<f32>(blurred.rgb / max(blurred.a, 1e-4), 1.);
+}
+
 struct Region {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) bounds: vec4<f32>,
@@ -61,10 +67,11 @@ fn region_vertex(
     @location(0) bounds: vec4<f32>,
     @location(1) radii: vec4<f32>,
     @location(2) shape: vec4<f32>,
+    @location(3) area: vec4<f32>,
 ) -> Region {
     let quad = array<u32, 6>(0u, 1u, 2u, 2u, 1u, 3u);
     let c = vec2<f32>(f32(quad[index] & 1u), f32((quad[index] >> 1u) & 1u));
-    let pixel = bounds.xy - vec2<f32>(1.) + c * (bounds.zw + vec2<f32>(2.));
+    let pixel = area.xy + c * area.zw;
     let ndc = pixel * pass_data.inverse_target * vec2<f32>(2., -2.) + vec2<f32>(-1., 1.);
     var out: Region;
     out.position = vec4<f32>(ndc, 0., 1.);
@@ -109,7 +116,7 @@ fn region_fragment(in: Region) -> @location(0) vec4<f32> {
     coverage *= concave_coverage(p, b.xy + vec2<f32>(b.z, 0.), in.radii.y, n);
     coverage *= concave_coverage(p, b.xy + b.zw, in.radii.z, n);
     coverage *= concave_coverage(p, b.xy + vec2<f32>(0., b.w), in.radii.w, n);
-    let blurred = upsample(p * pass_data.inverse_target);
+    let blurred = tap(p * pass_data.half_texel);
     let color = blurred.rgb / max(blurred.a, 1e-4);
     return vec4<f32>(color, 1.) * coverage;
 }

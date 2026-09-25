@@ -786,7 +786,6 @@ struct Worker {
     child: Child,
     renderer: WgpuRasterizer,
     presenter: ViewportPresenter,
-    backdrop: layer_render_wgpu::BackdropBlur,
     prepared_color: Option<color::Prepared>,
     config: wgpu::SurfaceConfiguration,
     view_color: crate::display_color::ViewColor,
@@ -1269,9 +1268,6 @@ impl Worker {
         }
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
-        if caps.usages.contains(wgpu::TextureUsages::TEXTURE_BINDING) {
-            config.usage |= wgpu::TextureUsages::TEXTURE_BINDING;
-        }
         let working_features =
             wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE;
         if !adapter.features().contains(working_features) {
@@ -1313,10 +1309,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))
             .map_err(error)?;
         presenter.prepare_overviews(&renderer);
-        presenter.set_deferred_overviews(true);
-        let backdrop = layer_render_wgpu::BackdropBlur::new(renderer.device(), config.format);
         Ok(Self {
-            backdrop,
             view_color,
             paper_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),
@@ -1359,9 +1352,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, wgpu::TextureFormat::Rgba16Float, encoding).map_err(error)?;
         presenter.inherit_proof(&self.renderer, &self.presenter);
         presenter.prepare_overviews(&self.renderer);
-        presenter.set_deferred_overviews(true);
         self.presenter = presenter;
-        self.backdrop = layer_render_wgpu::BackdropBlur::new(self.renderer.device(), wgpu::TextureFormat::Rgba16Float);
         self.hdr_encoding = Some(encoding);
         self.config.format = wgpu::TextureFormat::Rgba16Float;
         // The next complete frame installs geometry, cursor and the new swapchain.
@@ -1458,11 +1449,7 @@ impl Worker {
         self.overviews.clone_from(&frame.overviews);
         self.presenter
             .set_overviews(&self.renderer, &self.overviews);
-        let backdrops = if self.config.usage.contains(wgpu::TextureUsages::TEXTURE_BINDING) {
-            frame.backdrops.as_slice()
-        } else { &[] };
-        self.backdrop.set_style(frame.backdrop_style);
-        self.backdrop.set_regions(backdrops);
+        self.presenter.set_backdrop(&self.renderer, &frame.backdrops, frame.backdrop_style);
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
             .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
@@ -1528,18 +1515,9 @@ impl Worker {
         self.presenter
             .encode(&self.renderer, &mut encoder, &view, camera, surround)
             .map_err(error)?;
-        self.backdrop.encode(
-            &self.renderer,
-            &mut encoder,
-            &view,
-            &view,
-            [target.texture.width(), target.texture.height()],
-            self.presenter.content_damage(),
-        );
-        self.presenter.encode_overviews(&mut encoder, &view);
         #[cfg(test)]
         if let Some(timing) = &timing {
-            timing.backdrop(self.backdrop.frames());
+            timing.backdrop(self.presenter.backdrop_frames());
             timing.overview(
                 (!self.overviews.is_empty()).then(|| self.renderer.canvas_preview_revision()),
             );
@@ -1597,14 +1575,12 @@ impl Worker {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, texture.format(), color.surface()).map_err(error)?;
-        presenter.set_deferred_overviews(true);
         presenter.inherit_proof(&self.renderer, &self.presenter);
+        presenter.inherit_backdrop(&self.renderer, &self.presenter);
         presenter.set_hdr_view(&self.renderer, self.hdr_rendition, 1.).map_err(error)?;
         presenter.set_color_picker(&self.renderer, self.picker);
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
@@ -1613,23 +1589,15 @@ impl Worker {
             .renderer
             .device()
             .create_command_encoder(&Default::default());
-        let target = texture.create_view(&Default::default());
         presenter
-            .encode(&self.renderer, &mut encoder, &target, view, surround)
-            .map_err(error)?;
-        if !self.backdrop.is_empty() {
-            let mut backdrop = layer_render_wgpu::BackdropBlur::new(self.renderer.device(), texture.format());
-            backdrop.copy_regions(&self.backdrop);
-            backdrop.encode(
+            .encode(
                 &self.renderer,
                 &mut encoder,
-                &target,
-                &target,
-                [view.width_px, view.height_px],
-                None,
-            );
-        }
-        presenter.encode_overviews(&mut encoder, &target);
+                &texture.create_view(&Default::default()),
+                view,
+                surround,
+            )
+            .map_err(error)?;
         let stride = (view.width_px * 4).div_ceil(256) * 256;
         let buffer = self
             .renderer

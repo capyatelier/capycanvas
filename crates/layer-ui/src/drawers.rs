@@ -107,6 +107,38 @@ pub struct DrawerConnection {
     /// NW, NE, SE, SW: the body corner is joined, not exposed.
     pub square_corners: [bool; 4],
 }
+impl DrawerConnection {
+    pub fn glass(&self) -> Vec<([f32; 4], [f32; 4])> {
+        let [xx, yx, xy, yy, x, y] = self.transform;
+        let map = |u: f32, v: f32| [xx * u + xy * v + x + self.bounds.x, yx * u + yy * v + y + self.bounds.y];
+        let square = |u0: f32, v0: f32, u1: f32, v1: f32| {
+            let points = [map(u0, v0), map(u1, v0), map(u1, v1), map(u0, v1)];
+            let min = [0, 1].map(|i| points.iter().map(|p| p[i]).fold(f32::INFINITY, f32::min));
+            let max = [0, 1].map(|i| points.iter().map(|p| p[i]).fold(f32::NEG_INFINITY, f32::max));
+            [min[0], min[1], max[0] - min[0], max[1] - min[1]]
+        };
+        let [length, depth] = [self.length, self.depth];
+        let mut shapes = vec![(square(0., 0., length, depth), [0.; 4])];
+        for (edge, r, direction) in [(0., self.radii[0], -1.), (length, self.radii[1], 1.)] {
+            if r <= 0. {
+                continue;
+            }
+            let far = edge + direction * r;
+            let bounds = square(edge.min(far), depth - r, edge.max(far), depth);
+            let center = map(far, depth - r);
+            let corner = match ((center[0] - bounds[0]).abs() < 0.5, (center[1] - bounds[1]).abs() < 0.5) {
+                (true, true) => 0,
+                (false, true) => 1,
+                (false, false) => 2,
+                (true, false) => 3,
+            };
+            let mut radii = [0.; 4];
+            radii[corner] = -r;
+            shapes.push((bounds, radii));
+        }
+        shapes
+    }
+}
 impl DrawerPlacement {
     /// Ancestor clipping must not round off a tile's connected corners.
     /// Only flatten container corners whose rounding reaches the originating tile.

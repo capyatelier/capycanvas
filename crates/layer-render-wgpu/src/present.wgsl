@@ -200,7 +200,8 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
 }
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {
-    let surface = logical_surface(vertex.position.xy);
+    let footprint = camera.rotation.w;
+    let surface = logical_surface(vertex.position.xy * footprint);
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
     if any(p < vec2<f32>(0.)) || any(p >= extent) {
@@ -210,7 +211,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
         return view_store(vec4<f32>(rgb * coverage, coverage));
     }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
-    let paint = proof_artwork(artwork_at(p, camera.inverse.xy, camera.inverse.zw),p);
+    let paint = proof_artwork(artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint),p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}

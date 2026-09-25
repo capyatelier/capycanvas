@@ -3,102 +3,218 @@ use crate::{ViewportPresenter, WgpuRasterizer};
 use layer_core::{Layer, LayerId};
 use layer_render::{CanvasRenderer, FramePacket, ViewState};
 
-fn texture(r: &WgpuRasterizer, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+fn texture(r: &WgpuRasterizer, size: [u32; 2]) -> wgpu::Texture {
     r.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("backdrop test surface"),
         size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
 
-fn stripes(r: &WgpuRasterizer, target: &wgpu::Texture) {
-    let size = target.size();
-    let bytes: Vec<u8> = (0..size.height)
-        .flat_map(|_| (0..size.width).flat_map(|x| if (x / 4) % 2 == 0 { [255, 255, 255, 255] } else { [0, 0, 0, 255] }))
-        .collect();
-    r.queue().write_texture(
-        target.as_image_copy(),
-        &bytes,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.width * 4), rows_per_image: None },
-        size,
-    );
+fn view(size: [u32; 2], x: f32) -> ViewState {
+    ViewState {
+        width_px: size[0],
+        height_px: size[1],
+        document_to_surface: [1., 0., 0., 1., x, 0.],
+        background_rgba_linear: [0.; 4],
+    }
 }
 
-fn stripe(x: u32) -> [u8; 4] {
-    if (x / 4) % 2 == 0 { [255; 4] } else { [0, 0, 0, 255] }
+fn document(size: [u32; 2]) -> WgpuRasterizer {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.submit(FramePacket {
+        view: view(size, 0.),
+        document_extent: [size[0] / 2, size[1]],
+        layers: &[Layer::paint(LayerId(1), "backdrop")],
+        dabs: &[],
+        dab_batches: &[],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    r
 }
 
-fn run(r: &WgpuRasterizer, blur: &mut BackdropBlur, surface: &wgpu::Texture, damage: Option<&[[u32; 4]]>) -> Vec<u8> {
-    stripes(r, surface);
-    let view = surface.create_view(&Default::default());
-    let mut encoder = r.device().create_command_encoder(&Default::default());
-    let size = surface.size();
-    blur.encode(r, &mut encoder, &view, &view, [size.width, size.height], damage);
-    r.queue().submit([encoder.finish()]);
+fn present(r: &WgpuRasterizer, presenter: &mut ViewportPresenter, surface: &wgpu::Texture, x: f32) -> Vec<u8> {
+    let size = [surface.width(), surface.height()];
+    presenter.present(r, &surface.create_view(&Default::default()), view(size, x), [0., 0., 0., 1.]).unwrap();
     crate::layer_tests::page_bytes(r, surface)
 }
 
+fn region(bounds: [f32; 4], radii: [f32; 4]) -> BackdropRegion {
+    BackdropRegion { bounds, radii, shape: BackdropRegion::SQUIRCLE }
+}
+
 #[test]
-fn blur_writes_only_inside_rounded_regions() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let surface = texture(&r, [256, 128], wgpu::TextureFormat::Rgba8Unorm);
-    let mut blur = BackdropBlur::new(r.device(), wgpu::TextureFormat::Rgba8Unorm);
-    blur.set_regions(&[BackdropRegion { bounds: [64., 32., 128., 64.], radii: [16.; 4], shape: BackdropRegion::SQUIRCLE }]);
-    let bytes = run(&r, &mut blur, &surface, None);
-    let at = |x: u32, y: u32| &bytes[((y * 256 + x) * 4) as usize..][..4];
-    for (x, y) in [(10, 10), (70, 10), (70, 100), (65, 33), (200, 60)] {
-        assert_eq!(at(x, y), stripe(x), "{x},{y}");
+fn glass_blurs_only_inside_rounded_regions() {
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    let raw = present(&r, &mut presenter, &surface, 0.);
+    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default());
+    let glass = present(&r, &mut presenter, &surface, 0.);
+    let at = |bytes: &[u8], x: u32, y: u32| bytes[((y * 256 + x) * 4) as usize..][..4].to_vec();
+    for (x, y) in [(10, 10), (200, 10), (70, 100), (65, 33), (190, 94)] {
+        assert_eq!(at(&glass, x, y), at(&raw, x, y), "{x},{y}");
     }
-    for x in 90..150 {
-        let p = at(x, 64);
-        assert!(p[0].abs_diff(128) < 12 && p[3] == 255, "{x}: {p:?}");
-    }
+    let row: Vec<u8> = (70..186).map(|x| at(&glass, x, 64)[0]).collect();
+    assert!(row.windows(2).all(|w| w[0].abs_diff(w[1]) < 12), "smooth across the document edge: {row:?}");
+    assert!(at(&glass, 100, 64)[0] < at(&raw, 100, 64)[0] && at(&glass, 160, 64)[0] > 0);
+    assert!((70..186).all(|x| at(&glass, x, 64)[3] == 255), "glass keeps the surface opaque");
 }
 
 #[test]
 fn concave_corners_leave_the_fillet_sharp() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let surface = texture(&r, [128, 128], wgpu::TextureFormat::Rgba8Unorm);
-    let mut blur = BackdropBlur::new(r.device(), wgpu::TextureFormat::Rgba8Unorm);
-    blur.set_regions(&[BackdropRegion { bounds: [32., 32., 32., 32.], radii: [-32., 0., 0., 0.], shape: BackdropRegion::SQUIRCLE }]);
-    let bytes = run(&r, &mut blur, &surface, None);
-    let at = |x: u32, y: u32| &bytes[((y * 128 + x) * 4) as usize..][..4];
-    assert_eq!(at(36, 36), stripe(36), "inside the scooped disk");
-    assert!(at(62, 62)[0].abs_diff(128) < 24, "the far corner is frosted");
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    let raw = present(&r, &mut presenter, &surface, 0.);
+    presenter.set_backdrop(&r, &[region([96., 32., 64., 64.], [-32., 0., 0., 0.])], Default::default());
+    let glass = present(&r, &mut presenter, &surface, 0.);
+    let at = |bytes: &[u8], x: u32, y: u32| bytes[((y * 256 + x) * 4) as usize];
+    assert_eq!(at(&glass, 100, 36), at(&raw, 100, 36), "inside the scooped disk");
+    assert!(at(&raw, 148, 92) == 0 && at(&glass, 148, 92) > 16, "the far corner is frosted");
 }
 
 #[test]
-fn unchanged_backdrops_reuse_the_previous_blur() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let surface = texture(&r, [512, 256], wgpu::TextureFormat::Rgba8Unorm);
-    let mut blur = BackdropBlur::new(r.device(), wgpu::TextureFormat::Rgba8Unorm);
-    let region = |x: f32| BackdropRegion { bounds: [x, 16., 64., 64.], radii: [8.; 4], shape: BackdropRegion::SQUIRCLE };
-    blur.set_regions(&[region(16.)]);
-    run(&r, &mut blur, &surface, Some(&[]));
-    assert_eq!(blur.frames(), [1, 0]);
-    run(&r, &mut blur, &surface, Some(&[[400, 200, 410, 210]]));
-    assert_eq!(blur.frames(), [1, 1], "distant paint keeps the blur");
-    blur.set_regions(&[region(40.)]);
-    run(&r, &mut blur, &surface, Some(&[]));
-    assert_eq!(blur.frames(), [1, 2], "a short move stays inside the slack");
-    run(&r, &mut blur, &surface, Some(&[[110, 20, 120, 30]]));
-    assert_eq!(blur.frames(), [2, 2], "nearby paint recomputes");
-    blur.set_regions(&[region(300.)]);
-    run(&r, &mut blur, &surface, Some(&[]));
-    assert_eq!(blur.frames(), [3, 2], "a long move recomputes");
-    run(&r, &mut blur, &surface, None);
-    assert_eq!(blur.frames(), [4, 2], "camera changes recompute");
+fn navigator_overviews_draw_above_the_glass() {
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.prepare_overviews(&r);
+    presenter.set_overviews(
+        &r,
+        &[crate::OverviewPlacement {
+            bounds: [80., 40., 32., 32.],
+            clip: None,
+            work_area: [[0.; 2]; 4],
+            outline_linear: [0.; 3],
+            background_linear: [1., 0., 0.],
+            scale: 1.,
+            opacity: 1.,
+        }],
+    );
+    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default());
+    let bytes = present(&r, &mut presenter, &surface, 0.);
+    let pixel = &bytes[((56 * 256 + 96) * 4) as usize..][..4];
+    assert!(pixel[0] > 150 && pixel[1] < 64, "overview background: {pixel:?}");
 }
 
-fn measure(r: &WgpuRasterizer, iterations: u32, mut encode: impl FnMut(&mut wgpu::CommandEncoder)) -> Vec<f64> {
+#[test]
+fn cached_blur_is_reused_until_the_camera_or_a_long_move() {
+    let size = [512, 256];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    let place = |presenter: &mut ViewportPresenter, x: f32| {
+        presenter.set_backdrop(&r, &[region([x, 16., 64., 64.], [8.; 4])], Default::default());
+    };
+    place(&mut presenter, 16.);
+    present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [1, 0]);
+    present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [1, 1], "an unchanged frame keeps the blur");
+    place(&mut presenter, 40.);
+    present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [1, 2], "a short move stays inside the slack");
+    place(&mut presenter, 300.);
+    present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [2, 2], "a long move recomputes");
+    present(&r, &mut presenter, &surface, 8.);
+    assert_eq!(presenter.backdrop_frames(), [3, 2], "camera changes recompute");
+}
+
+#[test]
+fn retained_targets_repaint_only_changed_glass() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut blur = BackdropBlur::new(r.device(), FORMAT);
+    let frame = |blur: &mut BackdropBlur, damage: Option<&[PixelRect]>| {
+        let mut encoder = r.device().create_command_encoder(&Default::default());
+        let mut repaint = Vec::new();
+        blur.encode(&r, &mut encoder, [512, 256], 0, damage, |_| {}, None, &mut repaint);
+        r.queue().submit([encoder.finish()]);
+        repaint
+    };
+    let bounds = PixelRect::new(16, 16, 80, 80);
+    blur.set_regions(&[region([16., 16., 64., 64.], [8.; 4])]);
+    assert_eq!(frame(&mut blur, None), [bounds]);
+    assert_eq!(frame(&mut blur, Some(&[])), []);
+    assert_eq!(frame(&mut blur, Some(&[PixelRect::new(400, 200, 410, 210)])), [], "distant paint");
+    assert_eq!(blur.frames(), [1, 2]);
+    let reach = blur.style.reach();
+    assert_eq!(
+        frame(&mut blur, Some(&[PixelRect::new(110, 20, 120, 30)])),
+        [PixelRect::new(110 - reach, 16, 80, 80)],
+        "nearby paint repaints only its blurred neighborhood"
+    );
+    assert_eq!(blur.frames(), [2, 2]);
+    blur.set_regions(&[region([40., 16., 64., 64.], [8.; 4])]);
+    assert_eq!(frame(&mut blur, Some(&[])), [bounds, PixelRect::new(40, 16, 104, 80)], "moves repaint both places");
+    assert_eq!(blur.frames(), [2, 3]);
+    blur.set_regions(&[]);
+    assert_eq!(frame(&mut blur, Some(&[])), [PixelRect::new(40, 16, 104, 80)], "removed glass repaints the artwork");
+}
+
+#[test]
+fn local_refresh_matches_a_full_blur() {
+    let size = [256, 128];
+    let mut r = document(size);
+    let surface = texture(&r, size);
+    let glass = [region([140., 32., 96., 64.], [12.; 4])];
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_backdrop(&r, &glass, Default::default());
+    let before = present(&r, &mut presenter, &surface, 0.);
+    let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
+    dab.center = layer_core::Point { x: 110., y: 64. };
+    dab.radii = [8.; 2];
+    let mut batch = crate::layer_tests::batch(1);
+    batch.damage = layer_core::Rect { min: layer_core::Point { x: 100., y: 54. }, max: layer_core::Point { x: 120., y: 74. } };
+    r.submit(FramePacket {
+        view: view(size, 0.),
+        document_extent: [size[0] / 2, size[1]],
+        layers: &[Layer::paint(LayerId(1), "backdrop")],
+        dabs: &[dab],
+        dab_batches: &[batch],
+        restore_rasters: &[],
+        reset_layers: false,
+        time_seconds: 0.,
+        composite_all: false,
+    })
+    .unwrap();
+    let local = present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [2, 0], "paint within reach refreshes the cached blur");
+    let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
+    fresh.set_backdrop(&r, &glass, Default::default());
+    let full = present(&r, &mut fresh, &surface, 0.);
+    let worst = local.iter().zip(&full).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 1, "local refresh differs from a full blur by {worst}");
+    let at = |bytes: &[u8]| bytes[((64 * 256 + 150) * 4) as usize];
+    assert!(at(&local) < at(&before), "the nearby dab darkens the glass");
+}
+
+#[test]
+fn regions_follow_the_surface_rotation() {
+    let logical = region([10., 5., 20., 10.], [1., 2., 3., 4.]);
+    let size = [100., 50.];
+    assert_eq!(logical.rotated(0, size), logical);
+    assert_eq!(logical.rotated(1, size), region([35., 10., 10., 20.], [4., 1., 2., 3.]));
+    assert_eq!(logical.rotated(2, size), region([70., 35., 20., 10.], [3., 4., 1., 2.]));
+    assert_eq!(logical.rotated(3, size), region([5., 70., 10., 20.], [2., 3., 4., 1.]));
+}
+
+fn measure(r: &WgpuRasterizer, iterations: u32, mut encode: impl FnMut(&mut wgpu::CommandEncoder, u32)) -> Vec<f64> {
     let queries = r.device().create_query_set(&wgpu::QuerySetDescriptor {
         label: Some("backdrop timing"),
         ty: wgpu::QueryType::Timestamp,
@@ -116,7 +232,7 @@ fn measure(r: &WgpuRasterizer, iterations: u32, mut encode: impl FnMut(&mut wgpu
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let marker = texture(r, [1, 1], wgpu::TextureFormat::Rgba8Unorm).create_view(&Default::default());
+    let marker = texture(r, [1, 1]).create_view(&Default::default());
     let stamp = |encoder: &mut wgpu::CommandEncoder, index: u32, begin: bool| {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -139,7 +255,7 @@ fn measure(r: &WgpuRasterizer, iterations: u32, mut encode: impl FnMut(&mut wgpu
     for i in 0..iterations {
         let mut encoder = r.device().create_command_encoder(&Default::default());
         stamp(&mut encoder, 2 * i, true);
-        encode(&mut encoder);
+        encode(&mut encoder, i);
         stamp(&mut encoder, 2 * i + 1, false);
         r.queue().submit([encoder.finish()]);
     }
@@ -173,7 +289,7 @@ fn layout(scale: f32, extent: [u32; 2]) -> Vec<BackdropRegion> {
         let y = if bottom { y + 1000. * (sy - 1.) } else { y };
         let h = if h > 400. { h + 1000. * (sy - 1.) } else { h };
         let w = if w > 1000. { w + 1600. * (sx - 1.) } else { w };
-        BackdropRegion { bounds: [x * scale, y * scale, w * scale, h * scale], radii: [r / 0.54 * scale; 4], shape: BackdropRegion::SQUIRCLE }
+        region([x * scale, y * scale, w * scale, h * scale], [r / 0.54 * scale; 4])
     })
     .to_vec()
 }
@@ -183,16 +299,16 @@ fn layout(scale: f32, extent: [u32; 2]) -> Vec<BackdropRegion> {
 fn backdrop_blur_cost() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     eprintln!("adapter: {:?}", r.adapter().get_info());
-    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let iterations = std::env::var("LAYER_BLUR_BENCH_ITERATIONS").map_or(200, |v| v.parse().unwrap());
     for (scale, extent) in [(1., [1600, 1000]), (2., [3200, 2000]), (1., [3840, 2160]), (2., [5120, 2880])] {
-        let view = ViewState {
+        let camera = |i: u32| ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            document_to_surface: [0.8, 0.1, -0.1, 0.8, 200., 100.],
+            document_to_surface: [0.8, 0.1, -0.1, 0.8, 200. + (i % 2) as f32, 100.],
             background_rgba_linear: [0.5, 0.5, 0.5, 1.],
         };
         r.submit(FramePacket {
-            view,
+            view: camera(0),
             document_extent: [4096, 3072],
             layers: &[Layer::paint(LayerId(1), "bench")],
             dabs: &[],
@@ -203,53 +319,42 @@ fn backdrop_blur_cost() {
             composite_all: true,
         })
         .unwrap();
-        let surface = texture(&r, extent, format);
-        stripes(&r, &surface);
-        let target = surface.create_view(&Default::default());
-        let mut presenter = ViewportPresenter::for_renderer(&r, format);
-        presenter.set_corner_radius(12. * scale);
-        let iterations = std::env::var("LAYER_BLUR_BENCH_ITERATIONS").map_or(200, |v| v.parse().unwrap());
-        let present = measure(&r, iterations, |encoder| {
-            presenter.encode(&r, encoder, &target, view, [0.2, 0.2, 0.2, 1.]).unwrap();
+        let target = texture(&r, extent).create_view(&Default::default());
+        let surround = [0.2, 0.2, 0.2, 1.];
+        let median = |v: &[f64]| v[v.len() / 2];
+        let p95 = |v: &[f64]| v[v.len() * 95 / 100];
+        let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+        let present = measure(&r, iterations, |encoder, i| {
+            presenter.encode(&r, encoder, &target, camera(i), surround).unwrap();
         });
         let regions = layout(scale, extent);
         let area: f32 = regions.iter().map(|r| r.bounds[2] * r.bounds[3]).sum();
-        for style in [
-            BackdropBlurStyle { levels: 3, offset: 1.5 },
-            BackdropBlurStyle { levels: 3, offset: 3. },
-            BackdropBlurStyle { levels: 4, offset: 2. },
-            BackdropBlurStyle { levels: 5, offset: 2. },
-        ] {
-            let mut blur = BackdropBlur::new(r.device(), format);
-            blur.set_style(style);
-            blur.set_regions(&regions);
+        for style in [BackdropBlurStyle { levels: 3, offset: 2.5 }, BackdropBlurStyle { levels: 3, offset: 3. }, BackdropBlurStyle { levels: 4, offset: 2.5 }] {
+            let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+            presenter.set_backdrop(&r, &regions, style);
             let mut cpu = Vec::new();
-            let cost = measure(&r, iterations, |encoder| {
+            let moving = measure(&r, iterations, |encoder, i| {
                 let start = std::time::Instant::now();
-                blur.encode(&r, encoder, &target, &target, extent, None);
+                presenter.encode(&r, encoder, &target, camera(i), surround).unwrap();
                 cpu.push(start.elapsed().as_secs_f64() * 1000.);
             });
             cpu.sort_by(f64::total_cmp);
-            let cached = measure(&r, iterations, |encoder| {
-                blur.encode(&r, encoder, &target, &target, extent, Some(&[]));
+            let cached = measure(&r, iterations, |encoder, _| {
+                presenter.encode(&r, encoder, &target, camera(0), surround).unwrap();
             });
-            let work: u64 = blur.work().iter().map(|w| w.area()).sum();
-            let median = |v: &[f64]| v[v.len() / 2];
-            let p95 = |v: &[f64]| v[v.len() * 95 / 100];
             eprintln!(
-                "{extent:?} @{scale}x panels {:.0}% work {:.0}% ({} rects) of surface, reach {}px, levels {} offset {}: blur CPU encode median {:.4} ms, GPU median {:.4} ms p95 {:.4} ms, cached GPU median {:.4} ms; viewport present median {:.4} ms p95 {:.4} ms",
+                "{extent:?} @{scale}x glass {:.0}% of surface, reach {}px, levels {} offset {}: viewport median {:.4} ms p95 {:.4}; with glass, moving camera median {:.4} ms p95 {:.4} (CPU encode {:.4} ms), cached median {:.4} ms p95 {:.4}",
                 100. * area / (extent[0] * extent[1]) as f32,
-                100. * work as f32 / (extent[0] * extent[1]) as f32,
-                blur.work().len(),
                 style.reach(),
                 style.levels,
                 style.offset,
-                median(&cpu),
-                median(&cost),
-                p95(&cost),
-                median(&cached),
                 median(&present),
                 p95(&present),
+                median(&moving),
+                p95(&moving),
+                median(&cpu),
+                median(&cached),
+                p95(&cached),
             );
         }
     }

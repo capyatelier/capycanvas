@@ -32,7 +32,7 @@ fn view() -> ViewState {
         background_rgba_linear: [0.; 4],
     }
 }
-fn dab(color: [f32; 4]) -> Dab {
+pub(super) fn dab(color: [f32; 4]) -> Dab {
     Dab {
         center: Point { x: 64., y: 64. },
         radii: [60., 60.],
@@ -48,7 +48,7 @@ fn dab(color: [f32; 4]) -> Dab {
         previous_contact: [0.0; 4],
     }
 }
-fn batch(id: u64) -> DabBatch {
+pub(super) fn batch(id: u64) -> DabBatch {
     DabBatch {
         material_update: 0,
         stroke_id: StrokeId(1),

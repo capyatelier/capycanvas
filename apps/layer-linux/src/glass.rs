@@ -31,21 +31,10 @@ impl Clip {
         let scale = place.scale[0].min(place.scale[1]);
         let bounds = place.rect(rect.bounds());
         let fit = if round { 1. } else { crate::squircle::CORNER_FIT };
-        let mut radii = rect.corner().map(|s| s.width().min(s.height()) / fit * scale);
-        let [w, h] = [bounds[2], bounds[3]];
-        let [tl, tr, br, bl] = radii;
-        let factor = [w / (tl + tr), w / (bl + br), h / (tl + bl), h / (tr + br)]
-            .into_iter()
-            .filter(|f| f.is_finite())
-            .fold(1f32, f32::min);
-        if factor < 1. {
-            radii = radii.map(|r| r * factor);
-        }
-        Self {
-            bounds,
-            radii,
-            shape: if round { BackdropRegion::CIRCULAR } else { BackdropRegion::SQUIRCLE },
-        }
+        let radii = rect.corner().map(|s| s.width().min(s.height()) / fit * scale);
+        let shape = if round { BackdropRegion::CIRCULAR } else { BackdropRegion::SQUIRCLE };
+        let BackdropRegion { radii, .. } = BackdropRegion::rounded(bounds, radii, shape);
+        Self { bounds, radii, shape }
     }
 
     fn region(&self, rect: [f32; 4]) -> Option<BackdropRegion> {
@@ -173,38 +162,5 @@ fn visit(
 }
 
 pub fn connector(c: &layer_ui::DrawerConnection, out: &mut Vec<BackdropRegion>) {
-    let [xx, yx, xy, yy, x, y] = c.transform;
-    let map = |u: f32, v: f32| [xx * u + xy * v + x + c.bounds.x, yx * u + yy * v + y + c.bounds.y];
-    let square = |u0: f32, v0: f32, u1: f32, v1: f32| {
-        let points = [map(u0, v0), map(u1, v0), map(u1, v1), map(u0, v1)];
-        let min = [0, 1].map(|i| points.iter().map(|p| p[i]).fold(f32::INFINITY, f32::min));
-        let max = [0, 1].map(|i| points.iter().map(|p| p[i]).fold(f32::NEG_INFINITY, f32::max));
-        [min[0], min[1], max[0] - min[0], max[1] - min[1]]
-    };
-    let [length, depth] = [c.length, c.depth];
-    out.push(BackdropRegion {
-        bounds: square(0., 0., length, depth),
-        radii: [0.; 4],
-        shape: BackdropRegion::SQUIRCLE,
-    });
-    for (edge, r, direction) in [(0., c.radii[0], -1.), (length, c.radii[1], 1.)] {
-        if r <= 0. {
-            continue;
-        }
-        let far = edge + direction * r;
-        let bounds = square(edge.min(far), depth - r, edge.max(far), depth);
-        let center = map(far, depth - r);
-        let corner = match (
-            (center[0] - bounds[0]).abs() < 0.5,
-            (center[1] - bounds[1]).abs() < 0.5,
-        ) {
-            (true, true) => 0,
-            (false, true) => 1,
-            (false, false) => 2,
-            (true, false) => 3,
-        };
-        let mut radii = [0.; 4];
-        radii[corner] = -r;
-        out.push(BackdropRegion { bounds, radii, shape: BackdropRegion::SQUIRCLE });
-    }
+    out.extend(c.glass().into_iter().map(|(bounds, radii)| BackdropRegion { bounds, radii, shape: BackdropRegion::SQUIRCLE }));
 }

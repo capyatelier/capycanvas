@@ -1,7 +1,10 @@
 //! GPU-only viewport presentation shared by toolkit surfaces and WebGPU.
 
-use crate::{GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
+use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
+
+const CAMERA_SIZE: u64 = 128;
+const SOURCE_CAMERA: u32 = 256;
 
 /// A native UI's document overview, sampled from the existing GPU image.
 /// Bounds and work-area corners use physical target-surface pixels. Hosts can
@@ -77,8 +80,8 @@ pub struct ViewportPresenter {
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
-    content_damage: Option<Vec<[u32; 4]>>,
-    defer_overviews: bool,
+    backdrop: Option<crate::backdrop_blur::BackdropBlur>,
+    source_camera: Option<[f32; 32]>,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -419,8 +422,8 @@ impl ViewportPresenter {
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(CAMERA_SIZE),
                     },
                     count: None,
                 },
@@ -600,7 +603,7 @@ impl ViewportPresenter {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport camera"),
-            size: 128,
+            size: SOURCE_CAMERA as u64 + CAMERA_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -666,8 +669,8 @@ impl ViewportPresenter {
             quarter_turns: 0,
             retained: false,
             history: Default::default(),
-            content_damage: None,
-            defer_overviews: false,
+            backdrop: None,
+            source_camera: None,
             presented_area: 0,
             shader,
             pipeline_layout,
@@ -766,38 +769,25 @@ impl ViewportPresenter {
 
     pub fn retains_target(&self) -> bool { self.retained }
 
-    pub fn content_damage(&self) -> Option<&[[u32; 4]]> { self.content_damage.as_deref() }
-
-    pub fn set_deferred_overviews(&mut self, deferred: bool) {
-        self.defer_overviews = deferred;
-    }
-
-    pub fn encode_overviews(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let (Some(pipeline), Some(buffer), Some(group)) =
-            (&self.overview_pipeline, &self.overview_buffer, &self.bind_group)
-        else {
-            return;
-        };
-        if self.overviews.is_empty() {
+    pub fn set_backdrop(&mut self, renderer: &WgpuRasterizer, regions: &[BackdropRegion], style: BackdropBlurStyle) {
+        if regions.is_empty() && self.backdrop.is_none() {
             return;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("deferred overviews"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_bind_group(0, group, &[]);
-        pass.set_pipeline(pipeline);
-        pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..6, 0..self.overviews.len() as u32);
+        let backdrop = self
+            .backdrop
+            .get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::new(&renderer.device, self.format));
+        backdrop.set_style(style);
+        backdrop.set_regions(regions);
+    }
+
+    pub fn inherit_backdrop(&mut self, renderer: &WgpuRasterizer, other: &Self) {
+        if let Some(backdrop) = &other.backdrop {
+            self.set_backdrop(renderer, backdrop.regions(), backdrop.style());
+        }
+    }
+
+    pub fn backdrop_frames(&self) -> [u64; 2] {
+        self.backdrop.as_ref().map_or([0; 2], |b| b.frames())
     }
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
@@ -961,7 +951,11 @@ impl ViewportPresenter {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.uniform.as_entire_binding(),
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.uniform,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(CAMERA_SIZE),
+                        }),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -1053,7 +1047,7 @@ impl ViewportPresenter {
             inverse[1],
             inverse[2],
             inverse[3],
-            self.quarter_turns as f32, overlay.filter(|o|o.active).map_or(0.,|o| if o.protected { 2. } else { 1. }), f32::from(renderer.selection_previews.buffer.is_some()), 0.,
+            self.quarter_turns as f32, overlay.filter(|o|o.active).map_or(0.,|o| if o.protected { 2. } else { 1. }), f32::from(renderer.selection_previews.buffer.is_some()), 1.,
             overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
@@ -1065,6 +1059,19 @@ impl ViewportPresenter {
             self.uploads
                 .write(encoder, &renderer.queue, &self.uniform, bytes)?;
             self.camera_data = Some(data);
+        }
+        let source_camera = (self.backdrop.is_some() && !overview_only).then(|| {
+            let mut source = data;
+            source[27] = 4.;
+            source
+        });
+        if let Some(source) = source_camera.filter(|s| self.source_camera != Some(*s)) {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(source.as_ptr().cast::<u8>(), std::mem::size_of_val(&source))
+            };
+            self.uploads
+                .write_at(encoder, &renderer.queue, &self.uniform, SOURCE_CAMERA.into(), bytes)?;
+            self.source_camera = Some(source);
         }
         self.picker.upload(&mut self.uploads, renderer, encoder)?;
         if !self.cursor_vertices.is_empty() {
@@ -1103,7 +1110,7 @@ impl ViewportPresenter {
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
         let preserve_target = !overview_only && self.retained && self.history.valid;
-        let (regions, full) = if !overview_only {
+        let (mut regions, full, content_damage) = if !overview_only {
             let previous = &self.history;
             let full = !previous.valid
                 || bindings_changed
@@ -1134,20 +1141,10 @@ impl ViewportPresenter {
             }
             crate::present_damage::add_region(&mut regions, previous.cursor);
             crate::present_damage::add_region(&mut regions, cursor);
-            let mut cursor_rects = Vec::with_capacity(self.cursor_vertices.len());
-            crate::present_damage::cursor_rects(&self.cursor_vertices, view, self.quarter_turns, &mut cursor_rects);
-            self.content_damage = (!full).then(|| {
+            let content_damage = (!full).then(|| {
                 let selection = (previous.selection_revision != renderer.selection_paint_revision)
                     .then(|| crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
-                previous.picker.into_iter().chain(self.picker.bounds())
-                    .map(|bounds| crate::present_damage::surface_bounds(bounds, view, self.quarter_turns))
-                    .chain([repaint])
-                    .chain(selection)
-                    .chain(previous.cursor_rects.iter().copied())
-                    .chain(cursor_rects.iter().copied())
-                    .filter(|r| !r.is_empty())
-                    .map(|r| [r.min_x(), r.min_y(), r.max_x(), r.max_y()])
-                    .collect()
+                [repaint].into_iter().chain(selection).filter(|r| !r.is_empty()).collect::<Vec<_>>()
             });
             // A distant Navigator must not turn a short stroke into a nearly
             // full-screen render area. Only merge intersecting damage regions.
@@ -1193,7 +1190,6 @@ impl ViewportPresenter {
                 }
             }
             let previous = &mut self.history;
-            previous.cursor_rects = cursor_rects;
             previous.valid = true;
             previous.revision = renderer.composite_revision;
             previous.selection_revision = renderer.selection_paint_revision;
@@ -1202,17 +1198,11 @@ impl ViewportPresenter {
             previous.cursor = cursor;
             previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);
-            (regions, full)
+            (regions, full, content_damage)
         } else {
-            (vec![crate::pixel_rect::PixelRect::full(extent)], true)
+            (vec![crate::pixel_rect::PixelRect::full(extent)], true, None)
         };
-        let (regions, full) = if self.retained || overview_only {
-            (regions, full)
-        } else {
-            (vec![crate::pixel_rect::PixelRect::full(extent)], true)
-        };
-        self.presented_area = regions.iter().map(|r| r.area()).sum();
-        let timestamp_writes = if regions.is_empty() {
+        let timestamp_writes = if regions.is_empty() && self.retained {
             None
         } else {
             self.timing.as_mut().and_then(|timer| {
@@ -1220,6 +1210,36 @@ impl ViewportPresenter {
                 timer.begin_render_pass(timer.stats().requested)
             })
         };
+        let mut began = false;
+        if let Some(backdrop) = self.backdrop.as_mut().filter(|_| !overview_only) {
+            let (pipeline, group) = (&self.pipeline, self.bind_group.as_ref().unwrap());
+            let mut glass = Vec::new();
+            began = backdrop.encode(
+                renderer,
+                encoder,
+                [view.width_px, view.height_px],
+                self.quarter_turns,
+                content_damage.as_deref(),
+                |pass| {
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, group, &[SOURCE_CAMERA]);
+                    pass.draw(0..3, 0..1);
+                },
+                timestamp_writes.as_ref().map(|t| wgpu::RenderPassTimestampWrites { end_of_pass_write_index: None, ..t.clone() }),
+                &mut glass,
+            );
+            if !full {
+                for area in glass {
+                    crate::present_damage::add_region(&mut regions, area);
+                }
+            }
+        }
+        let (regions, full) = if self.retained || overview_only {
+            (regions, full)
+        } else {
+            (vec![crate::pixel_rect::PixelRect::full(extent)], true)
+        };
+        self.presented_area = regions.iter().map(|r| r.area()).sum();
         for (index, repaint) in regions.iter().enumerate() {
             // Each pass needs its own view: wgpu can defer encoding until
             // finish(), so mutating one view would reuse the last area.
@@ -1257,10 +1277,10 @@ impl ViewportPresenter {
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: timestamp_writes.as_ref()
-                    .filter(|_| index == 0 || index + 1 == regions.len()).map(|t| {
+                    .filter(|_| (index == 0 && !began) || index + 1 == regions.len()).map(|t| {
                     wgpu::RenderPassTimestampWrites {
                         query_set: t.query_set,
-                        beginning_of_pass_write_index: if index == 0 {
+                        beginning_of_pass_write_index: if index == 0 && !began {
                             t.beginning_of_pass_write_index
                         } else {
                             None
@@ -1281,21 +1301,33 @@ impl ViewportPresenter {
                 repaint.width(),
                 repaint.height(),
             );
-            pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
+            pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[0]);
             if !overview_only {
                 pass.set_pipeline(&self.pipeline);
-                pass.draw(0..3, 0..1);
+                let mut visible = vec![*repaint];
+                for hole in self.backdrop.iter().flat_map(|b| b.interiors()) {
+                    visible = visible.into_iter().flat_map(|r| r.subtract(*hole)).filter(|r| !r.is_empty()).collect();
+                }
+                for area in visible {
+                    pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());
+                    pass.draw(0..3, 0..1);
+                }
+                pass.set_scissor_rect(repaint.min_x(), repaint.min_y(), repaint.width(), repaint.height());
+                self.picker.draw(&mut pass);
+                if !self.cursor_vertices.is_empty() {
+                    pass.set_pipeline(&self.cursor_pipeline);
+                    pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
+                    pass.draw(0..6, 0..self.cursor_vertices.len() as u32);
+                }
+                if let Some(backdrop) = &self.backdrop {
+                    backdrop.draw(&mut pass, *repaint);
+                    pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[0]);
+                }
             }
-            if !self.overviews.is_empty() && (overview_only || !self.defer_overviews) {
+            if !self.overviews.is_empty() {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
-            }
-            if !overview_only { self.picker.draw(&mut pass); }
-            if !overview_only && !self.cursor_vertices.is_empty() {
-                pass.set_pipeline(&self.cursor_pipeline);
-                pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
-                pass.draw(0..6, 0..self.cursor_vertices.len() as u32);
             }
         }
         // Return upload chunks only after this encoder's GPU work completes.

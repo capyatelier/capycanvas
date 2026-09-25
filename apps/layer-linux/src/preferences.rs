@@ -762,7 +762,7 @@ impl Preferences {
                         }
                         PreferenceKind::Choice {
                             options,
-                            presentation: ChoicePresentation::Circles,
+                            presentation: ChoicePresentation::Circles { .. },
                             ..
                         } => {
                             let native_row = text_row(&row.title, &row.description);

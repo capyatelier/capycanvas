@@ -69,7 +69,7 @@ mod layer_masks;
 mod layer_tests;
 mod present;
 mod backdrop_blur;
-pub use backdrop_blur::{BackdropBlur, BackdropBlurStyle, BackdropRegion};
+pub use backdrop_blur::{BackdropBlurStyle, BackdropRegion};
 mod present_picker;
 mod artwork;
 mod display_mips;

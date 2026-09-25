@@ -25,7 +25,7 @@ pub enum Platform {
 }
 impl Platform {
     pub fn color_picker(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk)
     }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
@@ -404,12 +404,12 @@ impl PreferenceValue {
     }
 }
 /// Presentation only; both styles share choice validation, persistence and reset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChoicePresentation {
     Dropdown,
     ImageTiles { columns: u32 },
-    Circles,
+    Circles { alphas: [[f32; 2]; 4] },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -884,7 +884,10 @@ impl Settings {
                         "Panel transparency",
                         "",
                         PreferenceKind::Choice {
-                            presentation: ChoicePresentation::Circles,
+                            presentation: ChoicePresentation::Circles {
+                                alphas: crate::Transparency::CHOICES
+                                    .map(|c| [false, true].map(|dark| c.0.surface_alpha(dark))),
+                            },
                             options: crate::Transparency::CHOICES
                                 .iter()
                                 .map(|c| c.1.into())

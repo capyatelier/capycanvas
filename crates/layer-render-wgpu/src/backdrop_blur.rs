@@ -14,6 +14,35 @@ pub struct BackdropRegion {
 impl BackdropRegion {
     pub const CIRCULAR: [f32; 4] = [2., 0., 0., 0.];
     pub const SQUIRCLE: [f32; 4] = [4., 0., 0., 0.];
+
+    pub fn rounded(bounds: [f32; 4], radii: [f32; 4], shape: [f32; 4]) -> Self {
+        let [_, _, w, h] = bounds;
+        let [tl, tr, br, bl] = radii;
+        let factor = [w / (tl + tr), w / (bl + br), h / (tl + bl), h / (tr + br)]
+            .into_iter()
+            .filter(|f| f.is_finite())
+            .fold(1f32, f32::min);
+        Self { bounds, radii: radii.map(|r| r * factor), shape }
+    }
+
+    fn rotated(self, turns: u32, [width, height]: [f32; 2]) -> Self {
+        let [x, y, w, h] = self.bounds;
+        let bounds = match turns {
+            1 => [height - y - h, x, h, w],
+            2 => [width - x - w, height - y - h, w, h],
+            3 => [y, width - x - w, h, w],
+            _ => self.bounds,
+        };
+        let radii = std::array::from_fn(|i| self.radii[(i + 4 - turns as usize) % 4]);
+        Self { bounds, radii, ..self }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Edge {
+    region: BackdropRegion,
+    area: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,36 +66,36 @@ impl BackdropBlurStyle {
     }
 }
 
-fn expand(rect: PixelRect, by: u32, extent: [u32; 2]) -> PixelRect {
-    PixelRect::new(
-        rect.min_x().saturating_sub(by),
-        rect.min_y().saturating_sub(by),
-        rect.max_x().saturating_add(by).min(extent[0]),
-        rect.max_y().saturating_add(by).min(extent[1]),
-    )
+fn contains(outer: PixelRect, inner: PixelRect) -> bool {
+    outer.intersect(inner) == inner
 }
 
 const PASS_STRIDE: u64 = 256;
 const PASS_SIZE: u64 = 32;
 const SLACK: u32 = 96;
 
-pub struct BackdropBlur {
-    format: wgpu::TextureFormat,
+pub(crate) struct BackdropBlur {
     style: BackdropBlurStyle,
+    format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
+    fill: wgpu::RenderPipeline,
     region: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
-    levels: Vec<(wgpu::Texture, wgpu::BindGroup, wgpu::TextureView)>,
+    scratch: Option<wgpu::Texture>,
+    levels: Vec<(wgpu::Texture, wgpu::BindGroup)>,
     extent: [u32; 2],
     regions: Vec<BackdropRegion>,
+    placed: Vec<BackdropRegion>,
+    drawn: Vec<PixelRect>,
+    interiors: Vec<PixelRect>,
     valid: Vec<PixelRect>,
+    edges: u32,
     region_buffer: Option<wgpu::Buffer>,
     uploaded: bool,
-    computed: u64,
-    reused: u64,
+    frames: [u64; 2],
 }
 
 impl BackdropBlur {
@@ -140,14 +169,15 @@ impl BackdropBlur {
         };
         let down = pipeline("backdrop blur down", "fullscreen", "down", &[], None);
         let up = pipeline("backdrop blur up", "fullscreen", "up", &[], None);
+        let fill = pipeline("backdrop glass interiors", "fullscreen", "fill", &[], None);
         let region = pipeline(
             "backdrop blur regions",
             "region_vertex",
             "region_fragment",
             &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<BackdropRegion>() as u64,
+                array_stride: std::mem::size_of::<Edge>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+                attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4],
             })],
             Some(wgpu::BlendState {
                 color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
@@ -159,8 +189,8 @@ impl BackdropBlur {
             }),
         );
         Self {
-            format,
             style: BackdropBlurStyle::default(),
+            format,
             layout,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("backdrop blur"),
@@ -170,6 +200,7 @@ impl BackdropBlur {
             }),
             down,
             up,
+            fill,
             region,
             uniforms: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("backdrop blur passes"),
@@ -177,19 +208,31 @@ impl BackdropBlur {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            scratch: None,
             levels: Vec::new(),
             extent: [0; 2],
             regions: Vec::new(),
+            placed: Vec::new(),
+            drawn: Vec::new(),
+            interiors: Vec::new(),
             valid: Vec::new(),
+            edges: 0,
             region_buffer: None,
             uploaded: false,
-            computed: 0,
-            reused: 0,
+            frames: [0; 2],
         }
     }
 
+    pub fn style(&self) -> BackdropBlurStyle {
+        self.style
+    }
+
+    pub fn regions(&self) -> &[BackdropRegion] {
+        &self.regions
+    }
+
     pub fn set_style(&mut self, style: BackdropBlurStyle) {
-        let style = BackdropBlurStyle { levels: style.levels.clamp(1, 6), ..style };
+        let style = BackdropBlurStyle { levels: style.levels.clamp(2, 6), ..style };
         if self.style != style {
             self.style = style;
             self.levels.clear();
@@ -198,34 +241,30 @@ impl BackdropBlur {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.regions.is_empty()
-    }
-
     pub fn set_regions(&mut self, regions: &[BackdropRegion]) {
-        if self.regions == regions {
-            return;
+        if self.regions != regions {
+            self.regions.clear();
+            self.regions.extend_from_slice(regions);
         }
-        self.regions.clear();
-        self.regions.extend_from_slice(regions);
-        self.uploaded = false;
     }
 
-    pub fn copy_regions(&mut self, other: &Self) {
-        self.set_style(other.style);
-        self.set_regions(&other.regions);
+    pub fn interiors(&self) -> &[PixelRect] {
+        &self.interiors
     }
 
     pub fn frames(&self) -> [u64; 2] {
-        [self.computed, self.reused]
+        self.frames
     }
 
-    fn bind(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn bind(&self, device: &wgpu::Device, texture: &wgpu::Texture) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("backdrop blur"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture.create_view(&Default::default())),
+                },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -240,7 +279,7 @@ impl BackdropBlur {
     }
 
     fn bounds(&self) -> Vec<PixelRect> {
-        self.regions
+        self.placed
             .iter()
             .map(|r| {
                 let [x, y, w, h] = r.bounds;
@@ -256,11 +295,10 @@ impl BackdropBlur {
             .collect()
     }
 
-    fn work_for(&self, dirty: &[PixelRect]) -> Vec<PixelRect> {
-        let margin = self.style.reach() + SLACK;
+    fn work_for(&self, dirty: &[PixelRect], margin: u32) -> Vec<PixelRect> {
         let mut work: Vec<PixelRect> = Vec::new();
         for rect in dirty {
-            let mut area = expand(*rect, margin, self.extent);
+            let mut area = rect.expand(margin, self.extent);
             while let Some(i) = work.iter().position(|o| {
                 !o.intersect(area).is_empty() && o.union(area).area() <= o.area() + area.area()
             }) {
@@ -269,11 +307,6 @@ impl BackdropBlur {
             work.push(area);
         }
         work
-    }
-
-    #[cfg(test)]
-    fn work(&self) -> Vec<PixelRect> {
-        self.work_for(&self.bounds())
     }
 
     fn interior(&self, work: PixelRect) -> PixelRect {
@@ -287,29 +320,43 @@ impl BackdropBlur {
         )
     }
 
+    fn level_size(&self, level: usize) -> [u32; 2] {
+        if level == 0 {
+            self.extent
+        } else {
+            let size = self.levels[level - 1].0.size();
+            [size.width, size.height]
+        }
+    }
+
     fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, extent: [u32; 2]) {
         if self.extent != extent || self.levels.len() != self.style.levels as usize {
             self.extent = extent;
+            let texture = |level: u32| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("backdrop blur level"),
+                    size: wgpu::Extent3d {
+                        width: extent[0].div_ceil(1 << level).max(1),
+                        height: extent[1].div_ceil(1 << level).max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                })
+            };
+            self.scratch = Some(texture(1));
             self.levels = (1..=self.style.levels)
                 .map(|level| {
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("backdrop blur level"),
-                        size: wgpu::Extent3d {
-                            width: extent[0].div_ceil(1 << level).max(1),
-                            height: extent[1].div_ceil(1 << level).max(1),
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: self.format,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    });
-                    let view = texture.create_view(&Default::default());
-                    let group = self.bind(device, &view);
-                    (texture, group, view)
+                    let texture = texture(level);
+                    let group = self.bind(device, &texture);
+                    (texture, group)
                 })
                 .collect();
             self.valid.clear();
@@ -318,37 +365,65 @@ impl BackdropBlur {
         if self.uploaded {
             return;
         }
-        let size = |level: usize| -> [f32; 2] {
-            if level == 0 {
-                [extent[0] as f32, extent[1] as f32]
-            } else {
-                let s = self.levels[level - 1].0.size();
-                [s.width as f32, s.height as f32]
-            }
-        };
         let levels = self.style.levels as usize;
         let mut data = vec![0u8; PASS_STRIDE as usize * (2 * levels)];
-        let mut write = |index: usize, target: usize, source: usize| {
-            let [tw, th] = size(target);
-            let [sw, sh] = size(source);
-            let values = [1. / tw, 1. / th, 0.5 / sw, 0.5 / sh, self.style.offset, 0., 0., 0.];
+        let mut write = |index: usize, target: [u32; 2], source: [u32; 2]| {
+            let values = [
+                1. / target[0] as f32,
+                1. / target[1] as f32,
+                0.5 / source[0] as f32,
+                0.5 / source[1] as f32,
+                self.style.offset,
+                0.,
+                0.,
+                0.,
+            ];
             let bytes: Vec<u8> = values.iter().flat_map(|v: &f32| v.to_ne_bytes()).collect();
             data[index * PASS_STRIDE as usize..][..bytes.len()].copy_from_slice(&bytes);
         };
-        for level in 1..=levels {
-            write(level - 1, level, level - 1);
+        for level in 3..=levels {
+            write(level - 1, self.level_size(level), self.level_size(level - 1));
         }
         for level in (1..levels).rev() {
-            write(levels + level - 1, level, level + 1);
+            write(levels + level - 1, self.level_size(level), self.level_size(level + 1));
         }
-        write(2 * levels - 1, 0, 1);
+        write(0, self.level_size(0), self.level_size(1));
         queue.write_buffer(&self.uniforms, 0, &data);
-        if !self.regions.is_empty() {
+        self.interiors.clear();
+        let mut edges = Vec::with_capacity(8 * self.placed.len());
+        for region in &self.placed {
+            let [x, y, w, h] = region.bounds;
+            let round = region.radii.iter().fold(0f32, |a, b| a.max(*b)).ceil() + 1.;
+            let lines = |start: f32, size: f32, max: u32| {
+                let clamp = |v: f32| v.clamp(0., max as f32);
+                [start - 1., (start + 2.).ceil(), (start + round).ceil(), (start + size - round).floor(),
+                    (start + size - 2.).floor(), start + size + 1.].map(clamp)
+            };
+            let [xs, ys] = [lines(x, w, extent[0]), lines(y, h, extent[1])];
+            if region.radii.iter().any(|r| *r < 0.) || xs.windows(2).chain(ys.windows(2)).any(|p| p[0] > p[1]) {
+                edges.push(Edge { region: *region, area: [xs[0], ys[0], xs[5] - xs[0], ys[5] - ys[0]] });
+                continue;
+            }
+            for row in 0..5 {
+                let covered = |column: usize| (column == 2 && (1..4).contains(&row)) || (row == 2 && (1..4).contains(&column));
+                let mut column = 0;
+                while column < 5 {
+                    let run = (column..5).take_while(|c| covered(*c) == covered(column)).count();
+                    let [x0, x1, y0, y1] = [xs[column], xs[column + run], ys[row], ys[row + 1]];
+                    if covered(column) {
+                        self.interiors.push(PixelRect::new(x0 as u32, y0 as u32, x1 as u32, y1 as u32));
+                    } else if x1 > x0 && y1 > y0 {
+                        edges.push(Edge { region: *region, area: [x0, y0, x1 - x0, y1 - y0] });
+                    }
+                    column += run;
+                }
+            }
+        }
+        self.interiors.retain(|r| !r.is_empty());
+        self.edges = edges.len() as u32;
+        if !edges.is_empty() {
             let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    self.regions.as_ptr().cast::<u8>(),
-                    std::mem::size_of_val(self.regions.as_slice()),
-                )
+                std::slice::from_raw_parts(edges.as_ptr().cast::<u8>(), std::mem::size_of_val(edges.as_slice()))
             };
             if self.region_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
                 self.region_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
@@ -363,149 +438,160 @@ impl BackdropBlur {
         self.uploaded = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         renderer: &crate::WgpuRasterizer,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        extent: [u32; 2],
-        damage: Option<&[[u32; 4]]>,
-    ) {
-        if self.regions.is_empty() || extent[0] == 0 || extent[1] == 0 {
+        logical: [u32; 2],
+        turns: u32,
+        damage: Option<&[PixelRect]>,
+        viewport: impl Fn(&mut wgpu::RenderPass),
+        timestamps: Option<wgpu::RenderPassTimestampWrites>,
+        repaint: &mut Vec<PixelRect>,
+    ) -> bool {
+        let extent = if turns % 2 == 0 { logical } else { [logical[1], logical[0]] };
+        let size = logical.map(|v| v as f32);
+        let placed: Vec<BackdropRegion> = self.regions.iter().map(|r| r.rotated(turns, size)).collect();
+        if placed != self.placed {
+            self.placed = placed;
+            self.uploaded = false;
+        }
+        if self.placed.is_empty() || extent[0] == 0 || extent[1] == 0 {
+            repaint.append(&mut self.drawn);
+            self.interiors.clear();
+            self.levels.clear();
             self.valid.clear();
-            return;
+            self.extent = [0; 2];
+            return false;
         }
-        let device = renderer.device();
-        self.prepare(device, renderer.queue(), extent);
-        let dirty = self.dirty(damage);
-        if dirty.is_empty() {
-            self.reused += 1;
-        } else {
-            self.compute(device, encoder, source, dirty);
-            self.computed += 1;
-        }
-        let levels = self.style.levels as usize;
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("backdrop regions"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.region);
-        pass.set_bind_group(0, &self.levels[0].1, &[((2 * levels - 1) as u64 * PASS_STRIDE) as u32]);
-        pass.set_vertex_buffer(0, self.region_buffer.as_ref().unwrap().slice(..));
-        pass.draw(0..6, 0..self.regions.len() as u32);
-    }
-
-    fn dirty(&mut self, damage: Option<&[[u32; 4]]>) -> Vec<PixelRect> {
+        self.prepare(renderer.device(), renderer.queue(), extent);
         let bounds = self.bounds();
-        let Some(damage) = damage else {
-            self.valid.clear();
-            return bounds;
-        };
-        let (reach, extent) = (self.style.reach(), self.extent);
-        let touched = |area: PixelRect| {
-            let near = expand(area, reach, extent);
-            damage.iter().any(|&[x0, y0, x1, y1]| !near.intersect(PixelRect::new(x0, y0, x1, y1)).is_empty())
-        };
-        let contains = |outer: PixelRect, inner: PixelRect| outer.intersect(inner) == inner;
-        let mut valid = Vec::with_capacity(self.valid.len());
-        for v in &self.valid {
-            if touched(*v) {
-                valid.extend(bounds.iter().filter(|b| contains(*v, **b) && !touched(**b)).copied());
+        if self.drawn != bounds {
+            repaint.append(&mut self.drawn);
+            repaint.extend_from_slice(&bounds);
+            self.drawn.clone_from(&bounds);
+        }
+        let reach = self.style.reach();
+        let old = if damage.is_some() { std::mem::take(&mut self.valid) } else { Vec::new() };
+        let cached_before = |b: &PixelRect| old.iter().any(|v| contains(*v, *b));
+        let (local, stale): (Vec<PixelRect>, Vec<PixelRect>) = damage.into_iter().flatten().partition(|d| {
+            bounds.iter().any(|b| cached_before(b) && !d.expand(reach, extent).intersect(*b).is_empty())
+        });
+        let affected: Vec<PixelRect> = local
+            .iter()
+            .flat_map(|d| bounds.iter().map(move |b| d.expand(reach, extent).intersect(b.expand(2, extent))))
+            .filter(|a| !a.is_empty())
+            .collect();
+        let stale: Vec<PixelRect> = stale.iter().map(|d| d.expand(reach, extent)).collect();
+        let mut valid = Vec::with_capacity(old.len());
+        for v in &old {
+            if stale.iter().any(|d| !d.intersect(*v).is_empty()) {
+                valid.extend(bounds.iter().filter(|b| contains(*v, **b)).copied());
             } else {
                 valid.push(*v);
             }
         }
+        let (cached, fresh): (Vec<PixelRect>, Vec<PixelRect>) = bounds.iter().partition(|b| valid.iter().any(|v| contains(*v, **b)));
+        let changed: Vec<PixelRect> = local.iter().map(|d| d.expand(reach, extent)).collect();
+        let whole = self.work_for(&fresh, reach + SLACK);
+        valid.extend(whole.iter().map(|w| self.interior(*w)).filter(|v| !v.is_empty()));
+        valid.dedup();
         self.valid = valid;
-        bounds
-            .into_iter()
-            .filter(|b| touched(*b) || !self.valid.iter().any(|v| contains(*v, *b)))
-            .collect()
+        let work: Vec<PixelRect> = whole.into_iter().chain(self.work_for(&affected, reach)).collect();
+        if work.is_empty() {
+            self.frames[1] += 1;
+            return false;
+        }
+        self.frames[0] += 1;
+        self.compute(encoder, &work, viewport, timestamps.clone());
+        for b in fresh {
+            if !repaint.contains(&b) {
+                repaint.push(b);
+            }
+        }
+        for b in cached {
+            repaint.extend(changed.iter().map(|c| c.intersect(b)).filter(|r| !r.is_empty()));
+        }
+        timestamps.is_some()
     }
 
     fn compute(
-        &mut self,
-        device: &wgpu::Device,
+        &self,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
-        mut dirty: Vec<PixelRect>,
+        work: &[PixelRect],
+        viewport: impl Fn(&mut wgpu::RenderPass),
+        timestamps: Option<wgpu::RenderPassTimestampWrites>,
     ) {
-        let contains = |outer: PixelRect, inner: PixelRect| outer.intersect(inner) == inner;
-        let bounds = self.bounds();
-        let work = loop {
-            let work = self.work_for(&dirty);
-            let kept: Vec<PixelRect> = self
-                .valid
-                .iter()
-                .filter(|v| work.iter().all(|w| w.intersect(**v).is_empty()))
-                .copied()
-                .chain(work.iter().map(|w| self.interior(*w)))
-                .collect();
-            let orphans: Vec<PixelRect> = bounds
-                .iter()
-                .filter(|b| !dirty.contains(b) && !kept.iter().any(|v| contains(*v, **b)))
-                .copied()
-                .collect();
-            if orphans.is_empty() {
-                self.valid = kept.into_iter().filter(|v| !v.is_empty()).collect();
-                break work;
-            }
-            dirty.extend(orphans);
-        };
         let levels = self.style.levels as usize;
-        let pass = |encoder: &mut wgpu::CommandEncoder,
-                    pipeline: &wgpu::RenderPipeline,
-                    group: &wgpu::BindGroup,
-                    uniform: usize,
-                    target: usize| {
-            let (texture, _, view) = &self.levels[target - 1];
-            let shift = target as u32;
+        let pass = |encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, shift: u32, timestamps: Option<wgpu::RenderPassTimestampWrites>, draw: &dyn Fn(&mut wgpu::RenderPass)| {
+            let size = texture.size();
+            let areas: Vec<PixelRect> = work
+                .iter()
+                .map(|rect| PixelRect::new(rect.min_x() >> shift, rect.min_y() >> shift,
+                    rect.max_x().div_ceil(1 << shift).min(size.width), rect.max_y().div_ceil(1 << shift).min(size.height)))
+                .filter(|a| !a.is_empty())
+                .collect();
+            let view = texture.create_view(&Default::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("backdrop blur"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timestamps,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, group, &[(uniform as u64 * PASS_STRIDE) as u32]);
-            let size = texture.size();
-            for rect in &work {
-                let area = PixelRect::new(
-                    rect.min_x() >> shift,
-                    rect.min_y() >> shift,
-                    rect.max_x().div_ceil(1 << shift).min(size.width),
-                    rect.max_y().div_ceil(1 << shift).min(size.height),
-                );
-                if area.is_empty() {
-                    continue;
-                }
+            for area in areas {
                 pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());
-                pass.draw(0..3, 0..1);
+                draw(&mut pass);
             }
         };
-        let source_group = self.bind(device, source);
-        for level in 1..=levels {
-            let group = if level == 1 { &source_group } else { &self.levels[level - 2].1 };
-            pass(encoder, &self.down, group, level - 1, level);
+        let filter = |pipeline: &wgpu::RenderPipeline, source: &wgpu::BindGroup, uniform: usize, pass: &mut wgpu::RenderPass| {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, source, &[(uniform as u64 * PASS_STRIDE) as u32]);
+            pass.draw(0..3, 0..1);
+        };
+        let scratch = self.scratch.as_ref().unwrap();
+        pass(encoder, &self.levels[1].0, 2, timestamps, &viewport);
+        for level in 3..=levels {
+            pass(encoder, &self.levels[level - 1].0, level as u32, None, &|p| filter(&self.down, &self.levels[level - 2].1, level - 1, p));
         }
         for level in (1..levels).rev() {
-            pass(encoder, &self.up, &self.levels[level].1, levels + level - 1, level);
+            let into = if level == 1 { scratch } else { &self.levels[level - 1].0 };
+            pass(encoder, into, level as u32, None, &|p| filter(&self.up, &self.levels[level].1, levels + level - 1, p));
         }
+        for interior in work.iter().map(|w| self.interior(*w)) {
+            let area = PixelRect::new(interior.min_x().div_ceil(2), interior.min_y().div_ceil(2), interior.max_x() >> 1, interior.max_y() >> 1);
+            if area.is_empty() {
+                continue;
+            }
+            let origin = wgpu::Origin3d { x: area.min_x(), y: area.min_y(), z: 0 };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: scratch, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &self.levels[0].0, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: area.width(), height: area.height(), depth_or_array_layers: 1 },
+            );
+        }
+    }
+
+    pub fn draw(&self, pass: &mut wgpu::RenderPass, repaint: PixelRect) {
+        let Some(buffer) = self.region_buffer.as_ref().filter(|_| !self.drawn.is_empty()) else {
+            return;
+        };
+        pass.set_bind_group(0, &self.levels[0].1, &[0]);
+        pass.set_pipeline(&self.fill);
+        for area in self.interiors.iter().map(|i| i.intersect(repaint)).filter(|a| !a.is_empty()) {
+            pass.set_scissor_rect(area.min_x(), area.min_y(), area.width(), area.height());
+            pass.draw(0..3, 0..1);
+        }
+        pass.set_scissor_rect(repaint.min_x(), repaint.min_y(), repaint.width(), repaint.height());
+        pass.set_pipeline(&self.region);
+        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.draw(0..6, 0..self.edges);
     }
 }

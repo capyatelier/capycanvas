@@ -320,5 +320,23 @@ mod tests {
         assert!(!p.glass.transparency.enabled());
         assert_eq!(p.glass.panel.0[3], 1.);
         assert!(close(p.glass.panel.composite([0.5; 3]), rgb(p.panel), 1e-6));
+        for theme in [Theme::Dark, Theme::Light] {
+            let p = Settings { transparency: Transparency::Off, ..Settings::default() }.palette(theme, Platform::Web, None);
+            let g = p.glass;
+            for (glass, opaque) in [
+                (g.panel, p.panel),
+                (g.strip, p.tabbar),
+                (g.tab, p.panel),
+                (g.open_tile, p.panel),
+                (g.chip, p.bg),
+                (g.selection, p.selection),
+                (g.header_selection, p.header_selection),
+                (g.switcher_selection, p.header_selection),
+                (g.document_tab, p.panel),
+            ] {
+                let [r, g, b] = rgb(opaque);
+                assert_eq!(glass.0, [r, g, b, 1.], "{theme:?}: hosts may apply glass colors in every mode");
+            }
+        }
     }
 }
