@@ -7293,6 +7293,12 @@ fn native_floating_gestures() {
     assert_eq!(bounds(), initial);
     capture_reference(&w, &format!("{dir}/panel-cycle-tab-shown.png"), 1.0);
     restore();
+    w.dispatch(UiAction::Preferences {
+        action: layer_ui::PreferenceAction::Edit {
+            id: layer_ui::PreferenceId::ZenRevealAtEdges,
+            value: layer_ui::PreferenceValue::Bool(true),
+        },
+    });
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
     });
