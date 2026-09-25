@@ -59,9 +59,13 @@ import SwiftUI
     lazy var proof = ProofController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
+    var displayColors: JSON {
+        let mask = state["layer_tools"]["mask_editing"]["colors"]
+        return mask.isNull ? state["colors"] : mask
+    }
     var colorViewing: JSON {
-        JSON(["document_space": state["colors"]["rgb_space"].raw, "recipe": snapshot["proof_panel"]["recipe"].raw,
-              "document_depth": snapshot["proof_panel"]["depth"].raw, "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
+        JSON(["document_space": displayColors["rgb_space"].raw, "recipe": snapshot["proof_panel"]["recipe"].raw,
+              "document_depth": state["layer_tools"]["mask_editing"].isNull ? snapshot["proof_panel"]["depth"].raw : displayColors["hdr_depth"].raw, "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
     }
     var paintPreview: JSON {
         snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()

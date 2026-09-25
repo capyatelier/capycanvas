@@ -42,7 +42,8 @@ import CoreGraphics
         let ids = Set(visible.values)
         for layer in store?.state["layers"].array ?? [] where ids.contains(layer["id"].uint) {
             for mask in [false, true] {
-                if mask ? !layer["has_mask"].bool : layer["group"].bool || (!layer["content_icon"].isNull && layer["content_icon_color"].isNull) { continue }
+                if mask ? !layer["has_mask"].bool : layer["group"].bool
+                    || (!layer["content_icon"].isNull && !layer["selection_layer"].bool && layer["content_icon_color"].isNull) { continue }
                 result[Self.key(layer["id"].uint, mask)] = Version(
                     target: layer[mask ? "mask_id" : "id"].uint,
                     revision: layer[mask ? "mask_revision" : "paint_revision"].uint)

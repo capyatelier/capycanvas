@@ -37,7 +37,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn geometric_selection_constraints_history_cancel_and_workspace_memory() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             for command in [CommandId::RectangleSelect, CommandId::EllipseSelect] {
                 let mut s = session();
                 s.set_platform(platform);
@@ -212,6 +212,22 @@ mod selection_tools_checks {
         );
     }
     #[test]
+    fn sampling_sources_require_a_selection_tool() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+            let mut s = session();
+            s.set_platform(platform);
+            for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                assert!(!s.command(command).enabled);
+            }
+            invoke(&mut s, CommandId::ColorSelect);
+            for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                assert!(s.command(command).enabled);
+                invoke(&mut s, command);
+                assert!(s.command(command).selected);
+            }
+        }
+    }
+    #[test]
     fn selection_defaults_and_tools_follow_platform_rollout() {
         for platform in [
             Platform::Gtk,
@@ -229,7 +245,7 @@ mod selection_tools_checks {
                             command: CommandId::Select
                         }
                     }),
-                matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                platform != Platform::Windows
             );
             let photo = WorkspacePreset::Photographer.layout(platform);
             for command in [
@@ -240,7 +256,7 @@ mod selection_tools_checks {
             ] {
                 assert_eq!(
                     command.available_on(platform),
-                    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                    platform != Platform::Windows
                 );
                 assert_eq!(
                     photo
@@ -249,7 +265,7 @@ mod selection_tools_checks {
                         .tiles()
                         .iter()
                         .any(|t| t.control == ToolbarControl::Command { command }),
-                    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                    platform != Platform::Windows
                 );
             }
         }

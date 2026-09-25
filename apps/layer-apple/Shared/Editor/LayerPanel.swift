@@ -96,6 +96,9 @@ struct LayerPanel: View {
         HStack(spacing: 2) {
             LayerButton(icon: "add-layer", label: "New layer") { store.layer(["op": "new", "group": false, "clipped": false]) }
             LayerButton(icon: "folder", label: "New group") { store.layer(["op": "new", "group": true, "clipped": false]) }
+            LayerButton(icon: "selection-brush", label: "New Selection Layer", enabled: store.command("new_selection_layer")["enabled"].bool) {
+                store.invoke("new_selection_layer")
+            }
             LayerButton(icon: "mask", label: "Add layer mask", enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
@@ -204,7 +207,7 @@ private struct LayerRow: View {
     private var id: UInt64 { layer["id"].uint }
     var body: some View {
         HStack(spacing: 2) {
-            LayerButton(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: layer["visible"].bool ? "Hide layer" : "Show layer", height: 36) {
+            LayerButton(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: visibilityLabel, height: 36) {
                 perform { store.dispatch(["type": "set_layer_visibility", "id": id, "visible": !layer["visible"].bool]) }
             }
             LayerButton(icon: layer["selection_icon"].string, label: "Select layer without changing drawing target", height: 36) {
@@ -214,6 +217,11 @@ private struct LayerRow: View {
                 RoundedRectangle(cornerRadius: 1).fill(Color(red: 233/255, green: 153/255, blue: 165/255))
                     .frame(width: 3, height: 28).opacity(layer["clipped"].bool ? 1 : 0)
                 thumbnail(mask: false)
+                if layer["selection_layer"].bool {
+                    IconTile(icon: "selection-load", label: layer["load_selection_tooltip"].string, size: 24) {
+                        perform { store.dispatch(["type": "selection", "action": ["op": "load_layer", "id": id, "mode": "new", "inverted": false]]) }
+                    }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
+                }
                 if layer["has_mask"].bool {
                     LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", size: 12) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
@@ -245,22 +253,34 @@ private struct LayerRow: View {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
                 })
             .accessibilityElement(children: .contain)
-            .accessibilityValue(layer["mask_selected"].bool ? "Editing mask" : layer["drawing"].bool ? "Drawing target" : layer["selected"].bool ? "Selected" : "")
+            .accessibilityValue(layer["mask_selected"].bool ? "Editing mask"
+                : layer["drawing"].bool ? (layer["selection_layer"].bool ? "Editing selection" : "Drawing target")
+                : layer["selected"].bool ? "Selected" : "")
             .accessibilityIdentifier("layer-row-\(id)")
+    }
+    private var visibilityLabel: String {
+        layer["selection_layer"].bool ? (layer["visible"].bool ? "Hide selection overlay" : "Show selection overlay")
+            : (layer["visible"].bool ? "Hide layer" : "Show layer")
     }
     private func thumbnail(mask: Bool) -> some View {
         Button {
-            perform { store.layer(!mask && layer["group"].bool ? ["op": "collapse", "id": id] : ["op": "select", "id": id, "mask": mask]) }
+            perform {
+                if let load = ThumbnailSelectionLoad.current(), !layer["group"].bool {
+                    store.dispatch(["type": "selection", "action": ["op": "load_thumbnail", "id": id, "mask": mask, "shift": load.shift, "alt": load.alt]])
+                } else {
+                    store.layer(!mask && layer["group"].bool ? ["op": "collapse", "id": id] : ["op": "select", "id": id, "mask": mask])
+                }
+            }
         } label: {
             ZStack {
                 if !mask && layer["group"].bool { SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28) }
                 else {
-                    if mask || layer["content_icon"].isNull || !layer["content_icon_color"].isNull,
+                    if mask || layer["content_icon"].isNull || layer["selection_layer"].bool || !layer["content_icon_color"].isNull,
                        let image = previews.images[LayerThumbnails.key(id, mask)] {
                         Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
                             .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
                     }
-                    if !mask && !layer["content_icon"].isNull {
+                    if !mask && !layer["content_icon"].isNull && !layer["selection_layer"].bool {
                         SharedIcon(name: layer["content_icon"].string, size: 28)
                             .foregroundStyle(layer["content_icon_color"].isNull ? palette["text"] : Color(hex: layer["content_icon_color"].string))
                     }
@@ -275,7 +295,8 @@ private struct LayerRow: View {
                 // Bound the hit region as well as the drawing. Without this,
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : "Edit layer content")
+        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group"
+            : layer["selection_layer"].bool ? "Edit selection layer" : "Edit layer content")
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
@@ -288,7 +309,7 @@ private struct LayerRow: View {
     private func thumbnailCaptureStatus(mask: Bool) -> String {
         #if DEBUG
         if ProcessInfo.processInfo.environment["CAPY_CAPTURE_PROBE"] == "1" {
-            let symbolic = !mask && (layer["group"].bool || !layer["content_icon"].isNull)
+            let symbolic = !mask && (layer["group"].bool || (!layer["content_icon"].isNull && !layer["selection_layer"].bool))
             return symbolic || previews.images[LayerThumbnails.key(id, mask)] != nil ? "Preview ready" : "Preview pending"
         }
         #endif
@@ -323,7 +344,7 @@ private struct LayerName: View {
             } else {
                 Text(layer["label"].string).lineLimit(1).help(layer["label"].string)
                     .onTapGesture(count: 2) {
-                        if allowsAction(), layer["editable"].bool && !layer["locked"].bool { store.layer(["op": "begin_rename", "id": layer["id"].raw]) }
+                        if allowsAction(), layer["can_rename"].bool { store.layer(["op": "begin_rename", "id": layer["id"].raw]) }
                     }
             }
         }.onChange(of: renaming, initial: true) { _, active in

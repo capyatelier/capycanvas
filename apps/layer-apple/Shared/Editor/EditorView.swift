@@ -119,6 +119,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(ProofPresentation(model: store.proof))
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
+        .modifier(SelectionResizeDialog(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {
             SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)

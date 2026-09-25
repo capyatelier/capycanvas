@@ -1,10 +1,10 @@
 # Selection tools
 
-GTK, Web, and Android provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
+GTK, Web, Android, macOS and iPadOS provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
 Photo places these alongside Lasso and Auto select in its Tools toolbar. Sketch
 uses a Select title-bar command and a two-panel Tools → Tool drawer, matching
 the Eraser drawer. The Select command remembers the last chosen selection tool
-in the workspace. Other hosts retain their existing selection entry points.
+in the workspace. Windows retains its existing selection entry points.
 
 Preview-less tool rows match brush categories: at least 44 px on GTK/Web and
 48 dp on Android.
@@ -49,7 +49,7 @@ and affine transforms consume the same cached mask. Pooled coverage uses alpha
 to preserve its precision through color-managed rendering. No selection
 classification or feathering runs per brush dab.
 
-The defaults apply to GTK, Web, and Android. Shared migration recognizes only untouched
+The defaults apply to GTK, Web, Android, macOS and iPadOS. Shared migration recognizes only untouched
 included layouts and preserves working settings; customized history is retained.
 The new icons use the existing SVG bank, and native tool/header/toolbar buttons
 retain the application drag and reorder convention.
@@ -69,6 +69,12 @@ retain the application drag and reorder convention.
 - Android: run `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons`
   and `AndroidRasterTest#selectionToolsRenderAndCombineOnDevice`. They cover
   native mouse/touch/stylus UI contacts and actual Vulkan selection/fill pixels.
+- macOS and iPadOS: `cargo test --locked -p layer-apple --target aarch64-apple-darwin
+  --lib selection -- --test-threads=1` drives both Apple policies through the
+  pointer ABI and Metal (modifier latching, Grow/Shrink, Quick Mask rows, mask
+  colors, thumbnails and saved layers). `EditorLaunchTests/testSelectionMasks`
+  runs the native journey on each target. Command-click a layer thumbnail to load
+  it (Shift adds, Option subtracts); Control-click stays the context menu.
 - `native_selection_options_input` exercises mode controls on every tool,
   feather-radius entry, selection combinations, and single-step undo/redo.
 - `native_selection_tools_input` exercises GTK mouse/touch tool selection,

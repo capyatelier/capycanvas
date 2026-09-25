@@ -1970,6 +1970,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
+            CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
+                idle && self.layer_interaction.tool.selection_tool().is_some()
+            }
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),

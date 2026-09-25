@@ -331,6 +331,7 @@ pub(super) fn updated_photographer_default(
     let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
     let previous_drawers = WorkspacePreset::Photographer.legacy_without_picker_layout(platform);
     let previous_mask_panels = WorkspacePreset::Photographer.legacy_selection_drawers_layout(platform);
+    let previous_unselected_drawers = WorkspacePreset::Photographer.legacy_drawers_without_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = previous_columns.clone();
@@ -343,7 +344,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip && baseline.as_ref() != &previous_drawers && baseline.as_ref() != &previous_mask_panels) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip && baseline.as_ref() != &previous_drawers && baseline.as_ref() != &previous_mask_panels && baseline.as_ref() != &previous_unselected_drawers) {
         return None;
     }
     let mut content = entity.content.clone();
@@ -516,12 +517,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
 #[test]
 fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
     use layer_ui::{WorkspacePreset, LayoutHistory};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         for (preset, id, migrate) in [
             (WorkspacePreset::Painter, DEFAULT_WORKSPACES[0].0, updated_painter_default as fn(&Entity,Platform)->Option<ItemContent>),
             (WorkspacePreset::Photographer, DEFAULT_WORKSPACES[2].0, updated_photographer_default),
         ] {
-            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform)] {
+            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform),
+                preset.legacy_drawers_without_selection_layout(platform)] {
             if preset == WorkspacePreset::Painter && old == preset.layout(platform) { continue; }
             let mut working=preset.working_state();
             working.selection.tool=layer_ui::SelectionTool::Ellipse;

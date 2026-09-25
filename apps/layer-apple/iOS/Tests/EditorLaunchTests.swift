@@ -179,6 +179,8 @@ final class EditorLaunchTests: XCTestCase {
         checkRegionSelectionAndFill(in: editorCaptureApplication())
     }
 
+    @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
+
     @MainActor func testSelectionInversion() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkSelectionInversion(in: editorCaptureApplication())
