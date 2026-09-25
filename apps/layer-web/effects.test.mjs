@@ -66,6 +66,8 @@ export async function benchmarkFilters({evaluate}) {
       const result=await evaluate(`(${async function(filters,mode){
         const app=layerApp.app,send=a=>app.dispatch(a),effect=a=>send({type:"effect",action:a}),ids=[];
         send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
+        const group=app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("stats"));
+        if(group.active!=="stats")send({type:"select_panel_tab",group:group.id,panel:"stats"});
         send({type:"select_layer",id:1});
         send({type:"set_brush_size",value:24});send({type:"set_color",rgba:[.2,.5,.7,1]});
         for(const id of filters){
@@ -87,7 +89,7 @@ export async function benchmarkFilters({evaluate}) {
           if(mode==="relevant"||mode==="unrelated")effect({op:"set",layer:ids[ids.length-1],key:mode==="relevant"?"sigma":"amount",value:{kind:"number",value:mode==="relevant"?2+(i%20)*.5:50+(i%20)*5}});
           app.frame(now,now+1000/120);if(i>=60)wall.push(performance.now()-start);
         }
-        await frame();const stats=app.renderer_stats();
+        await frame();const stats=JSON.parse(JSON.stringify(app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v));
         for(const id of ids.reverse()){send({type:"select_layer",id});send({type:"layer",action:{op:"delete_selected"}});}
         send({type:"select_layer",id:1});
         wall.sort((a,b)=>a-b);
@@ -167,7 +169,7 @@ export async function checkDiagnostics({evaluate,settle}) {
     })`);
     await settle();
     assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),
-      ["CPU · ms","GPU · ms","chart","Frames","Canvas storage","Dabs","Effect passes","Pipelines"]);
+      ["CPU · ms","GPU · ms","chart","Frames","Canvas storage","Dabs","Effect passes","Pipelines","Start stroke recording"]);
     assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
   }
   console.log("PASS: live diagnostics chart after GPU timings and storage after Frames in both themes");
