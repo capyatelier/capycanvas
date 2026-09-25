@@ -6467,6 +6467,12 @@ fn native_zen_icons() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::ZenRevealAtEdges,
+            value: PreferenceValue::Bool(true),
+        },
+    });
     let dir = "../../artifacts/ui/zen-icons";
     std::fs::create_dir_all(dir).unwrap();
     let zen = command(&w, CommandId::ZenMode);
