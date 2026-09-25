@@ -302,7 +302,10 @@ import SwiftUI
         }
     }
     func input(_ value: [String: Any]) {
-        if value["type"] as? String == "blur" { interruptInput?() }
+        if value["type"] as? String == "blur" { interruptInput?(); workspace.dismissTransients(at: nil) }
+        if value["type"] as? String == "key", value["key"] as? String == "Escape", value["pressed"] as? Bool == true {
+            workspace.dismissTransients(at: nil)
+        }
         native?.submit(1, JSON(value)); wake?()
     }
     /// A captured chord is a complete input pair; closing its sheet cannot leave

@@ -3,12 +3,12 @@
 [Workspace and UI](README.md) · [Panel contract](panel-customization.md) ·
 [Numeric controls](numeric-controls.md) · [Drag convention](drag-and-reorder.md)
 
-GTK, Web and Android toolbars support **Brush size slider**, **Brush opacity slider**, and
+GTK, Web, Android, macOS and iPadOS toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
 Toolbars can also use [compact edge regions](compact-toolbar-edges.md).
-They are not title-bar items. Other hosts do not yet offer these components.
+They are not title-bar items. Windows does not yet offer these components.
 
 ## Included workspaces
 
@@ -117,10 +117,11 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   pointer capture and native dropdowns. Both normal toolbars and nested drawer toolbars
   use the same typed `TileWidget` builder and refresh path. The existing numeric
   editor supplies parsing and keyboard behavior.
-- Web `toolbar-components.js` and Android `ToolbarComponents.kt` render the same
-  owned component projection in ordinary toolbars and retained drawers.
-  `toolbar_transport.rs` exposes stateless fitting, numeric metadata and formatting
-  queries to Wasm/JNI; pointer timing/capture and font measurement stay native.
+- Web `toolbar-components.js`, Android `ToolbarComponents.kt` and Apple
+  `ToolbarComponents.swift` render the same owned component projection in ordinary
+  toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
+  numeric metadata and formatting queries to Wasm, JNI and `capy_apple_toolbar_ui`;
+  pointer timing/capture and font measurement stay native.
   Editors retain their original context token, and measurements are cached across
   value-only updates. The standalone slider uses the same shared cap/track geometry.
 - `toolbar_preview.rs` owns bookmark validation, hit policy, and stamp geometry.
@@ -193,3 +194,12 @@ attached tablet. They use native mouse/finger/stylus MotionEvents and isolated
 workspace stores. Screenshots cover both themes, standalone tracks, horizontal
 options, vertical sizes, numeric popovers and the connected drawer. These are
 injected native input journeys, not a hands-on physical stylus test.
+
+Apple regressions: the `toolbar_component` bridge tests in
+`cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` cover
+both Apple policies: stateless queries, slider edits, bookmarks, stamps, stale
+contexts, Photo options and compact-edge docking with one-step undo/redo. The
+`testToolbarComponents` XCUITest journey (`ToolbarComponentChecks.swift`) runs on
+macOS and a physical iPad: Sketch slider previews, caption updates, bookmarks,
+outside-tap and drag dismissal, quick-drag rejection and hold-to-reorder caps,
+the options display menu, 24px segmented choices and the Photo More drawer.

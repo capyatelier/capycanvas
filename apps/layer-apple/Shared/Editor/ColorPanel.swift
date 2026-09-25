@@ -87,11 +87,14 @@ struct ColorPanel: View {
                     .colorPlaced(layout["readout"], id: "readout")
             }.frame(width: side, height: height, alignment: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.aspectRatio(hdr ? 226 / max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) : 1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
+        }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
+    static func aspect(hdr: Bool) -> CGFloat {
+        hdr ? max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) / 226 : 1
+    }
 }
 
 /// Native buttons retain press/cancel and keyboard behavior. Only the shared

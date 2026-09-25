@@ -144,7 +144,7 @@ impl WorkspacePreset {
     pub fn legacy_without_palettes_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_proportional_layout(platform);
         if self == Self::Illustrator
-            && matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+            && matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Mac | crate::Platform::Ios)
         {
             fit_paint_columns(&mut layout);
         }
@@ -212,7 +212,7 @@ impl WorkspacePreset {
 
     /// Exact default before the GTK Color Picker button, for untouched saves.
     pub fn legacy_without_picker_layout(self, platform: crate::Platform) -> DockLayout {
-        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android);
+        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Mac | crate::Platform::Ios);
         let mut layout = self.component_layout(platform, supported);
         self.arrange_components(&mut layout, supported);
         if self == Self::Photographer && supported {
@@ -738,6 +738,19 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_saved_before_palettes_restore_the_default_registry() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            for preset in WorkspacePreset::ALL {
+                let layout = preset.legacy_without_palettes_layout(platform);
+                let mut saved = serde_json::to_value(&layout).unwrap();
+                saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+                let restored: DockLayout = serde_json::from_value(saved).unwrap();
+                assert_eq!(restored, layout, "{platform:?} {}", preset.name());
+            }
+        }
+    }
+
+    #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
         assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
@@ -845,7 +858,7 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
+                if platform != crate::Platform::Windows { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
                 else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
             for (id, expected) in [
                 (
@@ -954,7 +967,7 @@ mod tests {
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.floating.is_empty());
-            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
+            if platform != crate::Platform::Windows {
                 assert_eq!(layout.bands.len(), 1);
                 assert_eq!(layout.bands[0].edge, Edge::Left);
                 assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
@@ -1081,7 +1094,7 @@ mod tests {
         let bounds = |layout: &DockLayout, height, panel| {
             layout.resolve(1400., height).groups.into_iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let mut layout = WorkspacePreset::Illustrator.legacy_without_palettes_layout(platform);
             assert_eq!(layout.fit_height_groups, [10, 14]);
             for invalid in [vec![10, 10], vec![10, 999]] {
@@ -1146,7 +1159,7 @@ mod tests {
             assert_eq!(moved.fit_height_groups, [14]);
             assert!((column(&layout, 1000.) - column(&resized, 1000.)).abs() < 0.01);
         }
-        for platform in [Platform::Windows, Platform::Mac, Platform::Ios, Platform::Generic] {
+        for platform in [Platform::Windows, Platform::Generic] {
             assert!(WorkspacePreset::Illustrator.layout(platform).fit_height_groups.is_empty());
         }
     }

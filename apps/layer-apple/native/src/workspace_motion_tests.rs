@@ -222,7 +222,7 @@ fn layout_apple_abi_resizes_retained_content_and_matches_legacy_geometry() {
                     assert_eq!(next["layout"], old["layout"]);
                     assert_eq!(next["camera"], old["state"]["camera"]);
                     assert_eq!(next["panel_measurements"], old["panel_measurements"]);
-                    for field in ["bands", "floating", "collapsed", "fit_tab_groups"] {
+                    for field in ["bands", "floating", "collapsed", "fit_tab_groups", "fit_height_groups"] {
                         assert_eq!(
                             next["workspace_layout"][field],
                             old["state"]["workspace"]["layout"][field]

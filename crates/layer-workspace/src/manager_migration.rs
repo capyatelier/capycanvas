@@ -17,7 +17,9 @@ fn gtk_palettes_upgrade_only_untouched_paint_and_photo_defaults() {
             updated_photographer_default,
         ),
     ] {
-        let old = preset.legacy_without_palettes_layout(Platform::Gtk);
+        let mut saved = serde_json::to_value(preset.legacy_without_palettes_layout(Platform::Gtk)).unwrap();
+        saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+        let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
         let mut entity = Entity::workspace(
             preset.name(),
             WorkspaceCapture {
@@ -60,7 +62,7 @@ fn toolbar_components_upgrade_only_untouched_supported_defaults() {
     for (index, preset, platform) in [
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
-    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (i, p, platform))) {
+    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios].map(|platform| (i, p, platform))) {
         let mut previous = vec![preset.legacy_toolbar_components_layout(platform)];
         previous.push(preset.legacy_bottom_brush_controls_layout(platform));
         if preset == WorkspacePreset::Photographer {

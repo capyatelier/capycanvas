@@ -51,6 +51,7 @@ struct WorkspacePanels: View {
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
             WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)
+            ToolbarSliderPreviewOverlay(preview: workspace.sliderPreview, palette: EditorPalette(source: store.state["palette"])).zIndex(350)
             WorkspaceContactMenu(interaction: workspace.input, store: store).zIndex(400)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .compositingGroup()
@@ -131,13 +132,20 @@ struct WorkspaceToolbar: View {
         ZStack(alignment: .topLeading) {
             Color.clear
             ForEach(panel["tiles"].array.indices, id: \.self) { index in
-                let tile = panel["tiles"][index]
-                WorkspaceTile(store: store, panel: panel, tile: tile, vertical: vertical)
-                    .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
-                    .modifier(WorkspaceDrag(workspace: store.workspace,
-                        item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]), surface: .tile,
-                        context: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
-                    .placed(geometry["tiles"][index])
+                let tile = panel["tiles"][index], bounds = geometry["tiles"][index]
+                if tile["component"].isNull {
+                    WorkspaceTile(store: store, panel: panel, tile: tile, vertical: vertical)
+                        .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
+                        .modifier(WorkspaceDrag(workspace: store.workspace,
+                            item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]), surface: .tile,
+                            context: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
+                        .placed(bounds)
+                } else if bounds["width"].number > 0 && bounds["height"].number > 0 {
+                    ToolbarComponentView(store: store, panel: panel, tile: tile,
+                        size: CGSize(width: bounds["width"].number, height: bounds["height"].number), vertical: vertical)
+                        .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
+                        .placed(bounds)
+                }
             }
             if !geometry["grip"].isNull {
                 PanelGrip(vertical: vertical).frame(maxWidth: .infinity, maxHeight: .infinity)

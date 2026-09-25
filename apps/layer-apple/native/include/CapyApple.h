@@ -83,6 +83,7 @@ char *capy_apple_numeric(const char *json);
 /* Stateless shared tagged-color forms, previews in the requested display space and gradient
    samples. Owned JSON result; same error and lifetime rules as numeric. */
 char *capy_apple_color_ui(const char *json);
+char *capy_apple_toolbar_ui(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Shape: 0 circle,
    1 square, 2 triangle. Result: 0 miss/invalid, 1 hue ring, 2 field. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);

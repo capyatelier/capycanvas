@@ -179,6 +179,8 @@ final class EditorLaunchTests: XCTestCase {
         checkRegionSelectionAndFill(in: editorCaptureApplication())
     }
 
+    @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
+
     @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
 
     @MainActor func testSelectionInversion() {
