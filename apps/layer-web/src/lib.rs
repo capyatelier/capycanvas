@@ -1314,6 +1314,7 @@ impl WebApp {
         self.session.append_layer_overlay(&mut self.cursor.segments);
         let picker = self.session.color_picker_overlay();
         let glass = self.session.state().palette.glass;
+        let stroke = self.session.engine().has_active_stroke();
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
@@ -1324,6 +1325,7 @@ impl WebApp {
             &gpu.renderer,
             if glass.transparency.enabled() { &self.glass } else { &[] },
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+            stroke,
         );
         let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)

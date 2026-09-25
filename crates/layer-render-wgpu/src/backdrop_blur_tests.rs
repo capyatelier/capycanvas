@@ -61,7 +61,7 @@ fn glass_blurs_only_inside_rounded_regions() {
     let surface = texture(&r, size);
     let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
     let raw = present(&r, &mut presenter, &surface, 0.);
-    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default());
+    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default(), false);
     let glass = present(&r, &mut presenter, &surface, 0.);
     let at = |bytes: &[u8], x: u32, y: u32| bytes[((y * 256 + x) * 4) as usize..][..4].to_vec();
     for (x, y) in [(10, 10), (200, 10), (70, 100), (65, 33), (190, 94)] {
@@ -80,7 +80,7 @@ fn glass_larger_than_the_surface_fills_it() {
     let surface = texture(&r, size);
     let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
     let raw = present(&r, &mut presenter, &surface, 0.);
-    presenter.set_backdrop(&r, &[region([-32., -32., 320., 192.], [16.; 4])], Default::default());
+    presenter.set_backdrop(&r, &[region([-32., -32., 320., 192.], [16.; 4])], Default::default(), false);
     let glass = present(&r, &mut presenter, &surface, 0.);
     let row = |bytes: &[u8]| (16..64).map(|x| bytes[((64 * 256 + x) * 4) as usize]).collect::<Vec<u8>>();
     let spread = |row: &[u8]| row.iter().max().unwrap() - row.iter().min().unwrap();
@@ -96,7 +96,7 @@ fn concave_corners_leave_the_fillet_sharp() {
     let surface = texture(&r, size);
     let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
     let raw = present(&r, &mut presenter, &surface, 0.);
-    presenter.set_backdrop(&r, &[region([96., 32., 64., 64.], [-32., 0., 0., 0.])], Default::default());
+    presenter.set_backdrop(&r, &[region([96., 32., 64., 64.], [-32., 0., 0., 0.])], Default::default(), false);
     let glass = present(&r, &mut presenter, &surface, 0.);
     let at = |bytes: &[u8], x: u32, y: u32| bytes[((y * 256 + x) * 4) as usize];
     assert_eq!(at(&glass, 100, 36), at(&raw, 100, 36), "inside the scooped disk");
@@ -122,7 +122,7 @@ fn navigator_overviews_draw_above_the_glass() {
             opacity: 1.,
         }],
     );
-    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default());
+    presenter.set_backdrop(&r, &[region([64., 32., 128., 64.], [16.; 4])], Default::default(), false);
     let bytes = present(&r, &mut presenter, &surface, 0.);
     let pixel = &bytes[((56 * 256 + 96) * 4) as usize..][..4];
     assert!(pixel[0] > 150 && pixel[1] < 64, "overview background: {pixel:?}");
@@ -135,7 +135,7 @@ fn cached_blur_is_reused_until_the_camera_or_a_long_move() {
     let surface = texture(&r, size);
     let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
     let place = |presenter: &mut ViewportPresenter, x: f32| {
-        presenter.set_backdrop(&r, &[region([x, 16., 64., 64.], [8.; 4])], Default::default());
+        presenter.set_backdrop(&r, &[region([x, 16., 64., 64.], [8.; 4])], Default::default(), false);
     };
     place(&mut presenter, 16.);
     present(&r, &mut presenter, &surface, 0.);
@@ -183,15 +183,7 @@ fn retained_targets_repaint_only_changed_glass() {
     assert_eq!(frame(&mut blur, Some(&[])), [PixelRect::new(40, 16, 104, 80)], "removed glass repaints the artwork");
 }
 
-#[test]
-fn local_refresh_matches_a_full_blur() {
-    let size = [256, 128];
-    let mut r = document(size);
-    let surface = texture(&r, size);
-    let glass = [region([140., 32., 96., 64.], [12.; 4])];
-    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
-    presenter.set_backdrop(&r, &glass, Default::default());
-    let before = present(&r, &mut presenter, &surface, 0.);
+fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
     let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
     dab.center = layer_core::Point { x: 110., y: 64. };
     dab.radii = [8.; 2];
@@ -209,15 +201,52 @@ fn local_refresh_matches_a_full_blur() {
         composite_all: false,
     })
     .unwrap();
+}
+
+#[test]
+fn local_refresh_matches_a_full_blur() {
+    let size = [256, 128];
+    let mut r = document(size);
+    let surface = texture(&r, size);
+    let glass = [region([140., 32., 96., 64.], [12.; 4])];
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    let before = present(&r, &mut presenter, &surface, 0.);
+    paint_near_glass(&mut r, size);
     let local = present(&r, &mut presenter, &surface, 0.);
     assert_eq!(presenter.backdrop_frames(), [2, 0], "paint within reach refreshes the cached blur");
     let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
-    fresh.set_backdrop(&r, &glass, Default::default());
+    fresh.set_backdrop(&r, &glass, Default::default(), false);
     let full = present(&r, &mut fresh, &surface, 0.);
     let worst = local.iter().zip(&full).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
     assert!(worst <= 1, "local refresh differs from a full blur by {worst}");
     let at = |bytes: &[u8]| bytes[((64 * 256 + 150) * 4) as usize];
     assert!(at(&local) < at(&before), "the nearby dab darkens the glass");
+}
+
+#[test]
+fn strokes_keep_the_cached_glass_until_they_end() {
+    let size = [256, 128];
+    let mut r = document(size);
+    let surface = texture(&r, size);
+    let glass = [region([140., 32., 96., 64.], [12.; 4])];
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    let before = present(&r, &mut presenter, &surface, 0.);
+    paint_near_glass(&mut r, size);
+    presenter.set_backdrop(&r, &glass, Default::default(), true);
+    let during = present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [1, 1], "a stroke keeps the cached blur");
+    let at = |bytes: &[u8]| bytes[((64 * 256 + 150) * 4) as usize];
+    assert_eq!(at(&during), at(&before));
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    let after = present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [2, 1], "the stroke's end refreshes the glass");
+    let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
+    fresh.set_backdrop(&r, &glass, Default::default(), false);
+    let full = present(&r, &mut fresh, &surface, 0.);
+    let worst = after.iter().zip(&full).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 1, "the held refresh differs from a full blur by {worst}");
 }
 
 #[test]
@@ -347,7 +376,7 @@ fn backdrop_blur_cost() {
         let area: f32 = regions.iter().map(|r| r.bounds[2] * r.bounds[3]).sum();
         for style in [BackdropBlurStyle { levels: 3, offset: 2.5 }, BackdropBlurStyle { levels: 3, offset: 3. }, BackdropBlurStyle { levels: 4, offset: 2.5 }] {
             let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
-            presenter.set_backdrop(&r, &regions, style);
+            presenter.set_backdrop(&r, &regions, style, false);
             let mut cpu = Vec::new();
             let moving = measure(&r, iterations, |encoder, i| {
                 let start = std::time::Instant::now();

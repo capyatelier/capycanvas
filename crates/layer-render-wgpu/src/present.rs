@@ -769,7 +769,7 @@ impl ViewportPresenter {
 
     pub fn retains_target(&self) -> bool { self.retained }
 
-    pub fn set_backdrop(&mut self, renderer: &WgpuRasterizer, regions: &[BackdropRegion], style: BackdropBlurStyle) {
+    pub fn set_backdrop(&mut self, renderer: &WgpuRasterizer, regions: &[BackdropRegion], style: BackdropBlurStyle, hold: bool) {
         if regions.is_empty() && self.backdrop.is_none() {
             return;
         }
@@ -778,11 +778,12 @@ impl ViewportPresenter {
             .get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::new(&renderer.device, self.format));
         backdrop.set_style(style);
         backdrop.set_regions(regions);
+        backdrop.set_hold(hold);
     }
 
     pub fn inherit_backdrop(&mut self, renderer: &WgpuRasterizer, other: &Self) {
         if let Some(backdrop) = &other.backdrop {
-            self.set_backdrop(renderer, backdrop.regions(), backdrop.style());
+            self.set_backdrop(renderer, backdrop.regions(), backdrop.style(), false);
         }
     }
 

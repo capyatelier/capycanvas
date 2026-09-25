@@ -42,6 +42,7 @@ struct Frame {
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     backdrops: Vec<layer_render_wgpu::BackdropRegion>,
     backdrop_style: layer_render_wgpu::BackdropBlurStyle,
+    backdrop_hold: bool,
     stroke_target: Option<crate::wayland::StrokeTarget>,
     // Every queued producer must resolve its immutable roots, even on failure.
     pending_rasters: Vec<layer_core::raster::RasterRevision>,
@@ -191,6 +192,7 @@ pub struct RenderWorker {
     pub(super) overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     pub(super) backdrops: Vec<layer_render_wgpu::BackdropRegion>,
     pub(super) backdrop_style: layer_render_wgpu::BackdropBlurStyle,
+    pub(super) backdrop_hold: bool,
     pub(super) stroke_target: Option<crate::wayland::StrokeTarget>,
     #[cfg(test)]
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
@@ -358,6 +360,7 @@ impl RenderWorker {
             overviews: Vec::new(),
             backdrops: Vec::new(),
             backdrop_style: Default::default(),
+            backdrop_hold: false,
             #[cfg(test)]
             stats,
         })
@@ -757,6 +760,7 @@ impl CanvasRenderer for RenderWorker {
             overviews: self.overviews.clone(),
             backdrops: self.backdrops.clone(),
             backdrop_style: self.backdrop_style,
+            backdrop_hold: self.backdrop_hold,
             stroke_target: self.stroke_target,
             #[cfg(test)]
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
@@ -1449,7 +1453,7 @@ impl Worker {
         self.overviews.clone_from(&frame.overviews);
         self.presenter
             .set_overviews(&self.renderer, &self.overviews);
-        self.presenter.set_backdrop(&self.renderer, &frame.backdrops, frame.backdrop_style);
+        self.presenter.set_backdrop(&self.renderer, &frame.backdrops, frame.backdrop_style, frame.backdrop_hold);
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
             .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);

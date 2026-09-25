@@ -70,6 +70,13 @@ fn contains(outer: PixelRect, inner: PixelRect) -> bool {
     outer.intersect(inner) == inner
 }
 
+fn merge(rects: &mut Vec<PixelRect>, mut rect: PixelRect) {
+    while let Some(i) = rects.iter().position(|r| !r.intersect(rect).is_empty()) {
+        rect = rect.union(rects.swap_remove(i));
+    }
+    rects.push(rect);
+}
+
 const PASS_STRIDE: u64 = 256;
 const PASS_SIZE: u64 = 32;
 const SLACK: u32 = 96;
@@ -92,6 +99,8 @@ pub(crate) struct BackdropBlur {
     drawn: Vec<PixelRect>,
     interiors: Vec<PixelRect>,
     valid: Vec<PixelRect>,
+    hold: bool,
+    held: Vec<PixelRect>,
     edges: u32,
     region_buffer: Option<wgpu::Buffer>,
     uploaded: bool,
@@ -216,6 +225,8 @@ impl BackdropBlur {
             drawn: Vec::new(),
             interiors: Vec::new(),
             valid: Vec::new(),
+            hold: false,
+            held: Vec::new(),
             edges: 0,
             region_buffer: None,
             uploaded: false,
@@ -246,6 +257,10 @@ impl BackdropBlur {
             self.regions.clear();
             self.regions.extend_from_slice(regions);
         }
+    }
+
+    pub fn set_hold(&mut self, hold: bool) {
+        self.hold = hold;
     }
 
     pub fn interiors(&self) -> &[PixelRect] {
@@ -462,6 +477,7 @@ impl BackdropBlur {
             self.interiors.clear();
             self.levels.clear();
             self.valid.clear();
+            self.held.clear();
             self.extent = [0; 2];
             return false;
         }
@@ -473,6 +489,23 @@ impl BackdropBlur {
             self.drawn.clone_from(&bounds);
         }
         let reach = self.style.reach();
+        let damage = match damage {
+            None => {
+                self.held.clear();
+                None
+            }
+            Some(damage) if self.hold => {
+                for rect in damage {
+                    merge(&mut self.held, *rect);
+                }
+                Some(Vec::new())
+            }
+            Some(damage) => {
+                let mut all = std::mem::take(&mut self.held);
+                all.extend_from_slice(damage);
+                Some(all)
+            }
+        };
         let old = if damage.is_some() { std::mem::take(&mut self.valid) } else { Vec::new() };
         let cached_before = |b: &PixelRect| old.iter().any(|v| contains(*v, *b));
         let (local, stale): (Vec<PixelRect>, Vec<PixelRect>) = damage.into_iter().flatten().partition(|d| {

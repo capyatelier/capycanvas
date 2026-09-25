@@ -2189,6 +2189,7 @@ impl Workspace {
                             levels: blur.levels,
                             offset: blur.offset,
                         };
+                        g.session.renderer_mut().backdrop_hold = g.session.engine().has_active_stroke();
                         g.session.renderer_mut().backdrops = this.glass.borrow().iter()
                             .map(|r| layer_render_wgpu::BackdropRegion {
                                 bounds: r.bounds.map(|v| v * scale),

@@ -456,6 +456,7 @@ impl App {
         let zoom_milli_percent = (self.host.session.state().camera.zoom * 100_000.0).round() as i64;
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
+        let stroke = self.host.session.engine().has_active_stroke();
         self.host
             .session
             .update_canvas_cursor(&mut self.cursor);
@@ -565,6 +566,7 @@ impl App {
             gpu,
             if ready { &self.glass } else { &[] },
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+            stroke,
         );
         surface
             .presenter
