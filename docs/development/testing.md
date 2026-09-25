@@ -30,8 +30,10 @@ eight threads and in none of 45 runs with four.
 
 Headless renderers keep one wgpu instance for the process lifetime so the driver
 stays loaded: each reload consumes glibc static TLS, and the 19th load fails.
-They also omit wgpu debug labels: Vulkan loaders before 1.4.345 can crash when
-one thread names an object while another creates or destroys a device.
+They also omit wgpu's debug instance flag, keeping API validation: Vulkan
+loaders before 1.4.345 can crash when one thread names an object while another
+creates or destroys a device, and D3D12 debug builds would otherwise compile
+unoptimized DXC shaders whose fragment storage-buffer reads some drivers reject.
 
 A workspace-wide test can be useful in a fully configured environment, but it
 also includes platform crates. Start with the affected packages rather than

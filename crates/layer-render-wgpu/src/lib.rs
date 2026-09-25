@@ -1005,9 +1005,6 @@ impl WgpuRasterizer {
         let create = || {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             descriptor.backends = wgpu::Backends::PRIMARY;
-            // Keep D3D12 shaders optimized even in a Rust debug build. DXC's -Od
-            // output for fragment storage-buffer reads can be rejected by drivers.
-            // API validation remains enabled.
             descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
             wgpu::Instance::new(descriptor)
         };

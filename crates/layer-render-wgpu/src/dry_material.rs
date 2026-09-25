@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 
-pub(super) fn shader_destination(in_place: bool) -> String {
+fn shader_destination(in_place: bool) -> String {
     let access = if in_place { "read_write" } else { "write" };
     let original = if in_place { "material_color_output, p" } else { "source_11, p, 0" };
     format!("

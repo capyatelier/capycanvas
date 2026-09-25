@@ -200,7 +200,9 @@ fn draw(
     }
 }
 fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Selection>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while engine.has_pending_document_edits() || !engine.backend().raster_ready() {
+        assert!(std::time::Instant::now() < deadline, "document edits did not settle");
         std::thread::yield_now();
         engine.render_frame_at(1_000_000_000).unwrap();
     }

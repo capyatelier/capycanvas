@@ -5,6 +5,7 @@ use wgpu::util::DeviceExt;
 const BATCH_TILES: usize = 16;
 const _: () = assert!(BATCH_TILES <= SOURCE_SLOTS);
 const PARAMETER_BYTES: u64 = 64 * BATCH_TILES as u64;
+pub(super) const TONAL_PARAMETER_WORDS: usize = 88;
 
 struct Binding {
     views: [wgpu::TextureView; BATCH_TILES],
@@ -205,7 +206,7 @@ impl RawRegions {
             }),
             tonal_parameters: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tonal parameters"),
-                size: 352,
+                size: (TONAL_PARAMETER_WORDS * 4) as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
@@ -448,7 +449,7 @@ impl RawRegions {
         let coverage =
             tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_));
         if let Some(t) = tone {
-            let mut data = [0u32; 88];
+            let mut data = [0u32; TONAL_PARAMETER_WORDS];
             data[84..88].copy_from_slice(&[
                 self.tonal_cache.as_ref().map_or(0, |c| c.chunk_pixels),
                 w,
