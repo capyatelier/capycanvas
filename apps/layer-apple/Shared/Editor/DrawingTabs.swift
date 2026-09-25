@@ -306,7 +306,7 @@ private struct DrawingTabBackground: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             if vertical {
-                RoundedRectangle(cornerRadius: 6).fill(selected ? palette.active : Color.primary.opacity(0.035))
+                SquircleShape.control.fill(selected ? palette.active : Color.primary.opacity(0.035))
             } else {
                 ZStack {
                     if selected { SquircleShape.tile.fill(palette["panel"]) }

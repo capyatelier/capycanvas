@@ -60,6 +60,7 @@ import SwiftUI
                 guard !Task.isCancelled else { return }
                 guard self.latest?.token == request.token else { continue }
                 self.geometry = result; store.workspace.refreshChrome()
+                store.contentDrawers.source(self.id, geometry: request.closing ? JSON() : result)
                 if progress == 1 || result.isNull {
                     self.task = nil
                     if request.closing { store.contentDrawers.remove(self.id) }
@@ -78,6 +79,7 @@ import SwiftUI
 
 @MainActor final class ContentDrawersPresentation: ObservableObject {
     @Published private(set) var items: [String: ContentDrawerPresentation] = [:]
+    @Published private(set) var sources: [String: DrawerSource] = [:]
     private weak var store: EditorStore?
     private var tilesKey = ""
     private var columnsKey = ""
@@ -95,8 +97,13 @@ import SwiftUI
         for id in models.keys where items[id] == nil { items[id] = ContentDrawerPresentation(id: id, store: store) }
         for (id, item) in items { item.refresh(models[id] ?? JSON()) }
     }
+    func source(_ id: String, geometry: JSON) {
+        let next = geometry["connection"].isNull ? nil : DrawerSource(placement: geometry["placement"])
+        if sources[id] != next { sources[id] = next }
+    }
     func remove(_ id: String) {
         items.removeValue(forKey: id)?.stop()
+        source(id, geometry: JSON())
         store?.workspace.refreshChrome()
     }
     func measureTiles(_ measurements: [String: DrawerTileBounds]) {
@@ -126,6 +133,12 @@ import SwiftUI
         // measurements even when SwiftUI coalesces back to identical geometry.
         measureColumns(columns, force: true)
     }
+}
+
+struct DrawerSourceReader<Content: View>: View {
+    @ObservedObject var drawers: ContentDrawersPresentation
+    @ViewBuilder let content: ([String: DrawerSource]) -> Content
+    var body: some View { content(drawers.sources) }
 }
 
 struct ColumnDrawerMeasurements: PreferenceKey {

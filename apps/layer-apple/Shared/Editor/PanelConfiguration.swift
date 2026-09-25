@@ -22,11 +22,11 @@ struct PanelConfiguration: View {
                         Button { store.customize(["type": "set_control_visible", "panel": panel["id"].raw,
                             "control": item["control"].raw, "visible": !item["visible_in_panel"].bool]) } label: {
                             HStack(spacing: 4) {
-                                RoundedRectangle(cornerRadius: 4)
+                                SquircleShape(4)
                                     .fill(item["visible_in_panel"].bool ? palette.accent : Color.clear)
                                     .overlay {
                                         if item["visible_in_panel"].bool { SharedIcon(name: "check").foregroundStyle(.white) }
-                                        else { RoundedRectangle(cornerRadius: 4).strokeBorder(palette["text"].opacity(0.25), lineWidth: 2) }
+                                        else { SquircleShape(4).strokeBorder(palette["text"].opacity(0.25), lineWidth: 2) }
                                     }.frame(width: 16, height: 16)
                                 Text(item["label"].string)
                             }.frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 24).contentShape(Rectangle())
@@ -89,7 +89,7 @@ struct PanelConfiguration: View {
                 Button { store.dispatch(["type": "set_brush_size", "value": value]) } label: {
                     Text(String(Int(value))).fontWeight(.bold).padding(.horizontal, 12)
                         .frame(minWidth: 52).frame(height: fontSize * 1.66 + 8)
-                        .background(palette["button"].opacity(13 / 255), in: RoundedRectangle(cornerRadius: 6))
+                        .background(palette["button"].opacity(13 / 255), in: SquircleShape.control)
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("\(Int(value)) px")
                     .accessibilityIdentifier("configuration-size-\(Int(value))")

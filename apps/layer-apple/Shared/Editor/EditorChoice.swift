@@ -47,7 +47,7 @@ struct EditorChoice: View {
                         .frame(width: 16, height: 16)
                     .modifier(ChoiceMeasurement(id: identifier + ":arrow"))
                 }
-                .background(background, in: RoundedRectangle(cornerRadius: 6)).contentShape(RoundedRectangle(cornerRadius: 6))
+                .background(background, in: SquircleShape.control).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.7)
             .modifier(ChoiceMeasurement(id: identifier))
             .accessibilityLabel(label).accessibilityValue(options.indices.contains(selected) ? options[selected] : "")

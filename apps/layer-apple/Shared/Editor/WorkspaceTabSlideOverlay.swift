@@ -30,8 +30,8 @@ private struct WorkspaceTabSlideContent: View {
                 let offset = source || appeared ? slide.offset(group: grab.group, index: index) : 0
                 WorkspaceTabLabel(tab: tab, selected: selected, palette: palette)
                     .frame(width: frame.width, height: frame.height)
-                    .background(UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 0,
-                        bottomTrailingRadius: 0, topTrailingRadius: 6).fill(palette["tabbar"]))
+                    .background(SquircleShape(topLeading: SquircleShape.surfaceRadius, topTrailing: SquircleShape.surfaceRadius)
+                        .fill(palette["tabbar"]))
                     .offset(x: frame.minX - grab.clip.minX + offset, y: frame.minY - grab.clip.minY)
                     .animation(source || reduceMotion ? nil : .timingCurve(0, 0, 0.58, 1, duration: 0.12), value: offset)
                     .zIndex(source ? 2 : selected ? 1 : 0)

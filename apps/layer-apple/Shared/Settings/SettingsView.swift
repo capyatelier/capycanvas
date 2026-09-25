@@ -157,9 +157,9 @@ struct SettingsView: View {
                 ForEach(kind["options"].array.indices, id: \.self) { index in
                     let selected = index == Int(kind["selected"].number)
                     IconTile(icon: kind["icons"][index].string, label: kind["options"][index].string,
-                        selected: selected, size: 48, background: Color.primary.opacity(0.05)) { edit(row, index) }
+                        selected: selected, size: 48, background: Color.primary.opacity(0.05), corner: .radius(6)) { edit(row, index) }
                         .frame(height: 64)
-                        .overlay { RoundedRectangle(cornerRadius: 6)
+                        .overlay { SquircleShape(6)
                             .strokeBorder(selected ? EditorPalette(source: store.state["palette"]).accent : .clear, lineWidth: 2).allowsHitTesting(false) }
                         .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
                 }

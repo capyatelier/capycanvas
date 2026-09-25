@@ -7,7 +7,7 @@ struct ProofIndicator: View {
         if !model.status.isEmpty {
             Text(model.status).lineLimit(1).truncationMode(.middle)
                 .padding(.horizontal, 10).padding(.vertical, 3)
-                .background(palette.chromeSurface, in: Capsule())
+                .background(palette.chromeSurface, in: SquircleShape.tile)
                 .help(model.error ?? model.status).allowsHitTesting(false)
                 .accessibilityIdentifier("proof-status")
         }
@@ -60,9 +60,9 @@ private struct ReadoutButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label.background {
                 ZStack {
-                    Capsule().fill(palette.chromeSurface)
+                    SquircleShape.tile.fill(palette.chromeSurface)
                     if configuration.isPressed || hovering {
-                        Capsule().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
+                        SquircleShape.tile.fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
                     }
                 }
             }.onHover { hovering = $0 }

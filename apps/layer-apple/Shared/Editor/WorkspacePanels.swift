@@ -91,7 +91,24 @@ private struct WorkspacePanelGroup: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private func panel(_ id: JSON) -> JSON { store.panel(id.string) }
     private var active: JSON { panel(group["active"]) }
+    private var radius: CGFloat {
+        !group["tiles"].isNull && !group["tabs_visible"].bool ? active["tile_corner_radius"].number : SquircleShape.surfaceRadius
+    }
     var body: some View {
+        DrawerSourceReader(drawers: store.contentDrawers) { sources in
+            if expansion.isNull {
+                let shape = SquircleShape(radius, square: DrawerSource.square(group["bounds"].rect, radius: radius, sources: Array(sources.values)))
+                content.clipShape(shape.fittedClip)
+                    .background { shape.fill(palette["panel"]).shadow(color: .black.opacity(0.16), radius: 4, y: 2) }
+            } else {
+                content.background(palette["panel"])
+                    .clipShape(WorkspacePanelShape(expansion: expansion, radius: radius, square: []))
+                    .shadow(color: .black.opacity(0.4), radius: 12, y: 8)
+            }
+        }.modifier(NavigatorReveal())
+            .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
+    }
+    private var content: some View {
         Group {
             if expansion.isNull { preview(tiles: group["tiles"]) }
             else {
@@ -100,12 +117,7 @@ private struct WorkspacePanelGroup: View {
                     PanelConfiguration(store: store, panel: active).placed(expansion["configuration"])
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-        }.background(palette["panel"])
-            .clipShape(WorkspacePanelShape(expansion: expansion))
-            .shadow(color: .black.opacity(expansion.isNull ? 0.16 : 0.4),
-                radius: expansion.isNull ? 4 : 12, y: expansion.isNull ? 2 : 8)
-            .modifier(NavigatorReveal())
-            .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
+        }
     }
     private func preview(tiles: JSON) -> some View {
         VStack(spacing: 0) {
@@ -183,11 +195,14 @@ private struct WorkspaceTile: View {
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: store.paintPair, drawerOpen: drawerOpen) {
-                    guard !store.workspace.input.contact.consumeClick() else { return }
-                    let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]
-                    PickerActivation.activate(tile["control"], anchor: anchor, store: store) {
-                        store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                DrawerSourceReader(drawers: store.contentDrawers) { sources in
+                    ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: store.paintPair, drawerOpen: drawerOpen,
+                        drawerDirection: sources["tool"]?.direction) {
+                        guard !store.workspace.input.contact.consumeClick() else { return }
+                        let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]
+                        PickerActivation.activate(tile["control"], anchor: anchor, store: store) {
+                            store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                        }
                     }
                 }
             }
@@ -200,29 +215,39 @@ private struct WorkspaceTile: View {
 /// Same preview/configuration silhouette as Android, in logical UI coordinates.
 private struct WorkspacePanelShape: Shape {
     let expansion: JSON
+    let radius: CGFloat
+    let square: [Bool]
     func path(in rect: CGRect) -> Path {
-        guard !expansion.isNull else { return Path(roundedRect: rect, cornerRadius: 8) }
+        guard !expansion.isNull, expansion["configuration"]["y"].number > 0 else {
+            return SquircleShape(radius, square: square).path(in: rect)
+        }
         let preview = expansion["preview"].rect, configuration = expansion["configuration"].rect
         let left = preview.minX, right = preview.maxX, top = configuration.minY
-        let width = rect.width, height = rect.height, radius = min(8, min(height, width) / 2)
+        let width = rect.width, height = rect.height, r = min(SquircleShape.surfaceRadius, height / 2, width / 2), join = min(8, r)
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
         var p = Path()
-        p.move(to: CGPoint(x: left + radius, y: 0)); p.addLine(to: CGPoint(x: right - radius, y: 0))
-        p.addQuadCurve(to: CGPoint(x: right, y: radius), control: CGPoint(x: right, y: 0))
+        p.move(to: point(left + r, 0)); p.addLine(to: point(right - r, 0))
+        p.squircle(center: point(right - r, r), start: CGVector(dx: 0, dy: -r), end: CGVector(dx: r, dy: 0))
         if right < width {
-            p.addLine(to: CGPoint(x: right, y: top)); p.addLine(to: CGPoint(x: width - radius, y: top))
-            p.addQuadCurve(to: CGPoint(x: width, y: top + radius), control: CGPoint(x: width, y: top))
+            p.addLine(to: point(right, top)); p.addLine(to: point(width - r, top))
+            p.squircle(center: point(width - r, top + r), start: CGVector(dx: 0, dy: -r), end: CGVector(dx: r, dy: 0))
         }
-        p.addLine(to: CGPoint(x: width, y: height - radius))
-        p.addQuadCurve(to: CGPoint(x: width - radius, y: height), control: CGPoint(x: width, y: height))
-        p.addLine(to: CGPoint(x: radius, y: height)); p.addQuadCurve(to: CGPoint(x: 0, y: height - radius), control: CGPoint(x: 0, y: height))
+        p.addLine(to: point(width, height - r))
+        p.squircle(center: point(width - r, height - r), start: CGVector(dx: r, dy: 0), end: CGVector(dx: 0, dy: r))
+        p.addLine(to: point(r, height))
+        p.squircle(center: point(r, height - r), start: CGVector(dx: 0, dy: r), end: CGVector(dx: -r, dy: 0))
         if left > 0 {
-            p.addLine(to: CGPoint(x: 0, y: top + radius)); p.addQuadCurve(to: CGPoint(x: radius, y: top), control: CGPoint(x: 0, y: top))
+            p.addLine(to: point(0, top + r))
+            p.squircle(center: point(r, top + r), start: CGVector(dx: -r, dy: 0), end: CGVector(dx: 0, dy: -r))
             if expansion["concave_join"].bool {
-                p.addLine(to: CGPoint(x: left - radius, y: top)); p.addQuadCurve(to: CGPoint(x: left, y: top - radius), control: CGPoint(x: left, y: top))
-            } else { p.addLine(to: CGPoint(x: left, y: top)) }
+                p.addLine(to: point(left - join, top))
+                p.squircle(center: point(left - join, top - join), start: CGVector(dx: 0, dy: join), end: CGVector(dx: join, dy: 0))
+            } else { p.addLine(to: point(left, top)) }
         }
-        p.addLine(to: CGPoint(x: left, y: radius)); p.addQuadCurve(to: CGPoint(x: left + radius, y: 0), control: CGPoint(x: left, y: 0)); p.closeSubpath()
-        return p
+        p.addLine(to: point(left, r))
+        p.squircle(center: point(left + r, r), start: CGVector(dx: -r, dy: 0), end: CGVector(dx: 0, dy: -r))
+        p.closeSubpath()
+        return p.offsetBy(dx: rect.minX, dy: rect.minY)
     }
 }
 

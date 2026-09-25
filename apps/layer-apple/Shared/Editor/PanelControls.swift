@@ -12,7 +12,7 @@ struct BrushColorButton: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
                 .background(EditorPalette(source: store.state["palette"])["button"].opacity(13 / 255),
-                    in: RoundedRectangle(cornerRadius: 6))
+                    in: SquircleShape.control)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier("brush-color")
     }
@@ -119,7 +119,7 @@ struct PanelControls: View {
                         Circle().frame(width: min(27, 2 + sqrt(size) * 1.2), height: min(27, 2 + sqrt(size) * 1.2)).frame(height: 28)
                         Text(String(Int(size))).frame(height: lineHeight)
                     }.padding(2).frame(maxWidth: .infinity).frame(height: 36 + lineHeight)
-                        .background(size == store.state["brush"]["diameter"].number ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                        .background(size == store.state["brush"]["diameter"].number ? palette.active : Color.clear, in: SquircleShape.control)
                 }.buttonStyle(.plain).padding(3)
             }
         }

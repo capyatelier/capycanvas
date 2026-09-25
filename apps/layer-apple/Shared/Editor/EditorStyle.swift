@@ -108,11 +108,12 @@ struct IconTile: View {
     var background: Color?
     var keepsBackground = false
     var drawerBackground: Color?
+    var corner = SquircleShape.Corner.radius(SquircleShape.controlRadius)
     let action: () -> Void
     var body: some View {
         Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
             .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
-                background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground))
+                background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground, corner: corner))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -128,12 +129,8 @@ struct EditorControlButtonStyle: ButtonStyle {
     var background: Color?
     var keepsBackground = false
     var drawerBackground: Color?
-    private var shape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
-            bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
-            bottomTrailingRadius: joinedEdge == "bottom" || joinedEdge == "right" ? 0 : 6,
-            topTrailingRadius: joinedEdge == "top" || joinedEdge == "right" ? 0 : 6)
-    }
+    var corner = SquircleShape.Corner.radius(SquircleShape.controlRadius)
+    private var shape: SquircleShape { SquircleShape.joined(joinedEdge, corner: corner) }
     func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, style: self) }
     private struct Face: View {
         let configuration: Configuration
@@ -219,7 +216,7 @@ struct ToolActionControl: View {
             }
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 24, alignment: .leading)
                 .padding(.horizontal, 17).padding(.vertical, 5)
-                .contentShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(selected: selected))
             .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
             .help(command["tooltip"].string)

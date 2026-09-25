@@ -32,7 +32,7 @@ struct WorkspaceSwitcher: View {
                     }.padding(.horizontal, 12).frame(width: maximumWidth, height: tile)
                 }.buttonStyle(HeaderButtonStyle(radius: tile / 2))
             } else {
-                segments.clipShape(Capsule()).background(palette["tabbar"].opacity(0.75), in: Capsule())
+                segments.background(palette["tabbar"].opacity(0.75), in: SquircleShape.tile)
             }
         }
         .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
@@ -106,9 +106,9 @@ private struct SwitcherChoiceStyle: ButtonStyle {
         var body: some View {
             configuration.label.background {
                 if style.selected {
-                    Capsule().fill(hovering ? style.palette.headerSelectionHover : style.palette.headerSelection)
+                    SquircleShape.tile.fill(hovering ? style.palette.headerSelectionHover : style.palette.headerSelection)
                 } else if hovering || configuration.isPressed {
-                    Capsule().fill(style.palette["text"].opacity(configuration.isPressed ? 0.16 : 0.08))
+                    SquircleShape.tile.fill(style.palette["text"].opacity(configuration.isPressed ? 0.16 : 0.08))
                 }
             }.onHover { hovering = $0 }
         }

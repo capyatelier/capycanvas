@@ -28,7 +28,7 @@ struct ApplicationMenus: View {
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.padding(4).frame(height: 34).background(palette.chromeSurface, in: Capsule()).fixedSize()
+            }.padding(4).frame(height: 34).background(palette.chromeSurface, in: SquircleShape.tile).fixedSize()
                 .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
@@ -49,7 +49,7 @@ private struct MenuLabelStyle: ButtonStyle {
         var body: some View {
             configuration.label.background {
                 if configuration.isPressed || hovering {
-                    Capsule().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
+                    SquircleShape.tile.fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
                 }
             }.onHover { hovering = $0 }
         }

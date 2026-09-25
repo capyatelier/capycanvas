@@ -19,6 +19,13 @@ private struct WorkspaceCollapsedColumn: View {
     @ObservedObject var store: EditorStore
     let column: JSON
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var openSources: [DrawerSource] {
+        guard !column["open"].isNull else { return [] }
+        return column["groups"].array.flatMap { group in
+            group["icons"].array.filter { $0["panel"].string == group["active"].string }
+                .map { DrawerSource(direction: column["open"]["direction"].string, bounds: $0["bounds"].rect) }
+        }
+    }
     private var offset: CGFloat {
         store.state["workspace"]["layout"]["column_scroll"].array.first { $0[0].uint == column["id"].uint }?[1].number ?? 0
     }
@@ -46,7 +53,7 @@ private struct WorkspaceCollapsedColumn: View {
                             let direction = !column["open"].isNull ? column["open"]["direction"].string
                                 : store.contentDrawers.items[String(column["id"].uint)]?.geometry["placement"]["direction"].string
                             IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected,
-                                joinedEdge: selected ? direction : nil) {
+                                joinedEdge: selected ? direction : nil, corner: .half) {
                                 guard !store.workspace.input.contact.consumeClick() else { return }
                                 store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
                             }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
@@ -67,8 +74,8 @@ private struct WorkspaceCollapsedColumn: View {
                     context: JSON(["kind": "column", "column": column["id"].raw]), openOnTap: true))
                 .placed(column["grip"].relative(to: base)).accessibilityIdentifier("column-grip-\(column["id"].uint)")
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(palette["panel"]).clipShape(DrawerBodyShape(corners: JSON()))
-            .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
+            .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect, fill: palette["panel"],
+                shadow: 6, extra: openSources))
             .accessibilityElement(children: .contain).accessibilityIdentifier("collapsed-column-\(column["id"].uint)")
     }
 
@@ -120,8 +127,8 @@ private struct WorkspaceContentDrawer: View {
                         }.placed(bounds)
                     }
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
-                    .background(palette["panel"]).clipShape(DrawerBodyShape(corners: connection["square_corners"]))
-                    .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
+                    .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: placement["bounds"].rect,
+                        fill: palette["panel"], shadow: 12, joined: connection["square_corners"], excluding: drawer.id))
                     .modifier(NavigatorReveal())
                     .background(GeometryReader { body in
                         Color.clear.preference(key: ColumnDrawerMeasurements.self,
@@ -173,24 +180,32 @@ private struct DrawerHeights: PreferenceKey {
     static var defaultValue: [Int: CGFloat] { [:] }
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) { value.merge(nextValue(), uniquingKeysWith: max) }
 }
-private struct DrawerBodyShape: Shape {
-    let corners: JSON
-    var radius: CGFloat = 8
-    func path(in rect: CGRect) -> Path {
-        UnevenRoundedRectangle(topLeadingRadius: corners[0].bool ? 0 : radius, bottomLeadingRadius: corners[3].bool ? 0 : radius,
-            bottomTrailingRadius: corners[2].bool ? 0 : radius, topTrailingRadius: corners[1].bool ? 0 : radius).path(in: rect)
+private struct DrawerContainerSurface: ViewModifier {
+    @ObservedObject var drawers: ContentDrawersPresentation
+    let bounds: CGRect
+    let fill: Color
+    let shadow: CGFloat
+    var joined = JSON()
+    var excluding: String?
+    var extra: [DrawerSource] = []
+    func body(content: Content) -> some View {
+        let sources = drawers.sources.filter { $0.key != excluding }.map(\.value) + extra
+        let shape = SquircleShape(SquircleShape.surfaceRadius,
+            square: DrawerSource.square(bounds, radius: SquircleShape.surfaceRadius, sources: sources, joined: joined))
+        content.clipShape(shape.fittedClip)
+            .background { shape.fill(fill).shadow(color: .black.opacity(0.22), radius: shadow, y: 2) }
     }
 }
 private struct DrawerBridge: Shape {
     let connection: JSON
     func path(in rect: CGRect) -> Path {
-        let length = connection["length"].number, depth = connection["depth"].number
-        let r0 = connection["radii"][0].number, r1 = connection["radii"][1].number, k = 0.5522848
+        let l = connection["length"].number, d = connection["depth"].number
+        let a = connection["radii"][0].number, b = connection["radii"][1].number
         var p = Path()
-        p.move(to: .zero); p.addLine(to: CGPoint(x: length, y: 0)); p.addLine(to: CGPoint(x: length, y: depth - r1))
-        p.addCurve(to: CGPoint(x: length + r1, y: depth), control1: CGPoint(x: length, y: depth - r1 + r1 * k), control2: CGPoint(x: length + r1 - r1 * k, y: depth))
-        p.addLine(to: CGPoint(x: -r0, y: depth))
-        p.addCurve(to: CGPoint(x: 0, y: depth - r0), control1: CGPoint(x: -r0 + r0 * k, y: depth), control2: CGPoint(x: 0, y: depth - r0 + r0 * k))
+        p.move(to: .zero); p.addLine(to: CGPoint(x: l, y: 0)); p.addLine(to: CGPoint(x: l, y: d - b))
+        p.squircle(center: CGPoint(x: l + b, y: d - b), start: CGVector(dx: -b, dy: 0), end: CGVector(dx: 0, dy: b))
+        p.addLine(to: CGPoint(x: -a, y: d))
+        p.squircle(center: CGPoint(x: -a, y: d - a), start: CGVector(dx: 0, dy: a), end: CGVector(dx: a, dy: 0))
         p.closeSubpath()
         let t = connection["transform"]
         return p.applying(CGAffineTransform(a: t[0].number, b: t[1].number, c: t[2].number, d: t[3].number, tx: t[4].number, ty: t[5].number))

@@ -13,9 +13,8 @@ struct ManagedColorButton: View {
         HStack {
             Text(label).frame(maxWidth: .infinity, alignment: .leading)
             Button { editing = true } label: {
-                ColorSwatch(rgba: preview["rgba"]).frame(width: 48, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.primary.opacity(0.3), lineWidth: 1))
+                ColorSwatch(rgba: preview["rgba"], shape: .control).frame(width: 48, height: 28)
+                    .overlay(SquircleShape.control.stroke(.primary.opacity(0.3), lineWidth: 1))
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
                 .help(preview["in_gamut"].bool ? label : "Outside the Display P3 preview gamut. The stored color is preserved.")
                 .sheet(isPresented: $editing) {

@@ -28,9 +28,9 @@ struct WorkspaceDropIndicator: View {
         if !workspace.dropHint.isNull {
             let bounds = workspace.dropHint["bounds"].rect
             let bodyTarget = workspace.dropHint["target"]["kind"].string == "tab" && bounds.width > 3 && bounds.height > 3
-            RoundedRectangle(cornerRadius: 2).fill(palette.accent.opacity(bodyTarget ? 0.25 : 1))
-                .overlay { if bodyTarget { RoundedRectangle(cornerRadius: 2).strokeBorder(palette.accent, lineWidth: 2) } }
-                .background { RoundedRectangle(cornerRadius: 3).fill(.black.opacity(0.2)).padding(-1) }
+            SquircleShape(bodyTarget ? 0 : 2).fill(palette.accent.opacity(bodyTarget ? 0.25 : 1))
+                .overlay { if bodyTarget { Rectangle().strokeBorder(palette.accent, lineWidth: 2) } }
+                .background { if !bodyTarget { SquircleShape(3).fill(.black.opacity(0.2)).padding(-1) } }
                 .placed(workspace.dropHint["bounds"]).allowsHitTesting(false).accessibilityHidden(true)
         }
     }

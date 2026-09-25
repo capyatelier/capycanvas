@@ -14,7 +14,7 @@ struct ProofPanel: View {
                     } label: {
                         Text(mode == "sdr" ? "SDR" : mode.capitalized).frame(maxWidth: .infinity).padding(.vertical, 5)
                             .background(model["mode"].string == mode ? Color.primary.opacity(0.12) : .clear,
-                                in: RoundedRectangle(cornerRadius: 5))
+                                in: SquircleShape.control)
                     }.buttonStyle(.plain).disabled(mode == "sdr" && !model["hdr"].bool)
                         .accessibilityIdentifier("proof-mode-" + mode)
                         .accessibilityAddTraits(model["mode"].string == mode ? .isSelected : [])

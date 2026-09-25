@@ -20,8 +20,8 @@ struct AdjustmentPanel: View {
                         send(["op": "search", "query": $0])
                     }
                         .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 34)
-                        .background(palette["input"], in: RoundedRectangle(cornerRadius: 2))
-                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(palette["text"].opacity(0.4), lineWidth: 1))
+                        .background(palette["input"], in: SquircleShape(2))
+                        .overlay(SquircleShape(2).stroke(palette["text"].opacity(0.4), lineWidth: 1))
                         .focused($searching).accessibilityIdentifier("filter-search")
                         .onKeyPress(.escape) { send(["op": "toggle_search"]); return .handled }
                 } else {
@@ -92,7 +92,7 @@ private struct AdjustmentRow: View {
                     SharedIcon(name: choice["icon"].string)
                     Text(choice["label"].string).lineLimit(1)
                 }.frame(height: 18)
-            }.padding(.horizontal, 6).padding(.vertical, 3).contentShape(RoundedRectangle(cornerRadius: 6))
+            }.padding(.horizontal, 6).padding(.vertical, 3).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(selected: store.state["filter_picker"]["selected"].string == choice["id"].string))
             .help(choice["tooltip"].string)
             .accessibilityAddTraits(store.state["filter_picker"]["selected"].string == choice["id"].string ? .isSelected : [])
