@@ -5,6 +5,7 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import androidx.compose.ui.geometry.Offset
@@ -67,9 +68,11 @@ class AndroidWorkspaceSwitcherTest {
         } while (SystemClock.uptimeMillis() < until)
         fail("Timed out: $label; ${view()}")
     }
+    private fun rowsEnabled() = view().optString("page") != "workspaces" || !view().isNull("form") || view().array("rows").objects()
+        .all { node("workspace-row-${it.getString("id")}")?.second?.config?.getOrNull(SemanticsProperties.Disabled) == null }
     private fun idle() {
         SystemClock.sleep(220)
-        waitFor("workspace idle") { !view().optBoolean("busy") && !view().optBoolean("switcher_busy") && !view().optBoolean("dirty") }
+        waitFor("workspace idle") { !view().optBoolean("busy") && !view().optBoolean("switcher_busy") && !view().optBoolean("dirty") && rowsEnabled() }
         assertTrue(view().toString(), view().isNull("error")); assertTrue(view().toString(), view().isNull("switcher_error"))
     }
     private fun send(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; idle() }
@@ -192,6 +195,11 @@ class AndroidWorkspaceSwitcherTest {
         assertEquals(before, capture())
     }
 
+    private fun hold(pointer: Int) {
+        if (pointer != MotionEvent.TOOL_TYPE_MOUSE) return waitFor("$pointer held menu") { node("workspace-row-menu") != null }
+        SystemClock.sleep(ViewConfiguration.getLongPressTimeout().toLong() + 300)
+        instrumentation.runOnMainSync { assertNull("Mouse holds never open menus", node("workspace-row-menu")) }
+    }
     @Test fun nativeRowPickupScrollingMenusAndCancellation() {
         open()
         val originalOrder = order()
@@ -211,10 +219,7 @@ class AndroidWorkspaceSwitcherTest {
                 for (cancel in listOf(true, false)) {
                     val destination = bounds("workspace-row-$c").let { Offset(it.center.x, it.bottom - 5 * density) }
                     down("workspace-${if (grip) "grip" else "row"}-$a")
-                    if (!grip) {
-                        SystemClock.sleep(700)
-                        instrumentation.runOnMainSync { assertEquals("$pointer held menu", pointer != MotionEvent.TOOL_TYPE_MOUSE, node("workspace-row-menu") != null) }
-                    }
+                    if (!grip) hold(pointer)
                     event(MotionEvent.ACTION_MOVE, destination)
                     waitFor("$pointer/$grip insertion hint") { node("workspace-row-drop-hint") != null && node("workspace-row-menu") == null }
                     if (cancel) { key(KeyEvent.KEYCODE_ESCAPE); event(MotionEvent.ACTION_UP) }
@@ -227,7 +232,7 @@ class AndroidWorkspaceSwitcherTest {
                 }
             }
             // Release preserves touch/pen menus. Mouse holds retain ordinary selection.
-            down("workspace-row-$a"); SystemClock.sleep(700); event(MotionEvent.ACTION_UP); idle()
+            down("workspace-row-$a"); hold(pointer); event(MotionEvent.ACTION_UP); idle()
             if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
                 instrumentation.runOnMainSync { assertNull(node("workspace-row-menu")) }
                 tool = MotionEvent.TOOL_TYPE_FINGER; tap("workspace-row-$c"); tool = pointer
