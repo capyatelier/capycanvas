@@ -192,12 +192,13 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   refits the current preset without changing orientation. All changes animate
   briefly and preserve the anchor where viewport bounds allow. Tab labels never
   activate this behavior. The cycle, size comparison, tab toggle and persistence
-  belong to Rust (`DoubleClickPanelHandle`), not host click handlers. On a
-  docked lone built-in panel, the same drag areas toggle its tab bar immediately
+  belong to Rust (`DoubleClickPanelHandle`), not host click handlers. On any
+  group in a top-level side column, the same drag areas collapse that column.
+  Elsewhere, a docked lone built-in panel toggles its tab bar immediately
   without resizing its dock or changing its group's display style. A docked lone
   toolbar resets to one row (top/bottom) or column (left/right), adding lanes
   only when needed to fit. Nested resets preserve side-by-side panel widths.
-  Docked multi-tab groups do not change.
+  Other docked multi-tab groups do not change.
 - All durable workspace edits have independent undo/redo, including panel/tab
   moves, tile ordering, names, visibility, style, and floating geometry. Resize
   and live-move gestures coalesce into one entry; cancel restores the start.
