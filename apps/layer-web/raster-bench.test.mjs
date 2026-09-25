@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import {writeFile} from "node:fs/promises";
+import {mkdir,writeFile} from "node:fs/promises";
+import {dirname} from "node:path";
 
 export async function benchRaster({evaluate,settle}) {
   await evaluate(`new Promise(resolve=>{function check(){if(layerApp.startupTimes.complete!==null)resolve();else setTimeout(check,25);}check();})`);
@@ -37,7 +38,8 @@ export async function benchRaster({evaluate,settle}) {
     return results;
   })()`);
   console.log('Raster frame creation benchmark',JSON.stringify(results));
-  await writeFile(process.env.LAYER_RASTER_BENCH_OUTPUT||'artifacts/color-m1/web-frame-times.json',JSON.stringify(results,null,2)+'\n');
+  const output=process.env.LAYER_RASTER_BENCH_OUTPUT||'artifacts/color-m1/web-frame-times.json';
+  await mkdir(dirname(output),{recursive:true});await writeFile(output,JSON.stringify(results,null,2)+'\n');
   assert.ok(results.every(r=>r.frames===768));
   await settle();
 }
