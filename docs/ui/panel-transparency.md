@@ -130,6 +130,13 @@ Measured alphas:
 backdrops. It prints element rectangles (`ELEM`) for the Paint, Sketch and Photo
 scenes, so compositor captures can be sampled per element.
 
+Web and Android apply the same fills, and browsers and Android's compositor
+blend them in sRGB as GTK does. Probed over the same white and dark-grey
+backdrops at every level and theme, the share of the backdrop showing through
+each surface matches GTK's captures within 0.02 on Web (Chrome) and 0.01 on
+Android. Selection fills follow the accent, so a system accent can change their
+alpha: a tan Android accent reaches opaque in dark Low.
+
 Channels outside 0–255 are clamped. Light themes with a darker base therefore
 look slightly darker at High than the opaque theme.
 
@@ -139,9 +146,12 @@ The blur is cached. Its input is the composite repaint plus selection paint;
 cursor, picker and overviews do not affect it. When that damage lies within the
 blur reach of cached glass, only the glass within reach of the damage is
 recomputed, from its own reach of artwork. New regions, regions that move beyond
-a 96-pixel slack, and camera changes recompute whole regions. Retained targets,
-such as Android's front buffer, repaint only glass that changed. Idle views
-present nothing.
+a 96-pixel slack, and camera changes recompute whole regions. While a brush
+stroke is in progress (`has_active_stroke`), artwork damage leaves the cached
+blur in place; the first frame after the stroke refreshes the glass it
+reached, so pen latency never includes a glass refresh. Retained targets, such
+as Android's front buffer, repaint only glass that changed. Idle views present
+nothing.
 
 GPU time per presented frame on an RTX PRO 6000 (`backdrop_blur_cost`, the
 default Paint layout's glass):
@@ -157,44 +167,43 @@ Cached glass costs no more than the plain viewport, because its interiors
 replace viewport pixels. A moving camera recomputes every frame.
 
 The Huion tablet (Mali-G57) sets the tight budget. Its pen measurements compare
-the same build at each level with the previous main, drawing an 18 px round
-brush on a 1024 px document with replayed OS pen input.
+the same build at each level, drawing an 18 px round brush on a 1024 px
+document with replayed OS pen input.
 
-Web, Chrome on the tablet, a stroke across the fitted document (3–6 runs of 5 s):
+Android, front-buffer presentation, submission to GPU completion of each
+presentation (p50 / p95):
+
+| Stroke | Off | Low | Medium | High |
+| --- | --- | --- | --- | --- |
+| Across the fitted document | 2.88 / 5.00 ms | 2.83 / 4.93 ms | — | 2.80 / 4.91 ms |
+| Zoomed 2×, beside the panels | 2.93 / 5.83 ms | 2.85 / 5.88 ms | 2.86 / 6.04 ms | 2.95 / 5.96 ms |
+
+Before strokes held the glass, the near-panel stroke cost +0.4 / +1.9 ms at
+Low and +2.1 / +4.2 ms at High: contact brushes report damage in 256-pixel
+document pages, and each refresh runs four to six render passes, each with a
+fixed cost on this tile-based GPU.
+
+Web, Chrome on the tablet, a stroke across the fitted document (3–6 runs of
+5 s each; updates/s drift by several between runs as the tablet warms):
 
 | Level | Updates/s | Input → submit p50 / p95 / p99 |
 | --- | --- | --- |
-| Previous main | 85.9 | 27.8 / 31.5 / 32.9 ms |
-| Off | 83.7 | 28.3 / 31.7 / 33.2 ms |
-| Low | 85.1 | 27.8 / 31.6 / 32.9 ms |
-| Medium | 83.5 | 28.4 / 32.1 / 33.5 ms |
-| High | 80.9 | 28.3 / 31.8 / 33.7 ms |
+| Off | 80.2 | 28.4 / 32.0 / 33.4 ms |
+| Low | 77.4 | 28.3 / 32.2 / 33.8 ms |
+| Medium | 75.8 | 28.0 / 32.0 / 34.3 ms |
+| High | 77.3 | 28.3 / 32.2 / 33.6 ms |
 
-Low and Medium reuse the cached blur on every frame of this stroke. High's
-139-pixel reach touches the panels, so it recomputes about half of its frames.
-
-Android, front-buffer presentation, submission to GPU completion of each
-presentation:
-
-| Stroke | Previous main p50 / p95 | Low | Medium | High |
-| --- | --- | --- | --- | --- |
-| Across the fitted document | 1.77 / 4.38 ms | 1.64 / 4.34 ms | — | 3.34 / 5.82 ms |
-| Zoomed 2×, beside the panels | 2.78 / 4.95 ms | 3.10 / 7.40 ms | 3.34 / 7.67 ms | 5.15 / 9.45 ms |
+Every level reuses the cached blur for the whole stroke; High, whose 139-pixel
+reach touches the panels, refreshes it once when the stroke ends.
 
 Apple Release builds, the synthetic `ink` workload (2048 px document, 24 px
-brush, 60 s after warm-up) with the Paint glass registered:
+brush, 60 s after warm-up) with the Paint glass registered, measured before
+strokes held the glass:
 
 | Host | Before glass | Low | High |
 | --- | --- | --- | --- |
 | Mac, M2 Pro, 90 Hz | 84.8 fps, GPU p50 1.09 ms | 84.4 fps, 1.47 ms | 83.9 fps, 1.55 ms |
 | iPad Pro 13 M4, 120 Hz | 112.6 fps, GPU p50 1.26 ms | 113.2 fps, 1.35 ms | — |
-
-A stroke beside the panels must refresh the glass it blurs into, so this cost
-cannot be cached away. Two things set its size on the tablet: contact brushes
-report composite damage in 256-pixel document pages, so each frame refreshes
-the glass near whole pages rather than near the dab; and each refresh runs
-four render passes at Low and Medium, and six at High, on a tile-based GPU where
-every pass carries a fixed cost.
 
 ## Known limitations
 
@@ -206,9 +215,11 @@ every pass carries a fixed cost.
   such as the Paint tool drawer over the Tool Set column, is translucent over
   that panel too, so its content shows faintly through the drawer on every
   host.
-- Near the panels, Android pen completion slows as measured above. Exact
-  visual damage from the brush engine, which would also speed up ordinary
-  front-buffer repaint, or refreshing glass less often than ink, would reduce it.
+- Glass over artwork that a stroke is still painting shows the new ink only
+  when the stroke ends.
+- The blur reach is in device pixels, so on a 2× display it covers half the
+  distance it does at 1×. Scaling it to logical pixels roughly doubled the
+  refreshed area on the tablet and added pen latency, so it was not adopted.
 - Drawer shadows are cut only beneath connectors. Beneath a translucent source
   toolbar or column they can darken it by about one level; drawer-style tests
   therefore run at Off, as on GTK.
