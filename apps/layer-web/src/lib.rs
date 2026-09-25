@@ -1107,9 +1107,6 @@ impl WebApp {
         if !records.len().is_multiple_of(11) {
             return Err(js("Invalid pen batch length"));
         }
-        if !self.brush_ready() {
-            return Ok((records.len() / 11) as u32);
-        }
         for (index, item) in records.chunks_exact(11).enumerate() {
             if !item.iter().all(|n| n.is_finite()) {
                 return Err(js("Invalid pen sample"));
