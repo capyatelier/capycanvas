@@ -119,12 +119,12 @@ impl FilterPreviews {
                 .key
                 .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent)
                 || self.capture_background != packet.view.background_rgba_linear
-                || source_scope(packet.layers, request.target).is_none_or(|scope| {
-                    scope.len() != self.source_layers.len()
-                        || scope
-                            .iter()
-                            .zip(&self.source_layers)
-                            .any(|((layer, _), old)| *old != PreviewMetadata::new(layer))
+                || source_scope(packet.layers, request.target).is_none_or(|(_, mut scope)| {
+                    let mut old = self.source_layers.iter();
+                    !scope.all(|(layer, _)| {
+                        old.next()
+                            .is_some_and(|old| *old == PreviewMetadata::new(layer))
+                    }) || old.next().is_some()
                 });
         }
     }
@@ -188,9 +188,11 @@ impl FilterPreviews {
             self.rows.clear();
             self.size = request.size;
         }
-        let source_layers: Vec<_> = source_scope(&request.layers, request.target)
-            .map_or_else(Vec::new, |scope| {
-                scope.into_iter().map(|(layer, _)| PreviewMetadata::new(layer)).collect()
+        let source_layers: Vec<_> =
+            source_scope(&request.layers, request.target).map_or_else(Vec::new, |(_, scope)| {
+                scope
+                    .map(|(layer, _)| PreviewMetadata::new(layer))
+                    .collect()
             });
         let changed = self.key != Some(key) || self.source_layers != source_layers || resized;
         // The common UI driver retains delivered rows. Keep only the current
@@ -708,34 +710,30 @@ impl FilterPreviews {
 }
 // Keep only the insertion scope and its ancestors. An excluded global
 // effect above the target must not force a full-document dependency.
-fn source_scope(layers: &[Layer], target: LayerId) -> Option<Vec<(&Layer, bool)>> {
+fn source_scope(
+    layers: &[Layer],
+    target: LayerId,
+) -> Option<(Option<LayerId>, impl Iterator<Item = (&Layer, bool)>)> {
     let index = layers.iter().position(|l| l.id == target)?;
     let parent = layers[index].properties.parent;
-    let mut ancestors = Vec::new();
-    let mut ancestor = parent;
-    while let Some(id) = ancestor {
-        ancestors.push(id);
-        ancestor = layers
+    let parent_of = |id: LayerId| {
+        layers
             .iter()
             .find(|l| l.id == id)
-            .and_then(|l| l.properties.parent);
-    }
-    let scope = layers
-        .iter()
-        .enumerate()
-        .filter_map(|(i, layer)| {
-            if ancestors.contains(&layer.id) {
-                return Some((layer, true));
-            }
-            let mut root = i;
-            while layers[root].properties.parent != parent {
-                let id = layers[root].properties.parent?;
-                root = layers.iter().position(|l| l.id == id)?;
-            }
-            (root >= index).then_some((layer, false))
-        })
-        .collect();
-    Some(scope)
+            .and_then(|l| l.properties.parent)
+    };
+    let scope = layers.iter().enumerate().filter_map(move |(i, layer)| {
+        if std::iter::successors(parent, |&id| parent_of(id)).any(|id| id == layer.id) {
+            return Some((layer, true));
+        }
+        let mut root = i;
+        while layers[root].properties.parent != parent {
+            let id = layers[root].properties.parent?;
+            root = layers.iter().position(|l| l.id == id)?;
+        }
+        (root >= index).then_some((layer, false))
+    });
+    Some((parent, scope))
 }
 impl Scene {
     fn capture_filter_source(
@@ -746,14 +744,9 @@ impl Scene {
         region: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let scope = source_scope(&request.layers, request.target)
+        let (parent, scope) = source_scope(&request.layers, request.target)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
-        let parent = scope
-            .iter()
-            .find(|(layer, _)| layer.id == request.target)
-            .and_then(|(layer, _)| layer.properties.parent);
         let layers: Vec<_> = scope
-            .into_iter()
             .map(|(layer, ancestor)| {
                 let mut layer = layer.clone();
                 if ancestor {
