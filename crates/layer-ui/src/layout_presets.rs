@@ -144,7 +144,7 @@ impl WorkspacePreset {
     pub fn legacy_without_palettes_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_proportional_layout(platform);
         if self == Self::Illustrator
-            && matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Mac | crate::Platform::Ios)
+            && platform != crate::Platform::Generic
         {
             fit_paint_columns(&mut layout);
         }
@@ -212,7 +212,7 @@ impl WorkspacePreset {
 
     /// Exact default before the GTK Color Picker button, for untouched saves.
     pub fn legacy_without_picker_layout(self, platform: crate::Platform) -> DockLayout {
-        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Mac | crate::Platform::Ios);
+        let supported = platform != crate::Platform::Generic;
         let mut layout = self.component_layout(platform, supported);
         self.arrange_components(&mut layout, supported);
         if self == Self::Photographer && supported {
@@ -858,8 +858,7 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                if platform != crate::Platform::Windows { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
-                else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
+                [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
                 (
                     14,
@@ -967,11 +966,9 @@ mod tests {
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.floating.is_empty());
-            if platform != crate::Platform::Windows {
-                assert_eq!(layout.bands.len(), 1);
-                assert_eq!(layout.bands[0].edge, Edge::Left);
-                assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
-            } else { assert!(layout.bands.is_empty()); }
+            assert_eq!(layout.bands.len(), 1);
+            assert_eq!(layout.bands[0].edge, Edge::Left);
+            assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
             assert_eq!(
                 layout.header,
                 crate::HeaderLayout::painter_for_platform(platform)
@@ -1094,7 +1091,7 @@ mod tests {
         let bounds = |layout: &DockLayout, height, panel| {
             layout.resolve(1400., height).groups.into_iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
             let mut layout = WorkspacePreset::Illustrator.legacy_without_palettes_layout(platform);
             assert_eq!(layout.fit_height_groups, [10, 14]);
             for invalid in [vec![10, 10], vec![10, 999]] {
@@ -1159,7 +1156,7 @@ mod tests {
             assert_eq!(moved.fit_height_groups, [14]);
             assert!((column(&layout, 1000.) - column(&resized, 1000.)).abs() < 0.01);
         }
-        for platform in [Platform::Windows, Platform::Generic] {
+        for platform in [Platform::Generic] {
             assert!(WorkspacePreset::Illustrator.layout(platform).fit_height_groups.is_empty());
         }
     }

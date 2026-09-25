@@ -185,7 +185,9 @@ The Layers image picker decodes oriented sRGB pixels on the document worker;
 shared Core owns insertion, Undo and embedded project assets. Panel configuration
 and toolbar management use shared layout and actions. New Toolbar can start empty
 or copy a saved definition; the native manager saves, adds, renames and deletes
-library entries while keeping installed copies independent.
+library entries while keeping installed copies independent. Toolbars host the
+shared brush size/opacity sliders (stamp previews and bookmarks) and Tool Options,
+and dock to compact edge regions; Rust owns their fitting, numeric math and stamps.
 GPU Navigator previews use compositor clips when overlapping native panels.
 The full editor preset and titlebar-aware Zen layout are available. Incremental
 workspace messages retain panel models while native translation transforms move
@@ -218,6 +220,7 @@ pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-toolbar-components.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
 
 The document journey checks native import/save/export pickers, Unicode paths,

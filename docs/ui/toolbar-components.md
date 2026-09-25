@@ -3,12 +3,12 @@
 [Workspace and UI](README.md) · [Panel contract](panel-customization.md) ·
 [Numeric controls](numeric-controls.md) · [Drag convention](drag-and-reorder.md)
 
-GTK, Web, Android, macOS and iPadOS toolbars support **Brush size slider**, **Brush opacity slider**, and
+GTK, Web, Android, macOS, iPadOS and Windows toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
 Toolbars can also use [compact edge regions](compact-toolbar-edges.md).
-They are not title-bar items. Windows does not yet offer these components.
+They are not title-bar items.
 
 ## Included workspaces
 

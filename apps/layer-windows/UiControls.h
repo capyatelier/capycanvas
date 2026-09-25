@@ -112,6 +112,13 @@ struct WorkspaceData {
     J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
     bool externalPopup=false;
     bool updating=false;
+    std::map<uint64_t,std::function<bool()>> transients;uint64_t nextTransient=0;
+    uint64_t transient(std::function<bool()> close){transients.emplace(++nextTransient,std::move(close));return nextTransient;}
+    bool dismissTransients(){
+        bool closed=false;auto current=transients;
+        for(auto& [id,close]:current)closed=close()||closed;
+        return closed;
+    }
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     void refreshPalette(){
         auto palette=object(state,L"palette");
@@ -170,7 +177,10 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }
-struct NumberPresentation {bool preference=false;hstring description;std::function<hstring()> identity;};
+struct NumberPresentation {
+    bool preference=false;hstring description;std::function<hstring()> identity;
+    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;
+};
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={});
 }
