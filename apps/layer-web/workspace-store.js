@@ -1,6 +1,6 @@
 // IndexedDB transport only. The synchronous Wasm reducer owns validation,
 // fencing, counters, receipts, names, migration and retention policy.
-export const ownerLock = "capy-workspace-owner:";
+const ownerLock = "capy-workspace-owner:";
 export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB, locks = globalThis.navigator?.locks } = {}) {
   let database, opening;
   async function liveOwners() {
@@ -77,6 +77,7 @@ export function createWorkspaceClient(url, { onSettled = () => {}, module, prelo
   if (module || preload) start();
   return {
     initialize(compiledModule) { module = compiledModule; worker?.postMessage({module}); },
+    holdOwner(id) { globalThis.navigator?.locks?.request(ownerLock + id, () => new Promise(() => {})).catch(() => {}); },
     execute(request) {
       return new Promise((resolve,reject) => {
         try {
