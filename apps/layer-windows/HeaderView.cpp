@@ -407,7 +407,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 auto anchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
                 bool open=str(anchor,L"kind")==L"header"&&num(anchor,L"id")==id;
                 pick.Background(flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear());
-                pick.CornerRadius(open?CornerRadius{6,6,0,0}:CornerRadius{6,6,6,6});
+                double r=corner();pick.CornerRadius(open?CornerRadius{r,r,0,0}:CornerRadius{r,r,r,r});
                 AutomationProperties::SetItemStatus(pick,open?L"Open":flag(spec,L"selected")?L"On":L"Off");
                 AutomationProperties::SetName(pick,label);
             }
@@ -539,10 +539,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto zone=bar.GetNamedValue(L"overflow",JsonValue::CreateNullValue());
             if(zone.ValueType()==JsonValueType::Number&&zone.GetNumber()>=0&&zone.GetNumber()<3)overflowJoined[size_t(zone.GetNumber())]=true;
         }
-        while(bars.size()<barList.Size()){Border bar;bar.IsHitTestVisible(false);bar.Background(headerSurface(data));bar.CornerRadius({6,6,6,6});canvas.Children().Append(bar);Canvas::SetZIndex(bar,4);bars.push_back(bar);}
+        while(bars.size()<barList.Size()){Border bar;bar.IsHitTestVisible(false);bar.Background(headerSurface(data));canvas.Children().Append(bar);Canvas::SetZIndex(bar,4);bars.push_back(bar);}
         for(size_t i=0;i<bars.size();++i){
             bool shown=i<barList.Size()&&!hidden;bars[i].Visibility(shown?Visibility::Visible:Visibility::Collapsed);
-            if(shown)place(bars[i],object(barList.GetObjectAt(uint32_t(i)),L"bounds"));
+            if(shown){place(bars[i],object(barList.GetObjectAt(uint32_t(i)),L"bounds"));bars[i].CornerRadius({corner(),corner(),corner(),corner()});}
         }
         for(auto& [id,native]:items){
             auto bounds=id==held&&preview.Size()?object(preview,L"held"):object(findId(placed,id),L"bounds");
@@ -560,7 +560,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto drawerAnchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
             bool open=str(drawerAnchor,L"kind")==L"header"&&num(drawerAnchor,L"id")==id&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
-            native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));
+            native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius({corner(),corner(),corner(),corner()});native.outline.CornerRadius({corner(),corner(),corner(),corner()});
             if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             native.outline.BorderThickness(editing?Thickness{1,1,1,1}:Thickness{});
             native.outline.BorderBrush(held==id&&flag(preview,L"detached")?fill(color(L"#dc3545")):input->Selected()==id?accent(data):data->brush(L"tabbar"));
@@ -572,7 +572,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(i<zoneBounds.Size())place(zones[i],zoneBounds.GetObjectAt(i));zones[i].BorderBrush(data->brush(L"tabbar"));
             bool show=!hidden&&i<more.Size()&&more.GetAt(i).ValueType()==JsonValueType::Object;
             overflow[i].Visibility(show?Visibility::Visible:Visibility::Collapsed);if(show)place(overflow[i],more.GetObjectAt(i));
-            overflow[i].Background(overflowJoined[i]?clear():headerSurface(data));
+            overflow[i].Background(overflowJoined[i]?clear():headerSurface(data));overflow[i].CornerRadius({corner(),corner(),corner(),corner()});
         }
         ghost.Visibility(preview.Size()&&!held?Visibility::Visible:Visibility::Collapsed);
         if(preview.Size()&&!held){
@@ -616,6 +616,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto item:{menuOverflow,workspaceOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
         applyItems();reflow();requests();
     }
+    double corner()const{return tile*.5*CornerFit;}
     void glass(A& regions,DependencyObject const& node,UIElement const& reference)const{
         auto element=node.try_as<FrameworkElement>();if(!element||element.Visibility()!=Visibility::Visible)return;
         Brush surface{nullptr};CornerRadius corners{};

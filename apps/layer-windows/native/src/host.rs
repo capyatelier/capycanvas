@@ -998,6 +998,15 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
             windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
+            windows_tab_styles: {
+                let layout = &host.native.session.state().workspace.layout;
+                layout
+                    .panels
+                    .iter()
+                    .filter_map(|p| layout.panel_group(p.id))
+                    .filter_map(|g| Some((g.to_string(), serde_json::to_value(layout.group_tab_style(g).ok()?).ok()?)))
+                    .collect()
+            },
             windows_glass: serde_json::json!({
                 "regions": host.glass.count(),
                 "frames": host.presenter.as_ref().map_or([0; 2], |p| p.backdrop_frames()),

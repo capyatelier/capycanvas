@@ -28,6 +28,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     J headerSize(){auto header=object(data->model,L"header");return find(array(header,L"sizes"),L"id",str(object(header,L"model"),L"size"));}
     double tile(){return num(headerSize(),L"tile",36);}
     double gap(){return num(headerSize(),L"gap",2);}
+    double corner(){return tile()*.5*CornerFit;}
     hstring plainTitle(){
         auto all=array(data->state,L"tabs");if(!all.Size())return L"Capy Canvas";auto tab=all.GetObjectAt(0);
         return str(tab,L"title")+L" · "+to_hstring(int64_t(num(tab,L"width")))+L" × "+to_hstring(int64_t(num(tab,L"height")));
@@ -83,7 +84,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
             Grid content;double inset=tile()/2;
             auto title=label(data,tab.text.Text());title.TextTrimming(TextTrimming::CharacterEllipsis);title.Margin({inset+12,0,inset+12,0});title.HorizontalAlignment(HorizontalAlignment::Center);title.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(title);
             auto mark=label(data,L"×");mark.Width(24);mark.TextAlignment(TextAlignment::Center);mark.HorizontalAlignment(HorizontalAlignment::Right);mark.VerticalAlignment(VerticalAlignment::Center);mark.Margin({0,0,inset-12,0});content.Children().Append(mark);
-            SlideCopy copy;copy.id=id;copy.copy.Child(content);copy.copy.CornerRadius({6,6,6,6});
+            SlideCopy copy;copy.id=id;copy.copy.Child(content);copy.copy.CornerRadius({corner(),corner(),corner(),corner()});
             copy.copy.Background(id==selectedId?data->glass(L"document_tab"):id==source?data->tint(L"text",18):clear());
             copy.copy.Width(num(b,L"width"));copy.copy.Height(num(b,L"height"));
             Canvas::SetLeft(copy.copy,num(b,L"x")-bounds.X);Canvas::SetTop(copy.copy,num(b,L"y")-bounds.Y);Canvas::SetZIndex(copy.copy,id==source?2:0);
@@ -127,7 +128,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Content()){select(id);return;}}
     void show(FrameworkElement anchor=nullptr){refresh();popup.ShowAt(anchor?anchor:selector);}
     void styleTab(Tab& t){
-        t.box.CornerRadius({6,6,6,6});t.select.CornerRadius({6,6,6,6});t.close.CornerRadius({12,12,12,12});
+        t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});t.close.CornerRadius({12,12,12,12});
         for(auto const& part:{t.select,t.close}){
             part.Background(clear());
             part.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),data->tint(L"text",18));
@@ -138,7 +139,8 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void layout(){auto count=array(model(),L"tabs").Size();bool one=count<2,compact=!one&&capy_document_tabs_compact(float(root.ActualWidth()),count);
         plain.Visibility(one?Visibility::Visible:Visibility::Collapsed);
         strip.Visibility(one||compact?Visibility::Collapsed:Visibility::Visible);selector.Visibility(!one&&compact?Visibility::Visible:Visibility::Collapsed);
-        root.Background(headerSurface(data));root.CornerRadius({6,6,6,6});strip.Spacing(gap());
+        root.Background(headerSurface(data));root.CornerRadius({corner(),corner(),corner(),corner()});strip.Spacing(gap());
+        for(auto& [id,t]:tabs){t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});}
         double inset=tile()/2;
         for(auto& [id,t]:tabs){t.select.Padding({inset+12,0,inset+12,0});t.close.Margin({0,0,inset-12,0});}
         if(!compact){double width=std::max(0.,(root.ActualWidth()-gap()*(std::max(1u,count)-1))/std::max(1u,count));for(auto& [id,t]:tabs)t.box.Width(width);}}

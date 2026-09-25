@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "PanelBody.h"
+#include "WorkspaceGeometry.h"
 #include "ColorView.h"
 #include "ToolView.h"
 #include "EffectControls.h"
@@ -114,6 +115,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 Border slot;slot.Background(clear());slot.Child(pick);attach(slot);
                 tileControls.emplace(uint32_t(id),pick);
                 pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
+                {double r=num(panel,L"tile_corner_radius",SurfaceRadius)*CornerFit;pick.CornerRadius({r,r,r,r});}
                 AutomationProperties::SetAutomationId(slot,L"tile-hit-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
                 auto tileIcon=icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16));

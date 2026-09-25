@@ -32,7 +32,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
-    struct Column {Grid frame;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;};
+    struct Column {Grid frame;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;};
+    std::map<std::wstring,double> tabWidths;
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
@@ -181,9 +182,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     });
                     pick.Height(36);pick.MinWidth(36);pick.Padding({8,4,8,4});pick.CornerRadius({6,6,0,0});
                     StackPanel labelRow;labelRow.Orientation(Orientation::Horizontal);labelRow.Spacing(6);
-                    auto presentation=object(panel,L"tab");
-                    if(flag(presentation,L"show_icon"))labelRow.Children().Append(icon(str(panel,L"icon"),data->theme()));
-                    if(flag(presentation,L"show_name"))labelRow.Children().Append(label(data,str(panel,L"title"),true));
+                    auto presentation=object(panel,L"tab");bool fitted=automaticTabs(data,group);
+                    if(flag(presentation,L"show_icon")||fitted)labelRow.Children().Append(icon(str(panel,L"icon"),data->theme()));
+                    if(flag(presentation,L"show_name")||fitted){
+                        auto name=label(data,str(panel,L"title"),true);name.Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);labelRow.Children().Append(name);
+                        if(fitted)column.automatic.push_back({pick,name,std::wstring(panelId)+L"\n"+std::wstring(str(panel,L"title"))+L"\n"+std::to_wstring(data->textSize())});
+                    }
                     pick.Content(labelRow);
                     AutomationProperties::SetAutomationId(pick,L"drawer-tab-"+panelId);
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
@@ -192,6 +196,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     row.Children().Append(panelTabShell(pick,nullptr));
                 }
                 ScrollViewer strip;strip.Content(row);strip.Background(clear());
+                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->columns[index].automatic,sender.template as<ScrollViewer>().ActualWidth(),self->tabWidths);});
                 strip.HorizontalScrollMode(ScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
                 strip.VerticalScrollMode(ScrollMode::Disabled);header.Children().Append(strip);
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
@@ -296,14 +301,14 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
 
         auto key=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners},{L"holes",holes}}).Stringify();
         if(key==backgroundKey)return;backgroundKey=key;
-        std::array<float,4> radii{8,8,8,8};
+        std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         for(uint32_t i=0;i<std::min(4u,corners.Size());++i)if(corners.GetBooleanAt(i))radii[i]=0;
-        frame.CornerRadius({radii[0],radii[1],radii[2],radii[3]});
-        auto outline=roundedRectangle(width,height,radii);
+        frame.CornerRadius({radii[0]*CornerFit,radii[1]*CornerFit,radii[2]*CornerFit,radii[3]*CornerFit});
+        auto outline=squircleRectangle(width,height,radii);
         auto link=object(object(geometry,L"connection"),L"bounds");
         auto silhouette=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners},{L"link",link},{L"origin",bounds}}).Stringify();
         if(silhouette!=shadowKey){
-            shadowKey=silhouette;shadow.Shape(roundedRectangle(width,height,radii),width,height,21,5,1.f/3);
+            shadowKey=silhouette;shadow.Shape(squircleRectangle(width,height,radii),width,height,21,5,1.f/3);
             std::vector<Rect> bridgeArea;
             if(link.Size())bridgeArea.push_back({float(num(link,L"x")-num(bounds,L"x")),float(num(link,L"y")-num(bounds,L"y")),float(num(link,L"width")),float(num(link,L"height"))});
             shadow.Cut(radii,std::move(bridgeArea));
@@ -313,7 +318,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         background.Data(shape);
     }
     void collectGlass(A& regions,A& links,UIElement const& reference)const{
-        if(disposed||!appendGlass(regions,frame,reference,cornerRadii(frame.CornerRadius())))return;
+        auto design=cornerRadii(frame.CornerRadius());for(auto& radius:design)radius/=CornerFit;
+        if(disposed||!appendGlass(regions,frame,reference,design,true))return;
         appendConnection(links,object(geometry,L"connection"),workspace,reference);
     }
     void appendOverviews(A& slots)const{
