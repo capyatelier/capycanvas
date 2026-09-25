@@ -332,12 +332,15 @@ class AndroidHostTest {
                 if (tool == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS, 0)
         }
         fun icon(point: androidx.compose.ui.geometry.Offset, type: Int?, tool: Int = MotionEvent.TOOL_TYPE_MOUSE) {
-            val event = event(point, tool)
-            try {
-                compose.runOnIdle {
-                    assertEquals("Native cursor at $point for tool $tool", type?.let { PointerIcon.getSystemIcon(native.context, it) }, native.onResolvePointerIcon(event, 0))
-                }
-            } finally { event.recycle() }
+            val expected = type?.let { PointerIcon.getSystemIcon(native.context, it) }
+            fun resolved(): PointerIcon? {
+                val event = event(point, tool)
+                var icon: PointerIcon? = null
+                try { instrumentation.runOnMainSync { icon = native.onResolvePointerIcon(event, 0) } } finally { event.recycle() }
+                return icon
+            }
+            runCatching { compose.waitUntil(5_000) { resolved() == expected } }
+            assertEquals("Native cursor at $point for tool $tool", expected, resolved())
         }
         fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = if (type == PointerIcon.TYPE_GRAB || type == PointerIcon.TYPE_GRABBING) null else type) {
             root.performMouseInput { moveTo(point) }; settle(); icon(point, type)
@@ -1003,6 +1006,13 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
         assertContextBeside(tag)
     }
+    private fun openSettings() {
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+    }
+    private fun waitEnabled(tag: String) = compose.waitUntil(10_000) {
+        compose.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()?.config?.contains(SemanticsProperties.Disabled) == false
+    }
     private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
         .bufferedReader().use { it.readText() }
     private fun waitState(test: (JSONObject) -> Boolean) = compose.waitUntil(10_000) { test(state()) }
@@ -1125,7 +1135,7 @@ class AndroidHostTest {
         SystemClock.sleep(300)
         capture("layers-paint-mask-dark")
         compose.onNodeWithContentDescription("Layer actions").performClick()
-        compose.onNodeWithText("Delete mask").assertExists()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Delete mask").fetchSemanticsNodes().isNotEmpty() }
         capture("layers-mask-menu-dark")
         compose.onNodeWithText("Delete mask").performClick()
         waitState { !it.getJSONObject("layer_tools").getJSONObject("editing_layer").getBoolean("has_mask") }
@@ -1250,6 +1260,7 @@ class AndroidHostTest {
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         quickAccessToolbarsMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
         compose.onNodeWithTag("managed-toolbar-$copy").performClick()
+        waitEnabled("delete-managed-toolbar")
         compose.onNodeWithTag("delete-managed-toolbar").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
         val messageLayout = mutableListOf<TextLayoutResult>()
@@ -1288,9 +1299,10 @@ class AndroidHostTest {
             compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
             capture("toolbar-manager-$theme-initial")
             compose.onNodeWithTag("managed-toolbar-$hidden").performClick()
-            compose.onNodeWithTag("delete-managed-toolbar").assertIsEnabled()
+            waitEnabled("delete-managed-toolbar")
             capture("toolbar-manager-$theme-selected")
             compose.onNodeWithTag("delete-managed-toolbar").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
             capture("toolbar-manager-$theme-confirm")
             compose.onNodeWithText("Cancel").performClick()
             compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
@@ -1304,6 +1316,7 @@ class AndroidHostTest {
             while (host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() > 0) {
                 val panel = host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").objects().first().getString("panel")
                 compose.onNodeWithTag("managed-toolbar-$panel").performClick()
+                waitEnabled("delete-managed-toolbar")
                 compose.onNodeWithTag("delete-managed-toolbar").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
                 compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
@@ -1360,7 +1373,7 @@ class AndroidHostTest {
             action(obj("type" to "move_panel", "panel" to "layers", "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
             automaticNames(listOf("brushes", "sizes", "layers"))
         }
-        compose.onNodeWithTag("tab-layers").performTouchInput { longClick() }
+        contextGrip("tab-layers")
         compose.onNodeWithText("Icons only").assertDoesNotExist()
         compose.onNodeWithText("Configure Layers panel…").performClick()
         customize(obj("type" to "close_expanded"))
@@ -1886,8 +1899,7 @@ class AndroidHostTest {
     }
 
     @Test fun preferencesSearchAndThemeAreCoreDriven() {
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+        openSettings()
         capture("04-preferences-light")
         compose.onNodeWithText("Search settings").performTextInput("prediction")
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").array("search_results").length() > 0 }
@@ -1903,15 +1915,13 @@ class AndroidHostTest {
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("07-workspace-dark")
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+        openSettings()
         capture("08-preferences-dark")
     }
     @Test fun settingsAndDetailsSlideWithinOneSurface() {
         compose.mainClock.autoAdvance = false
         try {
-            compose.onNodeWithContentDescription("Settings").performClick()
-            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+            openSettings()
             compose.mainClock.advanceTimeBy(80)
             val entering = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
             compose.mainClock.advanceTimeBy(320)
@@ -1949,13 +1959,13 @@ class AndroidHostTest {
     }
 
     @Test fun retainedSettingsReleasePopupsFocusAndInvalidDrafts() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithTag("setting-choice-theme").performScrollTo().performClick()
         compose.onAllNodes(isPopup()).assertCountEquals(1)
         action(obj("type" to "close_settings"))
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        openSettings()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onNodeWithTag("settings-category-input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
@@ -1968,7 +1978,7 @@ class AndroidHostTest {
         action(obj("type" to "close_settings"))
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
         assertFalse("Hidden settings release text input ownership", host.editingText)
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithTag("settings-category-input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("number-value-pressure", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
@@ -1977,8 +1987,7 @@ class AndroidHostTest {
     }
 
     @Test fun settingsPanesShareTopEdgeAndUseAppScale() {
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+        openSettings()
         for (theme in listOf("light", "dark")) {
             compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to theme)) }
             waitState { it.getString("theme") == theme }
@@ -2021,7 +2030,7 @@ class AndroidHostTest {
     }
 
     @Test fun typingFromSettingsFocusesSearchWithoutLosingCharacters() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithTag("settings-category-about").performClick()
         compose.waitForIdle()
         // Send a burst before Compose can transfer focus; Rust must retain it
@@ -2057,7 +2066,7 @@ class AndroidHostTest {
     }
 
     @Test fun baseColorsAreSwatchesWithValidatedCustomHexAndDriveTheNativePalette() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         for ((theme, color) in listOf("dark" to "#1C2C3C", "light" to "#C0B49C")) {
             compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to theme)) }
             waitState { it.getString("theme") == theme }
@@ -2094,7 +2103,7 @@ class AndroidHostTest {
     }
 
     @Test fun accentSwatchesFollowSystemPresetsAndCustomHex() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithTag("settings-category-appearance").performClick()
         compose.onNodeWithTag("preference-accent").performScrollTo()
         compose.onNodeWithTag("setting-accent-swatch-0").assertContentDescriptionEquals("System").assertIsSelected()
@@ -2124,7 +2133,7 @@ class AndroidHostTest {
     }
 
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("preference-prediction_horizon", useUnmergedTree = true).performScrollTo()
@@ -2169,7 +2178,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done", useUnmergedTree = true).performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNode(hasText("64 ms") and hasAnyAncestor(hasTestTag("number-value-prediction_horizon")),
@@ -2181,7 +2190,7 @@ class AndroidHostTest {
     }
 
     @Test fun settingDefaultsResetFromContextAndEmptyCommits() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithTag("settings-category-appearance").performClick()
         compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "dark_base", "value" to "#224466")) }
         waitState { it.getJSONObject("settings").getString("dark_base") == "#224466" }
@@ -2221,8 +2230,7 @@ class AndroidHostTest {
     }
 
     @Test fun allPreferenceRowsRenderCoreMetadataAndTrailingControls() {
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+        openSettings()
         // Iterate the actual core catalog: new rows using existing kinds are
         // automatically covered, with no duplicated IDs, defaults or ranges.
         for (page in preferences().array("pages").objects()) {
@@ -2357,8 +2365,7 @@ class AndroidHostTest {
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("26-editor-default-dark")
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+        openSettings()
         compose.waitForIdle()
         compose.onNodeWithTag("preferences-surface", useUnmergedTree = true).assertWidthIsEqualTo(compose.activity.resources.configuration.screenWidthDp.dp)
         compose.onAllNodes(isDialog()).assertCountEquals(0)
@@ -2419,7 +2426,7 @@ class AndroidHostTest {
     }
 
     @Test fun shortcutSearchFindsModifiedKeysAndMarksChangedBindings() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         val search = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("shortcuts-search")))
         search.performTextInput("z")
@@ -2462,8 +2469,7 @@ class AndroidHostTest {
     }
 
     @Test fun shortcutPageRecordsMultipleBindingsAndPersists() {
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+        openSettings()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -2511,8 +2517,7 @@ class AndroidHostTest {
         compose.waitUntil(20_000) { host.snapshot!!.optBoolean("gpu_ready") }
         assertNull(host.failure)
         compose.waitUntil(20_000) { compose.activity.hasWindowFocus() && host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") && !it.optBoolean("switcher_busy") } == true }
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+        openSettings()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -2656,7 +2661,7 @@ class AndroidHostTest {
         capture("18-view-menu")
         compose.onNodeWithText("Fit canvas").performClick()
         compose.onNodeWithText("Fit canvas").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         capture("19-input-settings")
@@ -2684,7 +2689,7 @@ class AndroidHostTest {
     }
 
     @Test fun settingChoicesStayOnPageAndDismissNatively() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        openSettings()
         fun kind(page: String, id: String) = preferences().array("pages").objects().first { it.getString("id") == page }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == id }.getJSONObject("kind")
         // The same renderer handles ordinary choices and choices with previews.
