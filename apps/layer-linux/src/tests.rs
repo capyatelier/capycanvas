@@ -7022,7 +7022,7 @@ fn native_same_slot_drop() {
             .bounds;
         drag.update([
             (neighbor.x + neighbor.width * 0.5 - origin.x()) as f64,
-            (neighbor.y + TAB_BAR_HEIGHT + 3.0 - origin.y()) as f64,
+            (HEADER_HEIGHT * 0.5 - origin.y()) as f64,
         ]);
         pump(80);
         drag.end();
@@ -9619,9 +9619,18 @@ fn native_ribbon_allocation() {
     );
     let strip = TileStrip::new();
     strip.add_css_class("toolbar-controls");
-    for _ in 0..6 {
+    let controls: Vec<_> = (1..=6)
+        .map(|id| layer_ui::ToolbarTile {
+            id,
+            control: ToolbarControl::Command {
+                command: CommandId::Undo,
+            },
+        })
+        .collect();
+    for _ in &controls {
         strip.append(&gtk::Button::from_icon_name("document-edit-symbolic"));
     }
+    strip.set_tiles(&controls);
     strip.set_grip(&tiles::grip());
     for (axis, edge) in [(Axis::Horizontal, Edge::Top), (Axis::Vertical, Edge::Left)] {
         let mut layout = DockLayout::default();
@@ -9636,11 +9645,11 @@ fn native_ribbon_allocation() {
             };
             let g = layout.resolve(viewport[0], viewport[1]).groups.remove(0);
             strip.allocate(g.bounds.width as i32, g.bounds.height as i32, -1, None);
-            let expected = tile_layout(
+            let expected = layer_ui::toolbar_tile_layout(
                 g.bounds.width,
                 g.bounds.height,
                 axis,
-                6,
+                &controls,
                 true,
                 TileStyle::Small,
             );
