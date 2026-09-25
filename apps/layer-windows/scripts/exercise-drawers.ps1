@@ -48,6 +48,7 @@ function Invoke([string]$Value,[switch]$Name){
     if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
     else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
+function Collapsed([string]$Panel){@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $Panel}).Count -gt 0}
 function ContextMenu([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -84,23 +85,22 @@ try{
     Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Find 'tool-drawer')} 'Repeating color tile did not close drawer'
     ContextMenu 'panel-tab-sizes'
     Invoke 'Collapse column' -Name
-    Wait-Until {@((Model).layout.collapsed).Count -gt 0} 'Column context action did not collapse'
-    $column=(Model).layout.collapsed[0]
+    Wait-Until {Collapsed 'sizes'} 'Column context action did not collapse'
+    $column=@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'sizes'})[0]
     Invoke 'column-icon-sizes'
-    Wait-Until {@((Model).state.customization.column_drawers).Count -gt 0} 'Column icon did not open drawer'
+    Wait-Until {$open=@((Model).layout.collapsed|Where-Object id -eq $column.id)[0].open;$open -or @((Model).state.customization.column_drawers).Count -gt 0} 'Column icon did not open its column'
     Capture 'sizes-column'
     Invoke 'column-icon-sizes'
-    Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Repeating column icon did not close'
-    Invoke "expand-column-$($column.id)"
-    Wait-Until {@((Model).layout.collapsed).Count -eq 0 -and $null -ne (Find 'panel-tab-sizes')} 'Expand did not restore docked panels'
+    Wait-Until {$open=@((Model).layout.collapsed|Where-Object id -eq $column.id)[0].open;!$open -and @((Model).state.customization.column_drawers).Count -eq 0} 'Repeating column icon did not close'
+    ContextMenu 'column-icon-sizes';Invoke 'Expand column' -Name
+    Wait-Until {!(Collapsed 'sizes') -and $null -ne (Find 'panel-tab-sizes')} 'Expand did not restore docked panels'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
-    Wait-Until {@((Model).layout.collapsed).Count -gt 0} 'Workspace Undo did not restore collapse'
+    Wait-Until {Collapsed 'sizes'} 'Workspace Undo did not restore collapse'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'redo_workspace'
-    Wait-Until {@((Model).layout.collapsed).Count -eq 0} 'Workspace Redo did not restore expansion'
+    Wait-Until {!(Collapsed 'sizes')} 'Workspace Redo did not restore expansion'
     # The full editor groups Properties with Filters; Layers is independent.
-    ContextMenu 'panel-tab-properties'
-    Invoke 'Collapse column' -Name
-    ContextMenu 'column-icon-properties';Invoke 'Drawers' -Name
+    if(!(Collapsed 'properties')){ContextMenu 'panel-tab-properties';Invoke 'Collapse column' -Name}
+    ContextMenu 'column-icon-properties';Invoke 'Open individual panels' -Name
     Invoke 'column-icon-properties'
     Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Column drawer did not expose shared tabs'
     $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'})[0]
@@ -115,10 +115,9 @@ try{
     Capture 'filters-column'
     Invoke 'column-icon-properties'
     Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Column origin did not close after tab switch'
-    Invoke "expand-column-$($right.anchor.column)"
+    ContextMenu 'column-icon-properties';Invoke 'Expand column' -Name;Wait-Until {!(Collapsed 'properties')} 'Properties column did not expand'
 
-    ContextMenu 'panel-tab-navigator'
-    Invoke 'Collapse column' -Name
+    if(!(Collapsed 'navigator')){ContextMenu 'panel-tab-navigator';Invoke 'Collapse column' -Name}
     Invoke 'column-icon-navigator'
     Wait-Until {$null -ne (Find 'navigator-overview')} 'Navigator drawer did not create its preview'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'

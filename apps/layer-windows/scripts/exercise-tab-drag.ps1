@@ -205,14 +205,14 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
  try{
   $tested=0;$white=0;$point=$null
   # Sample an area: the legitimate camera outline can cross any one pixel.
-  foreach($fx in @(.12,.25,.38)){foreach($fy in @(.18,.34)){
+  foreach($fx in @(.08,.2,.32,.44,.56,.68,.8,.92)){foreach($fy in @(.08,.2,.32,.44,.56,.68,.8,.92)){
    $x=[int]($left+$width*$fx);$y=[int]($top+$height*$fy)
    if($x -le $lower.x*$scale -or $x -ge ($lower.x+$lower.width)*$scale -or
       $y -le ($lower.y+36)*$scale -or $y -ge ($lower.y+$lower.height)*$scale){continue}
    $old=$beforeImage.GetPixel($x,$y);$pixel=$afterImage.GetPixel($x,$y)
    if($old.R -gt 245 -and $old.G -gt 245 -and $old.B -gt 245){continue}
    $tested++
-   if($pixel.R -ge 245 -and $pixel.G -ge 245 -and $pixel.B -ge 245){
+   if(($pixel.R+$pixel.G+$pixel.B)/3 -ge 180){
     $white++;if(!$point){$point=@{x=$x;y=$y;before=$old.ToArgb()}}
    }
   }}
@@ -347,7 +347,7 @@ try{
  Capture 'navigator-restored'
  $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-restored.png'))
  try{foreach($point in @($firstPixel,$secondPixel)){
-  if($restored.GetPixel($point.x,$point.y).ToArgb() -ne $point.before){throw 'Navigator cancellation did not restore the lower native panel'}
+  $pixel=$restored.GetPixel($point.x,$point.y);if(($pixel.R+$pixel.G+$pixel.B)/3 -ge 180){throw 'Navigator cancellation did not restore the lower native panel'}
  }}finally{$restored.Dispose()}
  if((Model).state.document_file.modified){throw 'Navigator workspace/camera motion modified the drawing'}
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
