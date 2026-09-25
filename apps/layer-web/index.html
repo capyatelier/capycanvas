@@ -10,9 +10,8 @@
     <title>Capy Canvas — drawing workspace</title>
     <link rel="icon" href="data:," />
     <script type="module" async src="workspace-preload.js"></script>
+    <script>for (const href of ["icons.svg", "pkg/layer_web_bg.wasm"]) document.head.append(Object.assign(document.createElement("link"), {rel: "preload", as: "fetch", crossOrigin: "anonymous", href}));</script>
     <link id="workspace-style" rel="stylesheet" href="style.css" />
-    <link rel="preload" href="icons.svg" as="fetch" crossorigin />
-    <link rel="preload" href="pkg/layer_web_bg.wasm" as="fetch" crossorigin />
     <!-- Packager inserts install metadata here; development never registers a worker. -->
   </head>
   <body data-theme="dark" data-gpu="starting">
