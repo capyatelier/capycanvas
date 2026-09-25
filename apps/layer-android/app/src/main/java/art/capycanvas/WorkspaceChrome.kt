@@ -126,7 +126,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 val selected = if (opened != null) group.getString("active") == panel else drawers.any { it.getJSONObject("anchor").let { anchor ->
                                     anchor.getInt("column") == id && anchor.getString("origin") == panel
                                 } }
-                                val shape = drawerButtonShape(if (selected) opened?.getString("direction") ?: dock.drawerSources[id.toString()]?.direction else null)
+                                val source = dock.drawerSources[id.toString()]?.takeIf { it.anchor?.optString("origin") == panel }
+                                val shape = drawerButtonShape(if (opened != null) opened.getString("direction").takeIf { selected } else source?.direction)
                                 HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
                                     .dragSource(dock, target, holdToDrag = true)) {
                                     Box(Modifier.fillMaxSize().testTag("column-icon-$panel").semantics { this.selected = selected }
@@ -199,8 +200,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                 "progress" to progress, "from" to from, "closing" to (current == null)))
             if (geometry?.objectOrNull("connection") != null)
                 geometry!!.getJSONObject("placement").let { placement ->
-                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"),
+                    val source = DockInteraction.DrawerSource(placement.getString("direction"),
                         placement.getJSONObject("anchor").rect(), model.getJSONObject("anchor"))
+                    if (dock.drawerSources[id] != source) dock.drawerSources[id] = source
                 }
             else dock.drawerSources.remove(id)
             if (id == "tool") { dock.drawer = geometry; dock.refresh() }
