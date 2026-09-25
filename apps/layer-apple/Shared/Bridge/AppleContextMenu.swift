@@ -21,21 +21,24 @@ import Foundation
         }
         return leaves(sections)
     }
-    init(_ model: JSON, invoke: @escaping (JSON) -> Void) {
+    init(_ model: JSON, invoke: @escaping (JSON) -> Void, command: ((JSON) -> Void)? = nil) {
         title = model["title"].string
         func decodeSections(_ value: JSON, parentEnabled: Bool = true) -> [[Item]] {
             value.array.map { section in
                 section.array.map { item in
-                    let payload = item["action"]
+                    let payload = item["action"], request = item["command"]
                     let enabled = parentEnabled && item["enabled"].bool
-                    return Item(label: item["label"].string,
-                        identifier: item["identifier"].isNull
-                            ? (payload["type"].string == "invoke" ? "command-" + payload["command"].string : "menu-action-" + item["label"].string)
-                            : item["identifier"].string, enabled: enabled,
+                    let identifier = !item["identifier"].isNull ? item["identifier"].string
+                        : !request.isNull ? (["palette-command", request["command"].string, request["format"].string, request["action"]["op"].string]
+                            .filter { !$0.isEmpty }.joined(separator: "-"))
+                        : payload["type"].string == "invoke" ? "command-" + payload["command"].string : "menu-action-" + item["label"].string
+                    let action: (() -> Void)? = !request.isNull && command != nil ? { if enabled { command?(request) } }
+                        : payload.isNull ? nil : { if enabled { invoke(payload) } }
+                    return Item(label: item["label"].string, identifier: identifier, enabled: enabled,
                         selected: item["selected"].isNull ? nil : item["selected"].bool,
                         hint: item["hint"].string, bindings: item["bindings"].array,
                         sections: decodeSections(item["sections"], parentEnabled: enabled),
-                        action: payload.isNull ? nil : { if enabled { invoke(payload) } })
+                        action: action)
                 }
             }.filter { !$0.isEmpty }
         }

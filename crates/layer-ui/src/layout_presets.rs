@@ -1019,8 +1019,14 @@ mod tests {
         for (preset, platform) in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer]
             .into_iter()
             .flat_map(|preset| {
-                [crate::Platform::Gtk, crate::Platform::Web, crate::Platform::Android]
-                    .map(|platform| (preset, platform))
+                [
+                    crate::Platform::Gtk,
+                    crate::Platform::Web,
+                    crate::Platform::Android,
+                    crate::Platform::Mac,
+                    crate::Platform::Ios,
+                ]
+                .map(|platform| (preset, platform))
             })
         {
             let mut layout = preset.layout(platform);
@@ -1053,19 +1059,13 @@ mod tests {
                 crate::durable_layout(&restored),
                 crate::durable_layout(&layout)
             );
-            for platform in [
-                crate::Platform::Ios,
-                crate::Platform::Mac,
-                crate::Platform::Windows,
-            ] {
-                assert!(!Panel::Palettes.available_on(platform));
-                assert!(
-                    preset
-                        .layout(platform)
-                        .panel_group(Panel::Palettes)
-                        .is_none()
-                );
-            }
+            assert!(!Panel::Palettes.available_on(crate::Platform::Windows));
+            assert!(
+                preset
+                    .layout(crate::Platform::Windows)
+                    .panel_group(Panel::Palettes)
+                    .is_none()
+            );
         }
     }
 

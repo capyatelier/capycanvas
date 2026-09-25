@@ -67,10 +67,6 @@ impl PaletteFormat {
             Self::Gpl => "Krita, GIMP (.gpl)",
         }
     }
-    pub fn from_file_name(name: &str) -> Option<Self> {
-        let extension = name.rsplit_once('.')?.1.to_ascii_lowercase();
-        Self::ALL.into_iter().find(|f| f.extension() == extension)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

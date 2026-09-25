@@ -24,6 +24,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private var press: UILongPressGestureRecognizer!
     private var secondary: UITapGestureRecognizer!
     private var link: CADisplayLink?
+    private var lastTrack: CFTimeInterval?
     private var observer: NSObjectProtocol?
     override init(frame: CGRect) {
         super.init(frame: frame); isUserInteractionEnabled = false
@@ -149,6 +150,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         case .began, .changed:
             if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
             if moveReorder(recognizer.location(in: self)) && link == nil {
+                lastTrack = nil
                 let link = CADisplayLink(target: self, selector: #selector(track)); link.add(to: .main, forMode: .common); self.link = link
             }
         case .ended: finish()
@@ -181,8 +183,15 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private func reorderScrollTarget(at point: CGPoint) -> (UIScrollView, CGPoint)? {
         guard let scroll = scroll ?? scrollAt(point) else { return nil }
         let viewport = convert(scroll.bounds, from: scroll)
-        guard viewport.contains(point) else { return nil }
-        let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
+        let delta: CGFloat
+        if let edge = model?.edgeScroll {
+            let now = CACurrentMediaTime()
+            delta = edge.delta(at: point, in: viewport, elapsed: lastTrack.map { now - $0 } ?? 0)
+            lastTrack = now
+        } else {
+            guard viewport.contains(point) else { return nil }
+            delta = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
+        }
         guard delta != 0 else { return nil }
         let top = -scroll.adjustedContentInset.top
         let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)

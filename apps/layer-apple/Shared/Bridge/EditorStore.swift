@@ -57,6 +57,7 @@ import SwiftUI
     }
     lazy var histogram = HistogramController(store: self)
     lazy var proof = ProofController(store: self)
+    lazy var palettes = PaletteController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
     var displayColors: JSON {
@@ -311,6 +312,10 @@ import SwiftUI
     }
     func input(_ value: [String: Any]) {
         if value["type"] as? String == "blur" { interruptInput?(); workspace.dismissTransients(at: nil) }
+        if value["type"] as? String == "key", let key = value["key"] as? String,
+           let modifiers = value["modifiers"] as? [String: Any],
+           palettes.key(key, pressed: value["pressed"] as? Bool == true,
+               command: modifiers["command"] as? Bool == true, shift: modifiers["shift"] as? Bool == true) { return }
         if value["type"] as? String == "key", value["key"] as? String == "Escape", value["pressed"] as? Bool == true {
             workspace.dismissTransients(at: nil)
         }

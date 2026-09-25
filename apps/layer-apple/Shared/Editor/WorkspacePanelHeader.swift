@@ -11,7 +11,7 @@ struct WorkspacePanelHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             GeometryReader { viewport in
-                EditorScrollView(.horizontal) { HStack(spacing: 0) { tabs } }
+                EditorScrollView(.horizontal) { HStack(spacing: 0) { tabs(available: viewport.size.width) } }
                     .scrollIndicators(.hidden)
                     .scrollDisabled(store.workspace.tabSlide.grab != nil)
                     .environment(\.workspaceClip, viewport.frame(in: .named("editor-workspace")).intersection(clip))
@@ -22,8 +22,8 @@ struct WorkspacePanelHeader: View {
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw]),
                 context: JSON(["kind": "group", "group": group["id"].raw])))
     }
-    private var tabs: some View {
-        WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer)
+    private func tabs(available: CGFloat) -> some View {
+        WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer, available: available)
     }
 }
 
@@ -32,10 +32,32 @@ private struct WorkspacePanelTabs: View {
     let slide: WorkspaceTabSlide
     let group: JSON
     let drawer: Bool
+    let available: CGFloat
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var automatic: Bool {
+        func style(_ node: JSON) -> String? {
+            if node["kind"].string == "tabs" && node["id"].uint == group["id"].uint { return node["tab_style"].string }
+            for child in node.object.values.map(JSON.init) where !child.object.isEmpty || !child.array.isEmpty {
+                if let found = style(child) { return found }
+            }
+            for child in node.array { if let found = style(child) { return found } }
+            return nil
+        }
+        return style(store.state["workspace"]["layout"]) == "automatic"
+    }
+    private var tabs: [JSON] {
+        let panels = group["panels"].array.map { store.panel($0.string) }
+        guard automatic, available > 0 else { store.workspace.fittedTabs[group["id"].uint] = nil; return panels }
+        let size = store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
+        let widths = panels.map { [38 + EditorTextMetrics.width($0["title"].string, size: size, weight: .bold), 36] }
+        let fitted = ToolbarUI.cached(["type": "automatic_tab_names", "available": available, "widths": widths]).array.map(\.bool)
+        store.workspace.fittedTabs[group["id"].uint] = fitted.count == panels.count ? fitted : nil
+        return store.workspace.presentedTabs(group: group["id"].uint, panels: panels)
+    }
     var body: some View {
+        let tabs = self.tabs
         ForEach(group["panels"].array.indices, id: \.self) { index in
-            let tab = store.panel(group["panels"][index].string)
+            let tab = tabs[index]
             let selected = tab["id"].string == group["active"].string
             Button {
                 if !store.workspace.input.contact.consumeClick() { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) }

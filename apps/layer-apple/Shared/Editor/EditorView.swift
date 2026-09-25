@@ -120,6 +120,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .modifier(SelectionResizeDialog(store: store))
+        .modifier(PaletteFiles(controller: store.palettes))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {
             SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)
@@ -252,6 +253,8 @@ struct MenuItems: View {
         #if os(macOS)
         if nativeTextMenuAction(action) { didInvoke(); return }
         #endif
+        if action["type"].string == "invoke", ["undo", "redo"].contains(action["command"].string),
+           store.palettes.undoReorder(redo: action["command"].string == "redo") { didInvoke(); return }
         store.dispatch(action); didInvoke()
     }
 }

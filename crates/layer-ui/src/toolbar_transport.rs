@@ -49,6 +49,10 @@ pub enum ToolbarUiRequest {
     Style {
         style: TileStyle,
     },
+    AutomaticTabNames {
+        available: f32,
+        widths: Vec<[f32; 2]>,
+    },
 }
 
 pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String> {
@@ -123,5 +127,27 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
         ToolbarUiRequest::Style { style } => {
             json!({"size":style.size(), "icon":style.icon_size(), "labeled":style.label_lines()>0})
         }
+        ToolbarUiRequest::AutomaticTabNames { available, widths } => {
+            json!(TabStyle::automatic_names(available, &widths))
+        }
     })
+}
+
+#[test]
+fn automatic_tab_names_are_a_stateless_toolbar_query() {
+    let request = |available: f32| {
+        toolbar_ui(
+            serde_json::from_value(serde_json::json!({
+                "type": "automatic_tab_names",
+                "available": available,
+                "widths": [[120., 36.], [90., 36.], [140., 36.]],
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(request(108.), serde_json::json!([false, false, false]));
+    assert_eq!(request(192.), serde_json::json!([true, false, false]));
+    assert_eq!(request(246.), serde_json::json!([true, true, false]));
+    assert_eq!(request(400.), serde_json::json!([true, true, true]));
 }

@@ -67,14 +67,18 @@ import QuartzCore
 
             func color(_ action: [String: Any]) async throws { try await edit(store, ["type": "color", "action": action]) }
             func library(_ action: [String: Any]) async throws { try await color(["op": "library", "action": action]) }
+            let starting = store.state["colors"]["library"]["palettes"].array.count
             try await library(["op": "create_palette", "name": "Studio colors"])
-            let palette = store.state["colors"]["library"]["palettes"][1]["id"].uint
+            let palette = store.state["colors"]["library"]["palettes"].array.first { $0["name"].string == "Studio colors" }!["id"].uint
+            func saved(_ owner: EditorStore) -> JSON {
+                owner.state["colors"]["library"]["palettes"].array.first { $0["id"].uint == palette } ?? JSON()
+            }
             for space in ["Srgb", "DisplayP3", "AdobeRgb", "ProPhoto"] {
                 let definition = JSON(["space": space, "rgba": [1.125, -0.125, 0.34567891, 213.0 / 65535]])
                 try await color(["op": "set_slot", "slot": "foreground", "color": definition.raw])
                 let tagged = store.state["colors"]["foreground"]
                 try await library(["op": "store", "palette": palette, "name": space, "color": tagged.raw])
-                let swatch = store.state["colors"]["library"]["palettes"][1]["swatches"].array.last!
+                let swatch = saved(store)["swatches"].array.last!
                 try require(swatch["color"].stableKey == tagged.stableKey, "Store must retain extended values and precise alpha in \(space)")
                 try await library(["op": "rename", "id": swatch["id"].uint, "name": "Saved " + space])
                 try await color(["op": "set_slot", "slot": "foreground", "color": ["space": "Srgb", "rgba": [0, 0, 0, 1]]])
@@ -107,11 +111,11 @@ import QuartzCore
             try await wait("Fresh owner restoration") { restored.workspaceLibrary?.ready == true || restored.failure != nil }
             try require(restored.state["colors"]["library"].stableKey == savedLibrary, "Fresh owner must restore palette IDs, names, tags and samples")
             try require(restored.state["settings"]["new_document"].stableKey == settings, "Fresh owner must restore creation presets and defaults")
-            let removal = restored.state["colors"]["library"]["palettes"][1]["swatches"][0]["id"].uint
+            let removal = saved(restored)["swatches"][0]["id"].uint
             for action: [String: Any] in [["op": "remove", "id": removal], ["op": "remove_palette", "id": palette]] {
                 try await edit(restored, ["type": "color", "action": ["op": "library", "action": action]])
             }
-            try require(restored.state["colors"]["library"]["palettes"].array.count == 1, "Swatch and palette removal must preserve the remaining palette")
+            try require(restored.state["colors"]["library"]["palettes"].array.count == starting, "Swatch and palette removal must preserve the remaining palettes")
             try await restored.workspaceLibrary!.close()
             print("PASS: platform \(platform), creation defaults/preset validation/retry/Cancel, all tagged palette spaces, document adoption and fresh-owner durable restoration")
             withExtendedLifetime(surface) {}

@@ -35,7 +35,7 @@ extension XCTestCase {
             }
             XCTAssertEqual(properties.frame.minX, layers.frame.minX, accuracy: 1)
             XCTAssertLessThan(properties.frame.maxY, layers.frame.minY)
-            for panel in ["color", "stats", "properties", "adjustments", "layers"] {
+            for panel in ["color", "palettes", "properties", "adjustments", "layers"] + (photo ? [] : ["stats", "proof"]) {
                 XCTAssertTrue(app.buttons["panel-tab-" + panel].firstMatch.exists)
             }
             // Photo has a short Color group; Paint puts Color below Tools.
@@ -53,12 +53,14 @@ extension XCTestCase {
                 let brushes = app.buttons["column-icon-brushes"], tool = app.buttons["column-icon-tool_settings"], navigator = app.buttons["column-icon-navigator"]
                 XCTAssertLessThan(brushes.frame.minY, tool.frame.minY)
                 XCTAssertLessThan(tool.frame.minY, navigator.frame.minY)
-                XCTAssertFalse(element("workspace-group-6").exists)
+                let drawer = element("column-drawer-4")
+                XCTAssertFalse(drawer.exists)
                 workspaceActivate(brushes)
-                XCTAssertTrue(element("workspace-group-6").waitForExistence(timeout: 10))
+                XCTAssertTrue(drawer.waitForExistence(timeout: 10), "Photo's collapsed column opens drawers")
+                XCTAssertTrue(app.buttons["drawer-tab-stats"].exists, "Diagnostics shares the Tool Set drawer")
                 XCTAssertTrue(color.exists && properties.exists && layers.exists)
                 workspaceActivate(brushes)
-                XCTAssertTrue(element("workspace-group-6").waitForNonExistence(timeout: 10))
+                XCTAssertTrue(drawer.waitForNonExistence(timeout: 10))
             } else {
                 let icon = app.buttons["column-icon-layers"]
                 workspaceActivate(icon)

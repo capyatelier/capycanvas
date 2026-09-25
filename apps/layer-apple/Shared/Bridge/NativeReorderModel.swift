@@ -17,6 +17,20 @@ import CoreGraphics
     func beginSwipe(at point: CGPoint) -> Bool
     func moveSwipe(to point: CGPoint)
     func finishSwipe(cancelled: Bool)
+    var edgeScroll: ReorderEdgeScroll? { get }
+}
+
+struct ReorderEdgeScroll {
+    var inside: CGFloat = 20
+    var outside: CGFloat = 12
+    var speed: CGFloat = 240
+    func delta(at point: CGPoint, in viewport: CGRect, elapsed: TimeInterval) -> CGFloat {
+        guard point.x >= viewport.minX, point.x <= viewport.maxX else { return 0 }
+        let step = speed * CGFloat(min(0.05, max(0, elapsed)))
+        if point.y < viewport.minY + inside && point.y >= viewport.minY - outside { return -step }
+        if point.y > viewport.maxY - inside && point.y <= viewport.maxY + outside { return step }
+        return 0
+    }
 }
 
 extension NativeReorderModel {
@@ -24,6 +38,7 @@ extension NativeReorderModel {
     func beginSwipe(at point: CGPoint) -> Bool { false }
     func moveSwipe(to point: CGPoint) {}
     func finishSwipe(cancelled: Bool) {}
+    var edgeScroll: ReorderEdgeScroll? { nil }
     func recognizeHold() { if !swiping { contact.recognizeHold() } }
     func nativeInputDetached() {
         // Native recognizers are already detached. SwiftUI can still own its

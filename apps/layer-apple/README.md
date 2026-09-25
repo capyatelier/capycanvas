@@ -304,9 +304,11 @@ invalid drafts. Modal dismissal and UIKit delivery remain separate UI checks.
 The Color panel and brush-color popup expose **Edit Color…**.
 Paint entry uses the same tagged form, captures its foreground/background target,
 and rejects publication into a replacement document. HDR documents add intensity
-in EV and Base/Adjusted swatches. The palette popup is removed; previously saved
-palette data remains readable by the shared workspace library. Previews never
-replace the retained color definition. The former inline RGB sliders are removed.
+in EV and Base/Adjusted swatches. Saved colors live in the
+[Palettes panel](../../docs/development/color-palettes-panel.md#macos-and-ipados)
+beside Color in Paint and Photo and below the wheel in Sketch's color drawer.
+Previews never replace the retained color definition. The former inline RGB
+sliders are removed.
 
 New Drawing exposes shared presets, dimensions, background and independent
 working-space/bit-depth choices. Optional preset/default changes use shared

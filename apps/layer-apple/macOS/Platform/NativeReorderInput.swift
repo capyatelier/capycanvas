@@ -20,6 +20,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     private var press: NSPressGestureRecognizer!
     private var secondary: NSClickGestureRecognizer!
     private var timer: Timer?
+    private var lastTrack: TimeInterval?
     private var observers: [NSObjectProtocol] = []
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -139,6 +140,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         case .began, .changed:
             if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
             if move(recognizer.location(in: self)) && timer == nil {
+                lastTrack = nil
                 let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.track() } }
                 RunLoop.main.add(timer, forMode: .common); self.timer = timer
             }
@@ -159,8 +161,15 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         var scrolled = false
         if let scroll = enclosingScrollView ?? scrollAt(point) {
             let viewport = convert(scroll.contentView.bounds, from: scroll.contentView)
-            guard viewport.contains(point) else { _ = move(point); return }
-            let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
+            let delta: CGFloat
+            if let edge = model.edgeScroll {
+                let now = ProcessInfo.processInfo.systemUptime
+                delta = edge.delta(at: point, in: viewport, elapsed: lastTrack.map { now - $0 } ?? 0)
+                lastTrack = now
+            } else {
+                guard viewport.contains(point) else { _ = move(point); return }
+                delta = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
+            }
             if delta != 0 {
                 let clip = scroll.contentView
                 let limit = max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height)
