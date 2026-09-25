@@ -12,8 +12,10 @@ edge so regions never overlap). Its preview remains a 24px strip. The top edge b
 bar. Farther from the edge, the existing full-width/full-height targets remain
 available farther inward from the visible toolbar. The short target is shaded
 while dragging. Native footer insets do not block the bottom target. Existing
-sidebar/tab insertion surfaces retain priority; content panels and tab groups
-keep their existing docking rules.
+sidebar/tab insertion surfaces retain priority: while the pointer is over a
+panel group other than a standalone toolbar, that group's tab and body targets
+apply even when the visible toolbar reaches an edge. Content panels and tab
+groups keep their existing docking rules.
 
 Dropping at a compact toolbar's leading or trailing end adds an independent
 toolbar to that region. Each toolbar keeps its own handle and identity. The
