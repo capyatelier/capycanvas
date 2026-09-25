@@ -52,6 +52,10 @@ The [shared workflow centralization handoff](shared-workflow-centralization-hand
 tracks portable color/photo, export, profile-library and recovery rules that Web
 and Android should consolidate before Windows adds the same workflows.
 
+The [panel transparency handoff](panel-transparency-web-android-handoff.md)
+lists the shared glass palette, blur pass and host work still needed to bring
+GTK's Panel transparency setting to Web and Android.
+
 [Stroke recording and prediction datasets](stroke-recording.md) explains how to
 collect tablet input from Diagnostics and replay it for predictor comparisons.
 
