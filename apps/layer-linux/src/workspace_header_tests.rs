@@ -956,6 +956,20 @@ fn native_header_picker_journey() {
             .set_text(query);
         pump(300);
     };
+    fn choose(d: &mut Driver, name: &str) {
+        let choice = d.named(name);
+        let results = choice.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+        assert!(choice.grab_focus());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !choice
+            .compute_bounds(&results)
+            .is_some_and(|b| b.y() >= 0. && b.y() + b.height() <= results.height() as f32)
+        {
+            assert!(Instant::now() < deadline, "{name} scrolls into view");
+            pump(10);
+        }
+        d.click(&choice);
+    }
     for touch in [false, true] {
         d.edit();
         let before = original.zones[2][0].id;
@@ -974,9 +988,9 @@ fn native_header_picker_journey() {
         assert!(!d.named("toolbar-name").is_mapped());
         assert!(!d.named("confirm-tools").is_sensitive());
         search(&d, "Brush opacity");
-        d.click_name(&opacity);
+        choose(&mut d, &opacity);
         search(&d, "Color");
-        d.click_name(&color);
+        choose(&mut d, &color);
         search(&d, "No tool matches this query");
         assert!(d.label("No matching tools").is_mapped());
         assert_eq!(
@@ -1021,9 +1035,9 @@ fn native_header_picker_journey() {
         );
         assert!(!d.named("confirm-tools").is_sensitive());
         search(&d, "Brush opacity");
-        d.click_name(&opacity);
+        choose(&mut d, &opacity);
         search(&d, "Color");
-        d.click_name(&color);
+        choose(&mut d, &color);
         crate::capture(
             &d.w,
             d.dir
