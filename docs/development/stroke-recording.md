@@ -1,7 +1,8 @@
 # Stroke recording and prediction datasets
 
 Open **Diagnostics → Start stroke recording**, draw normally, then choose
-**Stop stroke recording**. GTK and Android open the system save dialog. Web uses
+**Stop stroke recording**. GTK, Android, macOS and iPadOS open the system save
+dialog. Web uses
 the system file picker when available, with a system share sheet or download UI
 as the fallback. Cancelling or failing a save retains the recording;
 the button becomes **Save stroke recording**. Recording stops automatically at

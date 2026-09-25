@@ -61,6 +61,9 @@ int32_t capy_project_compare(const CapyProjectTask *task); /* worker after candi
 char *capy_profile_library(const char *request_json, const uint8_t *bytes, size_t count); /* worker; bounded ICC, owned JSON */
 char *capy_export_draft(const char *recipe_json, const char *action_json); /* worker; owned shared draft JSON */
 char *capy_palette_file(const char *request_json, const uint8_t *bytes, size_t count, int32_t output_fd); /* worker; owned metadata JSON, export bytes to output_fd */
+uint8_t *capy_apple_stroke_recording_data(CapyApple *app, size_t *length); /* owner; raw capture copy or NULL with error */
+void capy_bytes_free(uint8_t *bytes, size_t length);
+char *capy_stroke_recording_write(const uint8_t *bytes, size_t count, int32_t output_fd); /* worker; NULL or owned error JSON */
 char *capy_export_presets(int32_t input_fd, int32_t output_fd, const char *request_json, const char *color_json); /* worker; host atomically publishes changed output */
 char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker only */
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;

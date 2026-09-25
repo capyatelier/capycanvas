@@ -13,6 +13,7 @@ import QuartzCore
         let button: UInt32
         let nativeButton: Int
         var last: [Double]
+        var chorded = false
     }
     private var contact: Contact?
     private var nextContact: UInt64 = 0
@@ -47,7 +48,10 @@ import QuartzCore
         if event.subtype == .tabletProximity { proximity(event); return }
         // Tablet side buttons arrive as right/other mouse events. They must
         // neither start navigation nor disturb the tip's captured contact.
-        if tablet(event), event.buttonNumber != 0 { return }
+        if tablet(event), event.buttonNumber != 0 {
+            if contact == nil || contact?.chorded == true { tabletPoint(event, chorded: true) }
+            return
+        }
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
             store.layerSwipe.close(); store.palettes.focused = false; store.workspace.dismissTransients(at: nil)
@@ -69,7 +73,7 @@ import QuartzCore
             contact = phase == 3 ? nil : value
         }
     }
-    func tabletPoint(_ event: NSEvent) {
+    func tabletPoint(_ event: NSEvent, chorded: Bool = false) {
         let touching = event.pressure > 0 || event.buttonMask.contains(.penTip)
         updateModifiers(event.modifierFlags, force: contact == nil && touching)
         if var value = contact {
@@ -86,7 +90,7 @@ import QuartzCore
             nextContact &+= 1
             let value = Contact(id: nextContact, device: event.deviceID,
                 tool: tools[event.deviceID] ?? 0, button: 0, nativeButton: 0,
-                last: pack(event, phase: 1))
+                last: pack(event, phase: 1), chorded: chorded)
             contact = value; send(value, value.last)
         } else { hover(event) }
     }

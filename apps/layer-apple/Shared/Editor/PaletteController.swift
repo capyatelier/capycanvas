@@ -32,7 +32,7 @@ struct PaletteDialog: Identifiable {
 }
 
 struct PaletteExport {
-    let document: PaletteFileDocument
+    let document: BinaryFileDocument
     let name: String
     let type: UTType
     let notice: String?
@@ -48,7 +48,7 @@ struct PaletteLift: Equatable {
     static func == (a: Self, b: Self) -> Bool { a.owner == b.owner && a.id == b.id && a.frame == b.frame && a.selected == b.selected }
 }
 
-struct PaletteFileDocument: FileDocument {
+struct BinaryFileDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.data] }
     let data: Data
     init(data: Data) { self.data = data }
@@ -220,7 +220,7 @@ struct PaletteFileDocument: FileDocument {
                 switch encoded {
                 case .success(let (metadata, data)):
                     let name = metadata["file_name"].string
-                    export = PaletteExport(document: PaletteFileDocument(data: data), name: name,
+                    export = PaletteExport(document: BinaryFileDocument(data: data), name: name,
                         type: UTType(filenameExtension: (name as NSString).pathExtension) ?? .data,
                         notice: metadata["notice"].isNull ? nil : metadata["notice"].string)
                 case .failure(let error): message = PaletteMessage(text: error.localizedDescription, error: true)
