@@ -210,8 +210,8 @@ pub fn slider_preview_layout(
                 height: side,
             }
         },
-        header_fade: if opacity { 0. } else { 52. * tile / TileStyle::Medium.size()[1] },
-        header_fade_opacity: 0.4,
+        header_fade: if opacity { 0. } else { 65. * tile / TileStyle::Medium.size()[1] },
+        header_fade_opacity: 0.5,
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",
