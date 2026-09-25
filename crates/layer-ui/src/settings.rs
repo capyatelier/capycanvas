@@ -34,6 +34,9 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
+    pub fn system_accent(self) -> bool {
+        matches!(self, Self::Gtk)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +99,8 @@ pub struct Settings {
     pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<HexColor>,
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
@@ -129,6 +134,7 @@ impl Default for Settings {
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
+            accent: None,
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
@@ -302,6 +308,7 @@ pub enum PreferenceId {
     ZenRevealAtEdges,
     DarkBase,
     LightBase,
+    Accent,
     Cursor,
     HideCursorWhileDrawing,
     PanSpeed,
@@ -335,6 +342,7 @@ impl PreferenceId {
             Self::ZenRevealAtEdges => "zen-reveal-at-edges",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
+            Self::Accent => "accent",
             Self::Cursor => "cursor",
             Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
             Self::PanSpeed => "pan-speed",
@@ -403,6 +411,13 @@ pub enum PreferenceKind {
         icons: Vec<String>,
         presentation: ChoicePresentation,
     },
+    Swatches {
+        swatches: Vec<Swatch>,
+        selected: u32,
+        value: String,
+        custom: String,
+        placeholder: String,
+    },
     Number {
         control: NumericControl,
         value: f32,
@@ -425,6 +440,7 @@ impl PreferenceKind {
             Self::Number { value, .. } => PreferenceValue::Number(*value),
             Self::Text { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Choice { selected, .. } => PreferenceValue::Choice(*selected),
+            Self::Swatches { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Switch { active } => PreferenceValue::Bool(*active),
             Self::Info { .. } | Self::Link { .. } => return None,
         })
@@ -442,8 +458,39 @@ impl PreferenceKind {
             Self::Choice {
                 options, selected, ..
             } => options[*selected as usize].clone(),
+            Self::Swatches {
+                swatches,
+                selected,
+                custom,
+                ..
+            } => match &swatches[*selected as usize] {
+                swatch if swatch.custom => custom.clone(),
+                swatch => swatch.label.clone(),
+            },
             Self::Switch { active } => if *active { "On" } else { "Off" }.into(),
             Self::Info { .. } | Self::Link { .. } => String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Swatch {
+    pub label: String,
+    pub value: String,
+    pub color: Option<HexColor>,
+    pub foreground: Option<HexColor>,
+    pub icon: Option<String>,
+    pub custom: bool,
+}
+impl Swatch {
+    fn new(label: &str, value: String, color: Option<HexColor>, icon: Option<&str>) -> Self {
+        Self {
+            label: label.into(),
+            value,
+            color,
+            foreground: color.map(HexColor::contrasting),
+            icon: icon.map(Into::into),
+            custom: false,
         }
     }
 }
@@ -979,6 +1026,9 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
+        if matches!(platform, Platform::Gtk) {
+            groups[0][0].rows.insert(1, self.accent_row(platform));
+        }
         groups.insert(2, self.color_groups(platform));
         SettingsPage::ALL
             .into_iter()
@@ -991,6 +1041,47 @@ impl Settings {
                 groups,
             })
             .collect()
+    }
+    fn accent_row(&self, platform: Platform) -> PreferenceRow {
+        let mut swatches: Vec<Swatch> = platform
+            .system_accent()
+            .then(|| Swatch::new("System", String::new(), Some(DEFAULT_ACCENT), Some("appearance")))
+            .into_iter()
+            .chain(ACCENTS.iter().map(|&(label, color)| {
+                Swatch::new(label, color.to_string(), Some(color), None)
+            }))
+            .collect();
+        let preset = self.accent.and_then(|accent| {
+            swatches
+                .iter()
+                .position(|s| !s.value.is_empty() && s.color == Some(accent))
+        });
+        swatches.push(Swatch {
+            custom: true,
+            ..Swatch::new(
+                "Custom",
+                String::new(),
+                self.accent.filter(|_| preset.is_none()),
+                Some("pencil"),
+            )
+        });
+        let selected = match (self.accent, preset) {
+            (None, _) => 0,
+            (Some(_), Some(index)) => index,
+            (Some(_), None) => swatches.len() - 1,
+        };
+        row(
+            PreferenceId::Accent,
+            "Accent color",
+            "",
+            PreferenceKind::Swatches {
+                selected: selected as u32,
+                value: self.accent.map(|c| c.to_string()).unwrap_or_default(),
+                custom: self.accent.unwrap_or(DEFAULT_ACCENT).to_string(),
+                placeholder: DEFAULT_ACCENT.to_string(),
+                swatches,
+            },
+        )
     }
     pub(crate) fn zen_menu(&self, _platform: Platform) -> Result<ContextMenu, String> {
         Ok(ContextMenu {
@@ -1050,6 +1141,11 @@ impl Settings {
             (PreferenceKind::Text { constraint, .. }, PreferenceValue::Text(text)) => {
                 constraint.validate(text)?;
             }
+            (PreferenceKind::Swatches { .. }, PreferenceValue::Text(text)) => {
+                if !text.trim().is_empty() {
+                    HexColor::try_from(text.trim().to_owned())?;
+                }
+            }
             _ => return Err("Invalid setting value".into()),
         }
         let n = value.number().unwrap_or(0.0);
@@ -1085,6 +1181,16 @@ impl Settings {
                 } else {
                     self.light_base = color;
                 }
+            }
+            Accent => {
+                let PreferenceValue::Text(text) = value else {
+                    unreachable!()
+                };
+                self.accent = match text.trim() {
+                    "" => None,
+                    text => Some(HexColor::try_from(text.to_owned())?),
+                }
+                .filter(|color| platform.system_accent() || *color != DEFAULT_ACCENT);
             }
             Pressure => self.pressure_gamma = n,
             PanSpeed => self.pan_speed = n,
@@ -1125,6 +1231,7 @@ impl PreferencesState {
         settings: &Settings,
         platform: Platform,
         platform_prediction_available: bool,
+        system_accent: Option<HexColor>,
     ) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
         let mut pages = settings.pages(platform);
@@ -1148,6 +1255,22 @@ impl PreferencesState {
                 && let Some(reset) = &mut row.reset
             {
                 reset.enabled = false;
+            }
+            if let PreferenceKind::Swatches {
+                swatches,
+                value,
+                custom,
+                ..
+            } = &mut row.kind
+            {
+                let system = system_accent.unwrap_or(DEFAULT_ACCENT);
+                for swatch in swatches.iter_mut().filter(|s| !s.custom && s.value.is_empty()) {
+                    swatch.color = Some(system);
+                    swatch.foreground = Some(system.contrasting());
+                }
+                if value.is_empty() {
+                    *custom = system.to_string();
+                }
             }
         }
         let mut search_results = Vec::new();
@@ -1454,6 +1577,74 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    fn accent_row(settings: &Settings, system: Option<HexColor>) -> (Vec<Swatch>, u32, String) {
+        let row = PreferencesState::default()
+            .view(settings, Platform::Gtk, false, system)
+            .pages
+            .into_iter()
+            .flat_map(|p| p.groups)
+            .flat_map(|g| g.rows)
+            .find(|r| r.id == PreferenceId::Accent)
+            .unwrap();
+        let PreferenceKind::Swatches { swatches, selected, custom, .. } = row.kind else {
+            panic!("accent row is swatches");
+        };
+        (swatches, selected, custom)
+    }
+
+    #[test]
+    fn accent_swatches_follow_system_presets_and_custom_hex() {
+        let teal = ACCENTS[1].1;
+        let mut state = PreferencesState::default();
+        let mut settings = Settings::default();
+        let (swatches, selected, custom) = accent_row(&settings, Some(teal));
+        assert_eq!(swatches.len(), ACCENTS.len() + 2);
+        assert_eq!((swatches[0].label.as_str(), swatches[0].color, selected), ("System", Some(teal), 0));
+        assert_eq!(custom, teal.to_string());
+        let custom_swatch = swatches.last().unwrap();
+        assert!(custom_swatch.custom && custom_swatch.color.is_none());
+        let mut apply = |settings: &mut Settings, action| {
+            state.edit(settings, action, Platform::Gtk);
+            state.error.clone()
+        };
+        let edit = |text: &str| PreferenceAction::Edit {
+            id: PreferenceId::Accent,
+            value: PreferenceValue::Text(text.into()),
+        };
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[5].1.to_string())), None);
+        assert_eq!(settings.accent, Some(ACCENTS[5].1));
+        assert_eq!(accent_row(&settings, Some(teal)).1, 6);
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[0].1.to_string())), None);
+        assert_eq!(settings.accent, Some(DEFAULT_ACCENT), "Blue differs from System here");
+        assert_eq!(apply(&mut settings, edit(" #12AB56 ")), None);
+        let (swatches, selected, custom) = accent_row(&settings, Some(teal));
+        assert_eq!(selected as usize, swatches.len() - 1);
+        assert_eq!(swatches[selected as usize].color, Some(HexColor([0x12, 0xab, 0x56])));
+        assert_eq!(custom, "#12ab56");
+        assert!(apply(&mut settings, edit("#12")).is_some());
+        assert_eq!(settings.accent, Some(HexColor([0x12, 0xab, 0x56])));
+        let field = settings.field(PreferenceId::Accent, Platform::Gtk).unwrap();
+        assert!(field.reset.as_ref().unwrap().enabled);
+        assert_eq!(field.reset.unwrap().value, "System");
+        let reset = PreferenceAction::Reset { id: PreferenceId::Accent };
+        assert_eq!(apply(&mut settings, reset), None);
+        assert_eq!(settings.accent, None);
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
+        assert_eq!(apply(&mut settings, edit("")), None);
+        assert_eq!(settings.accent, None);
+        assert!(settings.field(PreferenceId::Accent, Platform::Web).is_err());
+    }
+
+    #[test]
+    fn accent_setting_is_omitted_until_chosen() {
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert!(json.get("accent").is_none());
+        let saved = Settings { accent: Some(ACCENTS[3].1), ..Settings::default() };
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(json.contains("\"accent\":\"#c88800\""));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), saved);
+    }
 
     #[test]
     fn cursor_choices_preserve_saved_modes_and_reset_after_reordering() {
@@ -1948,7 +2139,7 @@ mod copy_tests {
                 state.capture.as_mut().unwrap().conflict = Some(definition.label);
                 check(
                     &state
-                        .view(&settings, platform, true)
+                        .view(&settings, platform, true, None)
                         .capture
                         .unwrap()
                         .notice,
@@ -1956,7 +2147,7 @@ mod copy_tests {
                 state.error = Some("Choose another key for this shortcut.".into());
                 assert_eq!(
                     state
-                        .view(&settings, platform, true)
+                        .view(&settings, platform, true, None)
                         .capture
                         .unwrap()
                         .notice,

@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let fixture = json!({"schema":2,"name":name,"width":3*(size+8)+8,"height":2*(size+8)+8,"scale":scale,
-                "theme":theme_name,"palette":Settings::default().palette(theme,Platform::Windows),"catalog":layer_ui::ui_catalog(),"items":items});
+                "theme":theme_name,"palette":Settings::default().palette(theme,Platform::Windows,None),"catalog":layer_ui::ui_catalog(),"items":items});
             fs::write(
                 output.join(format!("{name}.json")),
                 serde_json::to_vec_pretty(&fixture)?,

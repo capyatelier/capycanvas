@@ -125,13 +125,13 @@ pub use settings::{
     PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
-    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
+    SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
-pub use theme::{HexColor, Theme, ThemePalette};
+pub use theme::{ACCENTS, DEFAULT_ACCENT, HexColor, Theme, ThemePalette};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     durable_layout, layout_change_description,
@@ -1417,6 +1417,8 @@ pub enum UiAction {
     },
     SystemThemeChanged {
         theme: Theme,
+        #[serde(default)]
+        accent: Option<HexColor>,
     },
     NewDocumentSettings {
         settings: NewDocumentSettings,

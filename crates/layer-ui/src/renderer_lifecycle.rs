@@ -59,6 +59,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.platform = previous.state.platform;
         self.platform_prediction_available = previous.platform_prediction_available;
         self.system_theme = previous.system_theme;
+        self.system_accent = previous.system_accent;
         self.state.workspace = previous.state.workspace.clone();
         self.workspace_history = previous.workspace_history.clone();
         self.workspace_read_only = previous.workspace_read_only;

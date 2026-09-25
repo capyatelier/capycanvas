@@ -5,8 +5,7 @@ window.background.capy-workspace.native-canvas-background { background: transpar
 /* Pen fallback for GTK's mouse-position tooltip query; match native Adwaita. */
 popover.pen-tooltip { padding:0; margin:0; }
 popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }
-window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; --selection-bg: alpha(var(--accent-bg-color), .28); --header-selection-bg: alpha(var(--accent-bg-color), .28); --header-selection: mix(var(--panel-bg), var(--accent-bg-color), .28); --header-selection-hover: mix(var(--panel-bg), var(--accent-bg-color), .36); }
-window.capy-workspace.light-theme { --selection-bg: hsl(from var(--accent-bg-color) calc(h - 2) calc(s * .81) 85); --header-selection-bg: hsl(from var(--accent-bg-color) calc(h - 2) calc(s * .81) 79); --header-selection: var(--header-selection-bg); --header-selection-hover: mix(var(--header-selection-bg), black, .08); }
+window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; --accent-bg-color: var(--capy-accent); --selection-bg: var(--capy-selection); --header-selection: var(--capy-header-selection); --header-selection-hover: var(--capy-header-selection-hover); }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
@@ -37,7 +36,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar #document-selector > button:active,
 .window-bar #document-selector > button:checked,
 .window-bar windowcontrols > button:active > image { background-image: image(alpha(var(--window-fg-color), .16)); }
-.window-bar .header-tool.selected-tool { background-image: image(var(--header-selection-bg)); }
+.window-bar .header-tool.selected-tool { background-image: image(var(--header-selection)); }
 /* Open neutral tiles, their connectors and drawers share one opaque surface. */
 .window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
@@ -316,3 +315,6 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 .selection-modes > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
 .brush-preview > contents { padding: 0; border-radius: var(--surface-radius); background: var(--panel-bg); }
 .brush-preview button { min-width: 0; min-height: 0; padding: 6px; border-radius: var(--control-radius); }
+.swatch-selector button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 9999px; background-color: alpha(var(--window-fg-color), .1); box-shadow: inset 0 0 0 1px alpha(black, .08); }
+.swatch-selector button:hover { filter: brightness(1.08); }
+.swatch-selector button:checked { outline: 2px solid var(--window-fg-color); outline-offset: 2px; }
