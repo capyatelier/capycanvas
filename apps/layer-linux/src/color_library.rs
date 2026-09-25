@@ -9,7 +9,8 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use layer_core::color::RgbColor;
 use layer_ui::{
-    ColorAction, ColorLibrary, ColorLibraryAction as Action, ColorSlot, UiAction, UiState,
+    ColorAction, ColorLibrary, ColorLibraryAction as Action, ColorSlot, PaletteCommand,
+    PaletteFormat, PaletteMenuItem, PaletteMenuTarget, UiAction, UiState,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -18,23 +19,6 @@ use std::{
 #[path = "palette_drag.rs"]
 mod drag;
 
-#[derive(Clone, Copy)]
-enum MenuTarget {
-    Color(u64),
-    Palette(u64),
-}
-#[derive(Clone, Copy)]
-enum MenuAction {
-    New,
-    Import,
-    RenamePalette(u64),
-    Export(u64),
-    RemovePalette(u64),
-    RenameColor(u64),
-    RemoveColor(u64),
-    Undo(u64),
-    Redo(u64),
-}
 
 pub struct PalettePanel {
     pub root: gtk::Box,
@@ -365,13 +349,6 @@ impl PalettePanel {
         panel.root.add_controller(keys);
         panel.context_menu.set_has_arrow(false);
         panel.context_menu.set_widget_name("palette-context-menu");
-        panel.populate_menu(
-            &panel.library_menu,
-            &[&[
-                ("New Palette…", MenuAction::New, true),
-                ("Import Palette…", MenuAction::Import, true),
-            ]],
-        );
         panel
     }
     pub fn bind(self: &Rc<Self>, workspace: &Rc<Workspace>) {
@@ -401,7 +378,13 @@ impl PalettePanel {
             }
         ));
     }
+    fn notice(&self, notice: Option<&str>) {
+        self.error(notice);
+        self.validation.remove_css_class("error");
+        self.editor.remove_css_class("error");
+    }
     fn error(&self, error: Option<&str>) {
+        self.validation.add_css_class("error");
         self.validation.set_text(error.unwrap_or(""));
         self.validation.set_visible(error.is_some());
         if error.is_some() {
@@ -550,11 +533,7 @@ impl PalettePanel {
         patch.set_display_color(color, view, headroom);
         patch.set_overflow(gtk::Overflow::Hidden);
         tile.set_child(Some(&patch));
-        let detail = format!(
-            "{name} · {} · {}",
-            ColorLibrary::hex_preview(color),
-            color.space.name()
-        );
+        let detail = ColorLibrary::tile_detail(name, color);
         tile.set_tooltip_text(Some(&detail));
         tile.update_property(&[gtk::accessible::Property::Label(&detail)]);
         tile.connect_clicked(glib::clone!(
@@ -572,23 +551,37 @@ impl PalettePanel {
         if let Some(id) = id {
             tile.add_css_class("drag-immediate");
             tile.set_cursor_from_name(Some("grab"));
-            self.install_menu(tile.upcast_ref(), MenuTarget::Color(id));
+            self.install_menu(tile.upcast_ref(), PaletteMenuTarget::Color { id });
         }
         tile
     }
-    fn populate_menu(
+    fn populate_menu(self: &Rc<Self>, popup: &gtk::PopoverMenu, sections: Vec<Vec<PaletteMenuItem>>) {
+        let actions = gio::SimpleActionGroup::new();
+        let model = self.menu_model(popup, &actions, &sections, "item");
+        popup.insert_action_group("palette", Some(&actions));
+        popup.set_menu_model(Some(&model));
+    }
+    fn menu_model(
         self: &Rc<Self>,
         popup: &gtk::PopoverMenu,
-        sections: &[&[(&str, MenuAction, bool)]],
-    ) {
+        actions: &gio::SimpleActionGroup,
+        sections: &[Vec<PaletteMenuItem>],
+        prefix: &str,
+    ) -> gio::Menu {
         let model = gio::Menu::new();
-        let actions = gio::SimpleActionGroup::new();
         for (section, entries) in sections.iter().enumerate() {
             let group = gio::Menu::new();
-            for (index, &(title, command, enabled)) in entries.iter().enumerate() {
-                let id = format!("item-{section}-{index}");
+            for (index, item) in entries.iter().enumerate() {
+                let id = format!("{prefix}-{section}-{index}");
+                let Some(command) = item.command.clone() else {
+                    group.append_submenu(
+                        Some(item.label),
+                        &self.menu_model(popup, actions, &item.sections, &id),
+                    );
+                    continue;
+                };
                 let action = gio::SimpleAction::new(&id, None);
-                action.set_enabled(enabled);
+                action.set_enabled(item.enabled);
                 action.connect_activate(glib::clone!(
                     #[weak(rename_to = panel)]
                     self,
@@ -596,41 +589,40 @@ impl PalettePanel {
                     popup,
                     move |_, _| {
                         popup.popdown();
-                        panel.menu_action(command);
+                        panel.menu_command(command.clone());
                     }
                 ));
                 actions.add_action(&action);
-                group.append(Some(title), Some(&format!("palette.{id}")));
+                group.append(Some(item.label), Some(&format!("palette.{id}")));
             }
             model.append_section(None, &group);
         }
-        popup.insert_action_group("palette", Some(&actions));
-        popup.set_menu_model(Some(&model));
+        model
     }
-    fn menu_action(self: &Rc<Self>, command: MenuAction) {
+    fn menu_command(self: &Rc<Self>, command: PaletteCommand) {
+        let palette_name = |id| {
+            self.library.borrow().as_ref().and_then(|l| {
+                l.palettes
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.name.clone())
+            })
+        };
         match command {
-            MenuAction::New => self.ask_name("New Palette", "", None),
-            MenuAction::Import => self.import(),
-            MenuAction::RenamePalette(id)
-            | MenuAction::Export(id)
-            | MenuAction::RemovePalette(id) => {
-                let name = self.library.borrow().as_ref().and_then(|l| {
-                    l.palettes
-                        .iter()
-                        .find(|p| p.id == id)
-                        .map(|p| p.name.clone())
-                });
-                if let Some(name) = name {
-                    match command {
-                        MenuAction::RenamePalette(_) => {
-                            self.ask_name("Rename Palette", &name, Some(id))
-                        }
-                        MenuAction::Export(_) => self.export(id, &name),
-                        _ => self.remove_palette(id, &name),
-                    }
+            PaletteCommand::NewPalette => self.ask_name("New Palette", "", None),
+            PaletteCommand::ImportPalette => self.import(),
+            PaletteCommand::RenamePalette { id } => {
+                if let Some(name) = palette_name(id) {
+                    self.ask_name("Rename Palette", &name, Some(id))
                 }
             }
-            MenuAction::RenameColor(id) => {
+            PaletteCommand::ExportPalette { id, format } => self.export(id, format),
+            PaletteCommand::RemovePalette { id } => {
+                if let Some(name) = palette_name(id) {
+                    self.remove_palette(id, &name)
+                }
+            }
+            PaletteCommand::RenameColor { id } => {
                 let color = self
                     .library
                     .borrow()
@@ -643,85 +635,30 @@ impl PalettePanel {
                     self.edit_name();
                 }
             }
-            MenuAction::RemoveColor(id) => {
-                self.apply(Action::Remove { id });
-            }
-            MenuAction::Undo(palette) => {
-                self.apply(Action::UndoReorder { palette });
-            }
-            MenuAction::Redo(palette) => {
-                self.apply(Action::RedoReorder { palette });
+            PaletteCommand::Library { action } => {
+                self.apply(action);
             }
         }
     }
     fn show_menu(
         self: &Rc<Self>,
         widget: &gtk::Widget,
-        target: MenuTarget,
+        target: PaletteMenuTarget,
         point: [f32; 2],
         held: bool,
     ) {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
-        {
-            let library = self.library.borrow();
-            let Some(library) = library.as_ref() else {
-                return;
-            };
-            match target {
-                MenuTarget::Color(id) => {
-                    if library.swatch(id).is_none() {
-                        return;
-                    }
-                    let palette = library.active_palette().id;
-                    self.populate_menu(
-                        &self.context_menu,
-                        &[
-                            &[
-                                ("Rename Color…", MenuAction::RenameColor(id), true),
-                                ("Remove Color", MenuAction::RemoveColor(id), true),
-                            ],
-                            &[
-                                (
-                                    "Undo Color Reorder",
-                                    MenuAction::Undo(palette),
-                                    library.can_undo_reorder(palette, false),
-                                ),
-                                (
-                                    "Redo Color Reorder",
-                                    MenuAction::Redo(palette),
-                                    library.can_undo_reorder(palette, true),
-                                ),
-                            ],
-                        ],
-                    );
-                }
-                MenuTarget::Palette(id) => {
-                    if !library.palettes.iter().any(|p| p.id == id) {
-                        return;
-                    }
-                    self.populate_menu(
-                        &self.context_menu,
-                        &[
-                            &[
-                                ("Rename Palette…", MenuAction::RenamePalette(id), true),
-                                ("Export Palette…", MenuAction::Export(id), true),
-                            ],
-                            &[(
-                                "Remove Palette…",
-                                MenuAction::RemovePalette(id),
-                                library.palettes.len() > 1,
-                            )],
-                        ],
-                    );
-                }
-            }
-        }
+        let menu = self.library.borrow().as_ref().map(|l| l.menu(target));
+        let Some(Ok(sections)) = menu else {
+            return;
+        };
+        self.populate_menu(&self.context_menu, sections);
         self.context_menu.set_autohide(!held);
         w.popup_at(self.context_menu.upcast_ref(), widget, point);
     }
-    fn install_menu(self: &Rc<Self>, widget: &gtk::Widget, target: MenuTarget) {
+    fn install_menu(self: &Rc<Self>, widget: &gtk::Widget, target: PaletteMenuTarget) {
         widget.add_css_class("customizable-target");
         let popup = glib::clone!(
             #[weak(rename_to = panel)]
@@ -758,8 +695,8 @@ impl PalettePanel {
                 };
                 let direct = crate::input::touch_or_pen(gesture);
                 match target {
-                    MenuTarget::Color(id) if panel.hold_swatch(id) => {}
-                    MenuTarget::Palette(_) if direct => {}
+                    PaletteMenuTarget::Color { id } if panel.hold_swatch(id) => {}
+                    PaletteMenuTarget::Palette { .. } if direct => {}
                     _ => return,
                 }
                 gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -769,12 +706,12 @@ impl PalettePanel {
             }
         });
         widget.add_controller(hold.clone());
-        if let MenuTarget::Color(id) = target {
+        if let PaletteMenuTarget::Color { id } = target {
             let drag = self.reorder_gesture(widget.downcast_ref::<gtk::Button>().unwrap(), id);
             widget.add_controller(drag.clone());
             hold.group_with(&drag);
         }
-        if matches!(target, MenuTarget::Palette(_)) {
+        if matches!(target, PaletteMenuTarget::Palette { .. }) {
             // Like Layers, retain the original contact while held, then make
             // the menu modal on release. Claiming the hold suppresses selection.
             let release = gtk::EventControllerLegacy::new();
@@ -857,36 +794,20 @@ impl PalettePanel {
             self.name_stack.set_visible_child_name("label");
             self.error(None);
         }
-        if !palette
-            .swatches
-            .iter()
-            .any(|s| Some(s.id) == self.selected.get() && s.color == current)
-        {
-            self.selected.set(
-                palette
-                    .swatches
-                    .iter()
-                    .find(|s| s.color == current)
-                    .map(|s| s.id),
-            );
-        }
+        self.selected
+            .set(layer_ui::selected_swatch(palette, current, self.selected.get()));
         self.selector_label.set_text(&palette.name);
         self.selector
             .set_tooltip_text(Some(&format!("Choose a palette · {}", palette.name)));
-        let selected = self.selected.get().and_then(|id| library.swatch(id));
-        let suggested = ColorLibrary::suggested_name(current);
-        let name = selected
-            .map(|s| s.name.as_str())
-            .or_else(|| library.current_name(current))
-            .unwrap_or(&suggested);
-        self.name_label.set_text(name);
+        let name = self
+            .selected
+            .get()
+            .and_then(|id| library.swatch(id))
+            .map_or_else(|| library.color_name(current), |s| s.name.clone());
+        self.name_label.set_text(&name);
         self.name
             .set_tooltip_text(Some(&format!("{name} · Click to rename")));
-        let mut detail = ColorLibrary::hex_preview(colors.picker_base());
-        if colors.hdr_intensity() != 0. {
-            detail.push_str(&format!(" · {:+.1} EV", colors.hdr_intensity()));
-        }
-        self.detail.set_text(&detail);
+        self.detail.set_text(&ColorLibrary::color_detail(colors));
         self.detail.set_tooltip_text(Some("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity"));
         self.name.set_sensitive(!colors.transparent());
         self.add_color.set_sensitive(!colors.transparent());
@@ -898,12 +819,7 @@ impl PalettePanel {
                 let tile = previous
                     .remove(&swatch.id)
                     .unwrap_or_else(|| self.tile(swatch.color, &swatch.name, Some(swatch.id)));
-                let detail = format!(
-                    "{} · {} · {}",
-                    swatch.name,
-                    ColorLibrary::hex_preview(swatch.color),
-                    swatch.color.space.name()
-                );
+                let detail = ColorLibrary::tile_detail(&swatch.name, swatch.color);
                 tile.set_tooltip_text(Some(&detail));
                 tile.update_property(&[gtk::accessible::Property::Label(&detail)]);
                 tile.child()
@@ -970,6 +886,10 @@ impl PalettePanel {
         }
     }
     fn rebuild_chooser(self: &Rc<Self>, library: &ColorLibrary) {
+        self.populate_menu(
+            &self.library_menu,
+            library.menu(PaletteMenuTarget::Library).unwrap(),
+        );
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -989,17 +909,10 @@ impl PalettePanel {
             preview.add_css_class("palette-preview-strip");
             preview.set_overflow(gtk::Overflow::Hidden);
             preview.set_valign(gtk::Align::Center);
-            let count = palette.swatches.len().min(5);
-            for i in 0..count {
-                let index = if count == 1 {
-                    0
-                } else {
-                    i * (palette.swatches.len() - 1) / (count - 1)
-                };
-                let swatch = &palette.swatches[index];
+            for color in ColorLibrary::preview_colors(palette) {
                 let patch = ColorPatch::new(false);
                 patch.set_size_request(12, 18);
-                patch.set_display_color(swatch.color, self.view.get().0, self.view.get().1);
+                patch.set_display_color(color, self.view.get().0, self.view.get().1);
                 preview.append(&patch);
             }
             content.append(&preview);
@@ -1009,7 +922,7 @@ impl PalettePanel {
             row.update_state(&[gtk::accessible::State::Selected(Some(
                 palette.id == library.active_palette().id,
             ))]);
-            self.install_menu(row.upcast_ref(), MenuTarget::Palette(palette.id));
+            self.install_menu(row.upcast_ref(), PaletteMenuTarget::Palette { id: palette.id });
             row.set_child(Some(&content));
             self.list.append(&row);
         }
@@ -1045,7 +958,7 @@ impl PalettePanel {
                         name: entry.text().into(),
                     }
                 };
-                let result = library.clone().apply(action);
+                let result = library.check(action);
                 dialog.set_response_enabled("save", result.is_ok());
                 entry.set_tooltip_text(result.err().as_deref());
             }
@@ -1078,10 +991,10 @@ impl PalettePanel {
             return;
         };
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Palettes (.capycolor, .gpl, .json)"));
-        filter.add_suffix("capycolor");
-        filter.add_suffix("gpl");
-        filter.add_suffix("json");
+        filter.set_name(Some("Palettes"));
+        for extension in PaletteFormat::IMPORT_EXTENSIONS {
+            filter.add_suffix(extension);
+        }
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
@@ -1150,27 +1063,27 @@ impl PalettePanel {
             }
         ));
     }
-    fn export(self: &Rc<Self>, id: u64, name: &str) {
+    fn export(self: &Rc<Self>, id: u64, format: PaletteFormat) {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
-        let bytes = match self.library.borrow().as_ref().unwrap().export_palette(id) {
-            Ok(bytes) => bytes,
+        let export = match self.library.borrow().as_ref().unwrap().export_palette(id, format) {
+            Ok(export) => export,
             Err(error) => {
                 self.error(Some(&error));
                 return;
             }
         };
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Capycolor Palette (.capycolor)"));
-        filter.add_suffix("capycolor");
+        filter.set_name(Some(format.label()));
+        filter.add_suffix(format.extension());
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
             .title("Export Palette")
             .filters(&filters)
             .default_filter(&filter)
-            .initial_name(format!("{name}.capycolor"))
+            .initial_name(&export.file_name)
             .build();
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to=panel)]
@@ -1179,16 +1092,17 @@ impl PalettePanel {
                 let Ok(file) = dialog.save_future(Some(&w.window)).await else {
                     return;
                 };
-                if let Err((_, error)) = file
+                match file
                     .replace_contents_future(
-                        bytes,
+                        export.bytes,
                         None,
                         false,
                         gio::FileCreateFlags::REPLACE_DESTINATION,
                     )
                     .await
                 {
-                    panel.error(Some(&error.to_string()));
+                    Ok(_) => panel.notice(export.notice.as_deref()),
+                    Err((_, error)) => panel.error(Some(&error.to_string())),
                 }
             }
         ));

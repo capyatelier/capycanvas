@@ -935,7 +935,16 @@ fn check_palette_context(devices: &[&str]) {
             assert!(row.grab_focus());
             d.key(0xff67);
             assert!(d.label("Rename Palette…").is_mapped());
-            d.key(0xff1b);
+            d.click(&d.label("Export Palette"));
+            for format in layer_ui::PaletteFormat::ALL {
+                assert!(d.label(format.label()).is_mapped(), "{format:?}");
+            }
+            capture_palette(&mut d, "palette-export-menu.png");
+            d.named("palette-context-menu")
+                .downcast::<gtk::PopoverMenu>()
+                .unwrap()
+                .popdown();
+            pump(100);
         }
         assert!(d.named("palette-browser").is_visible());
         // Swiping the list before its hold must scroll without opening a menu.

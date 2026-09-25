@@ -131,6 +131,7 @@ export async function checkTabStyles({ call, evaluate, settle }) {
   await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
   const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); };
   const group = await evaluate("layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('brushes')).id");
+  await send({ type: 'customize', action: { type: 'set_panel_visible', panel: 'stats', visible: false } });
   for (const panel of ['sizes', 'layers']) await send({ type: 'move_panel', panel, target: { kind: 'tab', group } });
   for (const theme of ['dark', 'light']) {
     await send({ type: 'set_theme', theme });
@@ -138,13 +139,16 @@ export async function checkTabStyles({ call, evaluate, settle }) {
       await evaluate(`(() => { const n=document.querySelector('[data-group="${group}"] .dock-tabs > .panel-grip'),r=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.x+5,clientY:r.y+5})); })()`);
       assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu:popover-open button')].slice(0,5).map(n=>n.textContent)"), ['Automatic','Icons and active tab name','Icons and names','Names only','Icons only']);
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.textContent===${JSON.stringify(label)}).click()`);
+      let measured;
       for (const active of ['brushes','sizes','layers']) {
         await evaluate(`document.querySelector('.dock-tab[data-panel="${active}"]').click()`); await settle();
-        const tabs = await evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({panel:n.dataset.panel,icon:!!n.querySelector('svg'),name:n.textContent.trim().length>0,title:n.title,height:n.getBoundingClientRect().height}))`);
+        await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+        const tabs = await evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({panel:n.dataset.panel,icon:!!n.querySelector('svg'),name:[...n.childNodes].some(c=>c.nodeType===3?c.textContent.trim():c.tagName==='SPAN'&&!c.hidden&&c.textContent.trim()),title:n.title,height:n.getBoundingClientRect().height}))`);
         assert.equal(tabs.length, 3);
+        if (style === 'automatic') { measured ??= tabs.map(t => t.name); assert.deepEqual(tabs.map(t => t.name), measured); assert.equal(measured[0], true); }
         for (const tab of tabs) {
           assert.equal(tab.icon, style !== 'name');
-          assert.equal(tab.name, style === 'icon_name' || style === 'name' || (['automatic','active_name'].includes(style) && tab.panel === active));
+          if (style !== 'automatic') assert.equal(tab.name, style === 'icon_name' || style === 'name' || (style === 'active_name' && tab.panel === active));
           assert.ok(tab.title); assert.equal(tab.height, 36);
         }
       }
@@ -154,12 +158,12 @@ export async function checkTabStyles({ call, evaluate, settle }) {
     }
     await send({type:'customize',action:{type:'set_tab_style',group,style:'automatic'}});
     await send({type:'move_panel',panel:'layers',target:{kind:'float',position:[850,200]}});
-    const names = () => evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({icon:!!n.querySelector('svg'),name:n.textContent.trim().length>0}))`);
+    const names = async () => { await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))'); return evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({icon:!!n.querySelector('svg'),name:[...n.querySelectorAll('span')].some(s=>!s.hidden&&s.textContent.trim())}))`); };
     assert.deepEqual(await names(), [{icon:true,name:true},{icon:true,name:true}], 'Automatic expands both names when the third tab leaves');
     const shot = await call('Page.captureScreenshot', {format:'png'});
     await writeFile(`${dir}/web-${theme}-automatic-two-tabs.png`, Buffer.from(shot.data, 'base64'));
     await send({type:'move_panel',panel:'layers',target:{kind:'tab',group}});
-    assert.equal((await names()).filter(t=>t.name).length, 1, 'Automatic collapses inactive names when a third tab arrives');
+    assert.ok((await names()).filter(t=>t.name).length < 3, 'Automatic drops names that no longer fit when a third tab arrives');
   }
   assert.equal(await evaluate("document.querySelector('#status').textContent"), '');
   console.log('PASS: group context choices and active/inactive tab contents in all five styles, both themes');

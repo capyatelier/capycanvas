@@ -26,6 +26,8 @@ export async function checkColumnSizing({ call, evaluate, settle }) {
       root: split(41, "vertical", .4, tabs(42, ["sizes", "layers"]),
         split(43, "horizontal", .8, tabs(44, ["brushes"]),
           split(45, "vertical", .3, tabs(46, ["navigator"]), tabs(47, ["tool_settings"])))) }];
+    for (const field of ["floating", "collapsed", "column_stacks", "fit_tab_groups", "fit_height_groups"])
+      if (field in workspace.layout) workspace.layout[field] = [];
     workspace.layout.next_id = 48;
     return workspace;
   };
@@ -44,7 +46,8 @@ export async function checkColumnSizing({ call, evaluate, settle }) {
         const point = center(divider.bounds);
         await doubleClick(point);
         const after = await snapshot();
-        const width = mode === "nested" ? 502 : edge === "left" ? 242 : 254;
+        const contains = (node, panel) => node.kind === "tabs" ? node.panels.includes(panel) : contains(node.first, panel) || contains(node.second, panel);
+        const width = mode === "nested" ? 502 : edge === "left" ? (contains(band.root, "palettes") ? 280 : 242) : (contains(band.root, "proof") ? 300 : 254);
         const resized = after.layout.bands.find(b => b.id === band.id);
         assert.equal(resized.extent, width + 6, `${edge} ${mode}: normal starting width`);
         assert.equal(after.layout.collapsed.some(c => c.root === band.root.id), false);

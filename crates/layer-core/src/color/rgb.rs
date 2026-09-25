@@ -158,7 +158,7 @@ fn multiply(a: Matrix3, b: Matrix3) -> Matrix3 {
         std::array::from_fn(|col| (0..3).map(|k| a[row][k] * b[k][col]).sum())
     })
 }
-pub(crate) fn inverse(m: Matrix3) -> Matrix3 {
+pub fn inverse(m: Matrix3) -> Matrix3 {
     let cofactor: Matrix3 = std::array::from_fn(|i| {
         std::array::from_fn(|j| {
             m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3]

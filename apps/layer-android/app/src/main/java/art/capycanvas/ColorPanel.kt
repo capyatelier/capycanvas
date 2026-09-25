@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -60,6 +61,18 @@ private fun JSONArray.color() = Color(getDouble(0).toFloat(), getDouble(1).toFlo
 private fun JSONArray.point(scale: Float) = Offset(getDouble(0).toFloat() * scale, getDouble(1).toFloat() * scale)
 private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat().dp, rect.getDouble(1).toFloat().dp)
     .size(rect.getDouble(2).toFloat().dp, rect.getDouble(3).toFloat().dp)
+
+@Composable internal fun ColorMeasurement(host: CanvasHost, onContent: (PanelContentSize) -> Unit) {
+    val hdr = host.panelContent?.objectOrNull("color_panel")?.optBoolean("hdr") ?: return
+    val density = LocalDensity.current.density
+    val report by rememberUpdatedState(onContent)
+    Layout({}) { _, constraints ->
+        val size = (constraints.maxWidth / density - 16f).coerceAtLeast(128f)
+        val height = JSONObject(Native.colorUi(obj("type" to "layout", "size" to size, "hdr" to hdr).toString())).number("height")
+        report(PanelContentSize(((height * density).roundToInt() + 2 * (8 * density).roundToInt()) / density))
+        layout(0, 0) {}
+    }
+}
 
 /** Shared wheel and footer geometry; Rust owns layout and color math. */
 @Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
@@ -265,6 +278,8 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Edit Color…") }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); edit = true })
+            DropdownMenuItem(text = { Text("Palettes…") }, modifier = Modifier.testTag("color-library-menu"),
+                onClick = { menu = false; if (slot != "transparent") color(obj("op" to "select", "slot" to slot)); host.revealPanel("palettes") })
             DropdownMenuItem(text = { Text("Swap foreground and background") }, leadingIcon = { SharedIcon("color-swap", null) },
                 modifier = Modifier.testTag("color-swap-menu"), onClick = { menu = false; color(obj("op" to "swap")) })
         }

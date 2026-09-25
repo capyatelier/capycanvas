@@ -16,16 +16,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.platform.LocalDensity
+import org.json.JSONArray
 import org.json.JSONObject
+
+private fun JSONObject.tabStyle(group: Int): String? {
+    if (optString("kind") == "tabs" && optInt("id", -1) == group) return optString("tab_style", "automatic")
+    for (key in keys()) when (val value = opt(key)) {
+        is JSONObject -> value.tabStyle(group)?.let { return it }
+        is JSONArray -> for (i in 0 until value.length()) (value.opt(i) as? JSONObject)?.tabStyle(group)?.let { return it }
+    }
+    return null
+}
+
+@Composable internal fun automaticTabNames(host: CanvasHost, group: Int, panels: List<JSONObject?>, available: Float): List<Boolean>? {
+    val layout = host.snapshot?.optJSONObject("state")?.optJSONObject("workspace")?.optJSONObject("layout")
+    val automatic = remember(layout, group) { layout?.tabStyle(group) == "automatic" }
+    val measurer = rememberTextMeasurer()
+    val style = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
+    val density = LocalDensity.current.density
+    if (!automatic || available <= 0f) return null
+    val widths = panels.map { panel ->
+        panel?.let { listOf(16f + 22f + measurer.measure(AnnotatedString(it.getString("title")), style).size.width / density, 36f) } ?: listOf(0f, 0f)
+    }
+    return remember(widths, available) {
+        JSONArray(Native.automaticTabNames(obj("available" to available, "widths" to JSONArray(widths.map { JSONArray(it) })).toString()))
+            .let { names -> List(names.length()) { names.getBoolean(it) } }
+    }
+}
 
 /** Docked, floating and drawer tabs share geometry, colors and focus feedback. */
 @Composable internal fun WorkspaceTab(host: CanvasHost, dock: DockInteraction, panel: JSONObject,
-    group: Int, index: Int, selected: Boolean, modifier: Modifier, enabled: Boolean = true) {
+    group: Int, index: Int, selected: Boolean, modifier: Modifier, enabled: Boolean = true, fittedName: Boolean? = null) {
     val colors = LocalPalette.current
     val id = panel.getString("id")
     val presentation = panel.getJSONObject("tab")
-    val showIcon = presentation.getBoolean("show_icon")
-    val showName = presentation.getBoolean("show_name")
+    val showIcon = fittedName != null || presentation.getBoolean("show_icon")
+    val showName = fittedName ?: presentation.getBoolean("show_name")
     val measurer = rememberTextMeasurer()
     val style = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
     val width = if (!showName) 36f else 16f + (if (showIcon) 22f else 0f) +

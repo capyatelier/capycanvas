@@ -196,14 +196,15 @@ drop validation and transaction history. Hosts own native timing/slop, capture,
 file pickers and rendering. Extraction should run asynchronously with stale
 results rejected when its source changes.
 
-The GTK implementation now includes recent colors, saved palettes, shared reorder
-preview/history, GPL import and lossless `.capycolor` import/export. See the
-[implementation specification](color-palettes-panel.md) for its exact scope.
-Further work includes replacement/duplication, bulk operations and generation.
-Interchange priorities are ACO import/export for Clip Studio Paint and Photoshop,
-Procreate `.swatches` import, then ASE import/export for Affinity interoperability.
-Native Affinity exports require a separate `.afpalette` importer; ASE only covers
-delivery into Affinity. Krita accepts GPL, ACO and ASE, with KPL as its native format.
+The implementation now includes recent colors, saved palettes, shared reorder
+preview/history, and interchange with the priority applications: ACO and CLS for
+Clip Studio Paint, Procreate `.swatches`, ACO for Photoshop, ASE and `.afpalette`
+for Affinity, and GPL/KPL for Krita. See the
+[implementation specification](color-palettes-panel.md) for its exact scope and
+conversion rules. Further work includes replacement/duplication, bulk operations
+and generation. Native Affinity and Clip Studio exports remain undone: both
+applications document ASE or ACO import, and their native writers could not be
+checked on those applications.
 
 ## Delivery options
 

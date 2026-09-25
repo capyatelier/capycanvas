@@ -168,11 +168,21 @@ impl NativeHost {
             .expect("Native snapshot contains JSON-compatible fields")
     }
 
+    fn maps_sdr(&self) -> bool {
+        matches!(self.session.state().platform, layer_ui::Platform::Android | layer_ui::Platform::Windows)
+    }
     fn color_view(&self, colors: &layer_ui::ColorState) -> layer_ui::ColorPanelView {
-        if matches!(self.session.state().platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {
+        if self.maps_sdr() {
             colors.view_mapped(self.session.effective_sdr_rendition())
         } else {
             colors.view_in(self.ui_color_space)
+        }
+    }
+    fn swatch_preview(&self, colors: &layer_ui::ColorState, color: layer_core::color::RgbColor) -> [f32; 4] {
+        if self.maps_sdr() {
+            colors.mapped_swatch(color, self.session.effective_sdr_rendition())
+        } else {
+            colors.preview_in(color, self.ui_color_space)
         }
     }
     fn color_preview(&self) -> layer_ui::PickerPreview<'_> {
@@ -249,7 +259,16 @@ impl NativeHost {
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
         if state.platform.color_picker() { map.serialize_entry("color_preview", &self.color_preview())?; }
-        map.serialize_entry("color_panel", &self.color_view(state.display_colors()))?;
+        let colors = state.display_colors();
+        map.serialize_entry("color_panel", &self.color_view(colors))?;
+        if layer_ui::Panel::Palettes.available_on(state.platform) {
+            map.serialize_entry(
+                "palette_panel",
+                &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
+                    self.swatch_preview(colors, color)
+                }),
+            )?;
+        }
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,

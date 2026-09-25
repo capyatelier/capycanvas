@@ -343,7 +343,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             region_tools,
         } = prepared;
         let mut working = capture.working;
-        if self.state.platform == Platform::Gtk {
+        if Panel::palettes_presented_on(self.state.platform) {
             working.colors.library.ensure_starters();
         }
         let space = self.engine.document().color.space;

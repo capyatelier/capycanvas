@@ -3,55 +3,58 @@ use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[test]
-fn gtk_palettes_upgrade_only_untouched_paint_and_photo_defaults() {
+fn palettes_upgrade_only_untouched_paint_and_photo_defaults() {
     use layer_ui::{LayoutHistory, Panel, WorkspacePreset};
-    for (index, preset, update) in [
-        (
-            1,
-            WorkspacePreset::Illustrator,
-            updated_illustrator_default as fn(&Entity, Platform) -> Option<ItemContent>,
-        ),
-        (
-            2,
-            WorkspacePreset::Photographer,
-            updated_photographer_default,
-        ),
-    ] {
-        let mut saved = serde_json::to_value(preset.legacy_without_palettes_layout(Platform::Gtk)).unwrap();
-        saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
-        let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
-        let mut entity = Entity::workspace(
-            preset.name(),
-            WorkspaceCapture {
-                history: LayoutHistory::new(&old),
-                working: preset.working_state(),
-            },
-            old.clone(),
-            None,
-            1,
-        );
-        entity.id = DEFAULT_WORKSPACES[index].0.into();
-        entity.metadata.builtin = true;
-        let next = update(&entity, Platform::Gtk).expect("untouched default upgrades");
-        let ItemContent::Workspace { baseline, .. } = &next else {
-            panic!()
-        };
-        assert!(baseline.panel_group(Panel::Palettes).is_some());
-        entity.content = next;
-        assert!(update(&entity, Platform::Gtk).is_none());
-        let mut custom = old;
-        custom.set_panel_visible(Panel::Stats, false).unwrap();
-        if let ItemContent::Workspace {
-            baseline, history, ..
-        } = &mut entity.content
-        {
-            **baseline = custom.clone();
-            *history = LayoutHistory::new(&custom);
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for (index, preset, update) in [
+            (
+                1,
+                WorkspacePreset::Illustrator,
+                updated_illustrator_default as fn(&Entity, Platform) -> Option<ItemContent>,
+            ),
+            (
+                2,
+                WorkspacePreset::Photographer,
+                updated_photographer_default,
+            ),
+        ] {
+            let mut saved =
+                serde_json::to_value(preset.legacy_without_palettes_layout(platform)).unwrap();
+            saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+            let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
+            let mut entity = Entity::workspace(
+                preset.name(),
+                WorkspaceCapture {
+                    history: LayoutHistory::new(&old),
+                    working: preset.working_state(),
+                },
+                old.clone(),
+                None,
+                1,
+            );
+            entity.id = DEFAULT_WORKSPACES[index].0.into();
+            entity.metadata.builtin = true;
+            let next = update(&entity, platform).expect("untouched default upgrades");
+            let ItemContent::Workspace { baseline, .. } = &next else {
+                panic!()
+            };
+            assert!(baseline.panel_group(Panel::Palettes).is_some());
+            entity.content = next;
+            assert!(update(&entity, platform).is_none());
+            let mut custom = old;
+            custom.set_panel_visible(Panel::Stats, false).unwrap();
+            if let ItemContent::Workspace {
+                baseline, history, ..
+            } = &mut entity.content
+            {
+                **baseline = custom.clone();
+                *history = LayoutHistory::new(&custom);
+            }
+            assert!(
+                update(&entity, platform).is_none(),
+                "custom layout is preserved"
+            );
         }
-        assert!(
-            update(&entity, Platform::Gtk).is_none(),
-            "custom layout is preserved"
-        );
     }
 }
 

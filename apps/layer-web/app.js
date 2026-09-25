@@ -1,4 +1,4 @@
-import init, { WebApp, WebGpu, configure_raster_worker } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu, configure_raster_worker, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
@@ -14,6 +14,7 @@ import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createLayerPanel } from "./layers.js";
+import { createPalettes } from "./palettes.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
 import { installTooltips } from "./tooltips.js";
 import { installPenScrolling } from "./pen-scroll.js";
@@ -47,7 +48,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, editor, selectionUi, workspaceChrome, documents, systemStatus, header;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, documents, systemStatus, header;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -420,10 +421,32 @@ function place(node, rect) {
     height: `${rect.height}px`,
   });
 }
-function tabLabel(tab, view) {
+function tabLabel(tab, view, automatic = false) {
   tab.classList.toggle("icon-only-tab", !view.tab.show_name);
-  if (view.tab.show_icon) tab.append(icon(view.icon));
-  if (view.tab.show_name) tab.append(element("span", "", view.title));
+  if (view.tab.show_icon || automatic) tab.append(icon(view.icon));
+  if (view.tab.show_name || automatic) { const label = element("span", "", view.title); label.hidden = !view.tab.show_name; tab.append(label); }
+}
+const fullTabWidths = new Map(), pendingTabFits = new Set();
+let tabFitFrame = 0;
+const tabFit = new ResizeObserver(entries => {
+  for (const { target } of entries) pendingTabFits.add(target);
+  tabFitFrame ||= requestAnimationFrame(fitTabs);
+});
+function automaticTabs(list) { list.dataset.automatic = "true"; tabFit.observe(list); }
+function releaseTabs(root) { for (const list of root.querySelectorAll("[data-automatic]")) tabFit.unobserve(list); }
+function fitTabs() {
+  tabFitFrame = 0;
+  const lists = [...pendingTabFits].filter(list => list.isConnected && list.dataset.automatic); pendingTabFits.clear();
+  const size = document.documentElement.style.getPropertyValue("--ui-text-size");
+  const key = tab => `${tab.dataset.panel}\n${tab.getAttribute("aria-label")}\n${size}`;
+  const missing = lists.flatMap(list => [...list.children]).filter(tab => !fullTabWidths.has(key(tab)));
+  for (const tab of missing) { tab.classList.remove("icon-only-tab"); tab.lastElementChild.hidden = false; }
+  for (const tab of missing) fullTabWidths.set(key(tab), tab.getBoundingClientRect().width);
+  const fits = lists.map(list => [list, list.clientWidth]).filter(([, width]) => width > 0).map(([list, width]) => {
+    const tabs = [...list.children];
+    return [tabs, automatic_tab_names(width, new Float32Array(tabs.flatMap(tab => [fullTabWidths.get(key(tab)), 36])))];
+  });
+  for (const [tabs, names] of fits) tabs.forEach((tab, i) => { tab.classList.toggle("icon-only-tab", !names[i]); tab.lastElementChild.hidden = !names[i]; });
 }
 function arrange(nextLayout, layoutOnly = false) {
   if (!app) return;
@@ -442,9 +465,10 @@ function arrange(nextLayout, layoutOnly = false) {
       groups.set(group.id, node);
       workspace.append(node);
     }
+    const tabStyle = app.group_tab_style(group.id);
     const key = JSON.stringify([group.panels.map((id) => {
       const view = customization.view(id); return [id, view.title, view.tab, view.icon];
-    }), group.active, group.tabs_visible]);
+    }), group.active, group.tabs_visible, tabStyle]);
     if (node.dataset.key !== key) {
       node.dataset.key = key;
       node.dataset.panel = group.active;
@@ -452,6 +476,7 @@ function arrange(nextLayout, layoutOnly = false) {
       node.setAttribute("aria-label", customization.view(group.active).title);
       node.classList.toggle("toolbar", !!group.tiles);
       const preview = node.querySelector(".panel-preview");
+      releaseTabs(preview);
       const tabs = element("nav", "dock-tabs");
       draggable(tabs, { kind: "group", group: group.id });
       customization.target(tabs, { kind: "group", group: group.id });
@@ -469,11 +494,12 @@ function arrange(nextLayout, layoutOnly = false) {
           tab.dataset.panel = panel;
           const view = customization.view(panel);
           tab.title = view.title; tab.setAttribute("aria-label", view.title);
-          tabLabel(tab, view);
+          tabLabel(tab, view, tabStyle === "automatic");
           customization.target(tab, { kind: "panel", panel });
           tab.setAttribute("aria-selected", String(panel === group.active));
           labels.append(draggable(tab, { kind: "panel", panel }));
         });
+        if (tabStyle === "automatic") automaticTabs(labels);
         tabs.append(labels, grip({ kind: "group", group: group.id }));
         preview.replaceChildren(tabs, panels.get(group.active).parentElement);
       } else {
@@ -504,6 +530,7 @@ function arrange(nextLayout, layoutOnly = false) {
   }
   for (const [id, node] of groups)
     if (!live.has(id)) {
+      releaseTabs(node);
       node.remove();
       groups.delete(id);
     }
@@ -636,15 +663,15 @@ function measurePanels() {
       const content_height = cached.content?.getBoundingClientRect().height || 0;
       // The unconstrained copy lays out every row, including offscreen rows.
       // Subtract the list itself to keep headers/footers outside the scroll budget.
-      const list = cached.content?.querySelector(".layer-rows, .filter-picker-list");
-      const row = list?.querySelector(".layer-row, .filter-row");
+      const list = cached.content?.querySelector(".layer-rows, .filter-picker-list, .palette-scroll");
+      const row = list?.querySelector(".layer-row, .filter-row, .palette-tile");
       cached.value = {
         panel: id,
         tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
         content_height,
         ...(cached.content && id !== "color" ? { scroll: {
           fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
-          unit_height: row?.getBoundingClientRect().height || 0,
+          unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
         }} : {}),
       };
     }
@@ -710,6 +737,7 @@ function buildPanels() {
     sizeButtons.set(value, choice);
   }
   panels.get("sizes").append(controls, grid);
+  palettes.mount(panels.get("palettes"));
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
     contentChanged:panelContentChanged});
@@ -718,6 +746,8 @@ function contentPanel(id, splitPicker=false) {
   const panel=element("div",`panel ${id}-panel`);
   if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
+  } else if(id==="palettes") {
+    const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.disposePanel=view.dispose;
   } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
@@ -751,6 +781,7 @@ function update(regions) {
   }
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (4 | 8)) documents?.refresh();
+  if (regions & (2 | 4 | 16)) palettes.refresh(regions);
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 128)) persistWorkspace();
@@ -1611,12 +1642,14 @@ try {
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
+  palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,
+    dismissContext: () => customization?.dismissContext(), contentChanged: panelContentChanged });
   buildHeader();
   buildPanels();
   customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
-  workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
+  workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
