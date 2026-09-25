@@ -18,18 +18,18 @@ import java.util.concurrent.TimeUnit
 
 /** Device coverage for native projections of the evolving shared GTK/core models. */
 class AndroidFeatureParityTest {
-    companion object {
-        @JvmStatic @BeforeClass fun isolateStorage() {
+    private val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val isolation: org.junit.rules.RuleChain = org.junit.rules.RuleChain.outerRule(object : org.junit.rules.ExternalResource() {
+        override fun before() {
             val root = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,"parity-${System.nanoTime()}")
             CanvasHost.workspaceDirectoryForTest = java.io.File(root,"workspace").absolutePath
             RecoveryController.directoryForTest = java.io.File(root,"recovery")
         }
-        @JvmStatic @AfterClass fun restoreStorage() {
+        override fun after() {
             CanvasHost.workspaceDirectoryForTest = null
             RecoveryController.directoryForTest = null
         }
-    }
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    }).around(compose)
     private val host get() = compose.activity.host
     private fun state() = host.snapshot!!.getJSONObject("state")
     private lateinit var savedWorkspace: JSONObject
