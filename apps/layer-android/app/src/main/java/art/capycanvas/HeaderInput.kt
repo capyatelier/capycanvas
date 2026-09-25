@@ -34,7 +34,7 @@ internal fun Modifier.headerChrome(): Modifier = pointerInput(Unit) {
 /** The stable workspace owns capture, so compacting/reparenting a child cannot
  * lose a contact. Only Rust resolves destinations, live slides and final edits. */
 internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction) {
-    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int)
+    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int, val hold: Boolean)
     val sources = mutableMapOf<Any, Source>()
     var editing = false
     var enabled = false
@@ -99,13 +99,37 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     }
 }
 
-@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0): Modifier {
+@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0, hold: Boolean = true): Modifier {
     val token = remember { Any() }
     DisposableEffect(input, token) { onDispose { input.sources.remove(token) } }
     return onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-input.dock.origin)
         input.sources[token] = HeaderInteraction.Source(token, source, label,
-            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority)
+            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority, hold)
+    }
+}
+
+private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, down: PointerInputChange, id: Int, source: HeaderInteraction.Source) {
+    val early = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+        while (true) {
+            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+            if (change == null || !change.pressed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@withTimeoutOrNull true
+        }
+    }
+    if (early != null) return
+    input.contact = true
+    input.menu(id, source.bounds)
+    var released = false
+    try {
+        while (!released) {
+            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed && change.isConsumed) break
+            change.consume()
+            released = !change.pressed
+        }
+    } finally {
+        if (!released) input.context = null
+        input.contact = false
     }
 }
 
@@ -123,7 +147,11 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
                 down.consume(); input.selected = id; input.menu(id, source.bounds)
                 return@awaitEachGesture
             }
-            if (!input.editing || source.source.optString("kind") == "background") return@awaitEachGesture
+            if (!input.editing) {
+                if (id != null && source.hold && down.type != PointerType.Mouse) holdMenu(input, down, id, source)
+                return@awaitEachGesture
+            }
+            if (source.source.optString("kind") == "background") return@awaitEachGesture
             down.consume()
             input.selected = id; input.contact = true
             var started = false

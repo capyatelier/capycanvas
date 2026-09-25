@@ -148,7 +148,7 @@ private const val TabCloseSize=24f
         }).alpha(if(enabled)1f else .38f),contentAlignment=Alignment.Center){SharedIcon("close",label,Modifier.size(16.dp))}
     }
 }
-@Composable internal fun DrawingHeader(host:CanvasHost,title:String,editing:Boolean,tile:Float,gap:Float) {
+@Composable internal fun DrawingHeader(host:CanvasHost,title:String,editing:Boolean,tile:Float,gap:Float,tabs:@Composable Modifier.()->Modifier) {
     val controller=host.drawingTabs
     if(editing){Text(title,Modifier.padding(horizontal=6.dp).testTag("document-title"),maxLines=1,overflow=TextOverflow.Ellipsis);return}
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -159,7 +159,7 @@ private const val TabCloseSize=24f
             TextButton({controller.selector=true},Modifier.fillMaxSize().testTag("drawing-selector-button")) {
                 Text(row?.let{it.getString("title")+(if(it.getBoolean("modified"))" •" else "")+(if(controller.rows.size>1)" ▾"else title.substringAfter(" · ", "").let { dimensions -> if(dimensions.isEmpty())"" else " · $dimensions" })}?:title,Modifier.testTag("document-title"),maxLines=1,overflow=TextOverflow.Ellipsis)
             }
-        }else DrawingRows(host,false,Modifier.fillMaxSize(),tile,gap)
+        }else DrawingRows(host,false,Modifier.fillMaxSize().tabs(),tile,gap)
     }
 }
 @Composable internal fun DrawingSelector(host:CanvasHost) {

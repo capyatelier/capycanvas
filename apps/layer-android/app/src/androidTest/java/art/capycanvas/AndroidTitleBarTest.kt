@@ -218,6 +218,17 @@ class AndroidTitleBarTest {
         event(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP)
         idle()
     }
+    private fun tapMenuRow(label: String) {
+        var menuRoot: ViewRootForTest? = null
+        var target: SemanticsNode? = null
+        waitFor("$label row") {
+            fun row(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) node
+                else node.children.firstNotNullOfOrNull(::row)
+            WindowInspector.getGlobalWindowViews().flatMap(::roots).any { root -> row(root.semanticsOwner.unmergedRootSemanticsNode)?.let { menuRoot = root; target = it; true } == true }
+        }
+        pressed = menuRoot
+        event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)
+    }
     private fun startEditor() {
         action(obj("type" to "invoke", "command" to "customize_workspace_ui"))
         waitFor("inline editor") { editing() && node("header-editor") != null }
@@ -503,16 +514,7 @@ class AndroidTitleBarTest {
         tool = MotionEvent.TOOL_TYPE_FINGER
         restore()
         tap("application-menu-window")
-        // Select the shared entry via a real native popup row.
-        var menuRoot: ViewRootForTest? = null
-        var target: SemanticsNode? = null
-        waitFor("Window menu") {
-            fun label(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Customize Title Bar…" } == true) node
-                else node.children.firstNotNullOfOrNull(::label)
-            WindowInspector.getGlobalWindowViews().flatMap(::roots).any { root -> label(root.semanticsOwner.unmergedRootSemanticsNode)?.let { menuRoot = root; target = it; true } == true }
-        }
-        pressed = menuRoot
-        event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)
+        tapMenuRow("Customize Title Bar…")
         waitFor("menu enters inline editor") { editing() && node("title-bar")?.first?.view?.hasWindowFocus() == true }
         SystemClock.sleep(250)
         drag("header-component-tools", center())
@@ -956,6 +958,36 @@ class AndroidTitleBarTest {
         }
         shot("pen-tools-scroll")
         android.util.Log.i("FilterAcceptance","PASS: three panels, replacement/reopen/cancel, paper color, mouse/touch/pen, reversible swipe, final layer deletion/undo, tool scrolling")
+    }
+
+    @Test fun touchAndPenHoldsOpenItemMenusOutsideEditing() {
+        restore()
+        fun preferencesOpen() = snapshot().objectOrNull("preferences") != null
+        fun hold(device: Int) {
+            tool = device
+            down("header-item-3")
+            SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
+        }
+        hold(MotionEvent.TOOL_TYPE_MOUSE)
+        instrumentation.runOnMainSync { assertNull("Mouse hold never opens a context menu", node("workspace-menu")) }
+        event(MotionEvent.ACTION_UP)
+        waitFor("mouse release clicks Settings") { preferencesOpen() }
+        action(obj("type" to "close_settings"))
+        for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            hold(device)
+            waitFor("held item menu") { node("workspace-menu") != null }
+            event(MotionEvent.ACTION_CANCEL)
+            waitFor("cancellation closes the held menu") { node("workspace-menu") == null }
+            hold(device)
+            event(MotionEvent.ACTION_UP)
+            waitFor("release keeps the held menu") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
+            idle()
+            assertFalse("A hold suppresses the click", preferencesOpen())
+            tapMenuRow("Customize Title Bar…")
+            waitFor("held menu enters inline editor") { editing() && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+            tap("header-edit-cancel")
+            waitFor("editor closed") { !editing() }
+        }
     }
 
     @Test fun keyboardContextHoldAndFocusLossKeepTheirOwnership() {

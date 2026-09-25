@@ -47,6 +47,10 @@ popup/held-contact journeys wait for native window focus to settle.
   cross regions, delete and cancel. Mouse holds never open menus; secondary
   click does. Touch/stylus holds retain contact through context-menu dismissal
   and dragging. A real Android dialog taking focus cancels capture.
+- Outside customization, a finger or stylus hold on a bar item opens its
+  context menu (including Customize Title Bar…) without activating the item.
+  Release keeps the menu; cancellation closes it. Mouse holds still click, and
+  drawing tabs keep their own hold menu.
 - The built-in Sketch workspace has individual header tools and no painter
   toolbars or footer. All seven available default drawers open and dismiss from
   unused bar space. Pixel checks retain selected blue during press and keep

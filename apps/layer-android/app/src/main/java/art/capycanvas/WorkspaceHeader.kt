@@ -273,7 +273,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     }
                 }
                 kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing)
-                kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap"))
+                kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap")) { headerSource(input, obj("kind" to "item", "value" to id), label, 2, hold = false) }
                 kind == "clock" -> SystemStatus(showBattery = false)
                 kind == "battery" -> SystemStatus(clock = false)
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)
