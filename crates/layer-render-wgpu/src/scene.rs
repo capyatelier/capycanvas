@@ -9,6 +9,7 @@ mod previews;
 mod metadata;
 pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
+const DISPLAY_JOBS_PER_SUBMISSION: usize = 256;
 mod sources;
 mod placement;
 
@@ -1614,7 +1615,7 @@ impl Scene {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
             }
-            if display_tiles >= display_batch {
+            if display_tiles >= display_batch || self.jobs.len() >= DISPLAY_JOBS_PER_SUBMISSION {
                 self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
                 direct_count = 0;
                 // Keep at most two batches live. Finish and submit this batch
