@@ -7,7 +7,7 @@ struct ProofIndicator: View {
         if !model.status.isEmpty {
             Text(model.status).lineLimit(1).truncationMode(.middle)
                 .padding(.horizontal, 10).padding(.vertical, 3)
-                .background(palette.chromeSurface, in: SquircleShape.tile)
+                .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                 .help(model.error ?? model.status).allowsHitTesting(false)
                 .accessibilityIdentifier("proof-status")
         }
@@ -65,7 +65,7 @@ private struct ReadoutButtonStyle: ButtonStyle {
                         SquircleShape.tile.fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
                     }
                 }
-            }.onHover { hovering = $0 }
+            }.modifier(GlassRegistration(shape: SquircleShape.tile)).onHover { hovering = $0 }
         }
     }
 }

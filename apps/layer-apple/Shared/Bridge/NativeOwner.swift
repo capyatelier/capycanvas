@@ -151,6 +151,13 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
         }
     }
+    func glassRegions(_ value: JSON) {
+        perform { [self] in
+            let source = try value.encoded()
+            try check(source.withCString { capy_apple_glass_regions(handle, $0) })
+            receive(nil, nil)
+        }
+    }
     func navigatorPlacements(_ value: JSON) {
         perform { [self] in
             let source = try value.encoded()

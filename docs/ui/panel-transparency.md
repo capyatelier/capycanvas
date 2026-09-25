@@ -3,8 +3,8 @@
 [Workspace and UI](README.md) · [Theme colors](theme-colors.md)
 
 **Appearance → Panel transparency** offers Off, Low (the default), Medium and
-High. It is a shared setting (`Settings::transparency`) presented by GTK, Web and
-Android. The other levels show a blurred copy of the artwork behind panels, tab
+High. It is a shared setting (`Settings::transparency`) presented by GTK, Web,
+Android, macOS and iPadOS. The other levels show a blurred copy of the artwork behind panels, tab
 strips, drawers, their connectors and title-bar controls. Controls inside
 panels, such as inputs, lists and sliders, stay opaque.
 
@@ -29,6 +29,9 @@ No host can blur the canvas with its toolkit:
   cannot sample it.
 - On Web a CSS `backdrop-filter` over the continuously repainting WebGPU canvas
   makes the browser compositor re-blur every canvas frame.
+- On macOS and iPadOS a SwiftUI material over the continuously presenting
+  `CAMetalLayer` would also re-blur in the compositor every canvas frame, with
+  system tints instead of the calibrated palette.
 
 Instead, hosts draw translucent fills and publish each fill's bounds and corner
 radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
@@ -46,6 +49,11 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
 - Android: `Modifier.glass(shape, color)` draws the fill and registers its
   surface-pixel bounds and radii. `CanvasHost` sends all regions once per layout
   pass through `Native.glassRegions`.
+- macOS and iPadOS: `glassSurface` and `GlassRegistration` draw each glass
+  fill as a mask-free squircle and register its bounds and design radii in the
+  editor-workspace space. One `GlassRegistry` per window sends them, once per
+  run-loop turn, through `capy_apple_glass_regions`; the render owner scales
+  them to surface pixels each frame, so display changes need no republication.
 - Drawer and column connectors add their rectangle and concave feet from the
   shared `DrawerConnection::glass` geometry.
 
@@ -164,6 +172,14 @@ presentation:
 | Across the fitted document | 1.77 / 4.38 ms | 1.64 / 4.34 ms | — | 3.34 / 5.82 ms |
 | Zoomed 2×, beside the panels | 2.78 / 4.95 ms | 3.10 / 7.40 ms | 3.34 / 7.67 ms | 5.15 / 9.45 ms |
 
+Apple Release builds, the synthetic `ink` workload (2048 px document, 24 px
+brush, 60 s after warm-up) with the Paint glass registered:
+
+| Host | Before glass | Low | High |
+| --- | --- | --- | --- |
+| Mac, M2 Pro, 90 Hz | 84.8 fps, GPU p50 1.09 ms | 84.4 fps, 1.47 ms | 83.9 fps, 1.55 ms |
+| iPad Pro 13 M4, 120 Hz | 112.6 fps, GPU p50 1.26 ms | 113.2 fps, 1.35 ms | — |
+
 A stroke beside the panels must refresh the glass it blurs into, so this cost
 cannot be cached away. Two things set its size on the tablet: contact brushes
 report composite damage in 256-pixel document pages, so each frame refreshes
@@ -188,6 +204,13 @@ every pass carries a fixed cost.
   toolbar or column they can darken it by about one level; drawer-style tests
   therefore run at Off, as on GTK.
 - Web Zen glass follows the chosen visibility, not the fade animation.
+- On macOS and iPadOS SwiftUI commits and Metal presentation are not
+  synchronized, so glass can trail a moving panel by a frame. Implicit SwiftUI
+  animations, such as the title-bar bars sliding, report only their final
+  geometry. Shadows are drawn outside each glass surface only, so a translucent
+  surface never shows its own shadow; drawer and column shadows are also cut
+  beneath their connectors. Neither platform's Reduce Transparency setting is
+  applied yet; Off is the opaque mode, as on the other hosts.
 
 ## Validation
 
@@ -207,6 +230,12 @@ The capture test paints bands across the window and captures the Paint, Sketch
 (header drawer) and Photo (column drawer) workspaces and Preferences.
 `LAYER_GLASS_THEME=light` and `LAYER_GLASS_LEVEL=off|low|medium|high` select
 the variant.
+
+On macOS and iPadOS, `cargo test --locked -p layer-apple glass` checks region
+validation, display scaling and connector feet, and the `testPanelTransparency`
+journey checks the Settings circles and that panels over paper brighten from
+Off to Low to High. `CAPY_WORKLOAD_TRANSPARENCY=off|low|medium|high` selects the
+level for the Apple drawing workloads.
 
 For tablet pen timing, `LAYER_PEN_TRANSPARENCY=off|low|medium|high` selects the
 level in the [Web pen harness](../development/web-pen-huion-2026-09-20.md), and

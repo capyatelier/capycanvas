@@ -81,6 +81,12 @@ import Foundation
         try await action(["type": "set_brush_size", "value": plan.diameter])
         try await action(["type": "set_color", "rgba": [0.08, 0.2, 0.55, 1.0]])
         try await action(["type": "invoke", "command": "fit_canvas"])
+        if let level = ProcessInfo.processInfo.environment["CAPY_WORKLOAD_TRANSPARENCY"] {
+            guard let index = ["off", "low", "medium", "high"].firstIndex(of: level) else {
+                throw HostFailure(message: "CAPY_WORKLOAD_TRANSPARENCY must be off, low, medium or high")
+            }
+            try await action(["type": "preferences", "action": ["type": "edit", "id": "transparency", "value": index]])
+        }
         guard let store, store.state["layers"].array.count == plan.paintLayers + 1 else {
             throw HostFailure(message: "The workload layer count does not match its specification")
         }

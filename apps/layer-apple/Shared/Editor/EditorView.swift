@@ -29,7 +29,7 @@ struct EditorView<Canvas: View>: View {
                     HStack {
                         Spacer()
                         CameraStatus(camera: store.camera).padding(.horizontal, 10).padding(.vertical, 3)
-                            .background(palette.chromeSurface, in: SquircleShape.tile)
+                            .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                     }.placed(store.snapshot["layout"]["status"])
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
@@ -38,7 +38,7 @@ struct EditorView<Canvas: View>: View {
                     IconTile(icon: command["icon"].string, label: command["tooltip"].string,
                         enabled: command["enabled"].bool, corner: .half) { store.invoke("zen_mode") }
                         .frame(width: 36, height: 36)
-                        .background(palette.chromeSurface, in: SquircleShape.tile)
+                        .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: {
                             store.workspace.zenButton = $0
@@ -129,6 +129,7 @@ struct EditorView<Canvas: View>: View {
         }
         .environment(\.editorPopupStore, store)
         .environment(\.editorPalette, palette)
+        .environment(\.glassRegistry, store.glass)
         .environment(\.colorScheme, store.state.isNull ? colorScheme : store.state["theme"].string == "dark" ? .dark : .light)
         .background(NativeEditorAppearance(store: store, preferred: store.state["settings"]["theme"].string))
         .onOpenURL { url in

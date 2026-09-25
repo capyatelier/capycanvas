@@ -29,19 +29,18 @@ struct PalettePanel: View {
                             .accessibilityIdentifier("palette-swatches")
                             .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid", intrinsicHeight: cells.viewport(count), kind: .scroll))
                             .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid-unit", intrinsicHeight: PaletteCells.pitch, kind: .unit))
-                    }.allowsHitTesting(!covered).accessibilityHidden(covered)
+                    }.allowsHitTesting(!covered).accessibilityHidden(covered).opacity(covered ? 0 : 1)
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: PaletteCells.tile + 13))
                     if controller.expanded {
                         PaletteHistory(controller: controller, view: view, cells: cells,
                             rows: min(4, max(1, Int((bodyHeight + PaletteCells.gap) / PaletteCells.pitch))), expanded: true, enabled: true,
                             hdr: hdr, viewing: store.colorViewing)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .background(palette["panel"]).accessibilityIdentifier("palette-history-expanded")
+                            .accessibilityIdentifier("palette-history-expanded")
                     }
                     if controller.chooser {
                         PaletteChooser(store: store, controller: controller, view: view, rows: rows)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .background(palette["panel"])
                     }
                 }.frame(maxHeight: docked ? .infinity : nil, alignment: .top)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bodyHeight = $0 }

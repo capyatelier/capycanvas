@@ -42,6 +42,9 @@ impl ExportPresets {
         Ok(recipe)
     }
     pub fn recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, String> {
+        Ok(self.stored_recipe(index, document)?.for_color(document))
+    }
+    fn stored_recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, String> {
         if index < 4 {
             if let Some(recipe) = &self.destinations[index] {
                 return self.resolve(recipe);
@@ -329,6 +332,35 @@ mod tests {
             library.recipe(2, document).unwrap(),
             ExportRecipe::further_editing(document)
         );
+    }
+    #[test]
+    fn hdr_recipes_resolve_to_sdr_delivery_for_sdr_documents() {
+        use crate::{ExportBackground, ExportDraftAction, ExportFormat, ExportSize};
+        let hdr = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
+        let sdr = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U8 };
+        let mut jpeg = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe;
+        jpeg.jpeg_quality = 75;
+        jpeg.size = ExportSize::Fit { bounds: [640, 480], enlarge: false };
+        let exr = ExportRecipe::further_editing(hdr);
+        let avif = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::AvifHdrMapped)).recipe;
+        let mut library = ExportPresets::default();
+        library.remember(0, jpeg.clone()).unwrap();
+        library.remember(2, exr.clone()).unwrap();
+        let named = library.save("HDR share", avif.clone()).unwrap();
+        assert_eq!(library.recipe(0, hdr).unwrap(), jpeg);
+        assert_eq!(library.recipe(2, hdr).unwrap(), exr);
+        assert_eq!(library.recipe(named, hdr).unwrap(), avif);
+        let share = library.recipe(0, sdr).unwrap();
+        assert_eq!((share.format, share.depth, share.background), (ExportFormat::Jpeg, SampleDepth::U8, ExportBackground::White));
+        assert_eq!((share.jpeg_quality, &share.size), (75, &jpeg.size));
+        let editing = library.recipe(2, sdr).unwrap();
+        assert_eq!(editing, ExportRecipe::further_editing(sdr));
+        let named = library.recipe(named, sdr).unwrap();
+        assert_eq!((named.format, named.background), (ExportFormat::Png, ExportBackground::Preserve));
+        for recipe in [share, editing, named] {
+            assert!(!recipe.format.is_hdr());
+            recipe.validate().unwrap();
+        }
     }
     #[test]
     fn invalid_or_oversized_changes_are_atomic_and_corrupt_profiles_never_fallback() {

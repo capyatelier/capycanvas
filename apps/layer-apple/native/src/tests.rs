@@ -55,6 +55,8 @@ mod picker;
 mod tonal;
 #[path = "palette_tests.rs"]
 mod palette;
+#[path = "glass_tests.rs"]
+mod glass;
 
 type RasterSamples = (
     std::collections::BTreeMap<

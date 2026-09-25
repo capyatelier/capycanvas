@@ -75,7 +75,7 @@ import SwiftUI
             } else {
                 ForEach(geometry["bars"].array.indices, id: \.self) { index in
                     let bounds = geometry["bars"][index]["bounds"]
-                    SquircleShape(radius).fill(palette.chromeSurface)
+                    SquircleShape(radius).fill(palette.chromeSurface).modifier(GlassRegistration(shape: SquircleShape(radius)))
                         .placed(bounds).allowsHitTesting(false).accessibilityHidden(true)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: bounds.rect)
                 }
@@ -318,7 +318,7 @@ private struct HeaderItemControl: View {
         }.frame(width: width, height: size["tile"].number)
             .background {
                 if ["clock", "battery"].contains(kind) || editing && ["space", "workspaces"].contains(kind) {
-                    SquircleShape(radius).fill(palette.chromeSurface)
+                    SquircleShape(radius).fill(palette.chromeSurface).modifier(GlassRegistration(shape: SquircleShape(radius)))
                 }
             }.onHover { hovering = $0 }
     }

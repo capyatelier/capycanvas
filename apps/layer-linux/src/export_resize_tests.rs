@@ -381,6 +381,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
         enlarge: false,
     };
     library.save("Lab RGB", custom.clone()).unwrap();
+    library.remember(0, ExportRecipe::web_share().draft(layer_ui::ExportDraftAction::Format(layer_ui::ExportFormat::JpegHdr)).recipe).unwrap();
     std::fs::write(&path, library.encode().unwrap()).unwrap();
     let w = Workspace::with_project(&app, Some((new_drawing(64, 48).unwrap(), None)));
     w.window.present();
@@ -413,6 +414,9 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
         }
     };
     invoke(&w, CommandId::ExportDocument);
+    assert_eq!(combo(&w, "export-format").selected(), 2);
+    assert!(!widget("export-validation").is_visible());
+    assert!(super::new_photo::export_enabled(&w));
     combo(&w, "export-preset").set_selected(4);
     assert_eq!(super::new_photo::profile_name(&w, "export-space"), custom.profile.name);
     assert_eq!(combo(&w, "export-format").selected(), 1);

@@ -215,7 +215,7 @@ struct DrawingTabsHeader: View {
         Group {
             if tabs.rows.count > 1 && width / CGFloat(tabs.rows.count) >= 140 {
                 DrawingTabList(store: store, tabs: tabs, vertical: false)
-                    .padding(.vertical, 1).background(palette.chromeSurface, in: SquircleShape(tile / 2))
+                    .padding(.vertical, 1).glassSurface(SquircleShape(tile / 2), fill: palette.chromeSurface)
             } else {
                 Button { tabs.presented = true } label: {
                     HStack(spacing: 5) {
@@ -309,7 +309,7 @@ private struct DrawingTabBackground: ViewModifier {
                 SquircleShape.control.fill(selected ? palette.active : Color.primary.opacity(0.035))
             } else {
                 ZStack {
-                    if selected { SquircleShape.tile.fill(palette["panel"]) }
+                    if selected { SquircleShape.tile.fill(palette.glassDocumentTab) }
                     if hovering { SquircleShape.tile.fill(palette["text"].opacity(selected ? 0.03 : 0.07)) }
                 }
             }

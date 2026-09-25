@@ -42,6 +42,9 @@ import SwiftUI
         let clamped = points(SquircleShape(40).path(in: CGRect(x: 0, y: 0, width: 50, height: 30)))
         precondition(clamped.allSatisfy { $0.x >= -0.001 && $0.x <= 50.001 && $0.y >= -0.001 && $0.y <= 30.001 })
         precondition(!clamped.contains { close($0.x, 0) && close($0.y, 0) }, "Oversized radii scale down like CSS")
+        precondition(SquircleShape(40).radii(in: CGRect(x: 0, y: 0, width: 50, height: 30)) == [15, 15, 15, 15],
+            "Glass regions publish the same clamped radii the path draws")
+        precondition(SquircleShape.tile(joined: "bottom").radii(in: CGRect(x: 0, y: 0, width: 72, height: 36)) == [18, 18, 0, 0])
 
         let leading = SquircleShape.control.segment(0, of: 3), inner = SquircleShape.control.segment(1, of: 3)
         precondition(leading.corners == [.radius(12), .radius(0), .radius(0), .radius(12)]

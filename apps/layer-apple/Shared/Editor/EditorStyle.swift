@@ -7,14 +7,27 @@ import UIKit
 
 struct EditorPalette {
     let source: JSON
+    var onGlass = false
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
     private func role(_ name: String, _ fallback: String) -> Color { Color(hex: source[name].isNull ? fallback : source[name].string) }
+    private func glass(_ name: String, _ fallback: @autoclosure () -> Color) -> Color {
+        let value = source["glass"][name].array
+        guard value.count == 4 else { return fallback() }
+        return Color(.sRGB, red: value[0].number, green: value[1].number, blue: value[2].number, opacity: value[3].number)
+    }
     var accent: Color { role("accent", "#3584e4") }
     var accentForeground: Color { role("accent_foreground", "#ffffff") }
-    var active: Color { role("selection", "#c0d7f6") }
-    var headerSelection: Color { role("header_selection", "#afc6e5") }
+    var active: Color { onGlass ? glass("selection", role("selection", "#c0d7f6")) : role("selection", "#c0d7f6") }
+    var headerSelection: Color { glass("header_selection", role("header_selection", "#afc6e5")) }
     var headerSelectionHover: Color { role("header_selection_hover", "#a6bddb") }
-    var chromeSurface: Color { self["bg"].opacity(0.75) }
+    var chromeSurface: Color { glass("chip", self["bg"]) }
+    var glassPanel: Color { glass("panel", self["panel"]) }
+    var glassStrip: Color { glass("strip", self["tabbar"]) }
+    var glassTab: Color { glass("tab", self["panel"]) }
+    var glassSwitcher: Color { glass("switcher", self["tabbar"]) }
+    var glassSwitcherSelection: Color { glass("switcher_selection", role("header_selection", "#afc6e5")) }
+    var glassDocumentTab: Color { glass("document_tab", self["panel"]) }
+    var glassy: EditorPalette { var palette = self; palette.onGlass = true; return palette }
     var checkerLight: Color { role("checker_light", "#dcdcdc") }
     var checkerDark: Color { role("checker_dark", "#aaaaaa") }
 }
@@ -173,18 +186,18 @@ struct HeaderButtonStyle: ButtonStyle {
             let shape = style.drawerOpen ? SquircleShape(topLeading: r, topTrailing: r) : SquircleShape(r)
             configuration.label.background {
                 ZStack {
-                    if !style.inBar { shape.fill(palette.chromeSurface) }
+                    if !style.inBar { shape.fill(style.drawerOpen && !style.selected ? palette.glassPanel : palette.chromeSurface) }
                     Group {
                         if style.selected {
                             shape.fill(palette.headerSelection)
                         } else if style.drawerOpen {
-                            shape.fill(palette["panel"])
+                            if style.inBar { shape.fill(palette.glassPanel) }
                         } else if configuration.isPressed || style.hovering {
                             shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
                         }
                     }.padding(.vertical, style.inBar && !style.drawerOpen ? 1 : 0)
                 }
-            }
+            }.modifier(GlassRegistration(shape: shape, active: !style.inBar))
         }
     }
 }

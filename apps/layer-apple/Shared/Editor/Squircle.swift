@@ -37,10 +37,10 @@ struct SquircleShape: InsettableShape {
         var shape = self; shape.inset += amount; return shape
     }
 
-    func path(in rect: CGRect) -> Path {
+    func radii(in rect: CGRect) -> [CGFloat] {
         let r = rect.insetBy(dx: inset, dy: inset)
-        guard r.width > 0, r.height > 0 else { return Path() }
-        var radii = corners.map { corner -> CGFloat in
+        guard r.width > 0, r.height > 0 else { return [0, 0, 0, 0] }
+        let radii = corners.map { corner -> CGFloat in
             switch corner {
             case .radius(let value): max(0, value - inset)
             case .half: min(r.width, r.height) / 2
@@ -49,7 +49,13 @@ struct SquircleShape: InsettableShape {
         let sides = [(radii[0] + radii[1], r.width), (radii[1] + radii[2], r.height),
             (radii[2] + radii[3], r.width), (radii[3] + radii[0], r.height)]
         let scale = sides.reduce(CGFloat(1)) { $1.0 > $1.1 ? min($0, $1.1 / $1.0) : $0 }
-        if scale < 1 { radii = radii.map { $0 * scale } }
+        return scale < 1 ? radii.map { $0 * scale } : radii
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: inset, dy: inset)
+        guard r.width > 0, r.height > 0 else { return Path() }
+        let radii = radii(in: rect)
         var p = Path()
         p.move(to: CGPoint(x: r.minX + radii[0], y: r.minY))
         p.addLine(to: CGPoint(x: r.maxX - radii[1], y: r.minY))

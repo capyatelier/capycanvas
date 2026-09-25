@@ -33,6 +33,31 @@ pub unsafe extern "C" fn capy_apple_navigator_placements(
 }
 
 /// # Safety
+/// Serial owner call; JSON is {boxes: [[x,y,w,h,tl,tr,br,bl]], connections: [DrawerConnection]}
+/// in logical editor points. Only a changed layout wakes the canvas.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_glass_regions(app: *mut CapyApple, json: *const c_char) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|app| {
+        if json.is_null() {
+            return Err("Missing glass geometry".into());
+        }
+        let source = unsafe { CStr::from_ptr(json) }.to_str().map_err(|e| e.to_string())?;
+        if source.len() > 64 * 1024 {
+            return Err("Glass geometry exceeds the layout transport limit".into());
+        }
+        let layout = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        if app.metal.set_glass(layout)? {
+            app.host.dirty = true;
+        }
+        Ok(0)
+    })
+    .unwrap_or(-1)
+}
+
+/// # Safety
 /// Stateless geometry on any thread. JSON is [Camera, documentExtent, viewport].
 /// The returned JSON is owned and uses the ordinary string-free function.
 #[unsafe(no_mangle)]

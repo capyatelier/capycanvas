@@ -28,7 +28,7 @@ struct ApplicationMenus: View {
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.padding(4).frame(height: 34).background(palette.chromeSurface, in: SquircleShape.tile).fixedSize()
+            }.padding(4).frame(height: 34).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
                 .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)

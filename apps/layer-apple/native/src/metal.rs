@@ -17,6 +17,14 @@ pub(crate) struct OverviewSlot {
     pub order: i32,
 }
 
+/// Glass boxes are [x, y, w, h, tl, tr, br, bl] in logical editor points.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GlassLayout {
+    pub boxes: Vec<[f32; 8]>,
+    pub connections: Vec<layer_ui::DrawerConnection>,
+}
+
 struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -36,6 +44,7 @@ pub struct MetalHost {
     timing_enabled: bool,
     timing: Option<GpuFrameTimer>,
     overviews: Vec<OverviewSlot>,
+    glass: GlassLayout,
     failure: Arc<OnceLock<String>>,
 }
 
@@ -71,7 +80,9 @@ impl MetalHost {
             else if !retained { "Preparing SDR…" } else if s.state().soft_proof { "Print proof" }
             else if self.headroom > 1. { "SDR preview" } else { "Showing SDR" };
         serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"label":label,"headroom":self.headroom.max(1.),
-            "retained":retained,"error":self.local_tone.error,"reference_white":203})
+            "retained":retained,"error":self.local_tone.error,"reference_white":203,
+            "glass_regions":self.glass.boxes.len() + self.glass.connections.len(),
+            "backdrop_frames":self.surface.as_ref().map_or([0; 2], |s| s.presenter.backdrop_frames())})
     }
     fn encoding(color:layer_core::color::DocumentColor)->SdrSurfaceColor {
         if color.depth.is_float(){SdrSurfaceColor::ExtendedLinearSrgb}else{SdrSurfaceColor::DisplayP3}
@@ -160,6 +171,34 @@ impl MetalHost {
         let changed = self.overviews != slots;
         self.overviews = slots;
         Ok(changed)
+    }
+
+    pub(crate) fn set_glass(&mut self, layout: GlassLayout) -> Result<bool, String> {
+        let finite = layout.boxes.iter().all(|b| b.iter().all(|v| v.is_finite()) && b[2] >= 0. && b[3] >= 0.)
+            && layout.connections.iter().all(|c| {
+                [c.bounds.x, c.bounds.y, c.bounds.width, c.bounds.height, c.length, c.depth]
+                    .iter().chain(&c.transform).chain(&c.radii).all(|v| v.is_finite())
+            });
+        if layout.boxes.len() > 256 || layout.connections.len() > 32 || !finite {
+            return Err("Invalid glass geometry".into());
+        }
+        let changed = self.glass != layout;
+        self.glass = layout;
+        Ok(changed)
+    }
+
+    pub(crate) fn glass_regions(&self, host: &NativeHost) -> Vec<layer_render_wgpu::BackdropRegion> {
+        use layer_render_wgpu::BackdropRegion;
+        let scale = host.session.state().camera.viewport[0] as f32 / host.logical[0];
+        self.glass.boxes.iter()
+            .map(|b| BackdropRegion::rounded([b[0], b[1], b[2], b[3]].map(|v| v * scale),
+                [b[4], b[5], b[6], b[7]].map(|v| v * scale), BackdropRegion::SQUIRCLE))
+            .chain(self.glass.connections.iter().flat_map(|c| c.glass()).map(|(bounds, radii)| BackdropRegion {
+                bounds: bounds.map(|v| v * scale),
+                radii: radii.map(|v| v * scale),
+                shape: BackdropRegion::SQUIRCLE,
+            }))
+            .collect()
     }
 
     pub(crate) fn overview_placements(
@@ -364,6 +403,12 @@ impl MetalHost {
         } else {
             Vec::new()
         };
+        let glass = host.session.state().palette.glass;
+        let backdrop = if glass.transparency.enabled() && self.blank_presented && host.startup.canvas_ready {
+            self.glass_regions(host)
+        } else {
+            Vec::new()
+        };
         let proof = self.proof.lut(&host.session);
         let (proof_enabled, gamut) = (host.session.state().soft_proof, host.session.state().gamut_warning);
         let rendition=host.session.engine().document().color.depth.is_float().then(||host.session.effective_sdr_rendition());
@@ -418,6 +463,8 @@ impl MetalHost {
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
         surface.presenter.set_color_picker(gpu, picker);
         surface.presenter.set_overviews(gpu, &overviews);
+        surface.presenter.set_backdrop(gpu, &backdrop,
+            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset });
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.present(
             gpu,

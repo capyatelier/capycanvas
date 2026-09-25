@@ -215,6 +215,25 @@ impl ExportRecipe {
             resolution: ExportResolution::Master,
         }
     }
+    pub fn for_color(self, color: DocumentColor) -> Self {
+        if color.depth.is_float() || !self.format.is_hdr() {
+            return self;
+        }
+        let (base, format) = match self.format {
+            ExportFormat::Exr => (Self::further_editing(color), ExportFormat::Tiff),
+            f if f.gainmap() == Some(layer_color::photo::GainMapFormat::Jpeg) => (Self::web_share(), ExportFormat::Jpeg),
+            _ => (Self::web_share(), ExportFormat::Png),
+        };
+        Self {
+            background: self.background,
+            jpeg_quality: self.jpeg_quality,
+            size: self.size,
+            resolution: self.resolution,
+            ..base
+        }
+        .draft(ExportDraftAction::Format(format))
+        .recipe
+    }
     pub fn interpretation(&self) -> SourceInterpretation {
         SourceInterpretation {
             channels: match (
