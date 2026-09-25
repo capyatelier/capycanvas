@@ -113,9 +113,9 @@ change, and cancelling it restores the original arrangement.
 
 Zen mode controls which parts of the interface remain visible while drawing.
 Shared logic manages visibility, reveal behavior and the state that keeps controls
-available during a menu or interaction. Total and partial Zen expose different
-amounts of the interface; individual ports are still implementing parts of that
-behavior.
+available during a menu or interaction. Zen hides the header and docked chrome
+and keeps floating panels; preferences choose whether Capy stays visible and
+whether panels reveal near occupied screen edges.
 
 Hiding controls does not resize the document viewport or move the camera. The
 usable workspace area can inform an explicit Fit Canvas command, but ordinary
