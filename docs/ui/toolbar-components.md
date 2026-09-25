@@ -25,11 +25,17 @@ They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s size and opacity settings and disable when unavailable.
 Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values; opacity tracks show transparency over
-a checkerboard. Both orientations use equal end padding. The tracks have no
+a checkerboard. Both orientations use equal end padding. Every host draws
+GTK's track: 6px end insets, rounded tapered ends, fills from the theme text
+color (22% for size; 8% base, 20% checker cells and a 0–65% gradient for
+opacity) and a 12×28px squircle thumb with a 60% text border. The tracks have no
 persistent numeric readout. Dragging opens a rounded floating stamp preview
 beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
-outside tap or context change. Its header shows the value and units. Size uses
+outside tap or context change. The preview has the toolbar's tile radius and
+no border. Its header is one row of that toolbar's tiles: the bookmark button
+is a full tile with the tile's icon size in the top-end corner, the value and
+units are vertically centered beside it, and the fade grows with the row. Size uses
 the current tip at its document-pixel diameter, filling the popup to its rounded
 edges for oversized tips. A background fade keeps the header legible;
 opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,

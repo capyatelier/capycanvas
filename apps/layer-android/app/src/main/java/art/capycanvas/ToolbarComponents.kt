@@ -15,8 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -124,7 +126,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
                 }
                 if (preview && field != null) stamp?.let { brush ->
-                    BrushSliderPreview(brush, control, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
+                    BrushSliderPreview(brush, control, style, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
                         dismiss = { preview = false }, bookmark = { edit(obj("type" to "toggle_slider_bookmark", "control" to control)) })
                 }
             }
@@ -300,7 +302,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 val down = awaitFirstDown(); down.consume()
                 var moved = false; var finished = false
                 fun pick(p: Offset, snap: Boolean) {
-                    val half = 5.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
+                    val half = 6.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
                     if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, length / density)
                 }
                 onContact(true, false); pick(down.position, true)
@@ -315,40 +317,53 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
 
             }
         }) {
-        val thick = 20.dp.toPx().coerceAtMost(if (vertical) size.width else size.height)
-        val x = (size.width - thick) / 2; val y = (size.height - thick) / 2
-        val track = Path().apply {
-            if (vertical) { moveTo(x, 0f); lineTo(x + thick, 0f); lineTo(size.width / 2 + if (opacity) thick / 2 else 1f, size.height); lineTo(size.width / 2 - if (opacity) thick / 2 else 1f, size.height) }
-            else { moveTo(0f, size.height / 2 - if (opacity) thick / 2 else 1f); lineTo(size.width, y); lineTo(size.width, y + thick); lineTo(0f, size.height / 2 + if (opacity) thick / 2 else 1f) }; close()
+        val unit = 1.dp.toPx()
+        val extent = if (vertical) size.height else size.width
+        val length = extent - 12 * unit
+        if (length >= 4 * unit) withTransform({
+            if (vertical) { translate(size.width / 2, size.height - 6 * unit); rotate(-90f, Offset.Zero) }
+            else translate(6 * unit, size.height / 2)
+        }) {
+            val wide = 8 * unit; val narrow = if (opacity) wide else 2.5f * unit
+            val track = Path().apply {
+                moveTo(0f, -narrow); lineTo(length - 3 * unit, -wide)
+                cubicTo(length + unit, -wide, length + unit, wide, length - 3 * unit, wide)
+                lineTo(0f, narrow); cubicTo(-3 * unit, narrow, -3 * unit, -narrow, 0f, -narrow); close()
+            }
+            clipPath(track) {
+                val bounds = Rect(-3 * unit, -wide, length + unit, wide)
+                if (opacity) {
+                    drawRect(colors.text.copy(alpha = .08f), bounds.topLeft, bounds.size)
+                    val cell = 4 * unit
+                    for (col in -1..(length / cell).toInt() + 1) for (row in -2..1) if ((col + row) % 2 == 0)
+                        drawRect(colors.text.copy(alpha = .2f), Offset(col * cell, row * cell), Size(cell, cell))
+                    drawRect(Brush.horizontalGradient(listOf(colors.text.copy(alpha = 0f), colors.text.copy(alpha = .65f)), 0f, length),
+                        bounds.topLeft, bounds.size)
+                } else drawRect(colors.text.copy(alpha = .22f), bounds.topLeft, bounds.size)
+            }
         }
-        clipPath(track) {
-            if (opacity) {
-                val cell = 4.dp.toPx()
-                for (row in 0..(size.height / cell).toInt()) for (col in 0..(size.width / cell).toInt())
-                    drawRect(if ((row + col) % 2 == 0) Color(0xffdddddd) else Color(0xff888888), Offset(col * cell, row * cell), Size(cell, cell))
-                drawRect(if (vertical) Brush.verticalGradient(listOf(Color(0xff222222), Color.Transparent)) else Brush.horizontalGradient(listOf(Color.Transparent, Color(0xff222222))))
-            } else drawRect(colors.text.copy(alpha = .4f))
-        }
-        val marker = 10.dp.toPx()
-        if (vertical) drawRoundRect(colors.thumb, Offset(x - 4.dp.toPx(), (size.height - marker) * (1f - fill)), Size(thick + 8.dp.toPx(), marker), CornerRadius(marker / 2))
-        else drawRoundRect(colors.thumb, Offset((size.width - marker) * fill, y - 4.dp.toPx()), Size(marker, thick + 8.dp.toPx()), CornerRadius(marker / 2))
+        val along = 12 * unit; val across = 28 * unit
+        val thumb = if (vertical) Rect(Offset((size.width - across) / 2, (size.height - along) * (1f - fill)), Size(across, along))
+            else Rect(Offset((size.width - along) * fill, (size.height - across) / 2), Size(along, across))
+        drawPath(Path().apply { addSquircle(thumb, 6 * unit, 6 * unit, 6 * unit, 6 * unit) }, colors.thumb)
+        val edge = thumb.deflate(unit / 2); val corner = 5.5f * unit
+        drawPath(Path().apply { addSquircle(edge, corner, corner, corner, corner) }, colors.text.copy(alpha = .6f), style = Stroke(unit))
         for (mark in marks) {
             val position = if (mark.getBoolean("selected")) fill else mark.number("fill")
-            val center = if (vertical) Offset(size.width / 2, marker / 2 + (size.height-marker)*(1f-position))
-                else Offset(marker / 2 + (size.width-marker)*position, size.height / 2)
-            val delta = if (vertical) Offset(7.dp.toPx(), 0f) else Offset(0f, 7.dp.toPx())
-            drawLine(if (mark.getBoolean("selected")) colors.panel else colors.text, center-delta, center+delta, 2.dp.toPx())
+            val center = if (vertical) Offset(size.width / 2, along / 2 + (size.height - along) * (1f - position))
+                else Offset(along / 2 + (size.width - along) * position, size.height / 2)
+            val delta = if (vertical) Offset(7 * unit, 0f) else Offset(0f, 7 * unit)
+            drawLine(if (mark.getBoolean("selected")) colors.panel else colors.text, center - delta, center + delta, 2 * unit)
         }
-
     }
 }
 
 
-@Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, value: Float, length: Float,
+@Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, style: String, value: Float, length: Float,
     vertical: Boolean, selected: Boolean, dismiss: () -> Unit, bookmark: () -> Unit) {
     val density = LocalDensity.current.density
     val colors = LocalPalette.current
-    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "value" to value, "length" to length, "extent" to stamp.number("extent")))
+    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "style" to style, "value" to value, "length" to length, "extent" to stamp.number("extent")))
     val bitmap = remember(stamp) {
         val alpha = stamp.array("alpha"); val size = stamp.getInt("size")
         android.graphics.Bitmap.createBitmap(IntArray(alpha.length()) { (alpha.getInt(it) shl 24) or 0x00ffffff }, size, size, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
@@ -362,8 +377,8 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         }
     } }
     Popup(provider, onDismissRequest = dismiss, properties = PopupProperties(focusable = false)) {
-        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = SurfaceShape,
-            color = colors.panel, shadowElevation = 6.dp, border = androidx.compose.foundation.BorderStroke(1.dp, colors.divider)) {
+        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = SquircleShape(layout.number("radius").dp),
+            color = colors.panel, shadowElevation = 6.dp) {
             Box {
                 Canvas(Modifier.fillMaxSize()) {
                     val b = layout.getJSONObject("stamp")
@@ -378,11 +393,11 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.65f),
                         1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
                 }
-                Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)
-                    Box(Modifier.size(28.dp).clip(ControlShape).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
-                        SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(16.dp))
-                    }
+                Box(Modifier.placed(layout.getJSONObject("caption"), density), contentAlignment = Alignment.CenterStart) {
+                    Text(layout.getString("text"), maxLines = 1, softWrap = false)
+                }
+                Box(Modifier.placed(layout.getJSONObject("bookmark"), density).clip(TileShape).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
+                    SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(layout.number("icon").dp))
                 }
             }
         }

@@ -128,6 +128,10 @@ pub fn slider_bookmark_value(
 #[derive(Serialize)]
 pub struct SliderPreviewLayout {
     pub side: f32,
+    pub radius: f32,
+    pub bookmark: Bounds,
+    pub icon: f32,
+    pub caption: Bounds,
     pub stamp: Bounds,
     pub viewport: Bounds,
     pub header_fade: f32,
@@ -136,6 +140,7 @@ pub struct SliderPreviewLayout {
 }
 pub fn slider_preview_layout(
     control: ToolbarControl,
+    style: TileStyle,
     value: f32,
     length: f32,
     extent: f32,
@@ -145,12 +150,16 @@ pub fn slider_preview_layout(
         return Err("Invalid stamp extent".into());
     }
     binding.numeric().validate(value, "Slider value")?;
+    let tile = style.size()[1];
+    let icon = tile * 4. / 9.;
+    let inset = (tile - icon) / 2.;
+    let grown = tile - TILE_SIZE;
     let side = if length.is_finite() {
-        length.clamp(160., 240.)
+        length.clamp(160. + grown, 240. + grown)
     } else {
-        180.
+        180. + grown
     };
-    let available = side - 52.;
+    let available = side - tile - 16.;
     let opacity = binding == ToolbarNumericBinding::BrushOpacity;
     // Size remains in document pixels. Oversized tips are clipped by the preview
     // viewport instead of making the largest sizes all look identical.
@@ -161,10 +170,24 @@ pub fn slider_preview_layout(
     };
     Ok(SliderPreviewLayout {
         side,
+        radius: style.corner_radius(),
+        bookmark: Bounds {
+            x: side - tile,
+            y: 0.,
+            width: tile,
+            height: tile,
+        },
+        icon,
+        caption: Bounds {
+            x: inset,
+            y: 0.,
+            width: side - tile - inset,
+            height: tile,
+        },
         stamp: Bounds {
             x: (side - diameter) / 2.,
             y: if opacity {
-                36. + (available - diameter) / 2.
+                tile + (available - diameter) / 2.
             } else {
                 (side - diameter) / 2.
             },
@@ -174,9 +197,9 @@ pub fn slider_preview_layout(
         viewport: if opacity {
             Bounds {
                 x: 8.,
-                y: 36.,
+                y: tile,
                 width: side - 16.,
-                height: side - 44.,
+                height: side - tile - 8.,
             }
         } else {
             Bounds {
@@ -186,7 +209,7 @@ pub fn slider_preview_layout(
                 height: side,
             }
         },
-        header_fade: if opacity { 0. } else { 52. },
+        header_fade: if opacity { 0. } else { tile + 16. },
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",

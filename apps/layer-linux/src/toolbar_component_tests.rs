@@ -1119,6 +1119,13 @@ fn native_toolbar_visual_audit_input() {
                     .unwrap();
                 assert!(caption.text().contains("2048 px"));
                 assert!(caption.layout().pixel_size().0 <= caption.width());
+                capture_popover(
+                    &d.named("brush-slider-preview").downcast().unwrap(),
+                    d.dir
+                        .join(format!("audit-slider-preview-{theme:?}-{edge:?}-{style:?}.png"))
+                        .to_str()
+                        .unwrap(),
+                );
                 d.key(0xff1b);
             }
         }

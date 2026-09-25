@@ -666,24 +666,20 @@ impl Component {
                 return;
             };
             let area = gtk::DrawingArea::new();
-            let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            header.set_margin_start(12);
-            header.set_margin_end(5);
-            header.set_margin_top(4);
-            header.set_valign(gtk::Align::Start);
             let label = gtk::Label::new(None);
             label.set_widget_name("slider-preview-label");
             label.set_xalign(0.);
-            label.set_hexpand(true);
+            label.set_halign(gtk::Align::Start);
+            label.set_valign(gtk::Align::Start);
             let bookmark = gtk::Button::new();
             bookmark.add_css_class("flat");
-            bookmark.set_size_request(28, 28);
+            bookmark.set_halign(gtk::Align::End);
+            bookmark.set_valign(gtk::Align::Start);
             bookmark.set_widget_name("slider-bookmark");
-            header.append(&label);
-            header.append(&bookmark);
             let overlay = gtk::Overlay::new();
             overlay.set_child(Some(&area));
-            overlay.add_overlay(&header);
+            overlay.add_overlay(&label);
+            overlay.add_overlay(&bookmark);
             let popover: gtk::Popover = crate::squircle::Popover::new().upcast();
             popover.set_has_arrow(false);
             popover.set_autohide(false);
@@ -735,7 +731,7 @@ impl Component {
                     let _ = cr.save();
                     crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(
                         gtk::graphene::Rect::new(0., 0., layout.side, layout.side),
-                        SURFACE_RADIUS,
+                        layout.radius,
                     ));
                     cr.clip();
                     let _ = cr.save();
@@ -809,6 +805,7 @@ impl Component {
     fn preview_layout(&self, extent: f32) -> Result<SliderPreviewLayout, String> {
         slider_preview_layout(
             self.control,
+            self.root.imp().style.get(),
             self.value.get(),
             self.root.width().max(self.root.height()) as f32,
             extent,
@@ -825,6 +822,15 @@ impl Component {
         preview.area.set_content_width(layout.side as i32);
         preview.area.set_content_height(layout.side as i32);
         preview.label.set_text(&layout.text);
+        let caption = layout.caption;
+        preview.label.set_margin_start(caption.x as i32);
+        preview
+            .label
+            .set_size_request(caption.width as i32, caption.height as i32);
+        let button = layout.bookmark;
+        preview
+            .bookmark
+            .set_size_request(button.width as i32, button.height as i32);
         let selected = self.bookmarks.borrow().iter().any(|b| b.selected);
         if preview.selected.replace(Some(selected)) != Some(selected) {
             preview
@@ -839,6 +845,9 @@ impl Component {
             } else {
                 "Bookmark this value"
             }));
+        }
+        if let Some(icon) = preview.bookmark.child().and_downcast::<gtk::Image>() {
+            icon.set_pixel_size(layout.icon as i32);
         }
         preview.area.queue_draw();
     }

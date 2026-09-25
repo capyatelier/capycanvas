@@ -17,10 +17,10 @@ the former 8–10px circular corners.
   same rule with the header tile.
 - **Standalone toolbars** use their tile radius, so end tiles fill the toolbar
   ends exactly. `TileStyle::corner_radius` is published per panel as
-  `tile_corner_radius`.
+  `tile_corner_radius`. A slider's brush preview uses its toolbar's tile
+  radius; its tile-sized bookmark button fills the top-end corner.
 - **Surfaces** (panels, tab tops, drawers, collapsed columns, the title-bar
-  editor, notices and the brush-size preview) use `SURFACE_RADIUS`, 18px or
-  half a small tile.
+  editor and notices) use `SURFACE_RADIUS`, 18px or half a small tile.
 - **Panel controls** (buttons, entries, dropdowns, segmented choices and list
   highlights) use 12px, concentric with surfaces at the standard 6px inset.
   Controls 24px tall or shorter become capsules.
