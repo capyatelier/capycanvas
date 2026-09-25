@@ -18,8 +18,12 @@ import SwiftUI
     private var entries: [JSON] { model["zones"].array.flatMap(\.array) }
     private var size: JSON { view["sizes"].array.first { $0["id"].string == model["size"].string } ?? JSON() }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var light: Bool { store.state["theme"].string == "light" }
     private var geometry: JSON { header.preview.isNull ? header.geometry : header.preview["geometry"] }
+    private var radius: CGFloat { size["tile"].number / 2 }
+    private var barred: Set<UInt64> { Set(geometry["bars"].array.flatMap { $0["items"].array.map(\.uint) }) }
+    private func overflowInBar(_ zone: Int) -> Bool {
+        geometry["bars"].array.contains { !$0["overflow"].isNull && $0["overflow"].uint == UInt64(zone) }
+    }
     private var recoveryMenu: Bool {
         !editing && store.state["platform"].string != "mac"
             && !entries.contains { ["capy", "menu", "menu_labels", "workspaces"].contains($0["item"]["kind"].string) }
@@ -39,7 +43,8 @@ import SwiftUI
                 width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaceLibrary?.status["switcher_display"].array ?? [], textSize: 44.0 / 3))
                 compact = 144
             case "menu_labels":
-                width = ceil(store.snapshot["application_menus"].array.reduce(0) { $0 + EditorTextMetrics.width($1["label"].string, size: 44.0 / 3, weight: .bold) + 16 })
+                let textSize = store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44.0 / 3
+                width = ceil(ApplicationMenus.naturalWidth(store.snapshot["application_menus"].array, textSize: textSize))
                 compact = tile
             case "clock":
                 let text = editing && !store.state["fullscreen"].bool ? "Clock" : status.time
@@ -67,12 +72,19 @@ import SwiftUI
                     RoundedRectangle(cornerRadius: 6).stroke(palette["text"].opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3,3]))
                         .placed(geometry["zones"][zone]).allowsHitTesting(false)
                 }
+            } else {
+                ForEach(geometry["bars"].array.indices, id: \.self) { index in
+                    let bounds = geometry["bars"][index]["bounds"]
+                    SquircleShape(radius).fill(palette.chromeSurface)
+                        .placed(bounds).allowsHitTesting(false).accessibilityHidden(true)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: bounds.rect)
+                }
             }
             ForEach(entries, id: \.headerID) { entry in slot(entry) }
             if recoveryMenu {
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number)
                     .frame(width: size["tile"].number, height: size["tile"].number) }
-                    .buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
+                    .buttonStyle(HeaderButtonStyle(radius: radius))
                     .accessibilityLabel("Main Menu").accessibilityIdentifier("header-recovery-menu")
                     .offset(x: store.headerLeadingInset + 6, y: 6)
             }
@@ -86,7 +98,7 @@ import SwiftUI
                         } else {
                             EditorMenuButton(menu: { overflow(zone) }, identifier: "header-overflow-menu") { overflowIcon }
                         }
-                    }.buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
+                    }.buttonStyle(HeaderButtonStyle(inBar: !editing && overflowInBar(zone), radius: radius))
                         .accessibilityLabel("More title bar items")
                         .accessibilityIdentifier("header-overflow-\(zone)").placed(geometry["overflow"][zone])
                 }
@@ -102,8 +114,8 @@ import SwiftUI
                     ? entries.first(where: { $0["id"].uint == source["value"].uint }) ?? JSON()
                     : JSON(["id":0, "item":source["kind"].string == "tools" ? ["kind":"tools"] : source["value"].raw])
                 item(entry, width: header.preview["held"]["width"].number)
-                    .background(palette["panel"], in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(header.preview["detached"].bool ? .red : palette.accent, lineWidth: 2))
+                    .background(palette["panel"], in: SquircleShape(radius))
+                    .overlay(SquircleShape(radius).stroke(header.preview["detached"].bool ? .red : palette.accent, lineWidth: 2))
                     .placed(header.preview["held"]).allowsHitTesting(false).accessibilityHidden(true)
             }
             Color.clear.frame(width: header.menuAnchor.width, height: header.menuAnchor.height)
@@ -155,7 +167,7 @@ import SwiftUI
                         guard !header.contact.consumeClick() else { return }
                         header.selected = id; focused = true
                     } label: {
-                        item(entry, width: allocation["bounds"]["width"].number).allowsHitTesting(false)
+                        item(entry, width: allocation["bounds"]["width"].number, inBar: false).allowsHitTesting(false)
                             .overlay(Color.clear.contentShape(Rectangle()))
                     }
                         .buttonStyle(.plain).accessibilityLabel(metadata(entry)["label"].string)
@@ -163,11 +175,11 @@ import SwiftUI
                         .accessibilityAddTraits(header.selected == id ? .isSelected : [])
                         .modifier(HeaderSourceMeasurement(source: JSON(["kind":"item", "value":id])))
                 } else {
-                    item(entry, width: allocation["bounds"]["width"].number)
+                    item(entry, width: allocation["bounds"]["width"].number, inBar: barred.contains(id))
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":id])))
                 }
             }.modifier(HeaderControlMeasurement(id: "header-item-\(id)"))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(editing && header.selected == id ? palette.accent : .clear, lineWidth: 2))
+                .overlay(SquircleShape(radius).stroke(editing && header.selected == id ? palette.accent : .clear, lineWidth: 2))
                 .placed(allocation["bounds"]).opacity(held ? 0 : 1).allowsHitTesting(!held)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: allocation["bounds"].rect)
         }
@@ -203,13 +215,12 @@ import SwiftUI
         }.frame(width: 240, height: min(360, CGFloat(geometry["hidden"][zone].array.count) * 38 + 12))
             .onPreferenceChange(HeaderSources.self) { header.overflowSources = $0 }
     }
-    private func item(_ entry: JSON, width: CGFloat) -> some View {
+    private func item(_ entry: JSON, width: CGFloat, inBar: Bool = false) -> some View {
         HStack(spacing: 0) {
             if editing { SharedIcon(name: "grip", size: 12).frame(width: 20).opacity(0.5) }
             HeaderItemControl(store: store, entry: entry, description: metadata(entry), size: size, status: status,
-                width: max(0, width - (editing ? 20 : 0)), editing: editing)
+                width: max(0, width - (editing ? 20 : 0)), editing: editing, inBar: inBar)
         }.frame(width: width, height: size["tile"].number)
-            .background(editing && !light ? palette["bg"] : .clear, in: RoundedRectangle(cornerRadius: 6))
     }
     private func overflow(_ zone: Int) -> AppleContextMenu {
         let rows = geometry["hidden"][zone].array.compactMap { id -> Any? in
@@ -248,10 +259,11 @@ private struct HeaderItemControl: View {
     @ObservedObject var status: SystemStatus
     let width: CGFloat
     let editing: Bool
+    let inBar: Bool
     @State private var hovering = false
     private var kind: String { entry["item"]["kind"].string }
+    private var radius: CGFloat { size["tile"].number / 2 }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var light: Bool { store.state["theme"].string == "light" }
     private var drawerOpen: Bool {
         let anchor = store.state["customization"]["drawer"]["anchor"]
         return !editing && anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
@@ -264,18 +276,18 @@ private struct HeaderItemControl: View {
                     .modifier(HeaderControlMeasurement(id: "zen-button"))
             case "menu":
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                    .buttonStyle(EditorControlButtonStyle(active: hovering, background: palette.headerBackground(light: light), keepsBackground: light))
+                    .buttonStyle(HeaderButtonStyle(hovering: hovering, inBar: inBar, radius: radius))
                     .accessibilityLabel("Main Menu").accessibilityIdentifier("application-menus")
                     .modifier(HeaderControlMeasurement(id: "application-menus"))
-            case "menu_labels": ApplicationMenus(store: store, iconSize: size["icon"].number, tileSize: size["tile"].number)
+            case "menu_labels": ApplicationMenus(store: store, iconSize: size["icon"].number, tileSize: size["tile"].number, radius: radius)
             case "settings": tile("settings") { store.invoke("settings") }.accessibilityIdentifier("settings-button")
                     .modifier(HeaderControlMeasurement(id: "settings-button"))
             case "workspaces":
                 if let library = store.workspaceLibrary {
-                    WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette, maximumWidth: width)
+                    WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette, maximumWidth: width, tile: size["tile"].number)
                 } else { Text("Workspaces").lineLimit(1) }
             case "document_title":
-                DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width)
+                DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number)
                     .modifier(HeaderControlMeasurement(id: "document-title"))
             case "clock":
                 Text(editing && !store.state["fullscreen"].bool ? "Clock" : status.time).monospacedDigit().lineLimit(1)
@@ -290,10 +302,9 @@ private struct HeaderItemControl: View {
             case "tool":
                 if entry["item"]["control"]["kind"].string == "color" {
                     Button { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) } label: {
-                        HeaderPaintIcon(colors: store.displayColors, size: size["icon"].number)
+                        PaintPairIcon(rgba: store.paintPair, size: size["icon"].number)
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                    }.buttonStyle(EditorControlButtonStyle(active: hovering, joinedEdge: drawerOpen ? "bottom" : nil,
-                        background: palette.headerBackground(light: light), keepsBackground: light, drawerBackground: drawerOpen ? palette["panel"] : nil))
+                    }.buttonStyle(HeaderButtonStyle(hovering: hovering, inBar: inBar, drawerOpen: drawerOpen, radius: radius))
                         .accessibilityLabel(description["label"].string)
                 } else {
                     tile(description["icon"].string) {
@@ -306,34 +317,20 @@ private struct HeaderItemControl: View {
             }
         }.frame(width: width, height: size["tile"].number)
             .background {
-                if ["document_title", "clock", "battery"].contains(kind) {
-                    RoundedRectangle(cornerRadius: 6).fill(palette.headerBackground(light: light))
+                if ["clock", "battery"].contains(kind) || editing && ["space", "workspaces"].contains(kind) {
+                    SquircleShape(radius).fill(palette.chromeSurface)
                 }
             }.onHover { hovering = $0 }
     }
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
-        IconTile(icon: icon, label: description["label"].string, selected: description["selected"].bool,
-            enabled: editing || description["enabled"].bool,
-            size: kind == "capy" ? size["tile"].number * 440 / 512 : size["icon"].number,
-            active: hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette.headerBackground(light: light),
-            keepsBackground: light, drawerBackground: drawerOpen ? palette["panel"] : nil, action: action)
-    }
-}
-
-/// The canonical 16-unit color-pair icon, with the workspace's live paints.
-private struct HeaderPaintIcon: View {
-    let colors: JSON
-    let size: CGFloat
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            swatch("background", edge: 8.75).offset(x: 6.5 * size / 16, y: 6.5 * size / 16)
-            swatch("foreground", edge: 9.5).offset(x: 0.75 * size / 16, y: 0.75 * size / 16)
-        }.frame(width: size, height: size, alignment: .topLeading).accessibilityHidden(true)
-    }
-    private func swatch(_ slot: String, edge: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: size / 16)
-        return ColorSwatch(rgba: ColorUI.preview(colors[slot])["rgba"]).frame(width: edge * size / 16, height: edge * size / 16)
-            .clipShape(shape).overlay(shape.stroke(.foreground, lineWidth: size / 16))
+        let selected = description["selected"].bool, enabled = editing || description["enabled"].bool
+        return Button(action: action) {
+            SharedIcon(name: icon, size: kind == "capy" ? size["tile"].number * 440 / 512 : size["icon"].number)
+                .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+        }.buttonStyle(HeaderButtonStyle(selected: selected, hovering: hovering, inBar: inBar, drawerOpen: drawerOpen, radius: radius))
+            .disabled(!enabled).opacity(enabled ? 1 : 0.36)
+            .accessibilityLabel(description["label"].string).help(description["label"].string)
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

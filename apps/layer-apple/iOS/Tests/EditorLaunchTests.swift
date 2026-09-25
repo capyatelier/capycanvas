@@ -452,7 +452,8 @@ final class EditorLaunchTests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(editorDocumentTitle(in: app).exists)
-        XCTAssertFalse(app.buttons["zen-button"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["zen-button"].firstMatch.waitForExistence(timeout: 5),
+            "Zen keeps the standalone Capy by default")
         app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
         XCTAssertTrue(editorDocumentTitle(in: app).exists)

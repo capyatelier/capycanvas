@@ -73,6 +73,11 @@ import SwiftUI
     var paintPreview: JSON {
         snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()
     }
+    var paintPair: JSON {
+        let swatches = snapshot["color_panel"]["swatches"].array
+        func rgba(_ slot: String) -> Any { (swatches.first { $0["slot"].string == slot }?["rgba"] ?? JSON()).raw }
+        return JSON(["foreground": rgba("foreground"), "background": rgba("background")])
+    }
     var workspaceMotion: WorkspaceMotion { ui.workspace }
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared,

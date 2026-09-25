@@ -8,6 +8,7 @@ struct PhotoDropTarget: ViewModifier {
     var row: UInt64?
     @Environment(\.displayScale) private var scale
     @StateObject private var feedback = PhotoDropFeedback()
+    @Environment(\.editorPalette) private var palette
     @State private var height: CGFloat = 0
     func body(content: Content) -> some View {
         content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
@@ -16,11 +17,11 @@ struct PhotoDropTarget: ViewModifier {
             .overlay {
                 if row != nil, let position = feedback.position {
                     if position == "into" {
-                        Rectangle().stroke(EditorPalette.sharedAccent, lineWidth: 2).allowsHitTesting(false)
+                        Rectangle().stroke(palette.accent, lineWidth: 2).allowsHitTesting(false)
                     } else {
                         VStack(spacing: 0) {
                             if position == "below" { Spacer(minLength: 0) }
-                            Rectangle().fill(EditorPalette.sharedAccent).frame(height: 2)
+                            Rectangle().fill(palette.accent).frame(height: 2)
                             if position == "above" { Spacer(minLength: 0) }
                         }.allowsHitTesting(false)
                     }

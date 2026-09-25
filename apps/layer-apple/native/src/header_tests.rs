@@ -143,3 +143,59 @@ fn apple_header_capture_cancels_on_resize_blur_and_source_replacement() {
         }
     }
 }
+
+#[test]
+fn apple_header_joins_adjacent_icon_controls_into_bars_outside_customization() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let policy = unsafe { &*app.0 }.host.session.state().platform;
+        app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
+            layout: layer_ui::WorkspacePreset::Painter.layout(policy), ..Default::default()
+        }}));
+        let view = geometry(&app, platform);
+        let kinds = |bar: &Value| -> Vec<String> {
+            let header = &unsafe { &*app.0 }.host.session.state().workspace.layout.header;
+            bar["items"].as_array().unwrap().iter().map(|id| {
+                let entry = header.entry(id.as_u64().unwrap() as u32).unwrap();
+                serde_json::to_value(entry.item).unwrap()["kind"].as_str().unwrap().to_owned()
+            }).collect()
+        };
+        let bars = view["bars"].as_array().unwrap();
+        let groups: Vec<_> = bars.iter().map(kinds).collect();
+        assert_eq!(groups[0], ["capy"]);
+        assert_eq!(groups.last().unwrap(), &["tool"; 5]);
+        let menu = if platform == 0 { vec!["menu"] } else { vec![] };
+        assert_eq!(groups[1], [menu, vec!["tool"; 3]].concat());
+        for bar in bars {
+            let members: Vec<_> = view["items"].as_array().unwrap().iter()
+                .filter(|item| bar["items"].as_array().unwrap().contains(&item["id"])).collect();
+            for pair in members.windows(2) {
+                let end = pair[0]["bounds"]["x"].as_f64().unwrap() + pair[0]["bounds"]["width"].as_f64().unwrap();
+                assert_eq!(end, pair[1]["bounds"]["x"].as_f64().unwrap(), "members abut");
+            }
+            let tile = members[0]["bounds"]["height"].as_f64().unwrap();
+            assert_eq!(bar["bounds"]["height"].as_f64().unwrap(), tile - 2.);
+            assert_eq!(bar["bounds"]["y"].as_f64().unwrap(), members[0]["bounds"]["y"].as_f64().unwrap() + 1.);
+        }
+        app.invoke("customize_workspace_ui");
+        assert!(geometry(&app, platform)["bars"].as_array().unwrap().is_empty(), "Customization keeps items separate");
+    }
+}
+
+#[test]
+fn apple_palettes_publish_the_shared_selection_roles() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        for (theme, selection, header) in [("dark", "#40546e", "#40546e"), ("light", "#c0d7f6", "#afc6e5")] {
+            app.action(json!({"type":"set_theme","theme":theme}));
+            let palette = &app.state()["palette"];
+            assert_eq!(palette["selection"], selection, "{theme}");
+            assert_eq!(palette["header_selection"], header, "{theme}");
+            assert_eq!(palette["accent"], "#3584e4");
+            assert_eq!(palette["checker_light"], "#dcdcdc");
+        }
+        app.action(json!({"type":"preferences","action":{"type":"edit","id":"accent","value":"#e62d42"}}));
+        assert_eq!(app.state()["palette"]["accent"], "#e62d42");
+        assert_ne!(app.state()["palette"]["selection"], "#c0d7f6", "Selection follows the accent");
+    }
+}

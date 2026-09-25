@@ -21,6 +21,7 @@ struct EditorMenuButton<Label: View>: View {
 /// Familiar vertical menu rows, checkmarks, separators and submenu navigation,
 /// rendered by native controls on the editor's opaque palette.
 struct EditorActionMenu: View {
+    @Environment(\.editorPalette) private var palette
     let model: AppleContextMenu
     var width: CGFloat? = 340
     var identifier = "editor-action-menu"
@@ -75,7 +76,7 @@ struct EditorActionMenu: View {
             .accessibilityIdentifier(item.identifier)
             .accessibilityAddTraits(item.selected == true ? .isSelected : [])
             .id(index)
-            .background(focus == index ? EditorPalette.sharedAccent.opacity(0.15) : .clear,
+            .background(focus == index ? palette.accent.opacity(0.15) : .clear,
                 in: RoundedRectangle(cornerRadius: 4))
             .onHover { if $0 && item.enabled { focus = index } }
             .keyboardShortcut(item.bindings.first.flatMap { menuShortcut($0) })

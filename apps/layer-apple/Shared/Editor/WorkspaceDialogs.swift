@@ -85,8 +85,9 @@ private struct WorkspaceDialog: View {
                 Button(view["cancel_label"].string, role: .cancel) { action("cancel_toolbar") }
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("toolbar-prompt-cancel")
                 Button(view["confirm_label"].string, role: view["destructive"].bool ? .destructive : nil) { action("confirm_toolbar") }
-                    .buttonStyle(.borderedProminent).foregroundStyle(.white)
-                    .tint(view["destructive"].bool ? .red : EditorPalette.sharedAccent)
+                    .buttonStyle(.borderedProminent)
+                    .foregroundStyle(view["destructive"].bool ? .white : EditorPalette(source: store.state["palette"]).accentForeground)
+                    .tint(view["destructive"].bool ? .red : EditorPalette(source: store.state["palette"]).accent)
                     .keyboardShortcut(.defaultAction).disabled(!view["can_confirm"].bool)
                     .accessibilityIdentifier("toolbar-prompt-confirm")
             }

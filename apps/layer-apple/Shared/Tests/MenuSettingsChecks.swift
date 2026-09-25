@@ -97,9 +97,15 @@ extension XCTestCase {
             workspaceActivate(app.buttons["settings-button"])
             XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
         }
-        for label in ["Dark theme base color", "Light theme base color"] {
-            let field = app.textFields[label]
-            XCTAssertTrue(field.waitForExistence(timeout: 20))
+        for (id, label) in [("dark_base", "Dark theme base color"), ("light_base", "Light theme base color")] {
+            let custom = app.buttons["preference-\(id)-4"]
+            let field = app.textFields["preference-\(id)-custom"]
+            func openCustom() {
+                workspaceActivate(custom)
+                XCTAssertTrue(field.waitForExistence(timeout: 5))
+            }
+            XCTAssertTrue(custom.waitForExistence(timeout: 20))
+            openCustom()
             let defaultValue = field.value as? String ?? ""
             XCTAssertTrue(defaultValue.hasPrefix("#")); XCTAssertEqual(defaultValue.count, 7)
             func replace(_ value: String) {
@@ -117,6 +123,7 @@ extension XCTestCase {
                 expectation(for: NSPredicate(format: "value == %@", "#12ab34"), evaluatedWith: field)
                 waitForExpectations(timeout: 5)
                 reopen()
+                openCustom()
                 XCTAssertEqual(field.value as? String, "#12ab34", "Done must commit the limited native draft")
                 replace(draft)
                 XCTAssertEqual(field.value as? String, draft)
@@ -130,13 +137,17 @@ extension XCTestCase {
                 #endif
                 XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
                 workspaceActivate(reset)
-                expectation(for: NSPredicate(format: "value == %@", defaultValue), evaluatedWith: field)
-                waitForExpectations(timeout: 5)
                 reopen()
+                openCustom()
                 XCTAssertEqual(field.value as? String, defaultValue,
                     "Done/reopen must retain Reset instead of restoring the focused draft")
             }
         }
+        let accent = app.buttons["preference-accent-6"]
+        XCTAssertTrue(accent.waitForExistence(timeout: 10), "Appearance offers accent colors")
+        workspaceActivate(accent)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: accent)
+        waitForExpectations(timeout: 5)
         attachEditor(in: app, name: "settings-text-state")
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

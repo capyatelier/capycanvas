@@ -15683,7 +15683,7 @@ mod tests {
 
     #[test]
     fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let mut s = session(); s.set_platform(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
             for control in [ToolbarControl::Color, ToolbarControl::Panel { panel: Panel::Layers }] {

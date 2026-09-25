@@ -153,15 +153,10 @@ private struct ColorPanelButtonStyle: ButtonStyle {
 
 private struct ColorPaintPreview: View {
     let rgba: JSON
+    @Environment(\.editorPalette) private var palette
     var body: some View {
-        Canvas(colorMode: .extendedLinear) { graphics, size in
-            for row in 0..<Int(ceil(size.height / 5)) {
-                for column in 0..<Int(ceil(size.width / 5)) {
-                    let level = Double((row + column) % 2 == 0 ? 140 : 204) / 255
-                    graphics.fill(Path(CGRect(x: column * 5, y: row * 5, width: 5, height: 5)),
-                        with: .color(Color(.sRGB, white: level, opacity: 1)))
-                }
-            }
+        Canvas(colorMode: .extendedLinear) { [palette] graphics, size in
+            graphics.fillTransparencyChecker(size, palette: palette)
             graphics.fill(Path(CGRect(origin: .zero, size: size)), with: .color(rgba.paintColor))
         }.clipShape(Circle())
     }

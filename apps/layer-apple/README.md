@@ -122,9 +122,10 @@ The [toolbar component capture](../../tools/visual/README.md#toolbar-components)
 compares all five styles with Chrome using actual SwiftUI controls and shared
 vector assets, without launching an editor or automating window/menu controls.
 Component evidence supplements the full-editor visual and physical input gates.
-Icon, toolbar and tool-choice selections now share the editor accent and one
-disabled-opacity step over the whole button, independent of the Mac system
-accent. The [control-color matrix](../../tools/visual/README.md#editor-control-colors)
+Icon, toolbar and tool-choice selections use the shared palette's opaque
+`selection` role (title-bar tools and the switcher use `header_selection`) and one
+disabled-opacity step over the whole button. Both roles follow the Accent color
+setting; on Mac an unset accent follows the system accent. The [control-color matrix](../../tools/visual/README.md#editor-control-colors)
 compares enabled/selected combinations in both themes and retains full raw
 pixel differences; UIKit rendering and full-editor acceptance remain separate.
 
@@ -186,8 +187,8 @@ Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.
 Brush previews fill the row above a right-aligned single-line label, matching Web.
-Open tool buttons use the adjoining drawer's panel color; selection keeps its
-shared accent highlight.
+Open tool buttons use the adjoining drawer's panel color; selection keeps the
+shared selection color.
 The Tool panel shows the active tool's numeric fields and actions. Numeric
 expressions, units, ranges, slider mappings and stepping resolve through Rust.
 The shared Apple control
@@ -201,11 +202,10 @@ before closing, preserving valid drafts even when native focus-loss callbacks
 arrive afterward. Result and sidebar navigation release search focus, and the native sidebar
 width keeps page labels readable. Shared
 text fields ignore unchanged native callbacks so ending editing cannot resubmit
-the old query after navigation clears it. Run `tests/settings-text-input.swift` with
-`scripts/test-project-files.sh` for both theme-color fields on the shared Apple
-presets, including Reset to Default while a text draft is focused and subsequent
-Done/reopen. Updated theme-color values replace the focused draft so Done cannot
-restore a discarded value. The grouped `testNumericSettingsDone` editor workflow checks expression
+the old query after navigation clears it. The `testSettingsTextState` journey types
+into both theme-color Custom entries on macOS and iPad, including the seven-character
+limit, Done/reopen, and Reset to Default while a draft is focused. A changed shared
+value closes the Custom entry so Done cannot restore a discarded draft. The grouped `testNumericSettingsDone` editor workflow checks expression
 entry, Done, reopen, search-result/sidebar navigation and iPad keyboard dismissal
 through the actual native Settings window.
 
@@ -635,11 +635,12 @@ placeholders while windowed or when battery data is unavailable. iPad observes
 and compares its coordinate space with its display; Mac observes native window
 fullscreen notifications. Neither observation requests an iPad fullscreen change.
 
-Small, Medium and Large use shared tile/icon dimensions and six-point gaps.
-The selector retains its pill background and compacts to a menu when necessary.
-Title-bar controls, menu labels and status text use Web's rounded theme-gray
-backgrounds over artwork; gaps retain the live canvas. Color shows the live
-foreground/background paints. The retired text/icon halo renderer is removed. See the
+Small, Medium and Large use shared tile/icon dimensions. Adjacent icon controls
+join the shared geometry's bars with no gaps; separate items keep six-point gaps.
+Bars, menu labels, the title or drawing-tab strip, clock, battery and status
+readouts use the canvas surround at 75% opacity with the tile's squircle radius,
+and the selector's well uses the tab-bar color at 75%; gaps retain the live
+canvas. Color shows the live foreground/background paints as overlapping circles. The retired text/icon halo renderer is removed. See the
 [header comparison](../../tools/visual/README.md#complete-header-components)
 for native/Web captures and recorded host differences.
 

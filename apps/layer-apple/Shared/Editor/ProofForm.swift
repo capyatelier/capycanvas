@@ -6,8 +6,8 @@ struct ProofIndicator: View {
     var body: some View {
         if !model.status.isEmpty {
             Text(model.status).lineLimit(1).truncationMode(.middle)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(palette["bg"], in: Capsule())
+                .padding(.horizontal, 10).padding(.vertical, 3)
+                .background(palette.chromeSurface, in: Capsule())
                 .help(model.error ?? model.status).allowsHitTesting(false)
                 .accessibilityIdentifier("proof-status")
         }
@@ -22,9 +22,8 @@ struct HDRDisplayIndicator: View {
     var body: some View {
         if status["hdr"].bool {
             Button { details = true } label: {
-                Text(status["label"].string).lineLimit(1).padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(palette["bg"], in: Capsule())
-            }.buttonStyle(.plain).accessibilityIdentifier("hdr-status").help("Display Details")
+                Text(status["label"].string).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 3)
+            }.buttonStyle(ReadoutButtonStyle(palette: palette)).accessibilityIdentifier("hdr-status").help("Display Details")
                 .popover(isPresented: $details) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Display Details").font(.headline)
@@ -48,5 +47,25 @@ struct ProofPresentation: ViewModifier {
         .onAppear { model.setPaused(phase == .background) }
         .onChange(of: phase) { _, phase in model.setPaused(phase == .background) }
         .onDisappear { model.setPaused(true) }
+    }
+}
+
+private struct ReadoutButtonStyle: ButtonStyle {
+    let palette: EditorPalette
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, palette: palette) }
+    private struct Face: View {
+        let configuration: Configuration
+        let palette: EditorPalette
+        @State private var hovering = false
+        var body: some View {
+            configuration.label.background {
+                ZStack {
+                    Capsule().fill(palette.chromeSurface)
+                    if configuration.isPressed || hovering {
+                        Capsule().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
+                    }
+                }
+            }.onHover { hovering = $0 }
+        }
     }
 }
