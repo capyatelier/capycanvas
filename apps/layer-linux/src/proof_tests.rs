@@ -238,9 +238,9 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     let w = Workspace::with_project(&app, Some((new_drawing(128, 64).unwrap(), None)));
     w.window.present();
     ready(&w);
-    let output = std::path::Path::new("../../artifacts/color-m3/profile-review-2")
-        .canonicalize()
-        .unwrap();
+    let output = std::path::Path::new("../../artifacts/color-m3/profile-review-2");
+    std::fs::create_dir_all(output).unwrap();
+    let output = output.canonicalize().unwrap();
     let path = output.join("Unhelpful filename.icm");
     let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
     std::fs::write(&path, &bytes).unwrap();
