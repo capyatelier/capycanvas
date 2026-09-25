@@ -22,9 +22,9 @@ export function createGlass({ app, canvas, workspace, connections, enabled, wake
     if (enabled()) {
       const origin = canvas.getBoundingClientRect();
       for (const node of workspace.querySelectorAll(surfaces)) {
-        if (!node.checkVisibility({ visibilityProperty: true }) || node.closest(zen)) continue;
+        if (node.closest(zen)) continue;
         const r = node.getBoundingClientRect(), style = getComputedStyle(node);
-        if (r.width > 0 && r.height > 0)
+        if (r.width > 0 && r.height > 0 && style.visibility === "visible")
           boxes.push(r.x - origin.x, r.y - origin.y, r.width, r.height, ...corners.map(corner => parseFloat(style[corner]) || 0));
       }
     }
