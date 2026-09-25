@@ -8,6 +8,7 @@ const KEEP_ROUND: &str = "capy-keep-round";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
 pub const CORNER_FIT: f32 = 0.54;
+const SHADOW_SLICES: [(usize, usize); 8] = [(0, 0), (1, 0), (2, 0), (0, 1), (2, 1), (0, 2), (1, 2), (2, 2)];
 
 pub fn append_round(snapshot: &gtk::Snapshot, round: gtk::Snapshot) {
     if let Some(node) = round.to_node() {
@@ -125,12 +126,128 @@ fn rasterize(scale: f64, outer: &gsk::RoundedRect, inner: Option<&gsk::RoundedRe
         .upcast()
 }
 
+struct ShadowGeometry {
+    key: [u32; 22],
+    insets: [f32; 4],
+    edge: usize,
+    inset: usize,
+}
+
+impl ShadowGeometry {
+    fn new(scale: f64, shape: &gsk::RoundedRect, outline: &gsk::RoundedRect, blur: f32) -> Self {
+        let (s, o) = (shape.bounds(), outline.bounds());
+        let quantum = 16. * scale as f32;
+        let insets = [
+            o.x() - s.x(),
+            o.y() - s.y(),
+            s.x() + s.width() - o.x() - o.width(),
+            s.y() + s.height() - o.y() - o.height(),
+        ]
+        .map(|inset| (inset * quantum).round() / quantum);
+        let corners = shape.corner().iter().chain(outline.corner()).flat_map(|c| [c.width(), c.height()]);
+        let reach = corners.clone().fold(0f32, f32::max) + insets.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let edge = (1.5 * f64::from(blur) * scale).ceil() as usize;
+        let inset = (f64::from(reach) * scale).ceil() as usize + edge + 1;
+        let mut key = [0; 22];
+        let values = [scale as f32, blur].into_iter().chain(corners).chain(insets);
+        for (slot, value) in key.iter_mut().zip(values) {
+            *slot = value.to_bits();
+        }
+        Self { key, insets, edge, inset }
+    }
+
+    fn slices(&self, scale: f64, shape: &gsk::RoundedRect, outline: &gsk::RoundedRect, blur: f32) -> [gdk::Texture; 8] {
+        let size = 2 * (self.edge + self.inset) + 1;
+        let span = (2 * self.inset + 1) as f32 / scale as f32;
+        let [i_left, i_top, i_right, i_bottom] = self.insets;
+        let [tl, tr, br, bl] = *shape.corner();
+        let shape = gsk::RoundedRect::new(graphene::Rect::new(0., 0., span, span), tl, tr, br, bl);
+        let [tl, tr, br, bl] = *outline.corner();
+        let outline = gsk::RoundedRect::new(
+            graphene::Rect::new(i_left, i_top, span - i_left - i_right, span - i_top - i_bottom),
+            tl,
+            tr,
+            br,
+            bl,
+        );
+        let origin = self.edge as f64 / scale;
+        let mut alpha = coverage(size, scale, origin, &shape);
+        gaussian_blur(&mut alpha, size, 0.5 * f64::from(blur) * scale);
+        for (value, covered) in alpha.iter_mut().zip(coverage(size, scale, origin, &outline)) {
+            *value *= 1. - covered;
+        }
+        let cut = [0, self.edge + self.inset, self.edge + self.inset + 1, size];
+        SHADOW_SLICES.map(|(column, row)| {
+            let [x0, x1, y0, y1] = [cut[column], cut[column + 1], cut[row], cut[row + 1]];
+            let bytes: Vec<u8> = (y0..y1)
+                .flat_map(|y| alpha[y * size + x0..y * size + x1].iter().map(|v| (v * 255.).round().clamp(0., 255.) as u8))
+                .collect();
+            gdk::MemoryTexture::new(
+                (x1 - x0) as i32,
+                (y1 - y0) as i32,
+                gdk::MemoryFormat::A8,
+                &glib::Bytes::from_owned(bytes),
+                x1 - x0,
+            )
+            .upcast()
+        })
+    }
+}
+
+fn coverage(size: usize, scale: f64, origin: f64, rect: &gsk::RoundedRect) -> Vec<f32> {
+    let mut surface = cairo::ImageSurface::create(cairo::Format::A8, size as i32, size as i32)
+        .expect("allocate shadow shape");
+    {
+        let cr = cairo::Context::new(&surface).expect("draw shadow shape");
+        cr.scale(scale, scale);
+        cr.translate(origin, origin);
+        rounded_rect(&cr, rect);
+        let _ = cr.fill();
+    }
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("read shadow shape");
+    (0..size).flat_map(|y| data[y * stride..][..size].iter().map(|&a| f32::from(a) / 255.)).collect()
+}
+
+fn box_widths(sigma: f64) -> [usize; 3] {
+    let ideal = (4. * sigma * sigma + 1.).sqrt().floor().max(1.) as usize;
+    let lower = if ideal.is_multiple_of(2) { ideal - 1 } else { ideal };
+    let l = lower as f64;
+    let lower_count = ((12. * sigma * sigma - 3. * l * l - 12. * l - 9.) / (-4. * l - 4.)).round();
+    std::array::from_fn(|i| if (i as f64) < lower_count { lower } else { lower + 2 })
+}
+
+fn gaussian_blur(values: &mut [f32], size: usize, sigma: f64) {
+    let mut line = vec![0f32; size];
+    for width in box_widths(sigma) {
+        let radius = width / 2;
+        for (step, stride) in [(1, size), (size, 1)] {
+            for start in (0..size).map(|i| i * stride) {
+                for (i, value) in line.iter_mut().enumerate() {
+                    *value = values[start + i * step];
+                }
+                let mut sum: f32 = line[..=radius.min(size - 1)].iter().sum();
+                for i in 0..size {
+                    values[start + i * step] = sum / width as f32;
+                    if i + radius + 1 < size {
+                        sum += line[i + radius + 1];
+                    }
+                    if i >= radius {
+                        sum -= line[i - radius];
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Converter {
     scale: f64,
     nodes: HashMap<usize, (gsk::RenderNode, gsk::RenderNode)>,
     previous: HashMap<usize, (gsk::RenderNode, gsk::RenderNode)>,
     masks: HashMap<MaskKey, glib::WeakRef<gdk::Texture>>,
+    shadows: HashMap<[u32; 22], [gdk::Texture; 8]>,
 }
 
 impl Converter {
@@ -141,6 +258,9 @@ impl Converter {
         self.previous = std::mem::take(&mut self.nodes);
         if self.masks.len() > MASK_PRUNE_THRESHOLD {
             self.masks.retain(|_, mask| mask.upgrade().is_some());
+        }
+        if self.shadows.len() > MASK_PRUNE_THRESHOLD {
+            self.shadows.clear();
         }
         let converted = self.convert(node);
         self.previous.clear();
@@ -239,7 +359,7 @@ impl Converter {
         }
         if let Some(shadow) = node.downcast_ref::<gsk::OutsetShadowNode>() {
             let outline = shadow.outline();
-            if shadow.blur_radius() > 0. || outline.is_rectilinear() {
+            if outline.is_rectilinear() {
                 return node.clone();
             }
             let spread = shadow.spread();
@@ -247,6 +367,10 @@ impl Converter {
             let mut outer = inner;
             outer.offset(shadow.dx(), shadow.dy());
             outer.shrink(-spread, -spread, -spread, -spread);
+            let blur = shadow.blur_radius();
+            if blur > 0. {
+                return self.blurred_shadow(&outer, &inner, &shadow.color(), blur);
+            }
             return self.ring(&outer, &inner, &shadow.color());
         }
         if let Some(shadow) = node.downcast_ref::<gsk::InsetShadowNode>() {
@@ -267,6 +391,48 @@ impl Converter {
     fn ring(&mut self, outer: &gsk::RoundedRect, inner: &gsk::RoundedRect, color: &gdk::RGBA) -> gsk::RenderNode {
         let fill = gsk::ColorNode::new(color, outer.bounds());
         gsk::MaskNode::new(fill, self.mask(outer, Some(inner)), gsk::MaskMode::Alpha).upcast()
+    }
+
+    fn blurred_shadow(
+        &mut self,
+        shape: &gsk::RoundedRect,
+        outline: &gsk::RoundedRect,
+        color: &gdk::RGBA,
+        blur: f32,
+    ) -> gsk::RenderNode {
+        let geometry = ShadowGeometry::new(self.scale, shape, outline, blur);
+        let bounds = shape.bounds();
+        let scale = self.scale as f32;
+        let minimum = (2 * geometry.inset + 1) as f32 / scale;
+        if bounds.width() < minimum || bounds.height() < minimum {
+            let fill = gsk::ColorNode::new(color, bounds);
+            let shadow = gsk::MaskNode::new(fill, self.mask(shape, None), gsk::MaskMode::Alpha);
+            let blurred = gsk::BlurNode::new(shadow, blur);
+            return gsk::MaskNode::new(blurred, self.mask(outline, None), gsk::MaskMode::InvertedAlpha).upcast();
+        }
+        let textures = self
+            .shadows
+            .entry(geometry.key)
+            .or_insert_with(|| geometry.slices(self.scale, shape, outline, blur));
+        let (edge, inset) = (geometry.edge as f32 / scale, geometry.inset as f32 / scale);
+        let (x, y) = (bounds.x(), bounds.y());
+        let (right, bottom) = (x + bounds.width(), y + bounds.height());
+        let xs = [x - edge, x + inset, right - inset, right + edge];
+        let ys = [y - edge, y + inset, bottom - inset, bottom + edge];
+        let slices: Vec<_> = SHADOW_SLICES
+            .into_iter()
+            .zip(textures.iter())
+            .map(|((column, row), texture)| {
+                let area = graphene::Rect::new(xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]);
+                gsk::MaskNode::new(
+                    gsk::ColorNode::new(color, &area),
+                    gsk::TextureNode::new(texture, &area),
+                    gsk::MaskMode::Alpha,
+                )
+                .upcast()
+            })
+            .collect();
+        gsk::ContainerNode::new(&slices).upcast()
     }
 
     fn mask(&mut self, outer: &gsk::RoundedRect, inner: Option<&gsk::RoundedRect>) -> gsk::RenderNode {

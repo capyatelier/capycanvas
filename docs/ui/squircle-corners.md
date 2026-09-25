@@ -51,14 +51,22 @@ at 45°. Web uses this `--corner-fit` only when `corner-shape` is unsupported,
 keeping tiles as rounded squares rather than circles.
 
 GTK CSS has no `corner-shape`, so its stylesheet always declares the fitted
-circular radius (design radius × `--corner-fit`). GTK's own hit testing,
-overflow picking and blurred shadows therefore cover every painted pixel.
+circular radius (design radius × `--corner-fit`). GTK's own hit testing and
+overflow picking therefore cover every painted pixel.
 `squircle::Squircles` wraps the workspace window content and redraws each
-circular rounded clip, uniform border or outline, and crisp shadow ring as a
+circular rounded clip, uniform border or outline, and outset shadow as a
 squircle with the circle radius divided by the fit. Undesigned toolkit radii
 keep their former visual rounding the same way. Masks are rasterized once per
 device-pixel geometry and reused as GPU textures; unchanged render nodes,
 including shadow-wrapped subtrees, are reused between frames.
+Blurred outset shadows never reach GTK's analytic box-shadow shader. In GTK
+4.22 it returns NaN near rounded corners for some radius-to-blur ratios on
+NVIDIA, including the 9.72px drawer radius with its 24px blur. HDR windows
+render in float, so Mutter shows those pixels as black boxes; SDR loses the
+shadow there. Each shadow style (corner radii, blur, offset and scale) is
+instead blurred once on the CPU, about 2 ms for the drawer shadow at 2×, and
+drawn as nine cached slices. Shapes too small for the slices use a GSK blur
+node.
 `squircle::Popover` applies the same conversion to the brush-size preview.
 Subtrees that must stay round are drawn through `squircle::append_round`.
 Rust-drawn rounded rectangles in the workspace multiply design radii by
@@ -71,9 +79,11 @@ Android uses `SquircleShape`, a Compose `CornerBasedShape`, through
 ## Validation
 
 - GTK: `tools/performance/workspace-motion.sh gtk` with
-  `--native-test=native_squircle_corners` (corner picks reach tiles and
-  shadowed subtrees convert), `--native-test=native_toolbar_visual_audit_input`,
-  `--drawer-style` and `--drag-pickup`. `--workspace-motion` presentation rate
+  `--native-test=native_squircle_corners` (corner picks reach tiles,
+  shadowed subtrees convert and blurred drawer shadows stay finite; add
+  `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR path),
+  `--native-test=native_toolbar_visual_audit_input`, `--drawer-style` and
+  `--drag-pickup`. `--workspace-motion` presentation rate
   is unchanged by the conversion.
 - Web: `apps/layer-web/test.mjs` with `--drawer-style`, `--toolbar-components`,
   `--compact-workspaces`, `--tab-styles` and `--title-bar-state`.
