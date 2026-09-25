@@ -59,7 +59,7 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <Link><SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll.lib;windowsapp.lib;user32.lib;shell32.lib;shcore.lib;comctl32.lib;d3d11.lib;d2d1.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll.lib;windowsapp.lib;user32.lib;shell32.lib;dwmapi.lib;shcore.lib;comctl32.lib;d3d11.lib;d2d1.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>

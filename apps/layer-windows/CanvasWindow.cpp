@@ -7,6 +7,7 @@
 #include <microsoft.ui.xaml.window.h>
 #include <ShellScalingApi.h>
 #include <CommCtrl.h>
+#include <dwmapi.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <algorithm>
@@ -42,6 +43,12 @@ static uint64_t Now() {
     QueryPerformanceCounter(&ticks); QueryPerformanceFrequency(&frequency);
     return uint64_t(ticks.QuadPart / frequency.QuadPart) * 1000000000ULL
         + uint64_t(ticks.QuadPart % frequency.QuadPart) * 1000000000ULL / uint64_t(frequency.QuadPart);
+}
+static std::chrono::nanoseconds RefreshPeriod() {
+    DWM_TIMING_INFO info{};info.cbSize=sizeof(info);LARGE_INTEGER frequency;
+    if(SUCCEEDED(DwmGetCompositionTimingInfo(nullptr,&info))&&info.qpcRefreshPeriod&&QueryPerformanceFrequency(&frequency))
+        return std::chrono::nanoseconds(int64_t(double(info.qpcRefreshPeriod)*1e9/double(frequency.QuadPart)));
+    return std::chrono::microseconds(16667);
 }
 void CapyLifecycle(char const* event) {
     if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
@@ -782,6 +789,7 @@ void CanvasWindow::Run() {
         bool probe=GetEnvironmentVariableW(L"CAPY_PRESENT_PROBE",nullptr,0)!=0;
         bool probeReady=false;
         unsigned recoveryAttempts=0;
+        std::optional<std::chrono::steady_clock::time_point> lastPresent;
         for(;prepared;) {
             if(capy_device_lost(host)){
                 try {
@@ -819,6 +827,13 @@ void CanvasWindow::Run() {
             }
             // An idle service deadline can save/renew without submitting a frame.
             {std::lock_guard lock(mutex);if(!dirty&&!transportFailed&&work.Empty()&&!pendingHover&&previewWork.Empty())continue;}
+            if(lastPresent){
+                std::unique_lock lock(mutex);
+                auto input=[&]{return closing||resize||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();};
+                if(!input())wake.wait_until(lock,*lastPresent+RefreshPeriod(),input);
+                if(closing)break;
+                if(resize)continue;
+            }
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
             auto acquireStart=latencyTrace.enabled?Now():0;
             auto acquired=capy_acquire(host);
@@ -855,6 +870,7 @@ void CanvasWindow::Run() {
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(capy_error());break;}
             dirty=result!=0;
+            lastPresent=std::chrono::steady_clock::now();
             if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
             {std::lock_guard lock(mutex);revision=capy_view_revision(host);}
             if(auto snapshot=capy_snapshot(host)) {
