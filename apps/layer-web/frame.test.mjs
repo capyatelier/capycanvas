@@ -15,6 +15,7 @@ function harness() {
     performance: { now: () => current },
     app: { frame(...args) { calls.push(args); return {}; } },
     flushWorkspacePresentation() {},
+    glass: { flush() {} },
     applyChange() {},
     refreshStartup() {},
     scheduleCompiler() {},
