@@ -448,17 +448,17 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
         (
             CommandId::OpenDocument,
             b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
-            "Gain-map import is not supported",
+            "JPEG gain map has no MPF directory",
         ),
         (
             CommandId::ImportImage,
             b"MPF\0".as_slice(),
-            "Multiple-picture JPEG is not supported",
+            "Invalid JPEG MPF directory",
         ),
         (
             CommandId::PasteImage,
             b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
-            "Gain-map import is not supported",
+            "JPEG gain map has no MPF directory",
         ),
     ] {
         // A valid ordinary JPEG with a recognized richer-container declaration.

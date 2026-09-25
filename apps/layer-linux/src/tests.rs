@@ -765,13 +765,16 @@ fn native_document_files() {
                 advanced.set_expanded(true);
                 let intent = find_named(options.upcast_ref(), "export-intent").unwrap()
                     .downcast::<adw::ComboRow>().unwrap();
-                assert!(find_named(options.upcast_ref(), "export-bpc").is_none());
+                let bpc = find_named(options.upcast_ref(), "export-bpc").unwrap()
+                    .downcast::<adw::SwitchRow>().unwrap();
                 let dither = find_named(options.upcast_ref(), "export-dither").unwrap()
                     .downcast::<adw::SwitchRow>().unwrap();
                 assert_eq!(intent.selected(), 0);
                 assert!(!dither.is_active());
                 intent.set_selected(3);
+                assert!(!bpc.is_sensitive() && !bpc.is_active());
                 intent.set_selected(0);
+                assert!(bpc.is_sensitive());
                 dither.set_active(true);
                 pump(350);
                 let scroll = find_named(options.upcast_ref(), "export-color-scroll").unwrap()
