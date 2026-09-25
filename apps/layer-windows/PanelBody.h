@@ -2,6 +2,7 @@
 #include "UiControls.h"
 #include "NavigatorView.h"
 #include "WorkspaceGestures.h"
+#include "ToolbarComponents.h"
 
 // Undecorated native panel content. Each placement owns its widgets while
 // WorkspaceData shares preview/thumbnail caches and shared document state.
@@ -26,6 +27,7 @@ private:
     std::function<CapyUi::J()> scrollMetrics;
     std::vector<uint32_t> tileOrder;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Border> dividers;
+    std::map<uint32_t,std::shared_ptr<ToolbarComponent>> components;
     winrt::Microsoft::UI::Xaml::FrameworkElement tileGrip{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Image tileGripMark{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid sizes(double width);

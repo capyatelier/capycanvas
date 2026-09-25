@@ -113,7 +113,7 @@ try{
     Edit 'tool-picker-search' 'pen'
     Wait-Until {(Model).picker.query -eq 'pen'} 'Shared picker did not finish search'
     Wait-Until {$visible=$picker.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::CheckBox));$visible.Count -eq @((Model).picker.choices).Count} 'Native picker did not settle its search results'
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::CheckBox));$visible.Count -gt 0 -and $visible.Count -le @((Model).picker.choices).Count -and $null -ne (Find 'picker-choice-command-pen')} 'Native picker did not settle its search results'
     $pen=Control 'picker-choice-command-pen'
     $identity=$pen.GetRuntimeId() -join ':'
     $pen.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()

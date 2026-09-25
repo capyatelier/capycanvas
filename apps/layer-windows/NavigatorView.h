@@ -8,6 +8,7 @@ public:
     ~NavigatorView();
     winrt::Microsoft::UI::Xaml::FrameworkElement Root() const;
     void Apply(bool visible);
+    double NaturalHeight(double width) const;
     CapyUi::J Placement(winrt::Microsoft::UI::Xaml::UIElement const& reference,
         winrt::Windows::Foundation::Rect clip, int order) const;
 private:

@@ -1155,36 +1155,12 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain(platform.color_picker().then_some(ToolbarControl::ColorPicker))
-        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
-            .into_iter().filter(move |_| ToolbarControl::components_available(platform)))
-        .chain(
-            matches!(
-                platform,
-                Platform::Gtk
-                    | Platform::Generic
-                    | Platform::Android
-                    | Platform::Web
-                    | Platform::Ios
-                    | Platform::Mac
-            )
-            .then_some(ToolbarControl::Divider),
-        )
+        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])
+        .chain([ToolbarControl::Divider])
         .chain(
             Panel::ALL
                 .into_iter()
-                .filter(move |p| {
-                    p.kind() == PanelKind::Content
-                        && p.available_on(platform)
-                        && matches!(
-                            platform,
-                            Platform::Gtk
-                                | Platform::Generic
-                                | Platform::Android
-                                | Platform::Web
-                                | Platform::Ios
-                                | Platform::Mac
-                        )
-                })
+                .filter(move |p| p.kind() == PanelKind::Content && p.available_on(platform))
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
         .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
@@ -1309,16 +1285,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                     (state.brush.diameter - pixels as f32).abs() < 0.01
                 }
                 ToolbarControl::Panel { panel } => {
-                    enabled = panel.available_on(state.platform)
-                        && matches!(
-                            state.platform,
-                            Platform::Gtk
-                                | Platform::Generic
-                                | Platform::Android
-                                | Platform::Web
-                                | Platform::Ios
-                                | Platform::Mac
-                        );
+                    enabled = panel.available_on(state.platform);
                     false
                 }
                 _ => false,

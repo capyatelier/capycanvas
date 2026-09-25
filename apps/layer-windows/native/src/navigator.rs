@@ -100,6 +100,10 @@ pub unsafe extern "C" fn capy_navigator_image(
     }
     true
 }
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_navigator_aspect(document_width: u32, document_height: u32) -> f32 {
+    layer_ui::NavigatorGeometry::overview_aspect([document_width, document_height])
+}
 #[cfg(test)]
 mod tests {
     use super::*;
