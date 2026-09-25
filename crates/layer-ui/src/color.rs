@@ -1223,7 +1223,6 @@ impl ColorPanelLayout {
                 - separation * separation) / (2. * previous_distance * distance)).clamp(-1., 1.);
             let angle = dy.atan2(dx) + cosine.acos();
             circle[0] = center + distance * angle.cos() - radius;
-            // Keep the footer compact; this changes the narrow-size gap by about 1px.
             circle[1] = (center + distance * angle.sin() - radius).min(bottom - circle[3]);
             previous = *circle;
         }
@@ -1247,7 +1246,8 @@ impl ColorPanelLayout {
         let c = size * 0.5;
         let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
         let transparent = [size - bg, foreground[1], bg, bg];
-        let neutral_size = (bg * 0.80).round().max(20.);
+        let white = (bg * 0.64).round().max(20.);
+        let black = (bg * 0.8).round().max(white + 2.);
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
@@ -1256,8 +1256,8 @@ impl ColorPanelLayout {
             foreground,
             background,
             transparent,
-            black: [0., 0., neutral_size, neutral_size],
-            white: [0., 0., neutral_size, neutral_size],
+            black: [0., 0., black, black],
+            white: [0., 0., white, white],
             edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
@@ -1733,9 +1733,32 @@ mod tests {
             assert_eq!(l.background[2], l.transparent[2]);
             assert_eq!(l.foreground[1], l.transparent[1]);
             assert_eq!(l.transparent[0], size as f32 - l.transparent[2]);
-            assert!(l.black[2] < l.background[2]);
-            assert_eq!(l.white[2], l.black[2]);
+            assert!(l.white[2] >= 20. && l.white[2] < l.black[2] && l.black[2] < l.transparent[2]);
             assert!(l.foreground[2] > l.background[2]);
+        }
+    }
+
+    #[test]
+    fn neutral_swatches_shrink_along_an_equal_gap_arc() {
+        for size in 128..=600 {
+            for l in [
+                ColorPanelLayout::new(size as f32),
+                ColorPanelLayout::with_hdr(size as f32),
+            ] {
+                let l = l.unwrap();
+                let c = size as f32 * 0.5;
+                let gap =
+                    |b: [f32; 4]| (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c) - b[2] * 0.5;
+                let center = |b: [f32; 4]| (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c);
+                for b in [l.black, l.white] {
+                    let difference = (gap(b) - gap(l.transparent)).abs();
+                    assert!(difference < if size < 200 { 1.5 } else { 0.01 }, "{size}: {b:?} {difference}");
+                }
+                assert!(
+                    center(l.transparent) > center(l.black) && center(l.black) > center(l.white)
+                );
+                assert!(l.white[1] + l.white[3] <= l.background[1] + l.background[3]);
+            }
         }
     }
 

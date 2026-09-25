@@ -261,8 +261,9 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .property-section { margin-left: 6px; }
 .renderer-stats { margin: 6px; }
 /* The swatch pair intentionally overlaps; round hit regions match the paint. */
-.color-panel .color-swatch, .color-panel .color-utility { min-width:0; min-height:0; padding:3px; border-radius:999px; background:var(--window-bg-color); }
-.color-panel .color-swatch { box-shadow:inset 0 0 0 1px alpha(var(--window-fg-color), .25); }
+.color-panel .color-swatch, .color-panel .color-utility { min-width:0; min-height:0; padding:3px; border-radius:999px; }
+.color-panel .color-swatch { padding:1px; background:var(--panel-bg); box-shadow:inset 0 0 0 1px alpha(var(--window-fg-color), .25); }
+.color-panel #color-Foreground { padding:3px; }
 .color-panel .color-swatch.selected-tool, .color-panel .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--window-fg-color); }
 .color-panel .color-utility { background:transparent; }
 .color-panel .color-utility:hover { background:alpha(var(--window-fg-color), .12); }

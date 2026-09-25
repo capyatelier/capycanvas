@@ -105,7 +105,8 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                         .semantics { selected = preset.getBoolean("selected") },
                         onClick = { color(obj("op" to "quick_color", "white" to white)) }) { _, hovered ->
                         Canvas(Modifier.matchParentSize()) {
-                            drawCircle(preset.array("rgba").color())
+                            drawCircle(colors.panel)
+                            drawCircle(preset.array("rgba").color(), size.minDimension / 2 - 1.dp.toPx())
                             val stroke = (if (preset.getBoolean("selected") || hovered) 2.dp else 1.dp).toPx()
                             drawCircle(colors.text.copy(alpha = if (preset.getBoolean("selected") || hovered) 1f else .25f), size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
                         }
