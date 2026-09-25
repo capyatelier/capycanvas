@@ -217,7 +217,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     auto root=fittedColor.XamlRoot();
                     return ColorPanelNaturalHeight(data,fittedColor.ActualWidth(),root?root.RasterizationScale():1.)+2*inset;
                 };
-            }else if(!scrollable)root=content;
+            }else if(!scrollable||str(panel,L"id")==L"proof")root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
@@ -231,7 +231,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root=scroll;
             }
         }
-    if(!scrollMetrics&&(contentHeight||navigator)&&str(panel,L"id")!=L"color")
+    if(!scrollMetrics&&(contentHeight||navigator)&&str(panel,L"id")!=L"color"&&str(panel,L"id")!=L"proof")
         scrollMetrics=[]{return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
     if(!scrollable){
         auto id=str(panel,L"id");

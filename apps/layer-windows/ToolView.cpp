@@ -28,7 +28,7 @@ Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item,bool bol
     row.Children().Append(icon(str(item,L"icon"),data->theme()));
     auto title=label(data,str(item,L"label"),bold);title.TextTrimming(TextTrimming::CharacterEllipsis);
     title.VerticalAlignment(VerticalAlignment::Center);
-    if(trailingName){title.TextAlignment(TextAlignment::Right);title.LineHeight(24);}
+    if(trailingName){title.TextAlignment(TextAlignment::Right);title.LineHeight(18);}
     Grid::SetColumn(title,1);row.Children().Append(title);return row;
 }
 struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
@@ -42,7 +42,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     double arrangedWidth=-1;
     ToolSetView(std::shared_ptr<WorkspaceData> data,hstring panel):data(std::move(data)),panel(std::move(panel)){}
     void init(){
-        root.Spacing(8);list.Spacing(2);
+        root.Spacing(6);list.Spacing(2);
         auto weak=weak_from_this();
         root.Children().Append(groups);root.Children().Append(list);
         groups.Visibility(panel==L"tools"?Visibility::Collapsed:Visibility::Visible);
@@ -53,14 +53,12 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         double width=groups.ActualWidth();
         if(std::abs(arrangedWidth-width)<.01)return;arrangedWidth=width;
         int size=int(groupButtons.size());
-        int count=media()?1:std::max(1,std::min(size,int((width+4)/74.)));
-        double height=media()?44:58;
-        double gap=media()?2:4;
-        // Match the shared flex rows: 70 DIP minimum, four-DIP gaps, and equal
-        // widths within each row, including a partially filled final row.
+        constexpr double tile=3*36+2*2;
+        double gap=2,height=media()?44:36;
+        int count=media()?1:std::max(1,std::min(size,int((width+gap)/(tile+gap))));
         for(int i=0;i<size;i++){
-            int row=i/count,items=std::min(count,size-row*count);
-            double itemWidth=std::max(0.,(width-gap*(items-1))/items);
+            int row=i/count;
+            double itemWidth=media()?width:std::min(tile,width);
             auto const& pick=groupButtons[i];
             Canvas::SetLeft(pick,(i%count)*(itemWidth+gap));Canvas::SetTop(pick,row*(height+gap));
             pick.Width(itemWidth);pick.Height(height);
@@ -79,16 +77,10 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             pick.Padding({17,5,17,5});tooltip(pick,str(item,L"label"));
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
             if(group&&media())AutomationProperties::SetAutomationId(pick,(panel==L"sculpt_sets"?L"sculpt-set-":L"brush-set-")+str(item,L"icon"));
-            auto title=label(data,str(item,L"label"),true);
-            title.FontSize(data->textSize()*(group?.85:1.));title.LineHeight(24);
-            title.TextTrimming(TextTrimming::CharacterEllipsis);title.VerticalAlignment(VerticalAlignment::Center);
             if(group&&media()){
                 pick.Padding({6,5,6,5});pick.Content(toolLabel(data,item,false));
             }else if(group){
-                StackPanel content;content.Spacing(8);
-                auto glyph=icon(str(item,L"icon"),data->theme());glyph.HorizontalAlignment(HorizontalAlignment::Center);
-                title.TextAlignment(TextAlignment::Center);content.Children().Append(glyph);content.Children().Append(title);
-                pick.Content(content);
+                pick.Padding({6,0,6,0});pick.Content(toolLabel(data,item,true,true));
             }else{
                 // Match Web's full-width stroke over a compact icon/name row.
                 // A fixed preview column squeezes names in narrow dock columns.

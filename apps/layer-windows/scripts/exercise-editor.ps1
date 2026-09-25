@@ -266,7 +266,8 @@ try{
     Start-Sleep -Milliseconds 300
     Check-Zen
     Capture 'zen-light'
-    Set-Zen
+    if((Model).keep_zen_button){(Control 'zen-capy').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}else{Set-Zen}
+    Wait-Until {!(Model).chrome_hidden -and !(Model).state.workspace.zen_mode} 'Zen Capy did not leave Zen'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [pscustomobject]@{full_editor='passed';titlebar_hit_regions='passed';core_rectangles='passed';native_measurements='passed';tools='passed';full_zen='passed';zen_activation='passed';retained_canvas_resize='passed';restored_workspace='passed';themes='passed';zero_exit='passed';scope='native projection; complete visual and physical input acceptance remain separate'}|ConvertTo-Json
