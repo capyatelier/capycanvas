@@ -5,7 +5,7 @@ const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
 
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
-export function createProof({app,element,button,icon,applyChange,wake}) {
+export function createProof({app,element,button,icon,applyChange,wake,contentChanged}) {
   let paused=false;
   let work=null,setup=null,finishPending=async()=>{},hasPending=()=>false,refreshLibrary=()=>{};
   // The same immutable 512² Rust illustration as GTK, built off the UI thread.
@@ -187,7 +187,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     const intent=select(printPage,'Intent',model.intents.map(c=>[c.value,c.label]),printSettings.intent);
     const bpc=field(printPage,'Black point compensation',element('input'));bpc.type='checkbox';bpc.className='panel-check';bpc.checked=printSettings.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';
     const gamut=field(printPage,'Gamut warning',element('input'));gamut.type='checkbox';gamut.className='panel-check';gamut.onchange=()=>applyChange(app.dispatch({type:'invoke',command:'gamut_warning'}));
-    let serial=0,preparing=null,lastMode=model.mode;
+    let serial=0,preparing=null,lastMode=model.mode,shownMode=null;
     const sameRecipe=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
     const commit=value=>{committing=value;for(const node of owner.querySelectorAll('button,select,input'))node.disabled=value;if(!value){bpc.disabled=intent.value==='AbsoluteColorimetric';refreshPanel();}};
     const preparePrint=async()=>{
@@ -232,7 +232,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
       const savedRecipe=JSON.stringify(form.document_profile);
       if(savedRecipe!==appliedRecipe){appliedRecipe=savedRecipe;restorePrint(form);}
       mode.value=form.mode;for(const b of mode.children){b.setAttribute('aria-pressed',String(b.value===form.mode));b.disabled=committing||(b.value==='sdr'&&!form.hdr);b.hidden=b.value==='sdr'&&!form.hdr;}
-      sdrPage.hidden=form.mode!=='sdr';printPage.hidden=form.mode!=='print';gamut.checked=app.state().gamut_warning;gamut.disabled=committing||!form.document_profile;
+      sdrPage.hidden=form.mode!=='sdr';printPage.hidden=form.mode!=='print';if(shownMode!==form.mode){shownMode=form.mode;contentChanged('proof');}gamut.checked=app.state().gamut_warning;gamut.disabled=committing||!form.document_profile;
       for(const{input,spec}of arcControls)input.value=form.rendition[spec.key];
       if(sdrPage.hidden||!mapped){cancelDial();return;}
       ensurePattern();

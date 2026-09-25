@@ -15,7 +15,7 @@ const exportFormats={
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker,resumeCanvas}) {
+export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
@@ -30,7 +30,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     build(form,finish);root.showModal();
   });
   const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
-  const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch});
+  const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch,contentChanged});
   async function newDocument() {
     const spec=app.editor_models(innerWidth,innerHeight).document_options,model=spec.creation;
     return dialog(spec.new_title,(form,finish)=>{

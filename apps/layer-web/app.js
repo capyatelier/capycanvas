@@ -676,7 +676,7 @@ function measurePanels() {
         panel: id,
         tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
         content_height,
-        ...(cached.content && id !== "color" ? { scroll: {
+        ...(cached.content && id !== "color" && id !== "proof" ? { scroll: {
           fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
           unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
         }} : {}),
@@ -1627,7 +1627,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
-  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
+  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   const capy = iconButton("zen_mode");
