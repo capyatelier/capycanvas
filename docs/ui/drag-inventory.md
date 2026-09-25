@@ -33,6 +33,17 @@ toolkit behavior is implicit and cannot be established from source alone.
 | G14 | Manage Workspaces: all row bodies and narrow left grab handles | [`workspace_switcher_dialog.rs`](../../apps/layer-linux/src/workspace_switcher_dialog.rs), grouped native drag/click/hold recognizers | Mouse bodies drag immediately; touch/pen bodies hold first; handles start immediately for every device. Right-click and touch/pen hold open the row menu; same-contact movement closes it and drags. Mouse holds do not open menus. Real mouse/touch and keyboard checks cover scrolling, cancellation, and preview preservation. Hardware pen timing remains to be checked. Switcher order is an app preference and does not enter workspace layout history. |
 | G15 | Drawing tabs in the window title bar | [`documents.rs`](../../apps/layer-linux/src/documents.rs) keeps native contact capture and movement slop; shared [`DocumentTabs`](../../crates/layer-ui/src/document_tabs.rs) validates order changes and history. | **Implemented.** Mouse/touch immediate pickup, Escape cancellation, single-step reorder undo, and ordinary click/tap selection pass native input tests. Pen uses the same immediate path; physical pen acceptance remains open. Customize Title Bar disables inner tab input. |
 
+Saved palette color tiles are an explicit immediate-pickup exception for every device.
+[`palette_drag.rs`](../../apps/layer-linux/src/palette_drag.rs) groups GTK hold/drag
+gestures and filters unrelated device events to retain the original contact.
+Tile movement reorders after native slop; gaps and scrollbars remain available
+for scrolling. Stationary touch/pen holds open native menus, dismissed when
+dragging begins. A retained swatch image follows the grab point above the workspace;
+neighboring colors animate into the core's preview order around a vacant slot.
+Fixed grid hit cells prevent feedback oscillation. Edge scrolling is frame-paced.
+Shared library moves preserve IDs and commit once per drop, with palette-local undo/redo. History
+colors and the add tile are not drag sources.
+
 GTK workspace pickup now has one captured path. Native hold timing arms tile
 reordering; source classification leaves G5–G9 immediate.
 

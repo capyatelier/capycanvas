@@ -100,20 +100,7 @@ fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSessio
 /// The reviewed GTK reveal behavior, shared by the other retained workspaces.
 /// Showing a panel preserves its placement and opens its collapsed-column view.
 pub fn reveal<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>) -> Result<crate::UiChange,String> {
-    use crate::{CustomizationAction as Edit, DrawerAnchor, Panel, UiAction};
-    let panel=Panel::Proof;
-    let mut change=session.dispatch(UiAction::Customize {action:Edit::SetPanelVisible {panel,visible:true}})?;
-    let state=session.state();
-    let layout=&state.workspace.layout;
-    let group=layout.panel_group(panel).ok_or("Proof panel has no workspace group")?;
-    let action=if let Some(column)=layout.collapsed_column_for_group(group) {
-        let settings=layout.column_stack(column);
-        let open=if settings.drawers {state.customization.column_drawers.iter().any(|d| matches!(d.anchor,DrawerAnchor::Column {group:g,origin,..} if g==group&&origin==panel))}
-            else {settings.open_column==Some(column)&&layout.active_panel(panel)==Some(panel)};
-        (!open).then_some(UiAction::Customize {action:Edit::ToggleColumnDrawer {group,panel}})
-    } else {(layout.active_panel(panel)!=Some(panel)).then_some(UiAction::SelectPanelTab {group,panel})};
-    if let Some(action)=action {let next=session.dispatch(action)?;change.revision=next.revision;change.regions|=next.regions;change.canvas_wake|=next.canvas_wake;}
-    Ok(change)
+    session.reveal_panel(crate::Panel::Proof)
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

@@ -907,7 +907,7 @@ impl ColorPanel {
         menu_edit.set_widget_name("color-edit-menu");
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 4);
         actions.append(&menu_edit);
-        let menu_library = gtk::Button::with_label("Color Swatches…");
+        let menu_library = gtk::Button::with_label("Palettes…");
         menu_library.add_css_class("flat");
         menu_library.set_widget_name("color-library-menu");
         actions.append(&menu_library);

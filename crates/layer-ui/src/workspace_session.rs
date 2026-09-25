@@ -343,6 +343,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             region_tools,
         } = prepared;
         let mut working = capture.working;
+        if self.state.platform == Platform::Gtk {
+            working.colors.library.ensure_starters();
+        }
         let space = self.engine.document().color.space;
         working.colors.set_rgb_space(space)?;
         working.colors.set_document_depth(self.engine.document().color.depth)?;
@@ -350,6 +353,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         brush.color_rgba_linear = working.colors.definition().linear_in(space)?;
         // This is the only fallible mutation; CanvasEngine validates before setting.
         self.engine.set_brush(brush.clone()).map_err(error)?;
+        self.engine.set_paint_color(working.colors.definition());
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
@@ -442,5 +446,50 @@ impl<R: CanvasRenderer> UiSession<R> {
             regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
             false,
         ))
+    }
+}
+
+impl<R: CanvasRenderer> UiSession<R> {
+    /// Reveal existing panel placement, including a collapsed column, without
+    /// changing the user's arrangement. Native views only forward the request.
+    pub fn reveal_panel(&mut self, panel: Panel) -> Result<UiChange, String> {
+        use crate::{CustomizationAction as Edit, DrawerAnchor, UiAction};
+        if !panel.available_on(self.state.platform) {
+            return Err("This panel is not available on this platform".into());
+        }
+        let mut change = self.dispatch(UiAction::Customize {
+            action: Edit::SetPanelVisible {
+                panel,
+                visible: true,
+            },
+        })?;
+        let state = self.state();
+        let layout = &state.workspace.layout;
+        let group = layout
+            .panel_group(panel)
+            .ok_or("Panel has no workspace group")?;
+        let action = if let Some(column) = layout.collapsed_column_for_group(group) {
+            let settings = layout.column_stack(column);
+            let open = if settings.drawers {
+                state.customization.column_drawers.iter().any(|d| matches!(
+                    d.anchor, DrawerAnchor::Column { group: g, origin, .. } if g == group && origin == panel
+                ))
+            } else {
+                settings.open_column == Some(column) && layout.active_panel(panel) == Some(panel)
+            };
+            (!open).then_some(UiAction::Customize {
+                action: Edit::ToggleColumnDrawer { group, panel },
+            })
+        } else {
+            (layout.active_panel(panel) != Some(panel))
+                .then_some(UiAction::SelectPanelTab { group, panel })
+        };
+        if let Some(action) = action {
+            let next = self.dispatch(action)?;
+            change.revision = next.revision;
+            change.regions |= next.regions;
+            change.canvas_wake |= next.canvas_wake;
+        }
+        Ok(change)
     }
 }
