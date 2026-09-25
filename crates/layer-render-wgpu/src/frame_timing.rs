@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn encoded_span_excludes_cpu_delay_before_the_drawing_is_submitted() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = crate::WgpuRasterizer::headless_instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::TIMESTAMP_QUERY,
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn hardware_spans_keep_identity_bound_pending_and_reuse_completed_slots() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = crate::WgpuRasterizer::headless_instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("Hardware adapter required");
         assert!(

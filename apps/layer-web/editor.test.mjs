@@ -9,7 +9,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   };
   const pointer=async(selector,fx,fy,move,pointerType="mouse")=>{
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width*${fx},y:r.y+r.height*${fy}}})()`);
-    const appearance=()=>evaluate(`([...document.querySelectorAll('.tool-tile > button[data-command]')].map(n=>({command:n.dataset.command,disabled:n.disabled,opacity:getComputedStyle(n).opacity})))`);
+    const appearance=()=>evaluate(`([...document.querySelectorAll('.tool-tile > button[data-command]')].filter(n=>!n.closest('[inert]')).map(n=>({command:n.dataset.command,disabled:n.disabled,opacity:getComputedStyle(n).opacity})))`);
     const before=selector==="#canvas"?await appearance():null;
     if(before)assert.ok(before.length>0,"Check actual toolbar command buttons");
     for(const [type,x,y,buttons]of [["mousePressed",p.x,p.y,1],...(move?[["mouseMoved",p.x+move[0],p.y+move[1],1]]:[]),["mouseReleased",p.x+(move?.[0]||0),p.y+(move?.[1]||0),0]]){
@@ -25,10 +25,13 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   // selected the minimal Sketch workspace.
   await evaluate('layerApp.dispatch({type:"workspace_manager",command:{type:"switch",id:"builtin:workspace:illustrator"}})');
   await wait('(()=>{const v=JSON.parse(layerApp.app.workspace_view());return v.id==="builtin:workspace:illustrator"&&v.ready&&!v.busy&&!v.dirty;})()');
-  await invoke("reset_layout");
-  await wait(`!![...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore')`);
-  await evaluate(`[...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore').click()`);
-  await wait('!document.querySelector(".workspace-form[open]") && !JSON.parse(layerApp.app.workspace_view()).busy');
+  if(await evaluate("layerApp.state().commands.find(c=>c.id==='reset_layout').enabled")) {
+    await invoke("reset_layout");
+    await wait(`!![...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore')`);
+    await evaluate(`[...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore').click()`);
+    await wait('!document.querySelector(".workspace-form[open]") && !JSON.parse(layerApp.app.workspace_view()).busy');
+  }
+  assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='reset_layout').enabled"),false,"Paint starts from its starting layout");
   if(await evaluate("layerApp.state().workspace.zen_mode"))await invoke("zen_mode");
   console.log("editor startup",await evaluate('layerApp.startupTimes'));
   await wait('layerApp.startupTimes.complete!==null');

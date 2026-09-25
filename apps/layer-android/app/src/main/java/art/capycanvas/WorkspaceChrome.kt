@@ -43,32 +43,6 @@ import androidx.compose.ui.zIndex
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Partial Zen uses the core's edge clusters, preserving saved dock topology. */
-@Composable internal fun ZenToolbars(host: CanvasHost, snapshot: JSONObject, panels: Map<String, JSONObject>, dock: DockInteraction) {
-    snapshot.objectOrNull("zen_toolbars")?.array("sections")?.objects()?.forEachIndexed { index, section ->
-        val id = section.getString("panel")
-        val panel = panels[id] ?: return@forEachIndexed
-        val tiles = panel.array("tiles").objects().associateBy { it.getInt("id") }
-        val projectedTiles = JSONArray()
-        val bounds = JSONArray()
-        section.array("tiles").values().forEach { pair ->
-            pair as JSONArray
-            tiles[pair.getInt(0)]?.let { projectedTiles.put(it); bounds.put(pair.getJSONObject(1)) }
-        }
-        val projected = JSONObject(panel.toString()).put("tiles", projectedTiles).put("tile_style", section.getString("style"))
-        val shape = dock.drawerContainerShape(section.getJSONObject("bounds"), radius = panel.number("tile_corner_radius"))
-        key(id, index) {
-            CompositionLocalProvider(LocalPalette provides LocalPalette.current.onGlass) {
-                ToolRibbon(host, projected, obj("tiles" to bounds), dock,
-                    Modifier.placed(section.getJSONObject("bounds"), dock.density).zIndex(150f)
-                        .testTag("zen-section-$index").shadow(6.dp, shape)
-                        .clip(shape).glass(shape, LocalPalette.current.panelFill),
-                    section.getString("edge") in listOf("left", "right"))
-            }
-        }
-    }
-}
-
 private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
     .put("x", number("x") - parent.number("x")).put("y", number("y") - parent.number("y"))
 
@@ -154,8 +128,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 } }
                                 val shape = drawerButtonShape(if (selected) opened?.getString("direction") ?: dock.drawerSources[id.toString()]?.direction else null)
                                 HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
-                                    .testTag("column-icon-$panel").semantics { this.selected = selected }.dragSource(dock, target, holdToDrag = true)) {
-                                    Box(Modifier.fillMaxSize().clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
+                                    .dragSource(dock, target, holdToDrag = true)) {
+                                    Box(Modifier.fillMaxSize().testTag("column-icon-$panel").semantics { this.selected = selected }
+                                        .clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
                                         .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
                                             host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
                                         }), contentAlignment = Alignment.Center) {
@@ -222,9 +197,10 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             val progress = if (!animate) 1f else ((withFrameNanos { it } - start) / 200_000_000f).coerceIn(0f, 1f)
             geometry = host.awaitQuery(obj("type" to "drawer", "column" to columnId, "heights" to JSONArray(heights.toList()),
                 "progress" to progress, "from" to from, "closing" to (current == null)))
-            if (current != null && geometry?.objectOrNull("connection") != null)
+            if (geometry?.objectOrNull("connection") != null)
                 geometry!!.getJSONObject("placement").let { placement ->
-                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"), placement.getJSONObject("anchor").rect())
+                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"),
+                        placement.getJSONObject("anchor").rect(), model.getJSONObject("anchor"))
                 }
             else dock.drawerSources.remove(id)
             if (id == "tool") { dock.drawer = geometry; dock.refresh() }

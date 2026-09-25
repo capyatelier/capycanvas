@@ -78,7 +78,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     }
 }
 
-/** One host view for docked/floating toolbars, Zen strips and retained drawers. */
+/** One host view for docked/floating toolbars and retained drawers. */
 @Composable internal fun ToolbarComponent(host: CanvasHost, panel: JSONObject, tile: JSONObject,
     bounds: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier) {
     val model = tile.getJSONObject("component")
@@ -197,10 +197,9 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                         }
                     }
                 }
-                val drawerAnchor = host.snapshot?.getJSONObject("state")?.getJSONObject("customization")?.objectOrNull("drawer")?.getJSONObject("anchor")
-                val opensDrawer = drawerAnchor?.optString("panel") == panel.getString("id") && drawerAnchor.optInt("tile") == id
+                val source = dock.tileDrawerSource(panel.getString("id"), id)
                 Box(Modifier.placed(layout.getJSONObject("more"), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
-                    .clip(drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null))
+                    .clip(drawerButtonShape(source?.direction))
                     .testTag("toolbar-more-$id").clickable { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to id)) }, contentAlignment = Alignment.Center) {
                     SharedIcon("more", "More tool options", Modifier.size(panel.getInt("tile_icon_size").dp))
                 }

@@ -248,6 +248,12 @@ mod selection_tools_checks {
                     }),
                 platform != Platform::Windows
             );
+            assert_eq!(CommandId::TonalSelect.available_on(platform), platform != Platform::Windows);
+            for preset in WorkspacePreset::ALL {
+                let layout = preset.layout(platform);
+                assert!(!layout.panels.iter().flat_map(|p| p.tiles()).any(|t| t.control
+                    == ToolbarControl::Command { command: CommandId::TonalSelect }), "{platform:?} {}", preset.name());
+            }
             let photo = WorkspacePreset::Photographer.layout(platform);
             for command in [
                 CommandId::RectangleSelect,

@@ -1,7 +1,7 @@
 # Color picking
 
-Implemented on GTK, Web, Android, macOS and iPadOS, September 2026. GTK was
-reviewed before the Web and Android rollout. Windows retains its existing picker.
+Implemented on GTK, Web, Android, macOS, iPadOS and Windows, September 2026.
+GTK was reviewed before the Web and Android rollout.
 
 ## Research
 
@@ -39,7 +39,7 @@ the Eyedropper category and pipette icon, with both Color Picker and Eyedropper
 on the left of its settings drawer. Neither picker drawer dismisses on an
 outside UI contact. Dropdown popups remain interactive, and no instructional
 hint text occupies the settings panel.
-GTK and Android count a settings popup as focus within the same window;
+GTK, Android and Windows count a settings popup as focus within the same window;
 opening a dropdown must not trigger canvas blur. Leaving the application still
 cancels temporary picking.
 
@@ -64,6 +64,11 @@ not capture a mouse or pen that has the same numeric ID.
 Android retains native contact identities until release: Compose may synthesize
 an empty cancellation event, which ends those contacts without inventing a pen.
 Focus loss and surface teardown also cancel captured native contacts.
+Windows cancels every contact its core has seen begin on blur, renderer suspension
+and surface replacement. The lift or cancellation of such a contact still reaches
+Rust while workspace input is blocked; a new press with a reused ID starts fresh.
+Its hold uses a native `GestureRecognizer` on the canvas input thread, and the
+lift offset is 10 mm at the monitor's raw DPI, clamped to 36–64 logical pixels.
 
 The loupe has a 2× interior, a tiny central cross, and a 14-logical-pixel split ring with the
 candidate on top and the original selected color below. Fine edge reflections
@@ -98,7 +103,9 @@ Apple stages motion-published previews into their own snapshot field, so only th
 color panel re-evaluates, and rasterizes preview wheel fields on a serial worker with
 the same one-running, one-pending policy. The Mac and iPad hosts send `cursor_leave`
 when hover ends (a pointer cancel would end picking) and arm the finger hold with
-UIKit's 0.5 s timing and 10 pt slop. The loupe stays
+UIKit's 0.5 s timing and 10 pt slop. Windows applies preview packets to its
+retained color views without a workspace rebuild, at most once per UI dispatch,
+and rasterizes preview fields on a background worker with the same policy. The loupe stays
 on the canvas GPU path; preview work never mutates brush colors or history.
 Sampling uses artwork coordinates independent of canvas zoom, rotation, flips,
 selection boundaries and display/proof transforms. The zoomed interior is a
@@ -225,6 +232,16 @@ library access.
   p95 of 27.9 and 27.6 ms respectively. Large-area averaging and browser
   composition still cost throughput on this tablet; an additional preview timer
   did not recover it, so the Web port retains display-paced updates.
+- Windows: `apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable
+  artifacts/windows/Release/CapyCanvas.exe` drives the production app with
+  OS-injected mouse, pen and touch. It checks **I**/Escape, Sketch toolbar order,
+  double-press into the explicit Sketch drawer and the two-column Paint drawer,
+  the Source and Sample size choices, reversible pen and mouse hover, pen-lift
+  and mouse-press acceptance, finger-tap cancellation, touch-and-hold with the
+  lifted sample and second-finger source toggle, and a Paint hover sweep with no
+  workspace rebuilds or UI-thread field rasters. Synthetic pens leave range
+  without frames, so it keeps them hovering while waiting, as a physical pen does.
+  `exercise-canvas-touch.ps1` covers a finger lifted under a modal dialog.
 - Android builds with `:app:assembleDebug :app:assembleDebugAndroidTest`.
   `AndroidColorPanelTest#glassPickerInputAndSettings` and
   `#pickerWheelPreviewPerformance`, with instrumentation argument

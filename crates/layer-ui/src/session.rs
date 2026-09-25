@@ -4536,20 +4536,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
-        if matches!(self.state.platform, Platform::Mac | Platform::Ios | Platform::Windows)
-            && self.layer_interaction.tool.picks_color() {
-            self.state.tool_set.subtools.extend(
-                [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
-                    .into_iter()
-                    .map(|(label, width)| ToolSetItem {
-                        label,
-                        icon: "eyedropper",
-                        action: UiAction::SetColorSampleSize { width },
-                        selected: self.eyedropper.area.width() == width,
-                        preview: None,
-                    }),
-            );
-        }
         if self.state.platform.color_picker() && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.groups.clear();
             self.state.tool_set.subtools = [

@@ -102,6 +102,13 @@ impl CapyApple {
                 point: [f32; 2],
                 vertical: bool,
             },
+            Slide {
+                id: u64,
+                hits: Vec<layer_ui::DocumentTabHit>,
+                clip: layer_ui::Bounds,
+                press: [f32; 2],
+                point: [f32; 2],
+            },
             Budget {
                 bytes: usize,
             },
@@ -164,6 +171,17 @@ impl CapyApple {
                 self.documents
                     .drop_target(&hits, point, vertical)
                     .map(|before| json!({"before":before}))
+            ),
+            Request::Slide {
+                id,
+                hits,
+                clip,
+                press,
+                point,
+            } => json!(
+                self.documents
+                    .drag(id, press, &hits, clip)
+                    .and_then(|drag| drag.preview(point))
             ),
             Request::Budget { bytes } => {
                 self.documents.budget.inactive_ram =

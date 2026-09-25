@@ -17,6 +17,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -57,6 +59,9 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
+    winrt::Microsoft::UI::Input::GestureRecognizer pickerHold{nullptr}; // input thread only
+    std::optional<uint32_t> holdContact; // input thread only
+    std::set<uint32_t> contacts; // input thread only
     // Captured together under mutex; never pair a new DPI with an old camera.
     float inputScale=1;
     uint64_t revision=0;
@@ -130,4 +135,7 @@ private:
     void Replay(ReplayKind);
     void StartInput();
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
+    void PickerHold(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
+    void CancelPickerHold();
+    float PickerOffset(float scale)const;
 };

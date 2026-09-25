@@ -685,6 +685,7 @@ fn runtime_filter_pixel_reference() {
     for (i, id) in fixtures().iter().enumerate() {
         for scope in 0..4 {
             let mut effect = filter(id);
+            effect.id = LayerId(2 + scope as u64);
             effect.properties.clipped = scope == 1 || scope == 3;
             if scope >= 2 {
                 effect.opacity = 0.63;

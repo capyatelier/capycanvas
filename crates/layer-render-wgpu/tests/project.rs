@@ -200,8 +200,9 @@ fn draw(
     }
 }
 fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Selection>) {
-    while !engine.backend().raster_ready() {
+    while engine.has_pending_document_edits() || !engine.backend().raster_ready() {
         std::thread::yield_now();
+        engine.render_frame_at(1_000_000_000).unwrap();
     }
     let mut coverage = LayerMask::reveal_all(LayerId(0), Point::default());
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };

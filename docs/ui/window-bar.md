@@ -79,7 +79,7 @@ use the panels' opaque selection blue, and the selected drawing tab the opaque
 panel grey. Capy, menu labels, the switcher, the document title or
 tabs, clock, battery and Space stay separate with 6px gaps, and customization
 shows every item separately. Drawer origins
-fill their whole tile with square bottom corners while open.
+fill their whole tile with square bottom corners until their drawer has closed.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;
 native keyboard-focus indication remains independent of both states. The same

@@ -1013,7 +1013,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     self.layer_interaction.figure = (shape, paint);
                 }
-                if tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {return Err("Tonal range is currently available on GTK".into());}
+                if tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {return Err("Tonal range is not available on this platform".into());}
                 self.cancel_layer_gesture()?;
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;

@@ -90,38 +90,6 @@ fn code(bytes: &[u8], i: usize, depth: SampleDepth) -> u32 {
     }
 }
 
-fn canonical_coverage(actual: f32, code: u32, maximum: u32) -> bool {
-    let expected = f64::from(code) / f64::from(maximum);
-    let nearest = expected as f32;
-    // WGSL division permits 2.5 ULP, not a fixed absolute error:
-    // https://www.w3.org/TR/WGSL/#floating-point-accuracy
-    let ulp = if f64::from(nearest) >= expected {
-        f64::from(nearest) - f64::from(nearest.next_down())
-    } else {
-        f64::from(nearest.next_up()) - f64::from(nearest)
-    };
-    (0.0..=1.0).contains(&actual)
-        && (f64::from(actual) - expected).abs() <= 2.5 * ulp
-        && (f64::from(actual) * f64::from(maximum)).round() == f64::from(code)
-}
-
-#[test]
-fn canonical_coverage_oracle_rejects_changed_integer_codes() {
-    for maximum in [255, 65535] {
-        for code in 0..=maximum {
-            let decoded = (f64::from(code) / f64::from(maximum)) as f32;
-            assert!(canonical_coverage(decoded, code, maximum));
-            assert!(!canonical_coverage(decoded.next_up().next_up().next_up().next_up(), code, maximum));
-            for neighbor in [code.saturating_sub(1), (code + 1).min(maximum)] {
-                if neighbor != code {
-                    let wrong = (f64::from(neighbor) / f64::from(maximum)) as f32;
-                    assert!(!canonical_coverage(wrong, code, maximum));
-                }
-            }
-        }
-    }
-}
-
 #[test]
 fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(false); }
 #[test]
@@ -197,8 +165,7 @@ fn scalar_corpus(in_place: bool) {
                     let actual =
                         f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     if inside {
-                        assert!(canonical_coverage(actual, expected, maximum),
-                            "canonical pixel {i}: {actual} vs {expected}/{maximum}");
+                        assert_eq!(actual, expected as f32 * reciprocal(depth), "canonical pixel {i}");
                     } else {
                         assert_eq!(actual, if in_place { *value } else { -7. },
                             "untouched canonical pixel {i}");
@@ -501,8 +468,7 @@ fn scalar_slots(in_place: bool) {
                     assert_eq!(code(&bytes, i, depth), expected, "slot {slot} pixel {i}");
                     let actual = f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     if inside {
-                        assert!(canonical_coverage(actual, expected, depth.maximum()),
-                            "canonical slot {slot} pixel {i}: {actual} vs {expected}/{}", depth.maximum());
+                        assert_eq!(actual, expected as f32 * reciprocal(depth), "canonical slot {slot} pixel {i}");
                     } else {
                         assert_eq!(actual, if in_place { *value } else { -7. },
                             "untouched canonical slot {slot} pixel {i}");

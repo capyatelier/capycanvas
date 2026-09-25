@@ -15,6 +15,15 @@ API and writes the new PNG instead of comparing it. The current implementation's
 output is never used to generate expectations. The GPU run is recorded in
 `artifacts/color-m1/independent-filter-oracle.txt`.
 
+Pooled mask coverage is stored in alpha, not quantized through an sRGB-encoded
+color channel. The independent checkout applies the same contract on top of
+[the capture patch](../../../../tools/visual/windows-filter-oracle.patch): scene
+operation 2 writes coverage to every channel, operations 3 and 5 and both effect
+mask loads read alpha, and the pooled mask clear stores the default coverage in
+alpha. Without this change the same checkout and GPU reproduce the previous PNG
+(SHA-256 `9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`)
+byte for byte; with it, only the unclipped masked scope changes.
+
 The old v4 PNG and its linear8-specific quantization contract remain available
 in Git history. They are not valid expectations for encoded sRGB8 paint.
 
@@ -47,12 +56,12 @@ Linux fixture or establish physical iPad, browser or arbitrary-parameter parity.
 
 All artwork is original project test data under MIT OR Apache-2.0.
 
-PNG SHA-256: `9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`.
+PNG SHA-256: `e25f615e540ed6271587e2b73f3f84b5b756eba42484c09bee5eb4243c67e242`.
 
 The viewing conversion introduced in milestone 2 defines unassociated output at
 zero alpha as transparent black. The independent PNG contains four zero-alpha
 pixels with hidden RGB left by the former epsilon division. The comparison
 canonicalizes only reference pixels whose alpha is exactly zero, then compares
-all channels normally. The PNG and its checksum stay unchanged. A separate GPU
+all channels normally. The PNG keeps those four pixels. A separate GPU
 test injects hidden RGB at zero alpha in both attachment modes and requires black
 export/Navigator output while proving the original composite bytes stay intact.

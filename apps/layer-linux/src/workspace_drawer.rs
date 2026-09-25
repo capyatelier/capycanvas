@@ -687,32 +687,31 @@ impl Drawer {
         Some(result)
     }
     fn mark_origin(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
-        let placement = placement.filter(|p| !self.closing.get() && p.connection().is_some());
+        let placement = placement.filter(|p| p.connection().is_some());
         self.mark_source_corners(w, placement);
+        let anchor = self.state.borrow().as_ref().map(|s| s.anchor);
+        let direction = placement.map(|p| p.direction);
         if self.id != 0 {
-            let origin = self
-                .state
-                .borrow()
-                .as_ref()
-                .and_then(|s| match s.anchor {
+            let origin = anchor
+                .and_then(|a| match a {
                     DrawerAnchor::Column { origin, .. } => Some(origin),
                     _ => None,
                 })
-                .zip(placement)
-                .map(|(origin, p)| (origin, p.direction));
+                .zip(direction);
             w.columns.mark_drawer_origin(self.id, origin);
             return;
         }
-        let origin = self
-            .state
-            .borrow()
-            .as_ref()
-            .and_then(|s| s.anchor.tile())
-            .zip(placement);
-        w.customization
-            .mark_drawer_origin(origin.map(|(a, p)| (a, p.direction)));
+        let header = anchor
+            .and_then(|a| match a {
+                DrawerAnchor::Header { id } => Some(id),
+                _ => None,
+            })
+            .zip(direction);
+        w.header.mark_drawer_origin(header);
+        let origin = anchor.and_then(DrawerAnchor::tile).zip(direction);
+        w.customization.mark_drawer_origin(origin);
         for parent in w.columns.drawers.borrow().iter() {
-            parent.mark_tile_origin(origin.map(|(a, p)| (a, p.direction)));
+            parent.mark_tile_origin(origin);
         }
     }
     fn mark_source_corners(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
@@ -769,9 +768,6 @@ impl Drawer {
             .placement()
             .or_else(|| self.target(w).map(|p| p.closed()));
         self.closing.set(closing);
-        if closing {
-            self.mark_origin(w, None);
-        }
         self.progress.set(0.0);
         let target = adw::CallbackAnimationTarget::new(glib::clone!(
             #[weak]

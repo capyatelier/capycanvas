@@ -1147,6 +1147,7 @@ fn native_header_spacing_visual() {
                     .unwrap(),
             );
             d.click(&tool);
+            pump(PANEL_EXPANSION_MS.into());
             assert!(!button.has_css_class("drawer-origin-bottom"));
             d.edit();
             assert_shared_icons(d.w.header.root.upcast_ref());
@@ -1275,6 +1276,7 @@ fn native_drawer_dismissal_input() {
                     state(&d.w).customization.drawer.is_none(),
                     "{theme:?}/{touch}/{outside}"
                 );
+                pump(PANEL_EXPANSION_MS.into());
                 assert!(!color_button.has_css_class("drawer-open"));
                 if outside == "menu" {
                     assert!(
@@ -1371,7 +1373,13 @@ fn native_drawer_dismissal_input() {
                     let view = groups.iter().find(|g| g.id == group.id).unwrap();
                     find_css(view.root.upcast_ref(), "panel-grip").unwrap()
                 };
-                tap(&mut d, &handle, touch);
+                let grip = handle.compute_bounds(&d.w.window).unwrap();
+                let exposed = [grip.x() + 6., grip.y() + grip.height() / 2.];
+                assert!(
+                    !d.w.drawer.placement().unwrap().bounds.contains(exposed[0], exposed[1]),
+                    "toolbar handle {floating}/{touch}: the drawer covers the tapped grip"
+                );
+                contact(&mut d, exposed, touch);
                 assert!(
                     state(&d.w).customization.drawer.is_none(),
                     "toolbar handle {floating}/{touch}"

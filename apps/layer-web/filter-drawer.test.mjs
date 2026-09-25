@@ -26,7 +26,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   await send({type:'invoke',command:'new_document'});
   await wait(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create')`);
   await evaluate(`(()=>{const create=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create');const d=create.closest('dialog');for(const n of d.querySelectorAll('input[type=number]'))n.value=256;create.click();})()`);
-  await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !layerApp.state().document_file.busy && layerApp.app.brush_ready() && !document.querySelector('dialog[open]');})()`);
+  await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !layerApp.state().document_file.busy && !layerApp.documents.busy() && layerApp.app.brush_ready() && !document.querySelector('dialog[open]');})()`);
   console.log("Filter drawer: opening filters");
   const entries=await evaluate('layerApp.state().workspace.layout.header.zones.flat()');
   const header=(key,value)=>`[data-header-item="${entries.find(e=>e.item.control?.[key]===value).id}"] .header-tool`;

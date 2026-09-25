@@ -51,7 +51,7 @@ class AndroidFeatureParityTest {
         finally { Native.destroy(native) }
         action(obj("type" to "close_settings"))
         action(obj("type" to "restore_workspace", "workspace" to defaultWorkspace))
-        action(obj("type" to "restore_settings", "settings" to JSONObject(savedSettings.toString()).put("total_zen", false)))
+        action(obj("type" to "restore_settings", "settings" to JSONObject(savedSettings.toString())))
     }
     @After fun restore() {
         if (::savedWorkspace.isInitialized) {
@@ -83,30 +83,6 @@ class AndroidFeatureParityTest {
         try {
             instrumentation.targetContext.getExternalFilesDir(null)!!.resolve("parity-$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         } finally { bitmap.recycle() }
-    }
-    @Test fun partialZenProjectsEdgeToolbarsAndPreservesLayout() {
-        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "commands", "visible" to false)))
-        for (edge in listOf("left", "top", "right", "bottom")) {
-            action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to edge, "outer" to true), "viewport" to viewport()))
-            val before = state().getJSONObject("workspace").getJSONObject("layout").toString()
-            action(obj("type" to "invoke", "command" to "zen_mode"))
-            assertTrue(host.snapshot!!.getBoolean("partial_zen"))
-            val sections = host.snapshot!!.getJSONObject("zen_toolbars").array("sections").objects()
-            assertTrue(sections.isNotEmpty())
-            sections.forEachIndexed { index, section ->
-                compose.onNodeWithTag("zen-section-$index").assertIsDisplayed()
-                assertEquals(edge, section.getString("edge"))
-                section.array("tiles").values().forEach { pair ->
-                    pair as JSONArray
-                    compose.onNodeWithTag("tile-toolbar-${pair.getInt(0)}").assertIsDisplayed()
-                }
-            }
-            assertEquals(before, state().getJSONObject("workspace").getJSONObject("layout").toString())
-            capture("partial-zen-$edge")
-            compose.onNodeWithTag("zen-button").performClick()
-            compose.waitUntil(10_000) { !state().getJSONObject("workspace").getBoolean("zen_mode") }
-            assertEquals(before, state().getJSONObject("workspace").getJSONObject("layout").toString())
-        }
     }
     @Test fun toolSetAndSettingsFollowSelectedTool() {
         action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "tool_settings", "visible" to true)))
@@ -150,7 +126,7 @@ class AndroidFeatureParityTest {
             val shown = pixels[position.x.toInt(), position.y.toInt()]
             wheel.performTouchInput { click(position) }
             action(obj("type" to "color", "action" to obj("op" to "space", "space" to space))) // Drain the input's shared action.
-            val rgba = state().getJSONObject("colors").array("foreground")
+            val rgba = state().getJSONObject("colors").getJSONObject("foreground").array("rgba")
             for ((index, value) in listOf(shown.red, shown.green, shown.blue).withIndex()) {
                 assertEquals("$space wheel pixel matches picked component $index", value.toDouble(), rgba.getDouble(index), .035)
             }
@@ -158,17 +134,18 @@ class AndroidFeatureParityTest {
         }
         compose.onNodeWithTag("color-swatch-background").performClick()
         compose.waitUntil(10_000) { state().getJSONObject("colors").getString("slot") == "background" }
-        val before = state().getJSONObject("colors").array("foreground").toString()
+        val before = state().getJSONObject("colors").getJSONObject("foreground").array("rgba").toString()
         compose.onNodeWithTag("color-swap").performClick()
-        compose.waitUntil(10_000) { state().getJSONObject("colors").array("background").toString() == before }
+        compose.waitUntil(10_000) { state().getJSONObject("colors").getJSONObject("background").array("rgba").toString() == before }
         compose.onNodeWithTag("color-swatch-transparent").performClick()
         compose.waitUntil(10_000) { state().getJSONObject("colors").getString("slot") == "transparent" }
         compose.onNodeWithTag("color-swatch-transparent").assertIsSelected()
         capture("color-transparent")
     }
-    private fun shown(tag: String) {
-        compose.waitUntil(15_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag(tag).assertIsDisplayed()
+    private fun shown(tag: String) = shown(hasTestTag(tag))
+    private fun shown(matcher: SemanticsMatcher) {
+        compose.waitUntil(15_000) { compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(matcher).assertIsDisplayed()
     }
     private fun canvasEvent(phase: Int, point: Offset) {
         fun find(view: android.view.View): CanvasSurfaceView? {
@@ -206,15 +183,20 @@ class AndroidFeatureParityTest {
         assertNull(host.failure); assertNull(host.actionError); assertTrue(predicate(pixel(point)))
     }
     @Test fun toolDrawersOpenInZenAndOutsideContactDoesNotPaint() {
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "zen_reveal_at_edges", "value" to true)))
         action(obj("type" to "invoke", "command" to "pen"))
         action(obj("type" to "invoke", "command" to "zen_mode"))
+        compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
         val pen = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
             .first().getInt("id")
+        val undoBefore = state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled")
+        stroke(Offset(.01f, .5f))
+        shown("tile-toolbar-$pen")
         compose.onNodeWithTag("tile-toolbar-$pen").performTouchInput { click() }
         shown("tool-drawer")
-        shown("tool-group-${state().getJSONObject("tool_set").array("groups").getJSONObject(0).getString("label")}")
+        shown(hasTestTag("tool-group-${state().getJSONObject("tool_set").array("groups").getJSONObject(0).getString("label")}") and hasAnyAncestor(hasTestTag("tool-drawer")))
+        assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
         capture("zen-tool-drawer")
-        val undoBefore = state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled")
         stroke(Offset(.6f, .8f), Offset(.7f, .8f))
         compose.waitUntil(10_000) { state().getJSONObject("customization").objectOrNull("drawer") == null }
         assertEquals(undoBefore, state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled"))
@@ -275,7 +257,8 @@ class AndroidFeatureParityTest {
         }
         val tools = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }.toString()
         compose.onNodeWithTag("application-menu-window").performClick()
-        compose.onNodeWithText("Restore Commands toolbar").performClick()
+        compose.onNodeWithText("Quick Access Toolbars", useUnmergedTree = true).performTouchInput { click() }
+        compose.onNodeWithText("Restore Commands", useUnmergedTree = true).performTouchInput { click() }
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any { it.getString("active") == "commands" } }
         val commands = host.snapshot!!.array("panels").objects().first { it.getString("id") == "commands" }
         commands.array("tiles").objects().filter { it.getJSONObject("control").getString("kind") != "divider" }.forEach { shown("tile-commands-${it.getInt("id")}") }
@@ -292,18 +275,22 @@ class AndroidFeatureParityTest {
             val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
             source.performTouchInput { swipe(center, target - origin, 700) }
         }
+        fun workspaceIdle() = compose.waitUntil(15_000) {
+            host.workspaceManager?.let { !it.optBoolean("busy") && !it.optBoolean("switcher_busy") } == true
+        }
         // Cover both an existing saved workspace and the new editor preset.
         for (workspace in listOf(savedWorkspace, defaultWorkspace)) {
-            val input = JSONObject(workspace.toString()).put("zen_mode", false)
-            // Reset preserves tab appearance. Exercise a visible tab even if
-            // the saved workspace previously floated or explicitly hid it.
-            input.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "tool_settings" }.put("hide_tab", false)
-            action(obj("type" to "restore_workspace", "workspace" to input))
-            val oldGroup = group("tool_settings").getInt("id")
-            compose.onNodeWithTag("application-menu-view").performClick()
-            compose.onNodeWithText("Reset layout").performClick()
-            // Closing the native menu precedes the worker applying Reset.
-            compose.waitUntil(10_000) { group("tool_settings").getInt("id") != oldGroup }
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(workspace.toString()).put("zen_mode", false)))
+            action(obj("type" to "move_panel", "panel" to "tool_settings", "target" to obj("kind" to "float", "position" to JSONArray(listOf(480, 130))), "viewport" to viewport()))
+            compose.onNodeWithTag("application-menu-window").performClick()
+            compose.onNodeWithText("Workspaces", useUnmergedTree = true).performTouchInput { click() }
+            compose.onNodeWithText("Restore Starting Layout…", useUnmergedTree = true).performTouchInput { click() }
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("workspace-submit", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+            workspaceIdle()
+            compose.onNodeWithTag("workspace-submit", useUnmergedTree = true).performTouchInput { click() }
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("workspace-submit", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+            workspaceIdle()
+            compose.waitUntil(10_000) { !group("tool_settings").getBoolean("floating") }
             shown("tab-tool_settings")
             assertFalse(group("tool_settings").getBoolean("floating"))
             val canvas = compose.onNodeWithTag("workspace").fetchSemanticsNode().boundsInRoot
@@ -325,6 +312,7 @@ class AndroidFeatureParityTest {
                 assertEquals(panel, group(panel).getString("active"))
             }
             assertNull(host.failure)
+            workspaceIdle()
         }
         capture("reset-layout-tab-drag")
     }
@@ -394,8 +382,8 @@ class AndroidFeatureParityTest {
         action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, 0, 1, 1))))
         action(obj("type" to "invoke", "command" to "eyedropper"))
         stroke(Offset(.575f,.55f))
-        compose.waitUntil(15_000) { state().getJSONObject("colors").array("foreground").getDouble(0) > .7 || host.failure != null }
-        val rgba = state().getJSONObject("colors").array("foreground")
+        compose.waitUntil(15_000) { state().getJSONObject("colors").getJSONObject("foreground").array("rgba").getDouble(0) > .7 || host.failure != null }
+        val rgba = state().getJSONObject("colors").getJSONObject("foreground").array("rgba")
         assertEquals(.85, rgba.getDouble(0), .04); assertEquals(.12, rgba.getDouble(1), .04); assertEquals(.24, rgba.getDouble(2), .04)
         action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to true)))
         action(obj("type" to "move_panel", "panel" to "navigator", "target" to obj("kind" to "float", "position" to JSONArray(listOf(360, 100))), "viewport" to viewport()))
@@ -484,13 +472,11 @@ class AndroidFeatureParityTest {
     }
     private fun chooseSaveFile(name: String) {
         // Exercise Android's real DocumentsUI create picker and URI grant result.
-        val until = android.os.SystemClock.uptimeMillis() + 15_000
         var field: android.view.accessibility.AccessibilityNodeInfo? = null
-        while (field == null && android.os.SystemClock.uptimeMillis() < until) {
+        compose.waitUntil(30_000) {
             field = systemNode { it.isEditable && it.packageName?.toString()?.contains("documentsui") == true }
-            if (field == null) android.os.SystemClock.sleep(100)
+            field != null
         }
-        assertNotNull("DocumentsUI filename field", field)
         assertTrue(field!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
             putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, name)
         }))
@@ -550,6 +536,9 @@ class AndroidFeatureParityTest {
         awaitPixel(Offset(.56f,.55f)) { android.graphics.Color.blue(it) > 160 && android.graphics.Color.red(it) < 80 }
         capture("document-reopened")
         action(obj("type" to "invoke", "command" to "export_document"))
+        shown("export-choose-file")
+        compose.waitUntil(60_000) { compose.onAllNodes(hasTestTag("export-choose-file") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("export-choose-file").performClick()
         chooseSaveFile(name.removeSuffix(".capy") + ".png")
         awaitDocument()
         // Verify the exported PNG from its real persisted provider grant and
@@ -579,10 +568,12 @@ class AndroidFeatureParityTest {
         stroke(Offset(.5f,.5f), Offset(.6f,.5f))
         awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
         val epoch = state().getJSONObject("document_file").getLong("epoch")
+        val drawings = host.drawingTabs.rows.size
         action(obj("type" to "invoke", "command" to "new_document"))
-        shown("document-close-cancel")
-        compose.onNodeWithTag("document-close-cancel").performClick()
+        shown("new-document-cancel")
+        compose.onNodeWithTag("new-document-cancel").performClick()
         awaitDocument()
+        assertEquals(drawings, host.drawingTabs.rows.size)
         assertEquals(epoch, state().getJSONObject("document_file").getLong("epoch"))
         assertTrue(state().getJSONObject("document_file").getBoolean("modified"))
         awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }

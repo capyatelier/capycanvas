@@ -188,7 +188,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
         [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
-      if(source&&r.connection&&!r.closing)markSource(source,r.placement.direction);
+      if(source&&r.connection)markSource(source,r.placement.direction);
       if(r.connection) {
         const c=r.connection;
         r.bridge=bridge(r.bridge,c);r.bridge.style.zIndex=r.column==null?"1899":"1799";

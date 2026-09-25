@@ -193,7 +193,7 @@ const STARTERS: &[(&str, &[(&str, u32)])] = &[
 impl ColorLibrary {
     /// Install once in GTK working state, preserving existing palettes and IDs.
     /// Copies are ordinary editable palettes; deleting one never resurrects it.
-    pub(crate) fn ensure_starters(&mut self) {
+    pub fn ensure_starters(&mut self) {
         if self.starters_installed {
             self.upgrade_review_starters();
             return;

@@ -286,12 +286,15 @@ impl DockLayout {
             }
             .contains(point[0], point[1])
         }) || resolved.groups.iter().any(|g| {
-            g.tabs_visible
-                && Bounds {
-                    height: TAB_BAR_HEIGHT,
+            let surface = if matches!(g.panels.as_slice(), [panel] if panel.kind() == PanelKind::Tiles) {
+                Bounds {
+                    height: if g.tabs_visible { TAB_BAR_HEIGHT } else { 0. },
                     ..g.bounds
                 }
-                .contains(point[0], point[1])
+            } else {
+                g.bounds
+            };
+            surface.contains(point[0], point[1])
         }) {
             return None;
         }
@@ -827,6 +830,69 @@ mod tests {
         ));
         l.move_panel(VIEWPORT, source, hint.target).unwrap();
         assert!(l.compact_band(l.panel_group(source).unwrap()).is_none());
+    }
+    #[test]
+    fn docked_sidebars_keep_their_body_and_tab_targets_under_the_pointer() {
+        let mut l = DockLayout::default();
+        let source = l
+            .add_toolbar(None, "Test", &[ToolbarControl::Color; 6])
+            .unwrap();
+        l.move_panel(
+            VIEWPORT,
+            source,
+            DockTarget::Float {
+                position: [600., 500.],
+            },
+        )
+        .unwrap();
+        let r = resolved(&l, VIEWPORT);
+        let item = DockItem::Panel { panel: source };
+        let sidebar = r
+            .groups
+            .iter()
+            .find(|g| g.panels == [Panel::Brushes])
+            .unwrap();
+        let b = sidebar.bounds;
+        let preview = |p: [f32; 2]| Bounds {
+            x: p[0] - 54.,
+            y: p[1] - 270.,
+            width: 108.,
+            height: 280.,
+        };
+        for point in [
+            [b.x + b.width / 2., b.y + b.height / 2.],
+            [b.x + 4., b.y + TAB_BAR_HEIGHT + 3.],
+        ] {
+            assert!(
+                l.compact_edge_drop_hint(&r, item, point, Some(preview(point)))
+                    .is_none(),
+                "{point:?}"
+            );
+            assert!(matches!(
+                r.drop_hint_with_group_body(point[0], point[1], &[], true, true)
+                    .unwrap()
+                    .target,
+                DockTarget::Tab { group, .. } if group == sidebar.id
+            ));
+        }
+        let toolbar = r
+            .groups
+            .iter()
+            .find(|g| g.panels == [Panel::Toolbar])
+            .unwrap();
+        let point = [
+            VIEWPORT[0] / 2.,
+            toolbar.bounds.y + toolbar.bounds.height / 2.,
+        ];
+        assert_eq!(
+            l.compact_edge_drop_hint(&r, item, point, None)
+                .unwrap()
+                .target,
+            DockTarget::CompactEdge {
+                edge: Edge::Top,
+                alignment: EdgeAlignment::Center
+            }
+        );
     }
     #[test]
     fn compact_targets_cover_practical_edge_approaches_and_native_footer() {

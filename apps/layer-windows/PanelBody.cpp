@@ -94,10 +94,18 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     AutomationProperties::SetAutomationId(slot,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                     continue;
                 }
-                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
-                    if(auto gestures=weak.lock();gestures&&gestures->SuppressClick())return;
+                bool picker=pickerControl(object(tile,L"control"));
+                auto presses=picker?std::make_shared<DoublePress>():nullptr;
+                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,presses,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
+                    if(auto gestures=weak.lock();gestures&&gestures->SuppressClick()){if(presses)presses->reset();return;}
+                    if(presses&&presses->second()){
+                        data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
+                            {L"anchor",O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}})}})}}));
+                        return;
+                    }
                     data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                 });
+                if(presses)presses->listen(pick);
                 // A disabled command remains disabled and accessible as such;
                 // its surrounding tile still accepts customization gestures.
                 Border slot;slot.Background(clear());slot.Child(pick);attach(slot);
@@ -124,13 +132,14 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     text.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(text,1);content.Children().Append(text);
                     pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.Content(content);
                 }
-                bindings.emplace_back([data=data,pick,panelId,id]{
+                bindings.emplace_back([data=data,pick,panelId,id,picker]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
                     pick.Background(flag(current,L"selected")?selected(data):clear());
-                    ToolTipService::SetToolTip(pick,box_value(str(current,L"tooltip")));
+                    auto tooltip=str(current,L"tooltip");
+                    ToolTipService::SetToolTip(pick,box_value(picker?pickerTooltip(tooltip):tooltip));
                 });
             }
             for(uint32_t i=0;i<tileOrder.size()&&i<rects.Size();++i){
@@ -193,7 +202,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             }
             if(fittedColor){
                 Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedColor);root=fitted;
-                contentHeight=[fittedColor,inset]{return fittedColor.ActualHeight()+2*inset;};
+                contentHeight=[data=data,fittedColor,inset]{
+                    auto root=fittedColor.XamlRoot();
+                    return ColorPanelNaturalHeight(data,fittedColor.ActualWidth(),root?root.RasterizationScale():1.)+2*inset;
+                };
             }else if(!scrollable)root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
@@ -208,6 +220,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root=scroll;
             }
         }
+    if(!scrollMetrics&&(contentHeight||navigator)&&str(panel,L"id")!=L"color")
+        scrollMetrics=[]{return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
     if(!scrollable){
         auto id=str(panel,L"id");
         if(id==L"filter_types"||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);

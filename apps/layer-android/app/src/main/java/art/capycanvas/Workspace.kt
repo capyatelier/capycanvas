@@ -208,7 +208,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         onDispose { if (requestingDragFrames && window != null) window.attributes = window.attributes.apply { preferredRefreshRate = previous } }
     }
     dock.density = density
-    dock.enabled = snapshot?.optBoolean("partial_zen") != true && snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
+    dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
     val panelModels = host.panelContent?.optJSONArray("panels")
     val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
     val state = snapshot?.getJSONObject("state")
@@ -288,14 +288,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 ZenButton(host, state, dock, hidden)
             }
             val layout = snapshot.getJSONObject("layout")
-            if (snapshot.optBoolean("partial_zen")) ZenToolbars(host, snapshot, panels, dock)
             if (!hidden) CollapsedColumns(host, snapshot, panels, dock)
             ContentDrawers(host, snapshot, panels, dock)
             layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
-                  val source = dock.drawerSources.containsKey("tool") && group.getString("active") ==
-                      state.getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.optString("panel")
+                  val source = dock.drawerSources["tool"]?.anchor?.optString("panel") == group.getString("active")
                   val z = if (source) 199 else (if (group.optBoolean("floating")) 180 else 100) + index
                   CompositionLocalProvider(LocalWorkspaceZ provides z) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }

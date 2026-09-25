@@ -69,8 +69,36 @@ pub struct CapyHost {
     documents: Option<crate::documents::DocumentService>,
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
     blocked_contacts: std::collections::BTreeSet<u64>,
+    live_contacts: std::collections::BTreeMap<u64, CapyPointer>,
+}
+fn pointer_button(sample: &CapyPointer) -> PointerButton {
+    match sample.button {
+        0 => PointerButton::Primary,
+        1 => PointerButton::Pan,
+        _ => PointerButton::Other,
+    }
 }
 impl CapyHost {
+    /// Contacts the core has seen begin end with it; later samples wait for their own lift.
+    fn cancel_contacts(&mut self) -> Result<(), String> {
+        for (id, mut sample) in std::mem::take(&mut self.live_contacts) {
+            sample.phase = 4;
+            sample.flags &= !1;
+            self.blocked_contacts.insert(id);
+            self.native.pointer_event(sample.event(), pointer_button(&sample))?;
+        }
+        Ok(())
+    }
+    fn track_contact(&mut self, sample: &CapyPointer) {
+        if sample.phase == 0 {
+            return;
+        }
+        if matches!(sample.phase, 3 | 4) {
+            self.live_contacts.remove(&sample.id);
+        } else {
+            self.live_contacts.insert(sample.id, *sample);
+        }
+    }
     unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32) -> Result<Self, String> {
         if panel.is_null() || width == 0 || height == 0 || !scale.is_finite() || scale <= 0.0 {
             return Err("Invalid Windows canvas surface".into());
@@ -123,6 +151,7 @@ impl CapyHost {
             documents: None,
             workspaces: None,
             blocked_contacts: Default::default(),
+            live_contacts: Default::default(),
         })
     }
 
@@ -343,6 +372,7 @@ impl CapyHost {
         self.native
             .session
             .append_layer_overlay(&mut self.cursor.segments);
+        let picker = self.native.session.color_picker_overlay();
         let view = self.native.session.state().camera.view();
         let surround = self.native.session.state().palette.surround_linear;
         let proof = self.documents.as_mut().and_then(|s| s.proof.view.lut(&self.native.session));
@@ -367,6 +397,7 @@ impl CapyHost {
         presenter.set_gpu_local_tone_guide(gpu, self.documents.as_ref().and_then(|s| s.tone.preview(&self.native, self.gpu_generation))).map_err(err)?;
         presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
+        presenter.set_color_picker(gpu, picker);
         presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
             gpu,
@@ -628,22 +659,30 @@ pub unsafe extern "C" fn capy_pointer(
             validate_batch(batch).map_err(err)?;
             host.poll_services()?;
             let blocked = !host.accepts_workspace_input();
+            let mut delivered = None;
             for sample in batch {
+                let terminal = matches!(sample.phase, 3 | 4);
+                if !blocked && sample.phase == 1 {
+                    host.blocked_contacts.remove(&sample.id);
+                }
                 if blocked && sample.phase != 0 {
                     host.blocked_contacts.insert(sample.id);
                 }
                 if blocked || host.blocked_contacts.contains(&sample.id) {
-                    if sample.phase == 3 || sample.phase == 4 {
+                    if terminal {
                         host.blocked_contacts.remove(&sample.id);
                     }
-                    continue;
+                    if !(terminal && host.live_contacts.contains_key(&sample.id)) {
+                        continue;
+                    }
                 }
-                let button = match sample.button {
-                    0 => PointerButton::Primary,
-                    1 => PointerButton::Pan,
-                    _ => PointerButton::Other,
-                };
-                host.native.pointer_event(sample.event(), button)?;
+                host.native.pointer_event(sample.event(), pointer_button(sample))?;
+                if sample.flags & 1 == 0 {
+                    delivered = Some(*sample);
+                }
+            }
+            if let Some(sample) = delivered {
+                host.track_contact(&sample);
             }
         }
         Ok(0)
@@ -826,6 +865,9 @@ pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) ->
             host.chrome_facts = *facts;
             // This hit belongs only to that UI contact, never later canvas input.
             host.chrome_facts.contact_tab = None;
+        }
+        if matches!(input, layer_ui::UiInput::Blur) {
+            host.cancel_contacts()?;
         }
         host.native.input(input)?;
         host.poll_services()?;
@@ -1130,6 +1172,7 @@ pub unsafe extern "C" fn capy_reset_surface(host: *mut CapyHost, panel: *mut c_v
         host.surface = surface;
         host.config = None;
         host.blank_presented = false;
+        host.cancel_contacts()?;
         Ok(0)
     })
 }
@@ -1178,6 +1221,7 @@ pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
 pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
         host.target = None;
+        host.cancel_contacts()?;
         host.native.suspend_renderer()?;
         host.presenter = None;
         drop(host.native.session.renderer_mut().0.take());

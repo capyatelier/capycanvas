@@ -213,7 +213,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         }else if(type==L"swatches"){
             bool inlineRow=flag(kind,L"inline");double side=inlineRow?28:32;
             Panel circles{nullptr};
-            if(inlineRow){StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(10);circles=row;}
+            if(inlineRow){StackPanel strip;strip.Orientation(Orientation::Horizontal);strip.Spacing(10);circles=strip;}
             else{VariableSizedWrapGrid grid;grid.Orientation(Orientation::Horizontal);grid.ItemWidth(side+10);grid.ItemHeight(side+10);grid.HorizontalAlignment(HorizontalAlignment::Center);circles=grid;}
             TextBox entry;entry.Width(96);entry.MaxLength(7);entry.PlaceholderText(str(kind,L"placeholder"));entry.VerticalAlignment(VerticalAlignment::Center);
             AutomationProperties::SetAutomationId(entry,L"setting-text-"+id);AutomationProperties::SetName(entry,titleText);

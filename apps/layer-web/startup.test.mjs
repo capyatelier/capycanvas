@@ -70,6 +70,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     assert.equal(await evaluate("layerApp.app.input({...earlyContact,phase:'move'}).paint"), false,
       "A contact started before readiness must not start painting halfway through");
     await evaluate("layerApp.app.input({...earlyContact,phase:'up'}); undefined");
+    assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='undo').enabled"), false);
     const before = await canvasPixels();
     for (const [type, x, buttons] of [["mousePressed",650,1],["mouseMoved",850,1],["mouseReleased",850,0]]) {
       await call("Input.dispatchMouseEvent", { type, x, y:450, button:"left", buttons, clickCount:1 });
@@ -77,6 +78,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     await settle();
     assert.ok((await canvasPixels()).white < before.white - 50,
       "The current brush paints while an optional shader is still compiling");
+    await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled", 5000);
     const panBefore = await evaluate("layerApp.state().camera.translation");
     await call("Input.dispatchMouseEvent", { type:"mouseWheel", x:650,y:450,deltaX:0,deltaY:40 });
     await settle();

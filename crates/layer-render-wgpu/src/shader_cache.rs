@@ -308,7 +308,7 @@ mod tests {
         use crate::{PipelineDevice, WgpuRasterizer};
         use layer_render::CanvasRenderer;
         let temp = Temp::new();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = WgpuRasterizer::headless_instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
         let cache_features = adapter.features() & wgpu::Features::PIPELINE_CACHE;
         if adapter.get_info().backend == wgpu::Backend::Vulkan {

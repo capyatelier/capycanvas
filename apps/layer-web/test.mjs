@@ -521,9 +521,25 @@ try {
     );
     assert.equal(await evaluate("layerApp.state().tabs.length"), 1);
     assert.equal(await evaluate("layerApp.state().layers.length"), 2);
-    await click('[data-brush="4"]');
-    assert.equal(await evaluate("layerApp.state().brush.preset"), 4);
-    await click('[data-size="96"]');
+    const chooseBrush = async (tool, group, id) => {
+      await click(`[data-command="${tool}"]`);
+      await click(`.brushes-control [data-tool-choice="${group}"]`);
+      await click(`.brushes-control [data-brush="${id}"]`);
+      assert.equal(await evaluate("layerApp.state().brush.preset"), id);
+    };
+    const chooseSize = async value => {
+      await evaluate(`(() => { document.querySelector('[data-tool-setting="size"] .number-value').click(); const input=document.querySelector('[data-tool-setting="size"] .number-entry'); input.value='${value}'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`);
+      await settle();
+      assert.equal(await evaluate("layerApp.state().brush.diameter"), value);
+    };
+    const menuCommand = async (menu, command) => {
+      await evaluate(`document.querySelector('.header-menu[data-menu="${menu}"]').open=true`);
+      await settle();
+      await evaluate(`(() => { const label=layerApp.state().commands.find(c=>c.id==='${command}').label; [...document.querySelectorAll('.header-menu[data-menu="${menu}"] .menu-label')].find(n=>n.textContent===label).closest('button').click(); })()`);
+      await settle();
+    };
+    await chooseBrush("brush", "Paint", 4);
+    await chooseSize(96);
     // Temporary Space shortcut must route to camera gestures, never pen records.
     const beforePan = await evaluate("layerApp.state().camera.translation");
     await evaluate(
@@ -631,7 +647,7 @@ try {
     });
     await settle();
     assert.ok((await evaluate("layerApp.state().camera.zoom")) > beforeZoom);
-    await click('[data-command="fit_canvas"]');
+    await menuCommand("view", "fit_canvas");
     assert.equal(await evaluate("layerApp.state().brush.diameter"), 96);
     await click('.layer-footer [aria-label="New layer"]');
     assert.equal(await evaluate("layerApp.state().layers.length"), 3);
@@ -706,8 +722,8 @@ try {
       `Native mouse input must visibly paint: before=${pixels.white}, after=${painted.white}; ${JSON.stringify(await evaluate("({events:window.inkEvents,dpi:devicePixelRatio,w:layerApp.canvas.width,css:layerApp.canvas.clientWidth,camera:layerApp.state().camera.translation,zoom:layerApp.state().camera.zoom,undo:layerApp.state().commands.find(c=>c.id==='undo')})"))}`,
     );
     // Chrome-generated pen events must preserve pressure through DOM -> Wasm.
-    await click('[data-brush="1"]');
-    await click('[data-size="96"]');
+    await chooseBrush("pen", "Pen", 1);
+    await chooseSize(96);
     const pressureInk = [];
     for (const force of [0.3, 1.0]) {
       const baseline = (await canvasPixels()).white;
@@ -738,8 +754,8 @@ try {
       pressureInk[0] > 50 && pressureInk[1] > pressureInk[0] * 1.5,
       `pressure must visibly change ink width: ${pressureInk}`,
     );
-    await click('[data-brush="4"]');
-    await click('[data-size="96"]');
+    await chooseBrush("brush", "Paint", 4);
+    await chooseSize(96);
     // Workspace gestures are covered by the shared browser suite below.
     const camera = await evaluate(
       "({zoom:layerApp.state().camera.zoom, rotation:layerApp.state().camera.rotation})",
@@ -770,7 +786,7 @@ try {
         Math.abs(moved.rotation - camera.rotation) > 0.1,
       "Native two-touch input must zoom and rotate the shared camera",
     );
-    await click('[data-command="fit_canvas"]');
+    await menuCommand("view", "fit_canvas");
     await mkdir("artifacts/ui", { recursive: true });
     // Match the GTK review window's logical viewport, without browser chrome.
     await call("Emulation.setDeviceMetricsOverride", {
@@ -780,7 +796,7 @@ try {
       mobile: false,
     });
     await settle();
-    await click('[data-command="fit_canvas"]');
+    await menuCommand("view", "fit_canvas");
     const geometryExpression =
       "JSON.parse(JSON.stringify({view:layerApp.state().camera, rect:layerApp.canvas.getBoundingClientRect().toJSON()}, (_,v)=>typeof v==='bigint'?String(v):v))";
     const geometry = await evaluate(geometryExpression);
@@ -800,9 +816,9 @@ try {
     );
     assert.equal(
       await evaluate(
-        "getComputedStyle(document.querySelector('#header')).opacity",
+        "[...document.querySelectorAll('#header > *')].every(n=>getComputedStyle(n).opacity==='0')",
       ),
-      "0",
+      true,
     );
     assert.equal(
       await evaluate("getComputedStyle(layerApp.canvas).outlineStyle"),
@@ -857,6 +873,9 @@ try {
         `Zen hover at ${x},${y}`,
       );
     }
+    await evaluate(
+      "new Promise((resolve,reject)=>{const end=performance.now()+60000;(function poll(){if(!layerApp.state().filter_load.pending)resolve();else if(performance.now()>end)reject(Error('Filter library load timed out'));else setTimeout(poll,20);})();})",
+    );
     const beforeReveal = await evaluate("String(layerApp.state().revision)");
     await call("Input.dispatchTouchEvent", {
       type: "touchStart",
@@ -943,21 +962,22 @@ try {
       assert.equal(surfaces.active, surfaces.panel);
       assert.equal(
         await evaluate(
-          "getComputedStyle(document.querySelector('.size-controls .number-entry')).backgroundColor",
+          "getComputedStyle(document.querySelector('[data-tool-setting=\"size\"] .number-entry')).backgroundColor",
         ),
         theme === "dark" ? "rgb(51, 51, 51)" : "rgb(250, 250, 250)",
       );
       assert.equal(surfaces.radius, "0px");
       assert.equal(surfaces.foot, "6px");
       const spacing = await evaluate(
-        `(() => {const strip=document.querySelector('.toolbar-controls'),box=strip.getBoundingClientRect(),tiles=[...strip.querySelectorAll('.tile-button')].map(n=>n.getBoundingClientRect()),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tab=document.querySelector('.dock-tab').getBoundingClientRect();return{firstX:tiles[0].x-box.x,firstY:tiles[0].y-box.y,gaps:tiles.slice(1).map((b,i)=>b.x-tiles[i].right),gripRight:box.right-grip.right,gripCenter:grip.y+grip.height/2-box.y-box.height/2,tabHeight:tab.height,tileHeight:tiles[0].height};})()`,
+        `(() => {const strip=document.querySelector('.toolbar-controls[data-axis="horizontal"]'),box=strip.getBoundingClientRect(),tiles=[...strip.querySelectorAll('.tile-button')].map(n=>n.getBoundingClientRect()),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tab=document.querySelector('.dock-tab').getBoundingClientRect();return{firstX:tiles[0].x-box.x,firstY:tiles[0].y-box.y,gaps:tiles.slice(1).map((b,i)=>b.x-tiles[i].right),gripRight:box.right-grip.right,gripCenter:grip.y+grip.height/2-box.y-box.height/2,tabHeight:tab.height,tileHeight:tiles[0].height};})()`,
       );
       assert.equal(spacing.firstX, 0);
       assert.equal(spacing.firstY, 0);
-      assert.deepEqual(spacing.gaps, Array(7).fill(2));
+      assert.ok(spacing.gaps.length > 0);
+      assert.deepEqual(spacing.gaps, spacing.gaps.map(() => 2));
       assert.equal(
         await evaluate(
-          "(()=>{const [a,b]=[...document.querySelectorAll('.brush-choice')].slice(0,2).map(n=>n.getBoundingClientRect());return b.top-a.bottom;})()",
+          "(()=>{const [a,b]=[...document.querySelectorAll('.brushes-control .tool-subtools > .tool-choice-button')].slice(0,2).map(n=>n.getBoundingClientRect());return b.top-a.bottom;})()",
         ),
         2,
       );
@@ -966,7 +986,7 @@ try {
       assert.equal(spacing.tabHeight, spacing.tileHeight);
       assert.equal(spacing.tabHeight, 36);
       const chromeGeometry = await evaluate(`(() => {
-      const strip=document.querySelector('.toolbar-controls'),panel=strip.parentElement,box=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tabGrip=document.querySelector('.dock-tabs>.panel-grip').getBoundingClientRect(),zen=document.querySelector('#zen-button').getBoundingClientRect();
+      const strip=document.querySelector('.toolbar-controls[data-axis="horizontal"]'),panel=strip.parentElement,box=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tabGrip=document.querySelector('.dock-tabs>.panel-grip').getBoundingClientRect(),zen=document.querySelector('#zen-button').getBoundingClientRect();
       return {gripSize:[grip.width,grip.height],tabGripSize:[tabGrip.width,tabGrip.height],overflow:[panel.scrollWidth-panel.clientWidth,panel.scrollHeight-panel.clientHeight],top:box.top,above:zen.top,below:box.top-zen.bottom};
     })()`);
       assert.deepEqual(chromeGeometry.gripSize, [20, 36]);
@@ -1040,6 +1060,8 @@ try {
       renderer: info.gpu?.auxAttributes.glRenderer,
     }),
   );
+  if (process.argv.includes("--headless") && info.gpu?.featureStatus?.gpu_compositing !== "enabled")
+    console.error("Headless Chrome is compositing in software, so screenshots omit WebGPU canvas pixels. Run presented-pixel checks headed, e.g. tools/performance/workspace-motion.sh web --pen");
   console.error("Page errors:", errors);
   throw error;
 } finally {

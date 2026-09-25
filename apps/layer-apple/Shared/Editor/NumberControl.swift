@@ -41,7 +41,14 @@ struct NumberControl: View {
                         else { valueButton }
                     }
                 }
-            } else if valueOnly { numericEntry }
+            } else if valueOnly {
+                InlineNumberValueLayout(entrySize: showsEntry || field.dirty ? min(10, max(3, formatted["edit"].string.count)) : nil) {
+                    Text(formatted["text"].string).monospacedDigit().padding(.horizontal, 6).hidden().accessibilityHidden(true)
+                    Text("8").monospacedDigit().hidden().accessibilityHidden(true)
+                    if showsEntry || field.dirty { numericEntry }
+                    else { valueButton }
+                }
+            }
             else {
                 HStack(spacing: 6) {
                     Text(label).lineLimit(1).truncationMode(.tail)
@@ -68,7 +75,7 @@ struct NumberControl: View {
                     stepButton(1)
                 }
             }
-            if let error = field.error, !inline {
+            if let error = field.error, !inline && !valueOnly {
                 Text(error).font(.caption).foregroundStyle(.red).padding(.leading, 6)
                     .accessibilityIdentifier("number-error-" + key)
             }
@@ -88,13 +95,13 @@ struct NumberControl: View {
     private var valueButton: some View {
         Button { showsEntry = true } label: {
             Text(formatted["text"].string).monospacedDigit()
-                .frame(maxWidth: inline || toolbar != nil ? .infinity : nil, alignment: .trailing)
+                .frame(maxWidth: inline || valueOnly || toolbar != nil ? .infinity : nil, alignment: valueOnly ? .center : .trailing)
                 .padding(.horizontal, 6).frame(height: 24)
         }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36)
             // An asynchronous rejection can arrive after text entry closes.
             // Keep compact errors visible without expanding the layer header.
             .overlay {
-                if inline && field.error != nil {
+                if (inline || valueOnly) && field.error != nil {
                     RoundedRectangle(cornerRadius: 6).stroke(.red, lineWidth: 1).allowsHitTesting(false)
                 }
             }

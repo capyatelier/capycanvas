@@ -1273,6 +1273,7 @@ class AndroidInteractionTest {
         val originalTransparency = transparency()
         try { transparency(0); for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme)); restore()
+            waitFor("previous drawer closes") { !exists("column-drawer-41") }; settle()
             val docked = bounds("tab-brushes")
             val name = bounds("tab-name-brushes")
             val icon = bounds("tab-icon-brushes")

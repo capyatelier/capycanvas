@@ -178,6 +178,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
   await mkdir(directory,{recursive:true});
   const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
   const capture=async name=>{await settle();const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,"base64"));};
+  const wait=async(condition,timeout=120000)=>{const end=Date.now()+timeout;while(!await evaluate(condition))if(Date.now()>end)throw Error(`Timed out: ${condition}`);else await new Promise(resolve=>setTimeout(resolve,50));};
   await send({type:"set_theme",theme:"dark"});
   // Inserting above a selected clipping base must preserve the whole stack.
   await send({type:"layer",action:{op:"new",group:false,clipped:true}});
@@ -198,6 +199,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
     await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:x+40,y:y+180,button:"left",buttons:0,clickCount:1});
     await settle();
   }
+  await wait("layerApp.startupTimes.complete!==null");
   await evaluate("document.querySelector('.dock-tab[data-panel=adjustments]').click()");
   await evaluate(`new Promise((resolve,reject)=>{
     const deadline=performance.now()+20000;
@@ -258,15 +260,15 @@ export async function checkAdjustments({call,evaluate,settle}) {
     const deadline=performance.now()+10000;
     const ready=()=>{
       const panel=document.querySelector('.renderer-stats');
-      if(panel.getBoundingClientRect().height>0 && panel.children.length===layerApp.app.renderer_stats().rows.length+1)resolve(true);
+      if(panel.getBoundingClientRect().height>0 && panel.children.length===layerApp.app.renderer_stats().rows.length+2)resolve(true);
       else if(performance.now()>deadline)reject(Error('Diagnostics rows and chart did not render'));
       else setTimeout(ready,100);
     };ready();
   })`);
   assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
   const stats=await evaluate("JSON.parse(JSON.stringify(layerApp.app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v))");assert.ok(stats.samples.length>0,JSON.stringify({stats,layout:await evaluate("JSON.stringify(layerApp.app.layout(innerWidth,innerHeight),(_,v)=>typeof v==='bigint'?Number(v):v)"),error:await evaluate("document.querySelector('#status')?.textContent")}));
-  const order=stats.rows.map(row=>row.label);order.splice(Number(stats.chart_after_rows),0,"chart");
-  assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),order);
+  const order=stats.rows.map(row=>row.label);order.splice(Number(stats.chart_after_rows),0,"chart");order.push("stroke-recording");
+  assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.dataset.control??child.firstChild.textContent)"),order);
   await capture("stats-dark");await send({type:"set_theme",theme:"light"});await capture("stats-light");
   console.log(`PASS: ${choices.length} categorized filters, GPU previews, search, insertion/properties, controls, GPU rendering and live telemetry`);
 }

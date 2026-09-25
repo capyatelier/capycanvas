@@ -29,8 +29,8 @@ private func toolbarItem(_ panel: JSON, _ tile: JSON) -> JSON {
 }
 
 extension EditorStore {
-    func toolbarEdit(_ component: JSON, _ action: Any) {
-        dispatch(["type": "toolbar_edit", "context": component["context"].raw, "action": action])
+    func toolbarEdit(_ component: JSON, _ action: Any, completion: @escaping @MainActor (String?) -> Void = { _ in }) {
+        edit(["type": "toolbar_edit", "context": component["context"].raw, "action": action], completion: completion)
     }
 }
 
@@ -392,6 +392,7 @@ private struct ToolOptionsComponent: View {
         }
     }
     private func fieldSize(_ option: JSON, tile: CGSize) -> CGSize {
+        if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
         let choice = option["Choice"]
         if !choice.isNull && choice["segmented"].bool {
             let count = CGFloat(choice["items"].array.count)
@@ -454,6 +455,12 @@ private struct ToolOptionField: View {
         } else if !option["Choice"].isNull {
             ToolbarChoiceField(store: store, choice: option["Choice"], component: component, vertical: vertical,
                 labeled: labeled, stacked: stacked, iconSize: CGFloat(panel["tile_icon_size"].number))
+        } else if !option["Range"].isNull {
+            let range = option["Range"], bounds = range["bounds"].array
+            RangeControl(store: store, bounds: bounds, label: range["label"].string, prefix: "toolbar",
+                showSlider: preferences["sliders"].bool) { index, value, completion in
+                store.toolbarEdit(component, ["type": "set_tool_setting", "id": bounds[index]["id"].raw, "value": value], completion: completion)
+            }
         } else if !option["Action"].isNull {
             let command = option["Action"]["state"]
             Button { store.toolbarEdit(component, ["type": "invoke", "command": command["id"].raw]) } label: {
@@ -464,6 +471,38 @@ private struct ToolOptionField: View {
                 .accessibilityLabel(command["label"].string).help(command["tooltip"].string)
                 .accessibilityIdentifier("toolbar-action-" + command["id"].string)
         }
+    }
+}
+
+/// Connected icon choices shared by Tool Options and the Tool settings panel.
+struct SegmentedChoiceBar: View {
+    let choice: JSON
+    let prefix: String
+    let height: CGFloat?
+    let iconSize: CGFloat
+    var shape = SquircleShape.control
+    var stacked = false
+    let palette: EditorPalette
+    let send: (JSON) -> Void
+    var body: some View {
+        let items = choice["items"].array
+        let segments = ForEach(items.indices, id: \.self) { index in
+            let item = items[index]
+            Button { send(item) } label: {
+                SharedIcon(name: item["icon"].string, size: iconSize)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(item["selected"].bool ? palette.active : palette["input"])
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel(item["label"].string).help(item["label"].string)
+                .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
+                .accessibilityIdentifier("\(prefix)-segment-\(choice["id"].string)-\(index)")
+        }
+        Group {
+            if stacked { VStack(spacing: 0) { segments } } else { HStack(spacing: 0) { segments } }
+        }.frame(height: height)
+            .clipShape(shape).accessibilityElement(children: .contain)
+            .accessibilityLabel(choice["label"].string).accessibilityIdentifier("\(prefix)-segments-" + choice["id"].string)
     }
 }
 
@@ -480,23 +519,10 @@ private struct ToolbarChoiceField: View {
     private var items: [JSON] { choice["items"].array }
     var body: some View {
         if choice["segmented"].bool {
-            let segments = ForEach(items.indices, id: \.self) { index in
-                let item = items[index]
-                Button { store.toolbarEdit(component, item["action"].raw) } label: {
-                    SharedIcon(name: item["icon"].string, size: vertical ? iconSize : 16)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(item["selected"].bool ? palette.active : palette["input"])
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                    .accessibilityLabel(item["label"].string).help(item["label"].string)
-                    .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
-                    .accessibilityIdentifier("toolbar-segment-\(choice["id"].string)-\(index)")
+            SegmentedChoiceBar(choice: choice, prefix: "toolbar", height: vertical ? nil : 24, iconSize: vertical ? iconSize : 16,
+                shape: vertical ? SquircleShape.tile : SquircleShape.control, stacked: vertical && stacked, palette: palette) { item in
+                store.toolbarEdit(component, item["action"].raw)
             }
-            Group {
-                if vertical && stacked { VStack(spacing: 0) { segments } } else { HStack(spacing: 0) { segments } }
-            }.frame(height: vertical ? nil : 24)
-                .clipShape(vertical ? SquircleShape.tile : SquircleShape.control).accessibilityElement(children: .contain)
-                .accessibilityLabel(choice["label"].string).accessibilityIdentifier("toolbar-segments-" + choice["id"].string)
         } else {
             let selected = items.first { $0["selected"].bool } ?? items.first ?? JSON()
             Button { open = true } label: {
@@ -546,7 +572,9 @@ private struct ToolbarNumberField: View {
     private var id: String { field["id"].string }
     private var control: JSON { field["numeric"] }
     private var value: Double { field["value"].number }
-    private func change(_ next: Double) { store.toolbarEdit(component, ["type": "set_tool_setting", "id": id, "value": next]) }
+    private func change(_ next: Double, _ completion: @escaping @MainActor (String?) -> Void = { _ in }) {
+        store.toolbarEdit(component, ["type": "set_tool_setting", "id": id, "value": next], completion: completion)
+    }
     private func resolve(_ operation: [String: Any]) {
         if let result = try? store.resolveNumber(control, value: value, operation: operation) { change(result["value"].number) }
     }
@@ -580,7 +608,7 @@ private struct ToolbarNumberField: View {
                 .accessibilityIdentifier("toolbar-setting-" + id)
                 .editorPopover(isPresented: $open, placement: .inward) {
                     NumberControl(store: store, label: field["label"].string, value: value, control: control,
-                        identifier: "toolbar-popover-" + id) { next, completion in change(next); completion(nil) }
+                        identifier: "toolbar-popover-" + id) { next, completion in change(next, completion) }
                         .padding(10).frame(width: 240)
                 }
         } else {
@@ -593,7 +621,7 @@ private struct ToolbarNumberField: View {
                 NumberControl(store: store, label: field["label"].string, value: value, control: control,
                     identifier: "toolbar-" + id, inline: true,
                     toolbar: NumberControl.Toolbar(slider: preferences["sliders"].bool)) { next, completion in
-                    change(next); completion(nil)
+                    change(next, completion)
                 }
             }.accessibilityElement(children: .contain).accessibilityIdentifier("toolbar-setting-" + id)
         }
