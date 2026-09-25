@@ -13,6 +13,7 @@ export async function checkSelectedPainting({call, evaluate, settle}) {
     }
     await settle();
   };
+  const brushReady = () => evaluate("new Promise(resolve=>{(function poll(){if(layerApp.app.brush_ready())resolve();else setTimeout(poll,20);})();})");
   const pixels = async () => {
     const {data}=await call("Page.captureScreenshot",{format:"png"});
     return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${data}';await image.decode();
@@ -29,6 +30,7 @@ export async function checkSelectedPainting({call, evaluate, settle}) {
   await action({type:"set_brush_size",value:80});
   await action({type:"set_color",rgba:[.9,0,0,1]});
   const line=Array.from({length:21},(_,i)=>[550+i*20,500]);
+  await brushReady();
   await path(line);
   const selected=await pixels();
   assert.deepEqual(selected[0],before[0]);
@@ -36,6 +38,7 @@ export async function checkSelectedPainting({call, evaluate, settle}) {
   assert.ok(selected[1][0]>150&&selected[1][1]<100,"GPU paint fills selected interior");
   await layer({op:"invert_selection"});
   await action({type:"set_color",rgba:[0,0,.9,1]});
+  await brushReady();
   await path(line);
   const inverse=await pixels();
   assert.deepEqual(inverse[1],selected[1]);
