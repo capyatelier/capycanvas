@@ -143,9 +143,9 @@ extension XCTestCase {
         #endif
         app.launch(); capturePaintEditor(in: app)
         #if os(macOS)
-        let viewport = workspaceViewport(in: app)
-        let center = CGPoint(x: 0.445, y: 0.55)
-        let points = [center, CGPoint(x: 0.535, y: 0.55), CGPoint(x: 0.605, y: 0.55)]
+        let viewport = workspaceViewport(in: app), paper = editorPaper(in: app)
+        let center = paper.point(0.25, 0.5)
+        let points = [center, paper.point(0.55, 0.5), paper.point(0.85, 0.5)]
         func coordinate(_ point: CGPoint) -> XCUICoordinate {
             viewport.coordinate(withNormalizedOffset: CGVector(dx: point.x, dy: point.y))
         }
@@ -158,16 +158,16 @@ extension XCTestCase {
         // A separate outline layer makes the three region sources distinguishable.
         editorTool("Figure", in: app)
         editorChoice("Rectangle", group: true, in: app); editorChoice("Outline", in: app)
-        coordinate(CGPoint(x: 0.40, y: 0.42)).click(forDuration: 0.05,
-            thenDragTo: coordinate(CGPoint(x: 0.58, y: 0.68)))
+        coordinate(paper.point(0.1, 0.15)).click(forDuration: 0.05,
+            thenDragTo: coordinate(paper.point(0.7, 0.85)))
         editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-Use selected layers as references"])
         XCTAssertTrue(app.buttons["layer-Stop using this layer as a reference"].isSelected)
         workspaceActivate(app.buttons["layer-New layer"])
         // Visible artwork includes this unmarked divider; reference-only sampling ignores it.
         editorChoice("Line", group: true, in: app)
-        coordinate(CGPoint(x: 0.49, y: 0.42)).click(forDuration: 0.05,
-            thenDragTo: coordinate(CGPoint(x: 0.49, y: 0.68)))
+        coordinate(paper.point(0.4, 0.15)).click(forDuration: 0.05,
+            thenDragTo: coordinate(paper.point(0.4, 0.85)))
         editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-New layer"])
         workspaceActivate(app.buttons["color-swap"])
@@ -193,6 +193,7 @@ extension XCTestCase {
             for source in ["Visible artwork", "Editing layer", "Reference layers"] {
                 if tool == "Fill" { editorChoice(source, in: app) } else {
                     let action = app.buttons["tool-action-selection_" + ["Visible artwork": "visible", "Editing layer": "editing", "Reference layers": "reference"][source]!]
+                    revealEditorControl(action, in: app.scrollViews.containing(.button, identifier: action.identifier).firstMatch)
                     workspaceActivate(action)
                     expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: action)
                     waitForExpectations(timeout: 5)
@@ -228,7 +229,9 @@ extension XCTestCase {
             }
             // Exercise the real numeric editor, including restoration of the original value.
             for percent in [20, 10] {
-                workspaceActivate(app.buttons["number-value-tool-tolerance"])
+                let tolerance = app.buttons["number-value-tool-tolerance"]
+                revealEditorControl(tolerance, in: app.scrollViews.containing(.button, identifier: tolerance.identifier).firstMatch)
+                workspaceActivate(tolerance)
                 let entry = app.textFields["number-entry-tool-tolerance"]
                 XCTAssertTrue(entry.waitForExistence(timeout: 5))
                 entry.typeText("\(percent)\n")
@@ -245,7 +248,7 @@ extension XCTestCase {
                     let entry = app.textFields["number-entry-tool-" + id]
                     revealEditorControl(entry, in: app.scrollViews.containing(.textField, identifier: entry.identifier).firstMatch)
                     workspaceActivate(entry); entry.typeText(value + "\n")
-                    editorTool("Brush", in: app); editorTool(tool, in: app)
+                    editorTool("Paint Brush", in: app); editorTool(tool, in: app)
                     expectation(for: NSPredicate(format: "value == %@", value + " px"), evaluatedWith: entry)
                     waitForExpectations(timeout: 5)
                 }
@@ -256,7 +259,7 @@ extension XCTestCase {
                 workspaceActivate(value)
                 let entry = app.textFields["number-entry-tool-smoothing"]
                 XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("\(percent)\n")
-                editorTool("Brush", in: app); editorTool(tool, in: app)
+                editorTool("Paint Brush", in: app); editorTool(tool, in: app)
                 expectation(for: NSPredicate(format: "value == %@", "\(percent).0 %"), evaluatedWith: value)
                 waitForExpectations(timeout: 5)
             }

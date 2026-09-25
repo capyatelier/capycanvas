@@ -104,11 +104,7 @@ extension XCTestCase {
         attachEditor(in: app, name: "fullscreen-mouse-stroke")
         for (command, expected) in [("Undo", blank), ("Redo", painted), ("Undo", blank)] {
             editorHistory(command, in: app)
-            // Native integer restoration can differ by one displayed sRGB byte.
-            // Exact artwork history is checked separately from this screenshot.
-            expectation(for: NSPredicate { _, _ in
-                zip(self.editorPixels(in: app, at: samplePoint), expected).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
-            }, evaluatedWith: app)
+            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: samplePoint) == expected }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
         }
         fill(); expectPaper(blue: true)

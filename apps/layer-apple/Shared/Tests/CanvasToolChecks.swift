@@ -42,6 +42,45 @@ extension XCTestCase {
         workspaceActivate(button)
     }
 
+    /// The visible white paper, normalized to the editor screenshot. Points
+    /// derived from it follow the shared layout instead of fixed window positions.
+    @MainActor func editorPaper(in app: XCUIApplication) -> EditorPaper {
+        let source = CGImageSourceCreateWithData(editorScreenshot(in: app).pngRepresentation as CFData, nil)!
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary
+        let extent = max(properties[kCGImagePropertyPixelWidth] as! Int, properties[kCGImagePropertyPixelHeight] as! Int)
+        let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: extent] as CFDictionary)!
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        func white(_ x: Int, _ y: Int) -> Bool {
+            let i = (y * width + x) * 4
+            return bytes[i] >= 253 && bytes[i + 1] >= 253 && bytes[i + 2] >= 253
+        }
+        var best = (row: 0, start: 0, length: 0)
+        for y in stride(from: 0, to: height, by: 2) {
+            var start = 0
+            for x in 0...width {
+                if x < width && white(x, y) { continue }
+                if x - start > best.length { best = (y, start, x - start) }
+                start = x + 1
+            }
+        }
+        XCTAssertGreaterThan(best.length, width / 10, "The editor must show white paper")
+        let column = best.start + best.length / 2
+        var top = best.row, bottom = best.row
+        while top > 0 && white(column, top - 1) { top -= 1 }
+        while bottom < height - 1 && white(column, bottom + 1) { bottom += 1 }
+        return EditorPaper(frame: CGRect(x: CGFloat(best.start) / CGFloat(width), y: CGFloat(top) / CGFloat(height),
+            width: CGFloat(best.length) / CGFloat(width), height: CGFloat(bottom + 1 - top) / CGFloat(height)))
+    }
+
     @MainActor func editorScreenshot(in app: XCUIApplication) -> XCUIScreenshot {
         #if os(macOS)
         app.windows.firstMatch.screenshot()
@@ -120,18 +159,32 @@ extension XCTestCase {
             ("Pen", "Marker", ["Marker"]),
             ("Pencil", "Pencil", ["Pencil", "Pointy Pencil", "Shading Pencil"]),
             ("Pencil", "Pastel", ["Chalk", "Pastel Block", "Charcoal"]),
-            ("Brush", "Paint", ["Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze"]),
-            ("Brush", "Watercolor", ["Watercolor Wash", "Wet Watercolor"]),
-            ("Brush", "Oil paint", ["Loaded Oil", "Palette Knife", "Wet Round"]),
+            ("Paint Brush", "Paint", ["Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze"]),
+            ("Paint Brush", "Watercolor", ["Watercolor Wash", "Wet Watercolor"]),
+            ("Paint Brush", "Oil paint", ["Loaded Oil", "Palette Knife", "Wet Round"]),
             ("Airbrush", "Airbrush", ["Airbrush"]), ("Airbrush", "Spray", ["Spray"]),
             ("Decoration", "Texture", ["Dual Texture"]), ("Eraser", "Eraser", ["Eraser"]),
         ]
         #if os(macOS)
         func pixels() -> Data { editorPixels(in: app, at: CGPoint(x: 0.5, y: 0.52), size: 96) }
         let paper = pixels()
-        func expectPixels(_ value: Data) {
-            expectation(for: NSPredicate { _, _ in pixels() == value }, evaluatedWith: app)
-            waitForExpectations(timeout: 10)
+        func expectPixels(_ value: Data, _ message: String) {
+            let match = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() == value }, object: app)
+            if XCTWaiter.wait(for: [match], timeout: 10) != .completed {
+                attachEditor(in: app, name: "unexpected-pixels")
+                XCTFail(message)
+            }
+        }
+        func settledPixels() -> Data {
+            var previous = pixels(), unchanged = 0
+            for _ in 0..<40 {
+                Thread.sleep(forTimeInterval: 0.25)
+                let next = pixels()
+                unchanged = next == previous ? unchanged + 1 : 0
+                if unchanged == 4 { return next }
+                previous = next
+            }
+            XCTFail("The finished stroke must stop changing"); return previous
         }
         #endif
         for (tool, group, presets) in families {
@@ -148,7 +201,7 @@ extension XCTestCase {
                         let sample = pixels(); return Int(sample[2]) > Int(sample[0]) + 50
                     }, evaluatedWith: app)
                     waitForExpectations(timeout: 10)
-                } else { expectPixels(paper) }
+                } else { expectPixels(paper, "\(preset) starts on blank paper") }
                 let before = pixels()
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
@@ -164,12 +217,12 @@ extension XCTestCase {
                     return false
                 }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
-                let painted = pixels()
+                let painted = settledPixels()
                 attachEditor(in: app, name: "paint-" + preset)
                 for (command, expected) in [("Undo", before), ("Redo", painted), ("Undo", before)] {
-                    editorHistory(command, in: app); expectPixels(expected)
+                    editorHistory(command, in: app); expectPixels(expected, "\(preset) \(command) restores the displayed stroke")
                 }
-                if tool == "Eraser" { editorHistory("Undo", in: app); expectPixels(paper) }
+                if tool == "Eraser" { editorHistory("Undo", in: app); expectPixels(paper, "Undo restores the paper") }
                 #endif
                 XCTAssertEqual(viewport.frame, originalFrame)
                 XCTAssertFalse(app.staticTexts["Canvas error"].exists)
@@ -254,7 +307,7 @@ extension XCTestCase {
                 "toolbar-tile-toolbar-", label)).firstMatch)
         }
         #if os(macOS)
-        let viewport = workspaceViewport(in: app)
+        let viewport = workspaceViewport(in: app), paper = editorPaper(in: app)
         func drag(_ a: CGPoint, _ b: CGPoint) {
             viewport.coordinate(withNormalizedOffset: CGVector(dx: a.x, dy: a.y)).click(forDuration: 0.05,
                 thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: b.x, dy: b.y)))
@@ -290,11 +343,11 @@ extension XCTestCase {
                 XCTAssertEqual(app.buttons["number-value-tool-size"].exists, paint != "Fill")
                 XCTAssertTrue(app.buttons["number-value-tool-opacity"].exists)
                 #if os(macOS)
-                let center = CGPoint(x: 0.53, y: 0.55)
-                let edge = shape == "Line" ? center : CGPoint(x: 0.53, y: 0.42)
-                let points = [edge, center, CGPoint(x: 0.66, y: 0.55)]
+                let center = paper.point(0.425, 0.5)
+                let edge = shape == "Line" ? center : paper.point(0.425, 0.2)
+                let points = [edge, center, paper.point(0.85, 0.5)]
                 let blank = samples(points)
-                drag(CGPoint(x: 0.44, y: 0.42), CGPoint(x: 0.62, y: 0.68))
+                drag(paper.point(0.25, 0.2), paper.point(0.6, 0.8))
                 expectation(for: NSPredicate { _, _ in hasColor(samples(points)[0], red: false) }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
                 let painted = samples(points)
@@ -313,9 +366,9 @@ extension XCTestCase {
                 choose(name, group: false)
                 XCTAssertTrue(app.buttons["number-value-tool-opacity"].exists)
                 #if os(macOS)
-                let points = [CGPoint(x: 0.445, y: 0.55), CGPoint(x: 0.53, y: 0.55), CGPoint(x: 0.66, y: 0.55)]
+                let points = [paper.point(0.27, 0.5), paper.point(0.425, 0.5), paper.point(0.85, 0.5)]
                 let blank = samples(points)
-                drag(CGPoint(x: 0.44, y: 0.55), CGPoint(x: 0.62, y: 0.55))
+                drag(paper.point(0.25, 0.5), paper.point(0.6, 0.5))
                 expectation(for: NSPredicate { _, _ in hasColor(samples(points)[0], red: false) }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
                 let painted = samples(points)
@@ -391,4 +444,15 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
+}
+
+struct EditorPaper {
+    let frame: CGRect
+    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        CGPoint(x: frame.minX + x * frame.width, y: frame.minY + y * frame.height)
+    }
+    func offset(_ x: CGFloat, _ y: CGFloat) -> CGVector {
+        let point = point(x, y)
+        return CGVector(dx: point.x, dy: point.y)
+    }
 }

@@ -45,8 +45,10 @@ import SwiftUI
             store.snapshot["panel_measurements"].array.first { $0["panel"].string == panel } ?? JSON()
         }
         func fitted(_ panel: String) -> Bool {
-            let g = group(panel), height = measured(panel)["content_height"].number
-            return g["floating"].bool && height > 0 && abs(g["bounds"].rect.height - min(height + 36, 675)) < 0.02
+            let g = group(panel), measurement = measured(panel), height = measurement["content_height"].number
+            let scroll = measurement["scroll"], unit = scroll["unit_height"].number > 0 ? scroll["unit_height"].number : 36
+            let body = scroll.isNull ? height : min(height, scroll["fixed_height"].number + 4 * unit)
+            return g["floating"].bool && height > 0 && abs(g["bounds"].rect.height - min(body + 36, 675)) < 0.02
         }
         func float(_ panel: String, x: Double) async throws {
             try await action(["type": "move_panel", "panel": panel, "target": ["kind": "float", "position": [x, 180]], "viewport": [1200, 900]])
@@ -110,7 +112,10 @@ import SwiftUI
         try await action(["type": "invoke", "command": "add_layer"])
         try await wait("New layer grows intrinsic content") { fitted("layers") && measured("layers")["content_height"].number > layers + 20 }
         try await float("navigator", x: 880)
-        precondition(abs(measured("navigator")["content_height"].number - 214) < 0.02)
+        let document = store.state["tabs"][0], navigatorWidth = group("navigator")["bounds"].rect.width
+        precondition(abs(measured("navigator")["content_height"].number
+            - ((navigatorWidth - 16) * document["height"].number / document["width"].number + 50)) < 0.02,
+            "The Navigator measures its overview at the floating width plus its command row")
         precondition(geometry.navigators.count == 1, "Measuring tabs must not mount extra GPU Navigator views")
 
         try await action(["type": "move_panel", "panel": "stats", "target": ["kind": "tab", "group": group("sizes")["id"].raw], "viewport": [1200, 900]])

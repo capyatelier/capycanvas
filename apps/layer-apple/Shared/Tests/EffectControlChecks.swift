@@ -188,12 +188,16 @@ extension XCTestCase {
         toggleReverse(false); expectPixels(gray)
         let color = app.buttons["gradient-stop-color"]
         reveal(color); workspaceActivate(color)
-        edit("gradient-stop-rgba-0", "100", expected: "100.0 %")
+        let redField = app.textFields["color-input-0"]
+        XCTAssertTrue(redField.waitForExistence(timeout: 5), "A stop color opens the shared Edit Color form")
+        workspaceActivate(redField)
+        redField.typeKey("a", modifierFlags: .command); redField.typeText("1")
+        workspaceActivate(app.buttons["color-input-use"])
+        XCTAssertTrue(redField.waitForNonExistence(timeout: 10))
         let red = changed(from: gray)
         XCTAssertGreaterThan(red[0], gray[0]); XCTAssertEqual(red[1], gray[1]); XCTAssertEqual(red[2], gray[2])
         history(before: gray, after: red)
         attachEditor(in: app, name: "filter-gradient-color-artwork")
-        workspaceActivate(color)
         let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
         reveal(gradient)
         let middle = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 43.0 / 52))

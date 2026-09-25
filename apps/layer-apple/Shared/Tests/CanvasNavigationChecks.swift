@@ -27,20 +27,17 @@ extension XCTestCase {
         }
         #endif
         editorTool("Lasso selection", in: app)
-        editorChoice("Lasso", group: true, in: app)
+        editorChoice("Select", group: true, in: app)
+        editorChoice("Lasso selection", in: app)
         #if os(macOS)
         clickWithoutArea()
         #endif
         workspaceActivate(app.buttons["layer-Layer actions"])
-        workspaceActivate(app.buttons["menu-action-Selection"])
+        workspaceActivate(app.buttons["menu-action-Pixel Selection"])
+        for label in ["Fill Selection", "Invert Selection", "Deselect Pixels"] {
+            XCTAssertTrue(app.buttons["menu-action-" + label].waitForExistence(timeout: 5), label)
+        }
         attachEditor(in: app, name: "layer-selection-menu")
-        workspaceActivate(app.buttons["menu-action-Lasso Fill"])
-        editorChoice("Lasso fill", group: true, in: app)
-        #if os(macOS)
-        clickWithoutArea()
-        #endif
-        XCTAssertFalse(app.buttons["number-value-tool-opacity"].exists)
-        attachEditor(in: app, name: "lasso-fill-controls")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
@@ -57,12 +54,13 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         let viewport = workspaceViewport(in: app)
         let originalFrame = viewport.frame
-        let point = CGPoint(x: 0.32, y: 0.55)
+        let sheet = editorPaper(in: app)
+        let point = sheet.point(0.06, 0.5)
         func pixels() -> Data { editorPixels(in: app, at: point) }
         let paper = pixels()
         XCTAssertTrue(paper.prefix(3).allSatisfy { $0 == 255 }, "The initial sample must lie on white paper")
-        let start = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55))
-        let end = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.55))
+        let start = viewport.coordinate(withNormalizedOffset: sheet.offset(0.3, 0.5))
+        let end = viewport.coordinate(withNormalizedOffset: sheet.offset(0.7, 0.5))
         #if os(macOS)
         start.click(forDuration: 0.05, thenDragTo: end)
         editorDocumentTitle(in: app).hover()
@@ -93,8 +91,8 @@ extension XCTestCase {
         workspaceActivate(app.buttons["layer-New layer"])
         workspaceActivate(app.buttons["color-swap"])
         editorTool("Figure", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
-        viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.42)).click(forDuration: 0.05,
-            thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.68)))
+        viewport.coordinate(withNormalizedOffset: sheet.offset(0.25, 0.2)).click(forDuration: 0.05,
+            thenDragTo: viewport.coordinate(withNormalizedOffset: sheet.offset(0.6, 0.8)))
         workspaceActivate(app.buttons["number-value-layer-opacity"])
         app.textFields["number-entry-layer-opacity"].typeText("50\n")
         expectation(for: NSPredicate(format: "value == %@", "50"), evaluatedWith: app.buttons["number-value-layer-opacity"])
@@ -105,8 +103,8 @@ extension XCTestCase {
                 let state = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return [] }
             return state["rgba"] as? [Double] ?? []
         }
-        func pick(_ x: Double, expected: [Double]) {
-            viewport.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.55)).click()
+        func pick(_ x: CGFloat, expected: [Double]) {
+            viewport.coordinate(withNormalizedOffset: sheet.offset(x, 0.5)).click()
             editorDocumentTitle(in: app).hover()
             expectation(for: NSPredicate { _, _ in
                 let actual = color()
@@ -125,15 +123,15 @@ extension XCTestCase {
         }
         // Independently calculated sRGB result of 50% red over blue in linear light.
         source("Visible color")
-        pick(0.53, expected: [0.672824, 0.366774, 0.599931, 1])
+        pick(0.45, expected: [0.672824, 0.366774, 0.599931, 1])
         attachEditor(in: app, name: "eyedropper-visible")
         source("Selected layer")
-        pick(0.53, expected: [0.9, 0.25, 0.2, 1])
+        pick(0.45, expected: [0.9, 0.25, 0.2, 1])
         editorTool("Eyedropper", in: app)
-        pick(0.66, expected: [0.9, 0.25, 0.2, 1]) // Transparent layer pixels preserve the current color.
+        pick(0.8, expected: [0.9, 0.25, 0.2, 1]) // Transparent layer pixels preserve the current color.
         attachEditor(in: app, name: "eyedropper-layer")
         source("Visible color")
-        pick(0.66, expected: [0.2, 0.45, 0.8, 1])
+        pick(0.8, expected: [0.2, 0.45, 0.8, 1])
         #else
         editorTool("Eyedropper", in: app)
         XCTAssertTrue(app.buttons["picker-setting-source"].waitForExistence(timeout: 10), "Picking shows its source setting")

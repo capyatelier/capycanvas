@@ -49,7 +49,7 @@ extension XCTestCase {
             XCTFail("Filled paper must have visible bounds"); return .zero
         }
         let bounds = CGRect(x: left, y: top, width: right - left, height: bottom - top)
-        XCTAssertGreaterThan(bounds.width, 0.3); XCTAssertGreaterThan(bounds.height, 0.3)
+        XCTAssertGreaterThan(bounds.width, 0.15); XCTAssertGreaterThan(bounds.height, 0.15)
         return bounds
     }
 

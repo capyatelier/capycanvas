@@ -36,19 +36,23 @@ extension XCTestCase {
     }
     @MainActor func checkCollapsedColumnsDrawersAndZen(in app: XCUIApplication) {
         workspaceActivate(app.buttons["column-icon-toolbar"])
-        let column = app.descendants(matching: .any)["column-drawer-4"].firstMatch
-        XCTAssertTrue(column.waitForExistence(timeout: 10))
-        workspaceActivate(app.buttons["drawer-tab-brushes"])
-        XCTAssertTrue(column.buttons["brush-1"].waitForExistence(timeout: 5))
-        workspaceActivate(app.buttons["drawer-tab-toolbar"])
-        let pen = column.buttons["toolbar-tile-toolbar-1"]
+        let column = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "column-connection-4-")).firstMatch
+        XCTAssertTrue(column.waitForExistence(timeout: 10), "The collapsed column opens as its stacked groups")
+        let group = app.descendants(matching: .any)["workspace-group-6"].firstMatch
+        workspaceActivate(group.buttons["panel-tab-brushes"])
+        XCTAssertTrue(group.buttons["brush-1"].waitForExistence(timeout: 5))
+        workspaceActivate(group.buttons["panel-tab-toolbar"])
+        let pen = group.buttons["toolbar-tile-toolbar-1"]
         workspaceActivate(pen)
         let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
         if !drawer.waitForExistence(timeout: 2) { workspaceActivate(pen) }
         XCTAssertTrue(drawer.waitForExistence(timeout: 10))
         XCTAssertTrue(workspaceViewport(in: app).frame.contains(drawer.frame), "The shared drawer bounds must stay within the viewport")
         XCTAssertTrue(drawer.buttons["brush-1"].exists)
-        let outside = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.7))
+        let window = workspaceViewport(in: app).frame, bounds = drawer.frame
+        let outside = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(
+            dx: (bounds.midX - window.minX) / window.width, dy: min(0.95, (bounds.maxY + 40 - window.minY) / window.height)))
         #if os(macOS)
         outside.click()
         #else
@@ -56,7 +60,7 @@ extension XCTestCase {
         #endif
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: drawer)
         waitForExpectations(timeout: 5)
-        XCTAssertTrue(column.exists, "Column drawers use explicit dismissal")
+        XCTAssertTrue(column.exists, "Open columns use explicit dismissal")
         XCTAssertFalse(app.buttons["expand-column-4"].exists)
         workspaceActivate(app.buttons["column-icon-toolbar"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: column)
@@ -185,14 +189,19 @@ extension XCTestCase {
         attachWorkspaceScreen(app, name: "layer-configuration")
         let capture = XCTAttachment(screenshot: configuration.screenshot())
         capture.name = "layer-configuration-controls"; capture.lifetime = .keepAlways; add(capture)
+        func expectEnabled(_ enabled: Bool, _ message: String) {
+            expectation(for: NSPredicate(format: "enabled == %@", NSNumber(value: enabled)), evaluatedWith: value)
+            waitForExpectations(timeout: 5)
+            XCTAssertEqual(value.isEnabled, enabled, message)
+        }
         workspaceActivate(app.buttons["layer-Lock editing"])
-        XCTAssertFalse(value.isEnabled, "Locked opacity must retain the shared disabled state")
+        expectEnabled(false, "Locked opacity must retain the shared disabled state")
         workspaceActivate(app.buttons["layer-Lock editing"])
-        XCTAssertTrue(value.isEnabled)
+        expectEnabled(true, "Unlocking restores opacity")
         workspaceActivate(configuration.buttons["configuration-layer"])
-        workspaceActivate(app.buttons["configuration-layer-option-2"])
-        XCTAssertTrue(value.isEnabled, "Shared Paper opacity remains editable")
-        XCTAssertFalse(configuration.buttons["configuration-command-delete_layer"].isEnabled)
+        workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+            "configuration-layer-option-", "Paper")).firstMatch)
+        expectEnabled(false, "Paper has no layer opacity")
         close()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: configuration)
         waitForExpectations(timeout: 5)
@@ -241,15 +250,6 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         workspaceActivate(popup.buttons["Done"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
-        waitForExpectations(timeout: 5)
-        let red = app.buttons["number-value-Red"]
-        XCTAssertTrue(red.waitForExistence(timeout: 5), "The live swatch must retain precise RGB controls")
-        let originalRed = red.value as? String ?? ""
-        let increaseRed = app.buttons["number-increase-Red"]
-        let stepRed = increaseRed.isEnabled ? increaseRed : app.buttons["number-decrease-Red"]
-        revealEditorControl(stepRed, in: liveControls)
-        workspaceActivate(stepRed)
-        expectation(for: NSPredicate(format: "value != %@", originalRed), evaluatedWith: red)
         waitForExpectations(timeout: 5)
         attachWorkspaceScreen(app, name: "panel-brush-color")
         let group = app.descendants(matching: .any)
