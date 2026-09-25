@@ -939,6 +939,12 @@ try {
       geometry.view.translation,
     );
     await evaluate("document.activeElement?.blur()");
+    const transparency = await evaluate(
+      "['off','low','medium','high'].indexOf(layerApp.state().settings.transparency)",
+    );
+    await evaluate(
+      "layerApp.dispatch({type:'preferences',action:{type:'edit',id:'transparency',value:0}})",
+    );
     for (const theme of ["dark", "light"]) {
       await evaluate(
         `layerApp.dispatch({type:'set_theme', theme:${JSON.stringify(theme)}})`,
@@ -949,7 +955,7 @@ try {
       );
       const surfaces = await evaluate(`(() => {
       const group=document.querySelector('.dock-group:not(.toolbar)'), tab=group.querySelector('.dock-tab[aria-selected=true]');
-      return {panel:getComputedStyle(group).backgroundColor, bar:getComputedStyle(group.querySelector('.dock-tabs')).backgroundColor, active:getComputedStyle(tab).backgroundColor, radius:getComputedStyle(tab).borderBottomRightRadius, foot:getComputedStyle(tab,'::after').width};
+      return {panel:getComputedStyle(group.querySelector('.panel-frame')).backgroundColor, bar:getComputedStyle(group.querySelector('.dock-tabs')).backgroundColor, active:getComputedStyle(tab).backgroundColor, radius:getComputedStyle(tab).borderBottomRightRadius, foot:getComputedStyle(tab,'::after').width};
     })()`);
       assert.equal(
         surfaces.panel,
@@ -1003,6 +1009,9 @@ try {
         Buffer.from(shot.data, "base64"),
       );
     }
+    await evaluate(
+      `layerApp.dispatch({type:'preferences',action:{type:'edit',id:'transparency',value:${transparency}}})`,
+    );
     assert.ok(
       await evaluate(
         `(() => {const n=document.querySelector('#view-info').getBoundingClientRect(),p=document.querySelector('[data-panel=layers]').getBoundingClientRect();return Math.abs(n.bottom-p.bottom)<1;})()`,
