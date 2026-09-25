@@ -220,7 +220,8 @@ use std::{
 pub struct ToolSettings {
     pub root: gtk::Box,
     form: gtk::Box,
-    completion: gtk::Box,
+    modes: gtk::Box,
+    mode_container: gtk::Box,
     extra: gtk::Box,
     extra_fields: RefCell<Vec<(layer_ui::ToolOption,crate::tool_extra::ExtraField)>>,
     extra_context: Cell<Option<layer_ui::ToolbarContext>>,
@@ -234,15 +235,21 @@ impl ToolSettings {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let form = body();
         let picker = crate::color_picker::Settings::new();
-        let completion=body();
-        completion.set_orientation(gtk::Orientation::Horizontal);
-        root.append(&completion);
+        let mode_container=body();
+        let modes=gtk::Box::new(gtk::Orientation::Horizontal,0);
+        modes.set_homogeneous(true);
+        modes.set_widget_name("selection-mode-row");
+        modes.add_css_class("linked");
+        modes.add_css_class("selection-modes");
+        modes.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
+        mode_container.append(&modes);
+        root.append(&mode_container);
         let extra=body();
         root.append(&extra);
         root.append(&form);
         root.append(&picker.root);
         Self {
-            root, form, picker, extra, completion, extra_fields:RefCell::default(), extra_context:Cell::new(None),
+            root, form, picker, extra, modes, mode_container, extra_fields:RefCell::default(), extra_context:Cell::new(None),
             fields: RefCell::default(),
             actions: RefCell::default(),
             updating: Rc::new(Cell::new(false)),
@@ -252,7 +259,7 @@ impl ToolSettings {
         let picking = state.layer_tools.tool.picks_color();
         self.form.set_visible(!picking);
         self.extra.set_visible(!picking);
-        self.completion.set_visible(!picking);
+        self.mode_container.set_visible(state.layer_tools.tool.selection_tool().is_some());
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
         let context=state.toolbar_context();
@@ -262,11 +269,11 @@ impl ToolSettings {
             self.extra_fields.borrow_mut().clear();
             while let Some(child)=self.extra.first_child() {self.extra.remove(&child);}
             for option in &state.tool_extra {
-                let field=crate::tool_extra::ExtraField::new(workspace,option,context,false);
+                let field=crate::tool_extra::ExtraField::new(workspace,option,context);
                 self.extra.append(&field.root);self.extra_fields.borrow_mut().push((option.clone(),field));
             }
         } else {
-            for ((old,field),next) in self.extra_fields.borrow_mut().iter_mut().zip(&state.tool_extra) {field.refresh(workspace,next,context);*old=next.clone();}
+            for ((old,field),next) in self.extra_fields.borrow_mut().iter_mut().zip(&state.tool_extra) {field.refresh(next);*old=next.clone();}
         }
         let controls = &state.tool_settings;
         self.updating.set(true);
@@ -289,18 +296,9 @@ impl ToolSettings {
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
             }
-            while let Some(child)=self.completion.first_child() {self.completion.remove(&child);}
+            while let Some(child)=self.modes.first_child() {self.modes.remove(&child);}
             fields.clear();
             actions.clear();
-            let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            mode_row.set_homogeneous(true);
-            mode_row.set_widget_name("selection-mode-row");
-            mode_row.add_css_class("linked");
-            mode_row.add_css_class("selection-modes");
-            mode_row.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
-            if state.layer_tools.tool.selection_tool().is_some() {
-                self.form.append(&mode_row);
-            }
             let mut group = "";
             for control in controls {
                 if group != control.group {
@@ -401,23 +399,13 @@ impl ToolSettings {
                             command: action.command,
                         },
                     );
-                    let content=icon_label(command.label, command.icon.unwrap());
-                    if matches!(action.command,layer_ui::CommandId::ApplyTonalSelection | layer_ui::CommandId::CancelTonalSelection) {
-                        if let Some(label)=content.last_child().and_downcast::<gtk::Label>() {label.set_max_width_chars(-1);}
-                    }
-                    button.set_child(Some(&content));
+                    button.set_child(Some(&icon_label(command.label, command.icon.unwrap())));
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
-                if matches!(action.command,layer_ui::CommandId::ApplyTonalSelection | layer_ui::CommandId::CancelTonalSelection) {self.completion.append(&widget);}
-                else if mode { mode_row.append(&widget); }
+                if mode { self.modes.append(&widget); }
                 else { self.form.append(&widget); }
                 actions.push((*action, command.label, widget));
-            }
-            if state.layer_tools.tool.selection_tool().is_some() {
-                let menu = crate::selection_masks::menu_button(workspace, "Selection Actions…", crate::selection_masks::Menu::Selection);
-                menu.set_widget_name("selection-actions-menu");
-                self.form.append(&menu);
             }
         }
         for ((_, input), control) in fields.iter().zip(controls) {

@@ -1,101 +1,95 @@
 # Tonal range selections
 
-GTK exposes **Tonal range** in the Select family. It produces the same byte
-coverage selections as the other selection tools: existing painting, Quick
-Mask, saved selections, layer masks, and selection combination need no new
-mask type. The GTK Tools panel and Tool Options bar consume the same shared
-list, text, numeric, and command definitions.
+GTK exposes **Tonal range** in the Select family. It writes ordinary byte-coverage
+selections and saved selection masks. The shared Rust model supplies the same
+choice, numeric and selection-mode controls to the GTK panel and Tool Options bar.
+The panel presents the tones as a visible radio group; a narrow bar uses a compact
+native choice and offers the complete radio group in its overflow panel.
 
-The default controls are **Tones**, **Sample from**, **Softness**, and **Feather**,
-plus the standard selection combination modes, Invert, and Apply/Cancel.
-Choose **Visible image** (the default) or a specific artwork layer in **Sample from**.
-The source stays pinned when changing the editing destination. Raw layers
-are sampled before opacity and masks; composite sampling includes their rendered
-appearance but excludes selection overlays, proofing, and display mapping.
-Quick Mask and selection layers are destinations and never sampling sources.
+Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
+a custom interval. The result applies immediately. **Softness** and **Feather**
+refine it; **Custom** adds only **From** and **To** bounds. Moving one bound beyond
+the other moves that endpoint too. There is no Apply/Cancel workflow, source
+selector, range manager, destination label, or selection-actions menu in this
+panel. Invert remains an independent selection/mask action in existing menus.
 
-Check one or more entries in **Tones**. **Edit range** reveals the active range,
-its name, From/To bounds, edge widths, and saved-range controls. Editing a built-in preset creates
-an enabled custom copy and disables that preset; other included bands remain.
-Custom names and recipes survive workspace capture. **Save range** adds or
-updates an application preset by name; **Saved ranges** copies one into the
-current recipe. Up to 16 bands, including built-ins, can be in the recipe.
+Opening the tool, changing combination mode, or changing destinations does not
+modify a selection. A new tone choice or canvas sample starts an undo operation;
+subsequent numeric refinements amend that operation, preserving its starting
+coverage. Undo returns to that starting coverage and Redo restores the final
+result. Refinement is allowed only while the exact document revision and target
+still match. History admission checks retain the original inverse and account
+for its memory. Tool changes retain the applied result and cancel pending work.
+
+To combine named regions, choose **Add** and then another tone. To constrain tones
+spatially, make a lasso selection first and choose **Intersect**. Refinements use
+the operation's original baseline, so repeated softness/feather changes do not
+repeatedly erode an already-softened mask. Shift/Alt modifiers latch for a sample
+and its refinements; they do not change the configured mode of the next operation.
+
+Sampling always reads **visible artwork**, before display mapping/proofing and
+without selection or mask overlays. It does not silently switch to mask pixels
+when entering Quick Mask or selecting a selection layer. Use the ordinary layer
+visibility and Solo controls to isolate an exposure. Layer opacity, masks and
+transforms participate in the visible artwork composite.
+
+| Editing destination | Display | Updated coverage |
+| --- | --- | --- |
+| Ordinary selection | Standard marching ants | Current selection |
+| Quick Mask | Existing mask shading/settings | Current selection, remaining in Quick Mask |
+| Selection layer | That layer's mask shading/settings | Selected mask; current selection is unchanged |
+
+Q changes the display of an existing current selection without restarting the
+operation. Switching selection layers ends the operation; the new mask is changed
+only by the next tone choice, numeric adjustment or canvas sample.
 
 | Preset | Full-strength interval, stops relative to white |
 | --- | --- |
+| Deep shadows | below −7 |
 | Shadows | below −5 |
 | Mid-shadows | −5 to −3.5 |
 | Midtones | −3.5 to −1.5 |
 | Mid-highlights | −1.5 to −0.5 |
 | Highlights | above −0.5 |
-| Deep shadows | below −7 |
 | Bright HDR | above +1 |
 
 These are luminance intervals, not camera exposure metadata. The GPU computes
 `log2(Y)` from unassociated linear RGB using the document primaries' XYZ Y row.
-RGB 1 is reference white (203 cd/m²); values above 1 stay available in HDR.
-Zero and negative luminance use the black endpoint. Transparent pixels supply
-no selection coverage or sample weight.
+RGB 1 is reference white (203 cd/m²); HDR values above 1 remain available. Zero and
+negative luminance use the black endpoint; transparent pixels supply no coverage
+or sample weight. At 100% Softness each finite bound has a 0.5-stop smooth shoulder;
+0% gives a hard threshold, and 200% gives a one-stop shoulder. Feather is spatial
+smoothing in image pixels, using the existing GPU selection refinement.
 
-The default smooth falloff extends 0.5 stops beyond each finite bound.
-**Softness** scales every included range's falloff from 0% (hard threshold) to
-200%, with 100% as the default. It does not modify named presets. Under Edit range,
-linked **Edge width** edits both shoulders; unlinking allows independent values. Include
-Darker/Brighter controls remove the corresponding bound. Bands combine by
-maximum coverage, so overlap does not strengthen a mask. Invert applies to the
-combined tonal criterion; source alpha still limits coverage. Spatial feathering
-uses the existing GPU selection refinement in image pixels.
+A mouse/pen click samples a 5×5 alpha-weighted linear average and initially selects
+a one-stop range around it; later clicks preserve the current custom width. A
+rectangle samples the central 90% of its luminance distribution, with 1/16-stop
+bins. Both select matching tones throughout the image, rather than spatially
+clipping to the sample rectangle. GTK retains its existing finger navigation.
+GPU requests coalesce through the existing single-flight region queue. The GPU
+returns packed coverage and small sample summaries, never a full color image for
+CPU classification. Hover performs no tonal sampling.
 
-Mouse/pen hover reports a 5×5 linear average without changing the selection.
-A click samples that footprint into the active band, initially one stop wide;
-later clicks preserve a custom finite width. A dragged rectangle samples the
-central 90% of its luminance distribution with 1/16-stop bins. Rotated and sheared
-layers use the exact inverse-transformed sampling footprint. Matching tones
-are selected throughout the source. To restrict the result spatially, make a
-lasso selection first and choose Intersect. GTK retains its existing finger
-navigation; touch controls use normal native widgets.
-
-| Editing destination | Preview | Apply result |
-| --- | --- | --- |
-| Ordinary selection | Standard marching ants | Current selection |
-| Quick Mask | Existing Quick Mask shading and overlay settings | Current selection, staying in Quick Mask |
-| Selection layer | That layer's mask shading and overlay settings | That selection layer; current selection is unchanged |
-
-Toggling Quick Mask preserves a ready current-selection preview and the artwork
-source. Switching to a different selection layer restarts the preview against
-that layer's mask. The source choice stays unchanged. A short destination label
-and **Apply selection** / **Apply mask** identify where the result will go.
-
-Previews retain an immutable starting selection or destination mask. Every recomputation combines
-against that baseline, rather than repeatedly intersecting an already-softened
-result. Apply commits one history edit. Cancel, Escape, and tool changes discard
-the draft. Shift/Alt combination modifiers latch for a sampling gesture and its
-subsequent preview adjustments; they do not replace the configured mode after
-Apply. Sampling and parameter changes coalesce through the existing
-single-flight GPU region queue; hover uses the bounded color-sampling queue.
-The GPU classifies source tiles and returns packed coverage and small probe
-summaries. It never downloads a full color image for CPU classification.
+Workspace decoding accepts the original band-editor format, migrating the active
+included band to a preset or Custom. Retired command IDs remain decodable but
+unavailable, so old shortcuts/layouts cannot activate the removed editor.
 
 ## Checks
 
-- `cargo test --locked -p layer-ui tonal_` covers drafts, baseline combination,
-  completion-frame display publication, single-step history, cancellation,
-  mask destinations, global softness, saved bands, workspace capture, stale
-  controls, and shared options.
-- `cargo test --locked -p layer-render-wgpu tonal_` needs a hardware GPU. It
-  compares HDR masks with a scalar luminance oracle, checks SDR paint and
-  composites across tiles, and exercises transparent samples and percentiles.
+- `cargo test --locked -p layer-core refinement_` checks original Undo/final Redo,
+  current and saved masks, checkpoint identity and stale-history rejection.
+- `cargo test --locked -p layer-ui tonal_` covers direct edits, baseline
+  combination, refinements, mask destinations, sampling, stale results, shared
+  controls and workspace compatibility.
+- `cargo test --locked -p layer-render-wgpu tonal_` needs a hardware GPU and checks
+  HDR/SDR coverage, composites, transparent samples and percentiles.
 - `tools/performance/workspace-motion.sh gtk --native-test=native_tonal_selection_input`
-  exercises mouse sampling, touch presets, text/numeric entry, neutral ordinary
-  previews, Quick Mask shading, pinned artwork sources, selection-layer writes,
-  global mask coverage, cancellation, and undo/redo.
-- `native_tonal_toolbar_input` checks horizontal and narrow vertical Tool Options,
-  retained lists, text entry, pinned source choice, and the complete overflow form.
-- `cargo test --locked --release -p layer-render-wgpu tonal_preview_latency -- --ignored --test-threads=1 --nocapture`
-  measures complete 24MP HDR preview/readback and full-image sampling on an
-  opaque uniform composite (seven bands, no spatial feather). Run serially.
-- Run `native_tonal_selection_pen_input` through the same harness with `--tablet`
-  for injected Wayland pen sampling in Quick Mask. This is not a physical-device test.
+  checks radio controls, their ordering, native numeric edits, automatic updates,
+  actual outline/shading pixels, both mask destinations, sampling and undo/redo.
+- `native_tonal_toolbar_input` checks horizontal and vertical Tool Options and
+  the complete radio/numeric form in overflow.
+- `native_tonal_selection_pen_input --tablet` checks injected Wayland pen sampling
+  in Quick Mask; this is not a physical-device test.
 
 Use the isolated harness, not the user's desktop. Screenshots and machine-specific
 logs belong in ignored `artifacts/` or `/tmp`.

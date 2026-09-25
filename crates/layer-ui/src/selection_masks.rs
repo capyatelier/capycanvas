@@ -666,7 +666,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {LayerCanvasTool::Paint};
         self.refresh_document();
-        if tonal && !keep_draft { self.queue_tonal(None)?; }
         self.sync_selection_overlay();
         Ok(())
     }
@@ -725,7 +724,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {editing.tool};
         self.engine.set_selection_display(None);
         self.refresh_document();
-        if changing_target {self.queue_tonal(None)?;}
         self.sync_selection_overlay();
         Ok(())
     }

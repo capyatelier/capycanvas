@@ -1,9 +1,8 @@
-//! Tonal selection drafts: immutable baseline, pinned source, and one history edit.
-//! Hosts present shared fields and forward contacts; sampling never clips location.
+//! Direct tonal selection: visible artwork in, current selection or mask out.
 use super::*;
 use layer_core::{
     Affine, Point, Selection, SelectionTarget,
-    tonal::{MAX_BANDS, MAX_STOP, MIN_STOP, TonalBand},
+    tonal::{MAX_STOP, MIN_STOP, TonalBand},
 };
 use layer_render::{RegionRequest, SelectionRefinement, TonalProbe, TonalRequest, TonalSample};
 use std::sync::Arc;
@@ -11,72 +10,104 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TonalAction {
-    ToggleBand { index: usize },
-    ActiveBand { index: usize },
-    LoadBand { index: usize },
-    Source { layer: Option<u64> },
+    Preset { index: usize },
 }
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(from = "StoredTonalOptions")]
 pub struct TonalOptions {
-    pub bands: Vec<TonalBand>,
-    pub enabled: Vec<bool>,
-    pub active: usize,
-    pub linked: bool,
-    pub invert: bool,
+    pub tone: usize,
+    pub custom: [f32; 2],
     pub softness: f32,
 }
 impl Default for TonalOptions {
     fn default() -> Self {
         Self {
-            bands: TonalBand::defaults(),
-            enabled: vec![false, false, false, false, true, false, false],
-            active: 4,
-            linked: true,
-            invert: false,
+            tone: 4,
+            custom: [-3.5, -1.5],
             softness: 1.,
         }
     }
 }
+// Read workspaces from the original band editor without retaining its editing
+// machinery. A legacy multi-band recipe migrates to its active included band.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct StoredTonalOptions {
+    tone: Option<usize>,
+    custom: Option<[f32; 2]>,
+    softness: Option<f32>,
+    bands: Vec<TonalBand>,
+    enabled: Vec<bool>,
+    active: usize,
+}
+impl From<StoredTonalOptions> for TonalOptions {
+    fn from(old: StoredTonalOptions) -> Self {
+        let mut options = Self::default();
+        options.softness = old.softness.unwrap_or(1.);
+        if let Some(tone) = old.tone {
+            options.tone = tone;
+            options.custom = old.custom.unwrap_or(options.custom);
+        } else if !old.bands.is_empty() {
+            let index = if old.enabled.get(old.active) == Some(&true) {
+                old.active
+            } else {
+                old.enabled.iter().position(|on| *on).unwrap_or(4)
+            };
+            if let Some(band) = old.bands.get(index) {
+                options.tone = index.min(7);
+                if index >= 7 {
+                    options.custom = [
+                        band.lower.unwrap_or(MIN_STOP),
+                        band.upper.unwrap_or(MAX_STOP),
+                    ];
+                }
+            }
+        }
+        options
+    }
+}
 impl TonalOptions {
+    pub const NAMES: [&'static str; 8] = [
+        "Shadows",
+        "Mid-shadows",
+        "Midtones",
+        "Mid-highlights",
+        "Highlights",
+        "Deep shadows",
+        "Bright HDR",
+        "Custom",
+    ];
     pub fn validate(&self) -> Result<(), String> {
+        if self.tone >= Self::NAMES.len() {
+            return Err("Unknown tone".into());
+        }
         self.softness_control()
             .numeric
             .validate(self.softness, "Softness")?;
-        if self.bands.len() < 7
-            || self.bands.len() > MAX_BANDS
-            || self.enabled.len() != self.bands.len()
-            || self.active >= self.bands.len()
+        if self
+            .custom
+            .iter()
+            .any(|v| !v.is_finite() || !(MIN_STOP..=MAX_STOP).contains(v))
+            || self.custom[0] > self.custom[1]
         {
-            return Err("Invalid tonal band list".into());
-        }
-        if self.bands[..7] != TonalBand::defaults() {
-            return Err("Built-in tonal bands cannot be changed".into());
-        }
-        for band in &self.bands {
-            band.validate().map_err(str::to_string)?;
+            return Err("Invalid tonal range".into());
         }
         Ok(())
     }
-    fn add(&mut self, band: TonalBand) -> Result<(), String> {
-        if self.bands.len() == MAX_BANDS {
-            return Err("Remove a custom band before adding another (16 bands maximum)".into());
-        }
-        band.validate().map_err(str::to_string)?;
-        self.active = self.bands.len();
-        self.bands.push(band);
-        self.enabled.push(true);
-        Ok(())
-    }
-    fn editable(&mut self) -> Result<&mut TonalBand, String> {
-        if self.active < 7 {
-            let mut band = self.bands[self.active].clone();
-            band.name = format!("{} copy", band.name);
-            let old = self.active;
-            self.add(band)?;
-            self.enabled[old] = false;
-        }
-        Ok(&mut self.bands[self.active])
+    fn band(&self) -> TonalBand {
+        let mut band = if self.tone < 7 {
+            TonalBand::defaults().remove(self.tone)
+        } else {
+            TonalBand {
+                name: "Custom".into(),
+                lower: (self.custom[0] > MIN_STOP).then_some(self.custom[0]),
+                upper: (self.custom[1] < MAX_STOP).then_some(self.custom[1]),
+                falloff: [0.5; 2],
+            }
+        };
+        band.falloff = [self.softness * 0.5; 2];
+        band
     }
     pub fn softness_control(&self) -> ToolSetting {
         ToolSetting {
@@ -94,137 +125,82 @@ impl TonalOptions {
         }
     }
     pub fn controls(&self) -> Vec<ToolSetting> {
-        let b = &self.bands[self.active];
-        let stops = NumericControl {
-            soft_min: -12.,
-            soft_max: 6.,
-            ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 2).unit("stops")
-        };
-        let falloff = NumericControl::number(0., 16., 0.1, 2).unit("stops");
-        let mut fields = Vec::new();
-        for (id, label, value, numeric) in [
-            ("tonal_lower", "From", b.lower, stops.clone()),
-            ("tonal_upper", "To", b.upper, stops),
-            (
-                "tonal_falloff_low",
-                if self.linked {
-                    "Edge width"
-                } else {
-                    "Darker falloff"
-                },
-                Some(b.falloff[0]),
-                falloff.clone(),
-            ),
-            (
-                "tonal_falloff_high",
-                "Brighter falloff",
-                (!self.linked).then_some(b.falloff[1]),
-                falloff,
-            ),
-        ] {
-            if let Some(value) = value {
-                fields.push(ToolSetting {
+        let mut controls = Vec::new();
+        if self.tone == 7 {
+            let numeric = NumericControl {
+                soft_min: -12.,
+                soft_max: 6.,
+                ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 2).unit("stops")
+            };
+            for (id, label, value) in [
+                ("tonal_lower", "From", self.custom[0]),
+                ("tonal_upper", "To", self.custom[1]),
+            ] {
+                controls.push(ToolSetting {
                     id,
                     label,
-                    group: "Custom range",
                     value,
-                    numeric,
+                    group: "",
+                    numeric: numeric.clone(),
                 });
             }
         }
-        fields
+        controls.push(self.softness_control());
+        controls
     }
     pub fn reset_value(&self, id: &str) -> Result<f32, String> {
-        let b = &self.bands[self.active];
         match id {
             "tonal_softness" => Ok(1.),
-            "tonal_lower" => Ok((b.upper.unwrap_or(0.) - 1.).max(MIN_STOP)),
-            "tonal_upper" => Ok((b.lower.unwrap_or(-1.) + 1.).min(MAX_STOP)),
-            "tonal_falloff_low" | "tonal_falloff_high" => Ok(0.5),
+            "tonal_lower" => Ok((-3.5f32).min(self.custom[1])),
+            "tonal_upper" => Ok((-1.5f32).max(self.custom[0])),
             _ => Err("Unknown tonal setting".into()),
         }
     }
     pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
-        if id == "tonal_softness" {
-            self.softness_control()
-                .numeric
-                .validate(value, "Softness")?;
-            self.softness = value;
-            return Ok(());
-        }
-        let control = self
-            .controls()
-            .into_iter()
-            .find(|c| c.id == id)
-            .ok_or("Unknown tonal setting")?;
-        control.numeric.validate(value, control.label)?;
         let mut next = self.clone();
-        let linked = next.linked;
-        let b = next.editable()?;
         match id {
-            "tonal_lower" => b.lower = Some(value),
-            "tonal_upper" => b.upper = Some(value),
-            "tonal_falloff_low" => {
-                b.falloff[0] = value;
-                if linked {
-                    b.falloff[1] = value;
-                }
+            "tonal_softness" => next.softness = value,
+            "tonal_lower" if self.tone == 7 => {
+                next.custom[0] = value;
+                next.custom[1] = next.custom[1].max(value);
             }
-            "tonal_falloff_high" => b.falloff[1] = value,
-            _ => unreachable!(),
+            "tonal_upper" if self.tone == 7 => {
+                next.custom[1] = value;
+                next.custom[0] = next.custom[0].min(value);
+            }
+            _ => return Err("Unknown tonal setting".into()),
         }
         next.validate()?;
         *self = next;
         Ok(())
     }
-    pub fn rename(&mut self, name: String) -> Result<(), String> {
-        let mut next = self.clone();
-        let enabled = self.enabled[self.active];
-        next.editable()?.name = name.trim().into();
-        next.enabled[next.active] = enabled;
-        next.validate()?;
-        *self = next;
-        Ok(())
-    }
-    fn sample(&mut self, sample: TonalSample, point: bool) -> Result<(), String> {
-        let factory = self.active < 7;
-        let b = self.editable()?;
-        if factory {
-            b.name = "Sampled tones".into();
-        }
-        let width = if factory {
-            1.
+    fn sample(&mut self, sample: TonalSample, point: bool) {
+        let width = if self.tone == 7 {
+            (self.custom[1] - self.custom[0]).max(0.1)
         } else {
-            b.lower.zip(b.upper).map_or(1., |(a, b)| (b - a).max(0.1))
+            1.
         };
-        let [lo, hi] = if point {
+        self.custom = if point {
             [sample.stops[0] - width / 2., sample.stops[0] + width / 2.]
         } else {
             sample.stops
         };
-        b.lower = (lo > MIN_STOP).then_some(lo.min(MAX_STOP));
-        b.upper = (hi < MAX_STOP).then_some(hi.max(MIN_STOP));
-        self.enabled[self.active] = true;
-        Ok(())
+        self.custom = self.custom.map(|v| v.clamp(MIN_STOP, MAX_STOP));
+        self.tone = 7;
     }
 }
 #[derive(Default)]
 pub(super) struct TonalTools {
     pub draft: Option<TonalDraft>,
-    pub preview: Option<Selection>,
-    pub ready: bool,
-    pub source: Option<LayerId>,
     pub probe: Option<TonalProbe>,
-    pub hover: Option<f32>,
     pub changed: bool,
-    pub details: bool,
-    sample_area: Option<layer_render::ColorSampleArea>,
 }
 pub(super) struct TonalDraft {
     pub revision: u64,
     pub baseline: Option<Selection>,
     pub mode: SelectionMode,
     pub target: SelectionTarget,
+    committed: bool,
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn tonal_active(&self) -> bool {
@@ -232,61 +208,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn cancel_tonal(&mut self) -> bool {
         let active = self.tonal_tools.draft.take().is_some();
-        self.tonal_tools.preview = None;
-        if active {
-            self.engine.set_selection_display(None);
-        }
-        self.tonal_tools.ready = false;
         self.tonal_tools.probe = None;
-        self.tonal_tools.hover = None;
-        if let Some(area) = self.tonal_tools.sample_area.take() {
-            self.eyedropper.cancel();
-            self.eyedropper.area = area;
-        }
         if active {
             self.region_tools.cancel();
             self.tonal_tools.changed = true;
         }
         active
     }
-    fn tonal_source(&self) -> Result<(layer_render::RegionSource, Affine, [u32; 2]), String> {
-        let doc = self.engine.document();
-        if let Some(id) = self.tonal_tools.source {
-            let layer = doc.layer(id).ok_or("The sampled layer no longer exists")?;
-            if matches!(
-                layer.kind,
-                layer_core::LayerKind::Selection
-                    | layer_core::LayerKind::Group
-                    | layer_core::LayerKind::Effect
-            ) {
-                return Err("Choose an artwork layer to sample".into());
-            }
-            Ok((
-                layer_render::RegionSource::Layer(id),
-                doc.layer_transform(id),
-                doc.target_extent(id),
-            ))
-        } else {
-            Ok((
-                layer_render::RegionSource::Composite,
-                Affine::IDENTITY,
-                [doc.width, doc.height],
-            ))
-        }
-    }
     pub(super) fn queue_tonal(&mut self, probe: Option<TonalProbe>) -> Result<(), String> {
         if !self.tonal_active() {
             return Ok(());
-        }
-        let (source, basis, _) = self.tonal_source()?;
-        let doc = self.engine.document();
-        if self
-            .tonal_tools
-            .draft
-            .as_ref()
-            .is_some_and(|d| d.revision != doc.revision)
-        {
-            self.cancel_tonal();
         }
         let target = self
             .selection_masks
@@ -296,7 +227,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .tonal_tools
             .draft
             .as_ref()
-            .is_some_and(|d| d.target != target)
+            .is_some_and(|d| d.revision != self.engine.document().revision || d.target != target)
         {
             self.cancel_tonal();
         }
@@ -314,30 +245,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             baseline,
             mode,
             target,
+            committed: false,
         });
         if probe.is_some() {
             draft.mode = mode;
         }
-        let options = &self.selection_tools.options;
         let request = RegionRequest {
             request_id: 0,
             source: layer_render::RegionSource::Tonal(Box::new(TonalRequest {
-                source,
-                bands: options
-                    .tonal
-                    .bands
-                    .iter()
-                    .zip(&options.tonal.enabled)
-                    .filter(|(_, on)| **on)
-                    .map(|(b, _)| {
-                        let mut band = b.clone();
-                        band.falloff = band
-                            .falloff
-                            .map(|width| (width * options.tonal.softness).min(16.));
-                        band
-                    })
-                    .collect(),
-                invert: options.tonal.invert,
+                source: layer_render::RegionSource::Composite,
+                bands: vec![self.selection_tools.options.tonal.band()],
+                invert: false,
                 probe,
             })),
             contiguous: false,
@@ -349,12 +267,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 resize: 0,
                 mode: draft.mode,
                 antialias: true,
-                feather: options.feather,
+                feather: self.selection_tools.options.feather,
                 previous: draft.baseline.clone().map(Arc::new),
-                source_to_document: basis,
+                source_to_document: Affine::IDENTITY,
             }),
         };
-        self.tonal_tools.ready = false;
         self.tonal_tools.probe = probe;
         self.tonal_tools.changed = true;
         self.queue_tonal_region(request);
@@ -372,58 +289,34 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_tools
                     .options
                     .tonal
-                    .sample(sample, probe.point)?;
+                    .sample(sample, probe.point);
                 self.queue_tonal(None)?;
             } else {
+                self.cancel_tonal();
                 self.state.host_error = Some("No visible pixels in the sampled region".into());
-                self.queue_tonal(None)?;
             }
         } else {
-            self.tonal_tools.preview = Some(Selection::pixels(result.pixels));
-            self.tonal_tools.ready = true;
-            // Query completion can arrive after this frame was submitted. Publish
-            // the display mask now; waiting for another document frame leaves a
-            // ready preview showing its predecessor on an otherwise idle canvas.
+            let selection = Selection::pixels(result.pixels);
+            let draft = self.tonal_tools.draft.as_ref().unwrap();
+            if draft.committed {
+                self.engine
+                    .refine_selection(draft.target, selection, draft.revision)
+                    .map_err(error)?;
+            } else {
+                self.set_mask_coverage(draft.target, selection)?;
+            }
+            let draft = self.tonal_tools.draft.as_mut().unwrap();
+            draft.committed = true;
+            draft.revision = self.engine.document().revision;
             self.sync_selection_overlay();
             let display = self.engine.display_selection().map(|s| s.into_owned());
             self.engine
                 .backend_mut()
                 .set_selection_outline(display.as_ref())
                 .map_err(error)?;
+            self.refresh_document();
         }
         self.tonal_tools.changed = true;
-        self.layer_interaction.changed = true;
-        self.refresh_tools();
-        Ok(())
-    }
-    pub(super) fn finish_tonal(&mut self, apply: bool) -> Result<(), String> {
-        if apply
-            && (!self.tonal_tools.ready
-                || self
-                    .tonal_tools
-                    .draft
-                    .as_ref()
-                    .is_none_or(|d| d.revision != self.engine.document().revision))
-        {
-            return Err("Wait for the current tonal preview".into());
-        }
-        let selection = self.tonal_tools.preview.clone();
-        let target = self.tonal_tools.draft.as_ref().map(|d| d.target);
-        self.cancel_tonal();
-        self.layer_interaction.path.clear();
-        if apply {
-            self.set_mask_coverage(
-                target.ok_or("No tonal selection to apply")?,
-                selection.unwrap_or_else(Selection::empty),
-            )?;
-        }
-        self.sync_selection_overlay();
-        let display = self.engine.display_selection().map(|s| s.into_owned());
-        self.engine
-            .backend_mut()
-            .set_selection_outline(display.as_ref())
-            .map_err(error)?;
-        self.layer_interaction.changed = true;
         self.refresh_tools();
         Ok(())
     }
@@ -431,177 +324,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.tonal_active() {
             return Err("Choose Tonal range first".into());
         }
-        let options = &mut self.selection_tools.options.tonal;
-        let generate = match action {
-            TonalAction::ToggleBand { index } => {
-                let enabled = options.enabled.get_mut(index).ok_or("Unknown band")?;
-                *enabled = !*enabled;
-                if *enabled {
-                    options.active = index;
-                }
-                true
-            }
-            TonalAction::ActiveBand { index } => {
-                if index >= options.bands.len() {
-                    return Err("Unknown band".into());
-                }
-                options.active = index;
-                false
-            }
-            TonalAction::LoadBand { index } => {
-                options.add(
-                    self.state
-                        .settings
-                        .tonal_bands
-                        .get(index)
-                        .ok_or("Unknown saved band")?
-                        .clone(),
-                )?;
-                true
-            }
-            TonalAction::Source { layer } => {
-                let previous = self.tonal_tools.source;
-                self.tonal_tools.source = layer.map(LayerId);
-                if let Err(e) = self.tonal_source() {
-                    self.tonal_tools.source = previous;
-                    return Err(e);
-                }
-                self.eyedropper.cancel();
-                true
-            }
-        };
-        if generate {
-            self.queue_tonal(None)?;
+        let TonalAction::Preset { index } = action;
+        if index >= TonalOptions::NAMES.len() {
+            return Err("Unknown tone".into());
         }
-        self.refresh_tools();
-        Ok(())
-    }
-    pub(super) fn tonal_command(&mut self, command: CommandId) -> Result<(), String> {
-        if !self.tonal_active() {
-            return Err("Choose Tonal range first".into());
-        }
-        use CommandId::*;
-        if matches!(command, ApplyTonalSelection | CancelTonalSelection) {
-            return self.finish_tonal(command == ApplyTonalSelection);
-        }
-        if command == TonalDetails {
-            self.tonal_tools.details = !self.tonal_tools.details;
-            self.refresh_tools();
-            return Ok(());
-        }
-        let mut options = self.selection_tools.options.tonal.clone();
-        match command {
-            TonalNewBand => options.add(TonalBand {
-                name: "Custom band".into(),
-                lower: Some(-3.),
-                upper: Some(-2.),
-                falloff: [0.5; 2],
-            })?,
-            TonalRemoveBand => {
-                if options.active < 7 {
-                    return Err("Built-in presets cannot be removed".into());
-                }
-                options.bands.remove(options.active);
-                options.enabled.remove(options.active);
-                options.active = 4;
-            }
-            TonalSaveBand => {
-                let band = options.bands[options.active].clone();
-                band.validate().map_err(str::to_string)?;
-                let saved = &mut self.state.settings.tonal_bands;
-                if let Some(existing) = saved.iter_mut().find(|b| b.name == band.name) {
-                    *existing = band;
-                } else if saved.len() < 64 {
-                    saved.push(band);
-                } else {
-                    return Err("At most 64 saved tonal bands are supported".into());
-                }
-                self.request(HostRequestKind::SaveSettings {
-                    settings: Box::new(self.state.settings.clone()),
-                })?;
-                self.refresh_tools();
-                return Ok(());
-            }
-            TonalInvert => options.invert = !options.invert,
-            TonalLinkFalloff => {
-                options.linked = !options.linked;
-                if options.linked {
-                    let b = options.editable()?;
-                    b.falloff[1] = b.falloff[0];
-                }
-            }
-            TonalLowerOpen => {
-                let b = options.editable()?;
-                b.lower = if b.lower.is_some() {
-                    None
-                } else {
-                    Some((b.upper.unwrap_or(0.) - 1.).max(MIN_STOP))
-                };
-            }
-            TonalUpperOpen => {
-                let b = options.editable()?;
-                b.upper = if b.upper.is_some() {
-                    None
-                } else {
-                    Some((b.lower.unwrap_or(-1.) + 1.).min(MAX_STOP))
-                };
-            }
-            _ => return Err("Unknown tonal command".into()),
-        }
-        options.validate()?;
-        self.selection_tools.options.tonal = options;
-        if command == TonalNewBand {
-            self.tonal_tools.details = true;
-        }
+        self.cancel_tonal();
+        self.selection_tools.options.tonal.tone = index;
         self.queue_tonal(None)?;
         self.refresh_tools();
         Ok(())
     }
-    pub(super) fn tonal_hover(&mut self, point: Option<Point>) {
-        if !self.tonal_active() {
-            return;
-        }
-        let Some(point) = point else {
-            self.eyedropper.cancel();
-            self.tonal_tools.hover = None;
-            self.tonal_tools.changed = true;
-            return;
-        };
-        let Ok((source, basis, extent)) = self.tonal_source() else {
-            return;
-        };
-        let Some(inverse) = basis.inverse() else {
-            return;
-        };
-        let p = inverse.map(point);
-        if p.x < 0. || p.y < 0. || p.x >= extent[0] as f32 || p.y >= extent[1] as f32 {
-            self.eyedropper.cancel();
-            self.tonal_tools.changed |= self.tonal_tools.hover.take().is_some();
-            return;
-        }
-        self.tonal_tools
-            .sample_area
-            .get_or_insert(self.eyedropper.area);
-        self.eyedropper.area = layer_render::ColorSampleArea::Average5;
-        self.eyedropper.queue(
-            match source {
-                layer_render::RegionSource::Layer(id) => layer_render::ColorSampleSource::Layer(id),
-                _ => layer_render::ColorSampleSource::Composite,
-            },
-            [p.x as u32, p.y as u32],
-        );
-    }
-    pub(super) fn tonal_sampled_color(&mut self, color: layer_core::color::RgbColor) {
-        if let Ok(rgb) = color.linear_in(self.engine.document().color.space) {
-            let w = self.engine.document().color.space.to_xyz()[1];
-            let y = (0..3).map(|i| w[i] * f64::from(rgb[i])).sum::<f64>();
-            self.tonal_tools.hover = Some(if y > 0. { y.log2() as f32 } else { MIN_STOP });
-            self.tonal_tools.changed = true;
-        }
-    }
     pub(super) fn tonal_pen(&mut self, event: PenEvent, p: Point) -> Result<(), String> {
         match event.phase {
             PenPhase::Down => {
+                self.cancel_tonal();
                 self.layer_interaction.path = vec![p, p];
             }
             PenPhase::Move => {
@@ -609,72 +345,40 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.path[1] = p;
                 }
             }
-            PenPhase::Cancel => {
-                self.layer_interaction.path.clear();
-            }
-            PenPhase::Hover => self.tonal_hover(Some(p)),
+            PenPhase::Cancel => self.layer_interaction.path.clear(),
+            PenPhase::Hover => (),
             PenPhase::Up => {
                 let points = std::mem::take(&mut self.layer_interaction.path);
                 let Some(start) = points.first() else {
                     return Ok(());
                 };
-                let (_, basis, extent) = self.tonal_source()?;
-                let inverse = basis.inverse().ok_or("Invalid sampled layer placement")?;
+                let doc = self.engine.document();
+                let [w, h] = [doc.width, doc.height];
                 let point = (p.x - start.x).hypot(p.y - start.y) * self.state.camera.zoom < 4.;
-                let mut quad = None;
                 let bounds = if point {
-                    let q = inverse.map(p);
-                    if q.x < 0. || q.y < 0. || q.x >= extent[0] as f32 || q.y >= extent[1] as f32 {
+                    if p.x < 0. || p.y < 0. || p.x >= w as f32 || p.y >= h as f32 {
                         return Ok(());
                     }
-                    let [x, y] = [q.x as u32, q.y as u32];
+                    let [x, y] = [p.x as u32, p.y as u32];
                     [
                         x.saturating_sub(2),
                         y.saturating_sub(2),
-                        (x + 3).min(extent[0]),
-                        (y + 3).min(extent[1]),
+                        (x + 3).min(w),
+                        (y + 3).min(h),
                     ]
                 } else {
-                    let q = [
-                        inverse.map(*start),
-                        inverse.map(Point { x: p.x, y: start.y }),
-                        inverse.map(p),
-                        inverse.map(Point { x: start.x, y: p.y }),
-                    ];
-                    quad = Some(q);
-                    let x = q
-                        .iter()
-                        .map(|p| p.x)
-                        .fold(f32::INFINITY, f32::min)
-                        .floor()
-                        .max(0.) as u32;
-                    let y = q
-                        .iter()
-                        .map(|p| p.y)
-                        .fold(f32::INFINITY, f32::min)
-                        .floor()
-                        .max(0.) as u32;
-                    let r = (q
-                        .iter()
-                        .map(|p| p.x)
-                        .fold(f32::NEG_INFINITY, f32::max)
-                        .ceil()
-                        .max(0.) as u32)
-                        .min(extent[0]);
-                    let b = (q
-                        .iter()
-                        .map(|p| p.y)
-                        .fold(f32::NEG_INFINITY, f32::max)
-                        .ceil()
-                        .max(0.) as u32)
-                        .min(extent[1]);
-                    [x, y, r, b]
+                    [
+                        (start.x.min(p.x).floor().max(0.) as u32).min(w),
+                        (start.y.min(p.y).floor().max(0.) as u32).min(h),
+                        (start.x.max(p.x).ceil().max(0.) as u32).min(w),
+                        (start.y.max(p.y).ceil().max(0.) as u32).min(h),
+                    ]
                 };
                 if bounds[0] < bounds[2] && bounds[1] < bounds[3] {
                     self.queue_tonal(Some(TonalProbe {
                         bounds,
                         point,
-                        quad,
+                        quad: None,
                     }))?;
                 }
             }
@@ -682,143 +386,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.changed = true;
         Ok(())
     }
-    pub(super) fn tonal_controls(&self) -> Vec<ToolSetting> {
-        let options = &self.selection_tools.options.tonal;
-        let mut controls = vec![options.softness_control()];
-        if self.tonal_tools.details {
-            controls.extend(options.controls());
-        }
-        controls
-    }
     pub(super) fn tonal_extra(&self) -> Vec<ToolOption> {
         if !self.tonal_active() {
             return Vec::new();
         }
-        let options = &self.selection_tools.options.tonal;
-        let list = |id, label, icon, multiple, items| ToolOption::List {
-            id,
-            label,
-            icon,
-            multiple,
-            items,
-        };
-        let mut sources = vec![ToolListItem {
-            label: "Visible image".into(),
-            selected: self.tonal_tools.source.is_none(),
-            action: UiAction::Tonal {
-                action: TonalAction::Source { layer: None },
-            },
-        }];
-        sources.extend(
-            self.engine
-                .document()
-                .layers
-                .iter()
-                .filter(|l| {
-                    !matches!(
-                        l.kind,
-                        layer_core::LayerKind::Group
-                            | layer_core::LayerKind::Selection
-                            | layer_core::LayerKind::Effect
-                    )
-                })
-                .map(|l| ToolListItem {
-                    label: format!("Layer: {}", l.name),
-                    selected: self.tonal_tools.source == Some(l.id),
+        vec![ToolOption::Choice {
+            id: "tonal-tones",
+            label: "Tones",
+            segmented: false,
+            items: [5, 0, 1, 2, 3, 4, 6, 7]
+                .into_iter()
+                .map(|index| ToolSetItem {
+                    label: TonalOptions::NAMES[index],
+                    icon: "color-select",
                     action: UiAction::Tonal {
-                        action: TonalAction::Source {
-                            layer: Some(l.id.0),
-                        },
+                        action: TonalAction::Preset { index },
                     },
-                }),
-        );
-        let mut result = vec![
-            list(
-                "tonal-bands",
-                "Tones",
-                "color-select",
-                true,
-                options
-                    .bands
-                    .iter()
-                    .enumerate()
-                    .map(|(index, b)| ToolListItem {
-                        label: b.name.clone(),
-                        selected: options.enabled[index],
-                        action: UiAction::Tonal {
-                            action: TonalAction::ToggleBand { index },
-                        },
-                    })
-                    .collect(),
-            ),
-            list("tonal-source", "Sample from", "layers", false, sources),
-        ];
-        if self.tonal_tools.details {
-            result.push(list(
-                "tonal-active",
-                "Edit range",
-                "settings",
-                false,
-                options
-                    .bands
-                    .iter()
-                    .enumerate()
-                    .map(|(index, b)| ToolListItem {
-                        label: b.name.clone(),
-                        selected: options.active == index,
-                        action: UiAction::Tonal {
-                            action: TonalAction::ActiveBand { index },
-                        },
-                    })
-                    .collect(),
-            ));
-            result.push(ToolOption::Text {
-                id: "tonal-name",
-                label: "Name",
-                value: options.bands[options.active].name.clone(),
-            });
-            if !self.state.settings.tonal_bands.is_empty() {
-                result.push(list(
-                    "tonal-saved",
-                    "Saved ranges",
-                    "plus",
-                    false,
-                    self.state
-                        .settings
-                        .tonal_bands
-                        .iter()
-                        .enumerate()
-                        .map(|(index, b)| ToolListItem {
-                            label: b.name.clone(),
-                            selected: false,
-                            action: UiAction::Tonal {
-                                action: TonalAction::LoadBand { index },
-                            },
-                        })
-                        .collect(),
-                ));
-            }
-        }
-        let destination = match self.selection_masks.target() {
-            Some(SelectionTarget::Current) => "Quick Mask".into(),
-            Some(SelectionTarget::Saved(id)) => self
-                .engine
-                .document()
-                .layer(id)
-                .map_or("Selection layer".into(), |l| l.name.to_string()),
-            None => "Selection".into(),
-        };
-        let status = if self.tonal_tools.draft.is_some() && !self.tonal_tools.ready {
-            format!("{destination} · Updating…")
-        } else if let Some(value) = self.tonal_tools.hover {
-            format!("{destination} · {value:+.2} stops")
-        } else {
-            destination
-        };
-        result.push(ToolOption::Info {
-            id: "tonal-status",
-            text: status,
-        });
-        result
+                    selected: self.tonal_tools.draft.is_some()
+                        && self.selection_tools.options.tonal.tone == index,
+                    preview: None,
+                })
+                .collect(),
+        }]
     }
 }

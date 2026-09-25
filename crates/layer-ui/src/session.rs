@@ -563,7 +563,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cursor.hover.reset();
         }
         self.cursor.event = event;
-        if self.tonal_active() { self.tonal_hover(event.filter(|e|e.phase==PenPhase::Hover).map(|e| self.state.camera.input_transform().map(e.surface_position))); }
         if self.eyedropper.picking.previous.is_some() && !self.eyedropper.picking.finishing
             && self.eyedropper.picking.touch.is_none() {
             if let Some(e) = event.filter(|e| e.phase == PenPhase::Hover) {
@@ -1879,8 +1878,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn command_label(&self, id: CommandId) -> &'static str {
         if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
             "Restore Starting Layout…"
-        } else if id == CommandId::ApplyTonalSelection && self.selection_masks.target().is_some() {
-            "Apply mask"
         } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
             "Proof"
         } else {
@@ -1973,11 +1970,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
-            CommandId::ApplyTonalSelection => self.tonal_active() && self.tonal_tools.ready && self.tonal_tools.draft.as_ref().is_some_and(|d|d.revision==document.revision),
-            CommandId::CancelTonalSelection => self.tonal_tools.draft.is_some(),
-            CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => self.tonal_active() && idle,
-            CommandId::TonalRemoveBand => self.tonal_active() && self.selection_tools.options.tonal.active>=7,
-            CommandId::TonalNewBand => self.tonal_active() && self.selection_tools.options.tonal.bands.len()<layer_core::tonal::MAX_BANDS,
+            CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff | CommandId::TonalRemoveBand | CommandId::TonalNewBand => false,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
@@ -2031,11 +2024,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
             || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
-            || (id == CommandId::TonalDetails && self.tonal_tools.details)
-            || (id == CommandId::TonalInvert && self.selection_tools.options.tonal.invert)
-            || (id == CommandId::TonalLinkFalloff && self.selection_tools.options.tonal.linked)
-            || (id == CommandId::TonalLowerOpen && self.selection_tools.options.tonal.bands[self.selection_tools.options.tonal.active].lower.is_none())
-            || (id == CommandId::TonalUpperOpen && self.selection_tools.options.tonal.bands[self.selection_tools.options.tonal.active].upper.is_none())
             || (id == CommandId::SelectionBrushPressure && self.selection_tools.options.brush.pressure_size)
             || (id == CommandId::Select && selection.is_some())
             || selection.is_some_and(|tool| tool.command() == id)
@@ -2813,11 +2801,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
             UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
-            UiAction::SetToolText { id, value } => {
-                if id!="tonal-name" || !self.tonal_active() {return Err("Unknown text setting".into());}
-                self.selection_tools.options.tonal.rename(value)?;
-                self.refresh_tools();(BRUSH | COMMANDS,false)
-            }
+            UiAction::SetToolText { .. } => return Err("Unknown text setting".into()),
             UiAction::SetToolSetting { id, value } => {
                 if id.starts_with("tonal_") {
                     if !self.tonal_active() {return Err("Choose Tonal range first".into());}
@@ -3215,7 +3199,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if !self.tonal_active() {
                 self.region_tools.cancel();
             } else if tool_before.1 != self.layer_interaction.tool {
-                self.queue_tonal(None)?;
+                self.cancel_tonal();
             } else if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
                 || d.target != self.selection_masks.target().unwrap_or(layer_core::SelectionTarget::Current)) {
                 self.cancel_tonal();
@@ -3811,8 +3795,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.poll_region_tool()?;
         let sample_space = self.engine.document().color.space;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
-            if self.tonal_active() {self.tonal_sampled_color(color);}
-            else if self.eyedropper.picking.previous.is_some() {
+            if self.eyedropper.picking.previous.is_some() {
                 self.state.color_picker.preview = Some(color);
                 changed |= regions::COLOR_PREVIEW;
             } else if !self.eyedropper.preview_only {
@@ -3822,7 +3805,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 changed |= regions::BRUSH;
             }
         }
-        if self.tonal_active() && !self.eyedropper.busy() && self.eyedropper.sample.is_none() && self.tonal_tools.hover.take().is_some() {self.tonal_tools.changed=true;}
         if self.eyedropper.picking.previous.is_some() && !self.eyedropper.busy()
             && self.eyedropper.sample.is_none() && self.state.color_picker.preview.take().is_some() {
             changed |= regions::COLOR_PREVIEW;
@@ -3846,7 +3828,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::DOCUMENT;
         }
         let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
-        if tonal_changed {self.refresh_tools();changed |= regions::BRUSH | regions::COMMANDS;}
+        if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
@@ -4009,7 +3991,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::TonalDetails | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
-                self.tonal_command(command)?;Ok((DOCUMENT | BRUSH | COMMANDS | HOST,true))
+                return Err("This tonal control is no longer used".into());
             }
             CommandId::SelectionBrushPressure => {
                 self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
@@ -4045,10 +4027,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     CommandId::SelectionAntialias => options.antialias = !options.antialias,
                     _ => options.constrain_angles = !options.constrain_angles,
                 }
-                if self.tonal_active() {
-                    if let Some(draft) = &mut self.tonal_tools.draft {draft.mode = self.selection_tools.options.mode;}
-                    self.queue_tonal(None)?;
-                }
+                if self.tonal_active() {self.cancel_tonal();}
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, true))
             }
@@ -4501,10 +4480,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
         self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            let commands: &[CommandId] = if tool==SelectionTool::Tonal {
-                if self.tonal_tools.details {
-                    &[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalInvert,CommandId::TonalDetails,CommandId::TonalNewBand,CommandId::TonalRemoveBand,CommandId::TonalSaveBand,CommandId::TonalLowerOpen,CommandId::TonalUpperOpen,CommandId::TonalLinkFalloff]
-                } else {&[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalInvert,CommandId::TonalDetails]}
+            let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
             } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
@@ -4565,7 +4541,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind == SelectionTool::Tonal {self.tonal_controls()}
+            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls()}
             else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
             else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
@@ -4592,7 +4568,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
-            self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
+            let mut edges=self.selection_tools.options.edge_controls();
+            for field in &mut edges {field.group="";}
+            self.state.tool_settings.extend(edges);
         }
         self.state.tool_extra=self.tonal_extra();
         self.state.layer_tools.mask_editing = self.mask_editing_view();

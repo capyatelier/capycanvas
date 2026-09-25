@@ -1,33 +1,8 @@
 //! Native presentation of shared selection destinations and menus.
 use crate::number_control::NumberControl;
 use crate::workspace::Workspace;
-use gtk::{glib, prelude::*};
+use gtk::glib;
 use std::{cell::Cell, rc::Rc};
-
-pub use layer_ui::SelectionMenu as Menu;
-pub fn menu_button(w: &Rc<Workspace>, label: &str, kind: Menu) -> gtk::MenuButton {
-    let button = gtk::MenuButton::new();
-    button.set_label(label);
-    button.set_size_request(-1, 44);
-    let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>);
-    button.set_popover(Some(&popover));
-    w.watch_popover(popover.upcast_ref());
-    popover.connect_show(glib::clone!(
-        #[weak]
-        w,
-        move |popover| {
-            let model = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .map(|g| g.session.selection_menu(kind));
-            if let Some(model) = model {
-                w.populate_workspace_menu(popover, model);
-            }
-        }
-    ));
-    button
-}
 
 /// A numeric operation dialog, separate from the mask's persistent properties.
 pub struct ResizeDialog {

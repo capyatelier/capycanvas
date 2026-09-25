@@ -1033,7 +1033,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
-                if self.tonal_active() {self.queue_tonal(None)?;}
                 self.refresh_tools();
             }
             LayerAction::Deselect => { self.return_to_artwork()?; self.layer_edit(Edit::SetSelection(None))?; },

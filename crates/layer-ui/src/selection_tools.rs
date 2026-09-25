@@ -274,7 +274,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             (true, false) => SelectionMode::Add,
             (false, true) => SelectionMode::Subtract,
             _ if keys.command => SelectionMode::New,
-            _ if self.tonal_active() => self.tonal_tools.draft.as_ref().map_or(self.selection_tools.options.mode, |d| d.mode),
             _ => self.selection_tools.options.mode,
         }
     }
@@ -476,7 +475,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn selection_key(&mut self, key: &str) -> Result<bool, String> {
-        if self.tonal_active() && key == "enter" && self.tonal_tools.ready { self.finish_tonal(true)?; return Ok(true); }
         if self.layer_interaction.tool
             != (LayerCanvasTool::Selection {
                 kind: SelectionTool::Polygon,

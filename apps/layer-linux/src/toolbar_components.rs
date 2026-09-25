@@ -329,7 +329,6 @@ impl ComponentBody {
             );
             let mut child = row.first_child();
             while let Some(w) = child {
-                if w.has_css_class("tool-extra") {crate::tool_extra::present(&w,vertical,text);}
                 if w.has_css_class("option-label") {
                     w.set_visible(text);
                 }
@@ -384,7 +383,6 @@ struct BrushPreview {
 }
 
 enum Field {
-    Extra(crate::tool_extra::ExtraField),
     Numeric(NumberControl),
     Choice(gtk::DropDown),
     Segments(Vec<gtk::ToggleButton>),
@@ -630,7 +628,6 @@ impl Component {
             }
             for (field, option) in self.fields.borrow().iter().zip(options) {
                 match (field, option) {
-                    (Field::Extra(field),option) => field.refresh(w,option,context),
                     (Field::Numeric(number), ToolOption::Numeric(f)) => {
                         number.set_value(f.value as f64)
                     }
@@ -1049,10 +1046,6 @@ impl Component {
         row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
         let field = match option {
-            ToolOption::List {..} | ToolOption::Text {..} | ToolOption::Info {..} => {
-                let field=crate::tool_extra::ExtraField::new(w,option,context,true);
-                row.append(&field.root);Field::Extra(field)
-            }
             ToolOption::Numeric(f) => {
                 let label = gtk::Label::new(Some(f.label));
                 label.add_css_class("option-label");
