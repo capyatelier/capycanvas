@@ -33,6 +33,7 @@ pub(crate) enum DocumentAction {
     Recovery { action: crate::recovery::Action },
     WorkflowBegin { id: u32 },
     OpenPaths { paths: Vec<String> },
+    SaveStrokeRecording { path: String },
     DropImages { epoch: u64, revision: u64, active_layer: u64, paths: Vec<String>,
         screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
     Workflow { id: u32, action: crate::document_workflows::Action },
@@ -452,6 +453,7 @@ pub(crate) struct DocumentService {
     workflow_control: Option<(u32, layer_render_wgpu::snapshot::CaptureControl)>,
     workflow_running: bool,
     open_queue: std::collections::VecDeque<String>,
+    recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 impl DocumentService {
     pub(crate) fn open(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
@@ -480,6 +482,7 @@ impl DocumentService {
             workflow_control: None,
             workflow_running: false,
             open_queue: Default::default(),
+            recording_save: None,
         })
     }
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
@@ -670,6 +673,32 @@ impl DocumentService {
         host: &mut NativeHost,
         action: DocumentAction,
     ) -> Result<(), String> {
+        if let DocumentAction::SaveStrokeRecording { path } = action {
+            if self.recording_save.is_some() {
+                return Err("The stroke recording is already being saved".into());
+            }
+            location(&path)?;
+            let data = host.session.stroke_recording().snapshot().map_err(|e| e.to_string())?;
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let wake = self.wake.clone();
+            std::thread::Builder::new()
+                .name("capy-stroke-recording".into())
+                .spawn(move || {
+                    let result = layer_engine::recording::compress(&data)
+                        .map_err(|e| io_error("compress stroke recording", e))
+                        .and_then(|bytes| {
+                            atomic_write(std::path::Path::new(&path), &AtomicBool::new(false), |file| {
+                                std::io::Write::write_all(file, &bytes).map_err(|e| io_error("write stroke recording", e))
+                            })
+                        });
+                    let _ = sender.send(result);
+                    wake();
+                })
+                .map_err(|e| e.to_string())?;
+            self.recording_save = Some(receiver);
+            host.invalidate_snapshot();
+            return Ok(());
+        }
         if let DocumentAction::OpenPaths { paths } = action {
             if paths.is_empty() || self.open_queue.len() + paths.len() > Self::MAX_QUEUED_OPENS {
                 return Err("Open up to 64 drawings at once".into());
@@ -982,6 +1011,14 @@ impl DocumentService {
         self.poll_tabs(host)?;
         self.palettes.poll(host);
         self.open_queued(host);
+        if let Some(result) = self.recording_save.as_ref().and_then(|receiver| receiver.try_recv().ok()) {
+            self.recording_save = None;
+            match result {
+                Ok(()) => host.session.stroke_recording().saved(),
+                Err(error) => host.error = Some(format!("The stroke recording was not saved: {error}")),
+            }
+            host.invalidate_snapshot();
+        }
         // New/Open/Save/Export/Close supersede a pending import. Native dialogs
         // wait for its bounded worker slot to drain before responding.
         if host.session.state().document_file.busy || host.session.state().document_file.close_ready
@@ -1666,6 +1703,20 @@ mod tests {
         );
         assert_eq!(next, f.request());
         f.act(DocumentAction::Cancel { id: next });
+    }
+    #[test]
+    fn stroke_recordings_save_off_thread_and_release_only_after_delivery() {
+        let mut f = Fixture::new();
+        let status = |f: &mut Fixture, action: Option<&str>| f.host.query(serde_json::json!({"type": "stroke_recording", "action": action})).unwrap();
+        assert_eq!(status(&mut f, Some("start"))["recording"], true);
+        assert_eq!(status(&mut f, Some("stop"))["ready"], true);
+        let path = f.path("strokes.capystrokes");
+        f.act(DocumentAction::SaveStrokeRecording { path: path.clone() });
+        assert!(f.service.dispatch(&mut f.host, DocumentAction::SaveStrokeRecording { path: path.clone() }).is_err());
+        f.finish();
+        assert!(std::fs::read(&path).unwrap().starts_with(layer_engine::recording::MAGIC));
+        assert_eq!(status(&mut f, None)["ready"], false);
+        assert!(f.host.error.is_none());
     }
     #[test]
     fn dropped_drawings_queue_opens_while_mixed_and_layer_drops_are_refused() {

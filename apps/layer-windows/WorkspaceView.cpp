@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "WorkspaceView.h"
+#include "StrokeRecording.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
@@ -114,6 +115,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(camera,L"canvas-camera");
     }
     void init(){
+        data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
         fitCamera=button(data,L"Fit canvas",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"fit_canvas")}}));});
         fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");

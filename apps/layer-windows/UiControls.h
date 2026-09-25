@@ -29,6 +29,7 @@ using A=JsonArray;
 using V=IJsonValue;
 }
 namespace CapyUi {
+struct StrokeRecording;
 inline V S(hstring const& value){return JsonValue::CreateStringValue(value);}
 inline V N(double value){return JsonValue::CreateNumberValue(value);}
 inline V B(bool value){return JsonValue::CreateBooleanValue(value);}
@@ -107,6 +108,7 @@ struct WorkspaceData {
     std::shared_ptr<LayerThumbnailCache> thumbnails;
     PreviewTransport query;
     uint64_t windowId=0;bool glassSurfaces=false;A drawerSources;
+    std::shared_ptr<StrokeRecording> strokes;
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}

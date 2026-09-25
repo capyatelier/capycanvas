@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "StatsView.h"
 #include "WorkspaceQuery.h"
+#include "StrokeRecording.h"
 #include <chrono>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
@@ -14,10 +15,13 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
     Microsoft::UI::Xaml::Shapes::Line budget;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     std::vector<TextBlock> values;
+    Button record{nullptr};
+    TextBlock recordError;
+    uint64_t listener=0;
     J model;
     bool busy=false;
     uint64_t generation=0;
-    ~StatsView(){if(timer)timer.Stop();}
+    ~StatsView(){if(timer)timer.Stop();if(listener&&data->strokes)data->strokes->forget(listener);}
     bool visible()const{
         // An empty stack has zero natural height until its first query arrives.
         if(!root.IsLoaded()||root.ActualWidth()<=0)return false;
@@ -37,6 +41,14 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
         budget.Stroke(data->brush(L"settings_secondary"));budget.StrokeThickness(1);
         chart.Children().Append(budget);chart.Children().Append(samples);
         chart.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->draw();});
+        record=button(data,L"Start stroke recording",[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->data->strokes)self->data->strokes->click();});
+        record.HorizontalAlignment(HorizontalAlignment::Stretch);record.MinHeight(34);record.Padding({10,4,10,4});
+        AutomationProperties::SetAutomationId(record,L"stroke-recording");
+        recordError=label(data,L"");recordError.TextWrapping(TextWrapping::Wrap);recordError.Opacity(.75);AutomationProperties::SetAutomationId(recordError,L"stroke-recording-error");
+        AutomationProperties::SetLiveSetting(recordError,Automation::Peers::AutomationLiveSetting::Polite);
+        root.Children().Append(record);root.Children().Append(recordError);
+        if(data->strokes)listener=data->strokes->listen([weak=weak_from_this()]{if(auto self=weak.lock())self->recording();});
+        recording();
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(200));
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){self->timer.Start();self->refresh();}});
@@ -76,8 +88,17 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
                 }
             }
         }
+        {uint32_t index=0;if(!root.Children().IndexOf(record,index)){root.Children().Append(record);root.Children().Append(recordError);}}
         for(uint32_t i=0;i<rows.Size();i++)values[i].Text(str(rows.GetObjectAt(i),L"value"));
         draw();
+    }
+    void recording(){
+        if(!data->strokes)return;auto const& strokes=*data->strokes;auto status=strokes.status;auto text=str(status,L"label");
+        record.Content(box_value(text));AutomationProperties::SetName(record,text);record.IsEnabled(!strokes.saving);
+        hstring hint=L"Record tablet input for up to 10 minutes";
+        if(flag(status,L"recording"))hint=hint+L" \u00b7 "+to_hstring(int64_t(num(status,L"elapsed_seconds")))+L"s \u00b7 "+to_hstring(int64_t(num(status,L"raw_events")))+L" inputs";
+        tooltip(record,hint);
+        recordError.Text(strokes.error);recordError.Visibility(strokes.error.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     void draw(){
         auto readings=array(model,L"samples");double limit=num(model,L"budget_ms",1000./120.);

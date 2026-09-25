@@ -1,7 +1,7 @@
 # Stroke recording and prediction datasets
 
 Open **Diagnostics → Start stroke recording**, draw normally, then choose
-**Stop stroke recording**. GTK, Android, macOS and iPadOS open the system save
+**Stop stroke recording**. GTK, Android, Windows, macOS and iPadOS open the system save
 dialog. Web uses
 the system file picker when available, with a system share sheet or download UI
 as the fallback. Cancelling or failing a save retains the recording;
@@ -54,7 +54,7 @@ Never sort inputs before replay or use native predictions as ground truth.
 
 Capture allocates its bounded byte buffer when started, appends binary records
 without per-sample allocation, and performs no compression in input callbacks.
-GTK and Android compress on a worker when saving. Web uses asynchronous browser
+GTK, Android and Windows compress on a worker when saving. Web uses asynchronous browser
 gzip compression, with a Rust fallback for browsers without CompressionStream.
 Once a successful save is acknowledged, the buffer is released.
 
@@ -190,6 +190,10 @@ capture naming, hash-bound baselines and adding recordings from other tablets.
   `tools/performance/gtk-raster.sh` with isolated settings and Wayland display.
 - Android: `AndroidHostTest#strokeRecordingSavesRawStylusInput` exercises stylus
   input, the real system save dialog, cancellation and retry.
+- Windows: `stroke_recordings_save_off_thread_and_release_only_after_delivery`
+  and `apps/layer-windows/scripts/exercise-stroke-recording.ps1`, which records a
+  controlled pen stroke, saves through the owned picker, checks the CAPYPEN2 gzip
+  file, and confirms that a cancelled save keeps the recording for a retry.
 - Web: desktop and device harnesses accept `--stroke-recording`; this covers
   browser pen delivery, cancellation, provider failure, retry and binary export.
 - Shared: `cargo test -p layer-engine --features prediction-bench --lib`,

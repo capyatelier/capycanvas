@@ -37,7 +37,8 @@ fn request(json: &str) -> Result<Value, String> {
             | "palette_menu"
             | "palette_reorder_preview"
             | "palette_action"
-            | "reveal_panel",
+            | "reveal_panel"
+            | "stroke_recording",
         ) => Ok(value),
         _ => Err("Unsupported workspace query".into()),
     }
