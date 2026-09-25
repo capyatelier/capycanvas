@@ -33,7 +33,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-row { display:flex; position:relative; padding-right:14px; border-bottom:1px solid rgb(0 0 0 / 15%); touch-action:pan-y; }
 .workspace-row:last-child { border-bottom:0; }
 .workspace-choice { display:flex; flex:1; flex-direction:column; justify-content:center; align-items:start; gap:3px; min-width:0; min-height:55px; text-align:left; border-radius:0; background:transparent; padding:8px 6px 8px 14px; font-weight:400; line-height:normal; }
-.workspace-row[data-selected="true"] { background:color-mix(in srgb,var(--accent) 25%,transparent); }
+.workspace-row[data-selected="true"] { background:var(--selection); }
 .workspace-manager .workspace-choice { background:transparent; }
 .workspace-row-subtitle { font-size:inherit; opacity:.55; }
 .workspace-row-title, .workspace-row-subtitle { max-width:100%; overflow-wrap:anywhere; }
@@ -47,13 +47,13 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-pin { opacity:.55; }
 /* Row bodies, grips, and status icons share one hover surface. */
 :where(:root:not([data-touch])) .workspace-row:has(.workspace-choice:not(:disabled)):hover { background:color-mix(in srgb,var(--workspace-shade) 3%,transparent); }
-:where(:root:not([data-touch])) .workspace-row[data-selected="true"]:has(.workspace-choice:not(:disabled)):hover { background:color-mix(in srgb,var(--accent) 32%,transparent); }
+:where(:root:not([data-touch])) .workspace-row[data-selected="true"]:has(.workspace-choice:not(:disabled)):hover { background:color-mix(in srgb,var(--text) 8%,var(--selection)); }
 :where(:root:not([data-touch])) .workspace-manager :is(.workspace-add,.workspace-options):hover:not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 7%,transparent); }
 :where(:root:not([data-touch])) .workspace-manager .dialog-close:hover::before { background:color-mix(in srgb,var(--workspace-shade) 15%,transparent); }
 .workspace-manager :is(.workspace-add,.workspace-options):active:not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 16%,transparent); }
 .workspace-manager .dialog-close:active::before { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
 .workspace-row:has(.workspace-choice:active:not(:disabled)) { background:color-mix(in srgb,var(--workspace-shade) 8%,transparent); }
-.workspace-row[data-selected="true"]:has(.workspace-choice:active:not(:disabled)) { background:color-mix(in srgb,var(--accent) 40%,transparent); }
+.workspace-row[data-selected="true"]:has(.workspace-choice:active:not(:disabled)) { background:color-mix(in srgb,var(--text) 16%,var(--selection)); }
 .workspace-row-menu { position:fixed; inset:auto; margin:0; display:none; flex-direction:column; min-width:180px; padding:6px; border:0; color:var(--text); background:var(--popover); box-shadow:0 4px 16px #0005; border-radius:10px; }
 .workspace-row-menu:popover-open { display:flex; }
 .workspace-row-menu button { display:flex; align-items:center; gap:8px; text-align:left; font-weight:400; padding:4px 8px; }
@@ -70,7 +70,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-error { color:#e66; margin:10px 20px; white-space:pre-wrap; }
 .workspace-manager footer { flex:none; gap:8px; margin:12px 18px 18px; }
 .workspace-manager footer button { flex:1; background:var(--workspace-button-bg); }
-.workspace-manager footer .suggested-action { background:var(--accent); }
+.workspace-manager footer .suggested-action { background:var(--accent); color:var(--accent-foreground); }
 .workspace-manager button:disabled { opacity:.5; }
 :where(:root:not([data-touch])) .workspace-manager footer button:hover:not(:disabled) { background:var(--workspace-button-hover); }
 :where(:root:not([data-touch])) :is(.workspace-manager,.workspace-form) .suggested-action:hover:not(:disabled) { background:color-mix(in srgb,white 10%,var(--accent)); }
@@ -226,7 +226,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .configuration-presets button { min-width: 52px; background: var(--button); }
 .panel-check { appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border: 2px solid color-mix(in srgb, var(--text) 25%, transparent); border-radius: 4px; }
 .panel-check:checked { border: 0; background: var(--accent); }
-.panel-check:checked::after { content: ""; display: block; width: 16px; height: 16px; background: white; mask: url("icons/layer-check-symbolic.svg") center / contain no-repeat; }
+.panel-check:checked::after { content: ""; display: block; width: 16px; height: 16px; background: var(--accent-foreground); mask: url("icons/layer-check-symbolic.svg") center / contain no-repeat; }
 .panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; border: 0; border-radius: 12px; background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
@@ -498,7 +498,7 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .swatch-circles .swatch svg { width: 16px; height: 16px; }
 .swatch-circles .swatch[aria-checked="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
 :where(:root:not([data-touch])) .swatch-circles .swatch:hover:not(:disabled) { filter: brightness(1.08); }
-.preference-image-tiles button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 2px var(--accent); }
+.preference-image-tiles button[aria-pressed="true"] { background: var(--selection); box-shadow: inset 0 0 0 2px var(--accent); }
 dialog.shortcut-editor { width: 460px; height: fit-content; }
 .shortcut-editor-body { padding: 18px; }
 .shortcut-editor-body > p { margin: 12px 0; }
@@ -507,7 +507,7 @@ dialog.shortcut-editor { width: 460px; height: fit-content; }
 dialog footer { display: flex; justify-content: end; align-items: center; gap: 6px; margin: 12px; grid-column: 1 / -1; }
 dialog footer .preferences-error { flex: 1; }
 dialog footer button { background: color-mix(in srgb, var(--text) 8%, transparent); }
-dialog .suggested-action { background: var(--accent); color: #fff; }
+dialog .suggested-action { background: var(--accent); color: var(--accent-foreground); }
 dialog.toolbar-prompt { width: 400px; height: fit-content; padding: 24px; }
 dialog.toolbar-manager { width: 480px; height: 420px; }
 .toolbar-manager[open] { display: flex; flex-direction: column; }
@@ -519,7 +519,7 @@ dialog.toolbar-manager { width: 480px; height: 420px; }
 .managed-toolbars button + button { border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
 .managed-toolbars button > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .managed-toolbars small { font-size: .83333em; line-height: 15px; color: var(--settings-secondary); }
-#toolbar-manager button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+#toolbar-manager button[aria-pressed="true"] { background: var(--selection); }
 .toolbar-manager-empty { text-align: center; padding: 60px 0; }
 .toolbar-manager-body > button { align-self: end; flex: none; }
 .toolbar-manager .destructive-action { color: #c01c28; }
@@ -782,7 +782,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .header-size-choices button:last-child { border-radius:0 var(--control-radius) var(--control-radius) 0; }
 .header-editor button { background:var(--button); }
 .header-editor button[aria-pressed="true"] { background:var(--selection); }
-.header-editor .suggested-action { background:var(--accent); color:white; }
+.header-editor .suggested-action { background:var(--accent); color:var(--accent-foreground); }
 .header-editor button:focus-visible, #header .header-item:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 #header .popover { top:calc(var(--header-tile) + 4px); max-width:calc(100vw - 12px); max-height:calc(100dvh - var(--header-tile) - 22px); overflow:auto; }
 #header .popover button { height:auto; min-height:34px; justify-content:flex-start; }
@@ -819,7 +819,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .color-entry:focus-within { box-shadow:inset 0 0 0 2px var(--accent); border-radius:6px; }
 .color-dialog footer { margin:0; }
 .color-dialog footer button { flex:1; min-height:40px; background:var(--button); }
-.color-dialog footer .suggested-action { background:var(--accent); color:white; }
+.color-dialog footer .suggested-action { background:var(--accent); color:var(--accent-foreground); }
 .color-form-preview { min-height:48px; }
 .property-color { min-width: 56px; min-height: 28px; max-width: 120px; overflow: hidden; text-indent: -9999px; border: 1px solid currentColor; border-radius: var(--control-radius); }
 

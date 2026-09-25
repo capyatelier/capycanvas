@@ -2486,6 +2486,7 @@ impl Workspace {
             ("thumb", palette.thumb),
             ("text", palette.text),
             ("accent", palette.accent),
+            ("accent-foreground", palette.accent_foreground),
             ("selection", palette.selection),
             ("header-selection", palette.header_selection),
             ("header-selection-hover", palette.header_selection_hover),

@@ -83,6 +83,7 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val text = role("text")
     val secondary = text.copy(alpha = .55f)
     val accent = role("accent")
+    val accentForeground = role("accent_foreground")
     val sliderFill = lerp(panel, text, .5f)
     val active = role("selection")
     val headerActive = role("header_selection")
@@ -230,7 +231,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Box(Modifier.size(16.dp).clip(SquircleShape(4.dp))
             .then(if (checked) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.text.copy(alpha = .35f), SquircleShape(4.dp)))) {
-            if (checked) SharedIcon("check", null, tint = Color.White)
+            if (checked) SharedIcon("check", null, tint = colors.accentForeground)
         }
     }
 }
@@ -318,7 +319,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
                     val active = index == selected
                     val shape = RoundedCornerShape(6.dp)
                     Box(Modifier.size(64.dp).testTag("image-choice-$index").clip(shape)
-                        .background(if (active) colors.accent.copy(alpha = .18f) else colors.text.copy(alpha = .05f))
+                        .background(if (active) colors.active else colors.text.copy(alpha = .05f))
                         .then(if (active) Modifier.border(2.dp, colors.accent, shape) else Modifier)
                         .alpha(if (enabled) 1f else .4f)
                         .selectable(active, enabled = enabled, role = Role.RadioButton) { onSelect(index) },

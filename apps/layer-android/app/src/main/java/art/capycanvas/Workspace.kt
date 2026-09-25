@@ -100,7 +100,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val scheme = remember(colors) {
         (if (colors.dark) darkColorScheme() else lightColorScheme()).copy(surface = colors.panel, background = colors.surround,
             onSurface = colors.text, onBackground = colors.text, primary = colors.accent,
-            onPrimary = Color.White,
+            onPrimary = colors.accentForeground,
             surfaceContainer = colors.panel, surfaceContainerHigh = colors.panel,
             surfaceContainerHighest = colors.tabs, surfaceContainerLow = colors.input,
             surfaceContainerLowest = colors.surround, surfaceTint = Color.Transparent,

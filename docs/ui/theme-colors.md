@@ -93,7 +93,14 @@ stores nothing, so Reset stays disabled.
 
 The resolved accent is published as `palette.accent`. GTK assigns it to
 `--accent-bg-color`, so libadwaita switches, checks, suggested buttons and
-focus rings follow it, and derives `--accent-color` from it as usual. Web binds
+focus rings follow it, and derives `--accent-color` from it as usual.
+`palette.accent_foreground` is the text and icon color on accent fills: white,
+as libadwaita uses for its nine accents, or the dark text color when a custom
+accent is lighter than OKLab 0.72. GTK assigns it to `--accent-fg-color`; Web
+and Android use it for suggested buttons, checkboxes and Material `onPrimary`.
+Selected rows and tiles (workspace rows, Zen icon tiles, toolbar-manager
+buttons, vertical drawing tabs) use `selection`; drop-target overlays keep a
+translucent accent so the content beneath stays visible. Web binds
 the palette roles to `--accent`, `--selection`, `--header-selection` and
 `--header-selection-hover`; Android reads the same roles into its palette.
 

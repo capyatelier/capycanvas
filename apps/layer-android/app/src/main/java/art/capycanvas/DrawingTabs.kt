@@ -142,7 +142,7 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             val id=item.getLong("id");val selected=controller.selected==id
             Row(entry.drawingBounds(drag.rows,id).testTag("drawing-tab-$id")
                 .clip(if(vertical)ControlShape else TileShape)
-                .background(if(!selected)Color.Transparent else if(vertical)colors.accent.copy(alpha=.16f)else colors.panel)
+                .background(if(!selected)Color.Transparent else if(vertical)colors.active else colors.panel)
                 .then(if(drag.active==id)Modifier.border(2.dp,colors.accent,if(vertical)ControlShape else TileShape)else Modifier)
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}

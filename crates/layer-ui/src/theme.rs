@@ -149,6 +149,7 @@ pub struct ThemePalette {
     pub settings_secondary: HexColor,
     pub button: HexColor,
     pub accent: HexColor,
+    pub accent_foreground: HexColor,
     pub selection: HexColor,
     pub header_selection: HexColor,
     pub header_selection_hover: HexColor,
@@ -192,6 +193,7 @@ impl Settings {
             settings_secondary: HexColor(if dark { [188; 3] } else { [102; 3] }),
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             accent,
+            accent_foreground: accent.contrasting(),
             selection: surface([82; 3], [213; 3]).tint(accent, 0.0),
             header_selection: header.tint(accent, 0.0),
             header_selection_hover: header.tint(accent, if dark { 0.03 } else { -0.03 }),
@@ -318,6 +320,24 @@ mod tests {
                 );
             }
         }
+        for (_, accent) in ACCENTS {
+            let p = Settings {
+                accent: Some(accent),
+                ..Settings::default()
+            }
+            .palette(Theme::Light, Platform::Gtk, None);
+            assert_eq!(
+                p.accent_foreground,
+                HexColor([255; 3]),
+                "libadwaita keeps white text on {accent}"
+            );
+        }
+        let pale = Settings {
+            accent: Some(HexColor([0xf6, 0xe0, 0x7a])),
+            ..Settings::default()
+        }
+        .palette(Theme::Dark, Platform::Gtk, None);
+        assert_eq!(pale.accent_foreground, HexColor([46, 46, 50]));
         let grey = Settings {
             accent: Some(HexColor([128; 3])),
             ..Settings::default()
