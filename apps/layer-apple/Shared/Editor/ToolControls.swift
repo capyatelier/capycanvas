@@ -8,7 +8,7 @@ struct ToolSetControls: View {
     private var model: JSON { panel == "brushes" ? store.state["tool_set"] : store.state["tool_panels"][panel] }
     private var sets: Bool { panel == "brush_sets" || panel == "sculpt_sets" }
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             if sets {
                 VStack(spacing: 2) { items(model["groups"], group: true) }
             } else {
@@ -26,17 +26,17 @@ struct ToolSetControls: View {
             Button { store.dispatch(item["action"]) } label: {
                 Group {
                     if group && sets {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             SharedIcon(name: item["icon"].string)
                             Text(item["label"].string).fontWeight(.bold).lineLimit(1)
                             Spacer(minLength: 0)
                         }.padding(.horizontal, 6).frame(minHeight: 44)
                     } else if group {
-                        VStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             SharedIcon(name: item["icon"].string)
-                            Text(item["label"].string).fontWeight(.bold)
-                                .frame(minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 0.85 * 1.66)
-                        }.font(.system(size: store.catalog["text_size_pt"].number * 4 / 3 * 0.85))
+                            Text(item["label"].string).fontWeight(.bold).lineLimit(1).truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }.padding(.horizontal, 6).frame(maxHeight: .infinity)
                     } else {
                         VStack(spacing: 0) {
                             if !item["preview"].isNull {
@@ -48,14 +48,13 @@ struct ToolSetControls: View {
                                 SharedIcon(name: item["icon"].string)
                                 Text(item["label"].string).fontWeight(.bold)
                                     .lineLimit(1).truncationMode(.tail)
-                                    .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66,
+                                    .frame(maxWidth: .infinity, minHeight: item["preview"].isNull ? store.catalog["text_size_pt"].number * 4 / 3 * 1.66 : 18,
                                         alignment: item["preview"].isNull ? .leading : .trailing)
                             }
                         }
                     }
-                }.padding(.horizontal, group ? 0 : 6).padding(.vertical, group ? 4 : 3)
-                    .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? (store.tonalActive ? 36 : 44)
-                        : store.catalog["text_size_pt"].number * 4 / 3 * 1.66 + 8)
+                }.padding(.horizontal, group ? 0 : 6).padding(.vertical, group ? 0 : 3)
+                    .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? (store.tonalActive ? 36 : 44) : 64)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
                 .disabled(!command.isNull && !command["enabled"].bool)
@@ -68,32 +67,26 @@ struct ToolSetControls: View {
     }
 }
 
-/// Equal flexible buttons with wrapping, matching the web tool-group rows.
-/// An adaptive grid reserves unused columns when a family has fewer groups.
+/// Group buttons are three toolbar tiles wide and one tall, wrapping with
+/// the toolbar tile gap, as GTK's tool panels and the web lay them out.
 private struct ToolGroupsLayout: Layout {
-    private func rows(_ width: CGFloat, _ subviews: Subviews) -> [(Range<Int>, CGFloat, CGFloat)] {
-        let columns = max(1, Int((width + 4) / 74))
-        return stride(from: 0, to: subviews.count, by: columns).map { start in
-            let range = start..<min(start + columns, subviews.count)
-            let cell = max(0, (width - CGFloat(range.count - 1) * 4) / CGFloat(range.count))
-            let height = range.map { subviews[$0].sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0
-            return (range, cell, height)
-        }
+    private static let tile: CGFloat = 36, gap: CGFloat = 2
+    private func item(_ width: CGFloat) -> (width: CGFloat, columns: Int) {
+        let natural = 3 * Self.tile + 2 * Self.gap
+        return (min(natural, width), max(1, Int((width + Self.gap) / (natural + Self.gap))))
     }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let requested = proposal.width ?? 226
         let width = requested.isFinite ? max(0, requested) : 226
-        let rows = rows(width, subviews)
-        return CGSize(width: width, height: rows.reduce(0) { $0 + $1.2 } + CGFloat(max(0, rows.count - 1)) * 4)
+        let rows = (subviews.count + item(width).columns - 1) / item(width).columns
+        return CGSize(width: width, height: CGFloat(rows) * Self.tile + CGFloat(max(0, rows - 1)) * Self.gap)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for (range, width, height) in rows(bounds.width, subviews) {
-            for index in range {
-                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(index - range.lowerBound) * (width + 4), y: y),
-                    anchor: .topLeading, proposal: ProposedViewSize(width: width, height: height))
-            }
-            y += height + 4
+        let (width, columns) = item(bounds.width)
+        for index in subviews.indices {
+            subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(index % columns) * (width + Self.gap),
+                y: bounds.minY + CGFloat(index / columns) * (Self.tile + Self.gap)),
+                anchor: .topLeading, proposal: ProposedViewSize(width: width, height: Self.tile))
         }
     }
 }
