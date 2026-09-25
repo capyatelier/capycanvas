@@ -336,7 +336,18 @@ fn native_document_tabs_history_storage_and_close() {
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &original
     );
-    assert_eq!(state(&w).camera, original_view);
+    let view = state(&w).camera;
+    assert!(
+        view.revision > original_view.revision,
+        "reactivation retires queued input"
+    );
+    assert_eq!(
+        layer_ui::Camera {
+            revision: original_view.revision,
+            ..view
+        },
+        original_view
+    );
     assert_eq!(state(&w).brush.diameter, 42.);
     assert!(state(&w).document_file.modified);
     new_photo::invoke(&w, CommandId::Undo);

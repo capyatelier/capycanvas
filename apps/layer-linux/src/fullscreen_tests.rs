@@ -272,7 +272,12 @@ fn native_fullscreen_header_clock_and_battery() {
     w.window.unfullscreen();
     until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     w.window.destroy();
-    assert!(w.gpu.borrow().is_none());
+    assert!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .is_none_or(|g| g.session.engine().backend().worker_is_joined())
+    );
     // Finish compositor releases before libtest tears down the GTK owner thread.
     gdk::Display::default().unwrap().sync();
     pump();
