@@ -820,7 +820,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .header-bar { position:absolute; border-radius:var(--header-radius); background:var(--header-surface); pointer-events:none; }
 #header :is(.header-item,.header-overflow).in-bar { --header-control-bg:transparent; --header-feedback-bg:transparent; }
 #header :is(.header-item.in-bar :is(.header-tool,.header-menu > summary),.header-overflow.in-bar > summary) { width:100%; padding:0; border:solid transparent; border-width:1px 0; border-radius:var(--header-radius); background-clip:padding-box; }
-#header .header-item.in-bar .header-tool[aria-pressed="true"] { background-color:transparent; }
+#header .header-item.in-bar .header-tool[aria-pressed="true"] { background-color:var(--glass-header-selection); background-image:none; }
 #header .header-item.in-bar .header-tool[data-drawer-facing] { border-width:0; }
 #header .header-item.in-bar .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 .header-item-grip, .header-component-grip { display:flex; align-items:center; justify-content:center; width:20px; flex:none; opacity:.55; }

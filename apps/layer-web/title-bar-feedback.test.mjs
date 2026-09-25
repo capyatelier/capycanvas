@@ -29,9 +29,9 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const click = async selector => { await pointer('down', await center(selector)); await pointer('up'); await pause(180); };
   const paint = selector => evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}),c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d',{willReadFrequently:true}),css=getComputedStyle(b).backgroundColor;x.fillStyle=css;x.fillRect(0,0,1,1);return{css,rgba:[...x.getImageData(0,0,1,1).data],selected:b.getAttribute('aria-pressed'),drawer:b.dataset.drawerFacing}})()`);
   const blue = async selector => {
-    const value = await paint(selector), [r,g,b,a] = value.rgba;
+    const value = await paint(selector), [r,g,b] = value.rgba;
     assert.equal(value.selected,'true',`${device}: ${JSON.stringify(value)}`); assert.ok(b > g + 18 && g > r + 14,JSON.stringify(value));
-    assert.equal(a,255,`Selected bar tool uses the opaque panel selection blue: ${JSON.stringify(value)}`);
+    assert.equal(value.css,await evaluate(`(()=>{const c=layerApp.state().palette.glass.header_selection,p=document.body.appendChild(document.createElement('i'));p.style.background='rgb('+c.slice(0,3).map(v=>v*255).join(' ')+' / '+c[3]+')';const css=getComputedStyle(p).backgroundColor;p.remove();return css})()`),`Selected bar tool uses the shared header selection: ${JSON.stringify(value)}`);
   };
   const grey = async (selector, alpha) => {
     const value = await paint(selector), [r,g,b,a] = value.rgba;
