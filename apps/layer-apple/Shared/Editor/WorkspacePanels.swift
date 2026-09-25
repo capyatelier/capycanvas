@@ -184,7 +184,10 @@ private struct WorkspaceTile: View {
             } else {
                 ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.paintPreview, drawerOpen: drawerOpen) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
-                    store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                    let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]
+                    PickerActivation.activate(tile["control"], anchor: anchor, store: store) {
+                        store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                    }
                 }
             }
         }.accessibilityLabel(tile["label"].string).help(tile["tooltip"].string)

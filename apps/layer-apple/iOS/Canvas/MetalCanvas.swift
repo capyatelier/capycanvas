@@ -21,6 +21,7 @@ final class CanvasView: UIView {
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
+    var pickerHold: PickerHold?
     var estimates = EstimatedInput()
     var modifiers: UIKeyModifierFlags = []
 
@@ -71,6 +72,7 @@ final class CanvasView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         sceneGeometry = nil
+        if window == nil { cancelPickerHold() }
         if let window {
             measureWorkspaceBottom()
             store.systemSceneID = window.windowScene?.session.persistentIdentifier

@@ -77,6 +77,9 @@ fn toolbar_components_upgrade_only_untouched_supported_defaults() {
                 previous.push(preset.legacy_without_picker_history_layout(platform));
                 previous.push(preset.legacy_picker_category_layout(platform));
             }
+            if matches!(platform, Platform::Mac | Platform::Ios) {
+                previous.push(preset.legacy_without_picker_layout(platform));
+            }
         }
         for old in previous {
             let working = preset.working_state();

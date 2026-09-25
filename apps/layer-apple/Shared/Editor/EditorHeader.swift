@@ -296,7 +296,11 @@ private struct HeaderItemControl: View {
                         background: palette.headerBackground(light: light), keepsBackground: light, drawerBackground: drawerOpen ? palette["panel"] : nil))
                         .accessibilityLabel(description["label"].string)
                 } else {
-                    tile(description["icon"].string) { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) }
+                    tile(description["icon"].string) {
+                        PickerActivation.activate(entry["item"]["control"], anchor: ["kind": "header", "id": entry["id"].raw], store: store) {
+                            store.dispatch(["type":"activate_header_item", "id":entry["id"].raw])
+                        }
+                    }
                 }
             default: SharedIcon(name: "toolbar", size: size["icon"].number)
             }

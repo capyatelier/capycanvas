@@ -1,7 +1,7 @@
 # Color picking
 
-Implemented on GTK, Web and Android, September 2026. GTK was reviewed before
-the Web and Android rollout. Other hosts retain their existing picker.
+Implemented on GTK, Web, Android, macOS and iPadOS, September 2026. GTK was
+reviewed before the Web and Android rollout. Windows retains its existing picker.
 
 ## Research
 
@@ -93,7 +93,12 @@ panel models. Web sends field raster requests to a dedicated Wasm worker;
 Android uses a conflated coroutine channel and pure JNI raster functions on a
 background dispatcher. Both keep one raster in flight and the latest pending
 request. A finished older hue may appear during movement, but results for a
-previous size, shape or rendition, or arriving after cancellation, are rejected. The loupe stays
+previous size, shape or rendition, or arriving after cancellation, are rejected.
+Apple stages motion-published previews into their own snapshot field, so only the
+color panel re-evaluates, and rasterizes preview wheel fields on a serial worker with
+the same one-running, one-pending policy. The Mac and iPad hosts send `cursor_leave`
+when hover ends (a pointer cancel would end picking) and arm the finger hold with
+UIKit's 0.5 s timing and 10 pt slop. The loupe stays
 on the canvas GPU path; preview work never mutates brush colors or history.
 Sampling uses artwork coordinates independent of canvas zoom, rotation, flips,
 selection boundaries and display/proof transforms. The zoomed interior is a
@@ -159,6 +164,15 @@ library access.
   devices, plus cancellation when another window gains focus. Popup checks run
   before synthetic tablet injection, whose serials cannot authorize compositor
   popup grabs. Generated screenshots belong under ignored `artifacts/`, not in git.
+- Apple: the `picker` and `inspection` bridge tests in `cargo test --locked -p layer-apple
+  --target aarch64-apple-darwin --lib` cover mouse hover preview and press acceptance,
+  pen contact preview and lift acceptance, `cursor_leave` versus pointer cancel,
+  finger holds sampling above the contact, second-finger source toggling, sole-contact
+  admission, preview publication and circular/point samples from visible and layer
+  sources. The `testColorPicker` XCUITest journey (`ColorPickerChecks.swift`) runs on
+  macOS and a physical iPad: toolbar and Sketch entry, hover preview while leaving the
+  canvas, mouse acceptance, finger-tap cancellation, long-press sampling, neutral
+  shortcuts, Sketch's toolbar order and the double-press settings drawer.
 - The existing `native_drawer_dismissal_input` regression also passes in both
   themes with mouse and touch, preserving other drawers' dismissal behavior.
 - `native_color_picker_preview_pacing` moves continuously across painted hues

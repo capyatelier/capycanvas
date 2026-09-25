@@ -4,7 +4,7 @@ struct ColorPanel: View {
     @ObservedObject var store: EditorStore
     @StateObject private var resources = ColorPanelLayoutCache()
     @FocusState private var readoutFocused: Bool
-    private var model: JSON { store.snapshot["color_panel"] }
+    private var model: JSON { store.colorPanel }
     private var hdr: Bool { model["hdr"].bool }
     private var context: String {
         "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.displayColors["paint_slot"].string)"
@@ -27,19 +27,32 @@ struct ColorPanel: View {
             let layout = spec["layout"], height = spec["height"].number
             let palette = EditorPalette(source: store.state["palette"])
             ZStack(alignment: .topLeading) {
-                ColorWheelDrawing(model: model, bounds: layout["wheel"], viewing: hdr ? store.colorViewing : JSON())
+                ColorWheelDrawing(model: model, bounds: layout["wheel"], viewing: hdr ? store.colorViewing : JSON(),
+                    previewing: store.colorPreviewing)
                     .frame(width: side, height: side).allowsHitTesting(false)
                 ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: context,
                     value: captureState ?? model["readout_description"].string) { part, point, size in
                     color(["op": "pick_wheel", "part": part == 1 ? "hue" : "field",
                         "point": [point.x, point.y], "size": size])
                 }.colorPlaced(layout["wheel"], id: "wheel")
+                ForEach([true, false], id: \.self) { white in
+                    let quick = model["quick_colors"].array.first { $0["white"].bool == white } ?? JSON()
+                    let name = white ? "white" : "black"
+                    Button { color(["op": "quick_color", "white": white]) } label: {
+                        Circle().fill(quick["rgba"].paintColor).padding(1).contentShape(Circle())
+                    }.buttonStyle(ColorPanelButtonStyle(kind: .paint(quick["selected"].bool), palette: palette))
+                        .clipShape(Circle()).contentShape(Circle())
+                        .accessibilityLabel(quick["label"].string)
+                        .accessibilityAddTraits(quick["selected"].bool ? .isSelected : [])
+                        .accessibilityIdentifier("color-quick-" + name)
+                        .colorPlaced(layout[name], id: "quick-" + name)
+                }
                 // Foreground is above background for both painting and hit testing.
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {
                         Group {
-                            if hdr { HDRColorSwatch(color: slot == "transparent" ? JSON(["space": "Srgb", "rgba": [0, 0, 0, 0]]) : store.displayColors[slot], viewing: store.colorViewing).clipShape(Circle()) }
+                            if hdr { HDRColorSwatch(color: slot == "transparent" ? JSON(["space": "Srgb", "rgba": [0, 0, 0, 0]]) : store.panelColors[slot], viewing: store.colorViewing).clipShape(Circle()) }
                             else { ColorPaintPreview(rgba: swatch["rgba"]) }
                         }.modifier(ColorPanelMeasurement(id: "paint-" + slot))
                             .padding(slot == "foreground" ? 3 : 1)
@@ -52,7 +65,10 @@ struct ColorPanel: View {
                         .colorPlaced(layout[slot], id: slot)
                 }
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
-                if hdr { HDRIntensityArc(store: store, geometry: spec["arc"], size: side).frame(width: side, height: height) }
+                if hdr {
+                    HDRIntensityArc(store: store, geometry: spec["arc"], caption: layout["intensity_caption"], size: side)
+                        .frame(width: side, height: height)
+                }
                 ForEach(0..<2, id: \.self) { index in
                     let shape = model["other_shapes"][index].string
                     Button { color(["op": "shape", "shape": shape]) } label: {

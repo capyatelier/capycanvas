@@ -352,6 +352,7 @@ impl MetalHost {
         let clock = Instant::now();
         host.prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = host.session.state().camera.view();
+        let picker = host.session.color_picker_overlay();
         let surround = host.session.state().palette.surround_linear;
         let scale = view.width_px as f32 / host.logical[0];
         host.session.update_canvas_cursor(&mut self.cursor);
@@ -415,6 +416,7 @@ impl MetalHost {
         surface
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_color_picker(gpu, picker);
         surface.presenter.set_overviews(gpu, &overviews);
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.present(

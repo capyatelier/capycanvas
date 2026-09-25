@@ -117,7 +117,7 @@ impl NativeHost {
             }
             let snapshot = Motion {
                 workspace_update: update,
-                color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.session.color_preview()),
+                color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.color_preview()),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
             .serialize(serializer)?;
@@ -168,6 +168,19 @@ impl NativeHost {
             .expect("Native snapshot contains JSON-compatible fields")
     }
 
+    fn color_view(&self, colors: &layer_ui::ColorState) -> layer_ui::ColorPanelView {
+        if matches!(self.session.state().platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {
+            colors.view_mapped(self.session.effective_sdr_rendition())
+        } else {
+            colors.view_in(self.ui_color_space)
+        }
+    }
+    fn color_preview(&self) -> layer_ui::PickerPreview<'_> {
+        let state = self.session.state();
+        let colors = state.preview_colors();
+        let view = self.color_view(&colors);
+        layer_ui::PickerPreview { picker: &state.color_picker, colors, view }
+    }
     fn serialize_snapshot<S: Serializer>(
         &self,
         serializer: S,
@@ -235,8 +248,8 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
-        if state.platform.color_picker() { map.serialize_entry("color_preview", &self.session.color_preview())?; }
-        map.serialize_entry("color_panel", &if matches!(state.platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {state.display_colors().view_mapped(self.session.effective_sdr_rendition())}else{state.display_colors().view_in(self.ui_color_space)})?;
+        if state.platform.color_picker() { map.serialize_entry("color_preview", &self.color_preview())?; }
+        map.serialize_entry("color_panel", &self.color_view(state.display_colors()))?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
@@ -291,6 +304,18 @@ mod tests {
         .unwrap();
         host.resize(2410, 1810, 2.).unwrap();
         host
+    }
+    #[test]
+    fn picker_previews_use_the_color_panel_projection() {
+        for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+            let mut host = host(platform);
+            host.ui_color_space = layer_core::color::RgbSpace::DisplayP3;
+            let snapshot = host.take_snapshot().unwrap();
+            assert_eq!(snapshot.get("color_preview").is_some(), platform.color_picker(), "{platform:?}");
+            if platform.color_picker() {
+                assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
+            }
+        }
     }
     fn decoded(bytes: Option<Vec<u8>>) -> Option<Value> {
         bytes.map(|bytes| serde_json::from_slice(&bytes).unwrap())

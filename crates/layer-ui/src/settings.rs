@@ -25,7 +25,7 @@ pub enum Platform {
 }
 impl Platform {
     pub fn color_picker(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios)
     }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)

@@ -92,9 +92,9 @@
       "name": "Hand, eyedropper and histogram",
       "commands": ["hand", "eyedropper", "histogram"],
       "sdr_scope": "Document-space histogram and Point/3×3/5×5 sampling pass exact Metal snapshot/sample checks on both Apple policies; native Mac histogram/sampling controls pass. Physical Pencil sampling and UIKit histogram delivery remain open.",
-      "checks": ["native/src/tests.rs", "native/src/navigator_tests.rs", "native/src/inspection_tests.rs", "Shared/Tests/CanvasNavigationChecks.swift", "Shared/Tests/HistogramChecks.swift"],
-      "ios": "partial: simulator single-finger Hand pan/Fit restoration with stable window, unchanged artwork history and both eyedropper choices; physical two-finger zoom/rotation passes by user report; Pencil eyedropper sampling remains separate",
-      "mac": "partial: native mouse Hand pan/Fit restoration, visible/layer eyedropper samples including compositing and transparent-pixel preservation; trackpad/tablet and multi-contact navigation remain"
+      "checks": ["native/src/tests.rs", "native/src/navigator_tests.rs", "native/src/inspection_tests.rs", "native/src/picker_tests.rs", "Shared/Tests/CanvasNavigationChecks.swift", "Shared/Tests/HistogramChecks.swift", "Shared/Tests/ColorPickerChecks.swift"],
+      "ios": "partial: simulator single-finger Hand pan/Fit restoration with stable window, unchanged artwork history; physical two-finger zoom/rotation passes by user report; the shared glass picker passes bridge checks for pen lift acceptance, finger holds, second-finger source toggling and preview publication, and testColorPicker on the physical iPad covers toolbar entry, finger-tap cancellation, long-press sampling, neutral shortcuts and the double-tap settings drawer; physical Pencil picking remains a manual check",
+      "mac": "partial: native mouse Hand pan/Fit restoration; the shared glass picker samples visible and layer colors with compositing and transparent-pixel preservation, previews on hover, keeps picking when the cursor leaves the canvas, accepts on press and opens its settings on double click (testHandAndEyedropper, testColorPicker, testNativeHistogram); trackpad/tablet and multi-contact navigation remain"
     },
     {
       "name": "Rulers",
