@@ -430,7 +430,7 @@ The [tablet display investigation](../development/android-hdr-display.md#pq-disp
 records the reviewed route. Color controls and layer thumbnails remain SDR previews.
 Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
 open artwork. Neither host currently offers gain-map output. The user accepted the tablet’s HDR appearance;
-instrumented brightness/colorimetry remain unqualified. Proof shares Color's Paint/Photo tab group and supports the normal
+instrumented brightness/colorimetry remain unqualified. Proof follows Navigator in the Paint/Photo tab group and supports the normal
 docked, floating and drawer views. The report separates these tested workflows
 from outstanding hardware qualification and measured performance limits.
 
@@ -438,4 +438,4 @@ The [GTK parity audit](../development/color-management-gtk-parity.md) records th
 near visual match for Color, Proof and Edit Color: shared geometry and labels,
 neutral mode buttons, compact Print rows, grouped color entries and the same
 color-definition/gamut feedback. Restore Starting Layout includes adjacent
-Color/Proof tabs in Paint and Photo on both hosts.
+Navigator/Proof tabs in Paint and Photo on both hosts.

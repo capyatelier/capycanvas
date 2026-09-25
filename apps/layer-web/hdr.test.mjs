@@ -32,6 +32,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await wait(`${formats()}.length>=2&&${formats()}.every(c=>c.format===${hdr?"'rgba16float'":"navigator.gpu.getPreferredCanvasFormat()"}&&(c.toneMapping?.mode??'standard')==='${hdr?'extended':'standard'}')`);
     assert.ok((await evaluate(`${formats()}.length`))>=2,'Canvas and Navigator are both configured');
   };
+  const showProof=async()=>{await evaluate(`[...document.querySelectorAll('.dock-tab[data-panel="proof"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);await settle();};
   try {
     // Preserve prior recovery records, but finish offering them before real
     // contacts target the header. A late modal can intercept the first tap.
@@ -107,7 +108,7 @@ export async function checkHdr({call,evaluate,settle}) {
     const master0=await save();
     await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
     await output(false);
-    results.proofOutput=await checkHdrDisplay({evaluate},false);
+    results.proofOutput=await checkHdrDisplay({evaluate},false);await showProof();
     if(process.env.LAYER_PROOF_WORKSPACE) {
       const layout=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().workspace.layout,(_,v)=>typeof v==="bigint"?Number(v):v))');
       const before=await layout();
@@ -184,11 +185,11 @@ export async function checkHdr({call,evaluate,settle}) {
     await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-modes button[value="off"]')`);
     await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);
     await output(hdrDisplay);
-    results.recoveredOutput=await checkHdrDisplay({evaluate},hdrDisplay);
+    results.recoveredOutput=await checkHdrDisplay({evaluate},hdrDisplay);await showProof();
     await evaluate(`document.querySelector('.proof-modes button[value="print"]').click()`);
     await evaluate(`(()=>{const p=document.querySelector('.proof-panel [aria-label="Proof profile"]');p.value=p.querySelector('optgroup[label="Standard Color Spaces"] option').value;p.dispatchEvent(new Event('change'))})()`);
     await wait(`layerApp.app.proof_status().text.startsWith('Proof:')&&!layerApp.app.proof_status().needed`);
-    await output(false);assert.deepEqual(await hist(),original,'Print proof preserves HDR artwork');
+    await output(false);assert.deepEqual(await hist(),original,'Print proof preserves HDR artwork');await showProof();
     await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);
     await output(hdrDisplay);
     if(hdrDisplay){

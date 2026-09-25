@@ -67,13 +67,12 @@ export async function checkProofStartingLayout({call,evaluate,settle}) {
     await label('Restore Starting Layout…','.header-menu[open] .popover');
     await click('.workspace-form .suggested-action');
     await idle();await settle();
-    const groups=await evaluate('layerApp.app.layout(innerWidth,innerHeight).groups');
-    const group=groups.find(g=>g.panels.includes('color'));
-    assert.ok(group,`${name} Color group`);
-    assert.equal(group.panels[group.panels.indexOf('color')+1],'proof',`${name}: Proof immediately follows Color after restoring`);
+    const panels=await evaluate(`(()=>{const l=layerApp.app.layout(innerWidth,innerHeight);return [...l.groups.map(g=>g.panels),...l.collapsed.flatMap(c=>c.groups.map(g=>g.icons.map(i=>i.panel)))].find(p=>p.includes('navigator'))})()`);
+    assert.ok(panels,`${name} Navigator group`);
+    assert.equal(panels[panels.indexOf('navigator')+1],'proof',`${name}: Proof immediately follows Navigator after restoring`);
     assert.ok(await evaluate(`!![...document.querySelectorAll('.dock-tab[data-panel="proof"]')].find(n=>n.getBoundingClientRect().width>0)`));
   }
-  console.log('Window → Workspaces → Restore Starting Layout restores adjacent Color/Proof tabs in Photo and Paint');
+  console.log('Window → Workspaces → Restore Starting Layout restores adjacent Navigator/Proof tabs in Photo and Paint');
 }
 
 export async function checkProofKeys({call,evaluate,settle,invoke}) {
