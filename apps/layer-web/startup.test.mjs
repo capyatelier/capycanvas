@@ -61,6 +61,16 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
       await evaluate("layerApp.dispatch({type:'close_settings'})");
       await settle();
     }
+    const heldPan = await evaluate("layerApp.state().camera.translation");
+    await call("Input.dispatchKeyEvent", { type:"keyDown", key:" ", code:"Space", windowsVirtualKeyCode:32 });
+    for (const [type, x, buttons] of [["mousePressed",600,1],["mouseMoved",660,1],["mouseReleased",660,0]]) {
+      await call("Input.dispatchMouseEvent", { type, x, y:450, button:"left", buttons, clickCount:1 });
+    }
+    await call("Input.dispatchKeyEvent", { type:"keyUp", key:" ", code:"Space", windowsVirtualKeyCode:32 });
+    await settle();
+    assert.equal(await evaluate("layerApp.app.brush_ready()"), false);
+    assert.deepEqual((await evaluate("layerApp.state().camera.translation")).map((v, i) => Math.round(v - heldPan[i])), [60, 0],
+      "Space-drag pans the camera while the brush pipeline is compiling");
     await evaluate(`
       window.earlyContact = {type:'pointer',id:999n,kind:'pen',button:'primary',position:[650,450]};
       layerApp.app.input({...earlyContact,phase:'down'}); startupTest.release()`);

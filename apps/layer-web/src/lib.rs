@@ -1031,12 +1031,15 @@ impl WebApp {
         if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
             return serialize(&layer_ui::InputReply::default());
         }
-        if let layer_ui::UiInput::Pointer { id, phase, .. } = &input {
+        if let layer_ui::UiInput::Pointer { id, phase, kind, button, .. } = &input {
             use layer_ui::ContactPhase;
             if *phase == ContactPhase::Down {
                 if let Some(control) = self.tone.pending.take() { control.cancel(); }
                 self.deferred_contacts.remove(id);
-                if !self.brush_ready() {
+                if !self.brush_ready()
+                    && (*kind == layer_ui::PointerKind::Touch
+                        || self.session.pointer_contact_paints(*button))
+                {
                     self.deferred_contacts.insert(*id);
                 }
             }

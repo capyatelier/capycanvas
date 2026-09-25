@@ -1116,9 +1116,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                     }
                 } else {
-                    let paint = button == PointerButton::Primary
-                        && self.interaction.pan_key.is_none()
-                        && self.layer_interaction.tool != LayerCanvasTool::Hand;
+                    let paint = self.pointer_contact_paints(button);
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
@@ -4605,6 +4603,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
     }
 
+    pub fn pointer_contact_paints(&self, button: PointerButton) -> bool {
+        button == PointerButton::Primary
+            && self.interaction.pan_key.is_none()
+            && self.layer_interaction.tool != LayerCanvasTool::Hand
+    }
     fn require_idle(&self) -> Result<(), String> {
         if self.painted_selections.has_contact()
             || self.input_pending
