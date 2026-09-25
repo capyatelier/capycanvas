@@ -6,14 +6,28 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.test.core.app.ActivityScenario
+import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
+import java.io.File
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Run alone in a fresh instrumentation process to exercise the cold renderer. */
 class AndroidStartupTest {
+    @Before fun isolate() {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "startup-tests/${UUID.randomUUID()}")
+        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
+        RecoveryController.directoryForTest = File(root, "recovery")
+    }
+    @After fun release() {
+        CanvasHost.workspaceDirectoryForTest = null
+        RecoveryController.directoryForTest = null
+    }
     @Test fun drawingAndNavigationWorkBeforeSpeculativeShadersFinish() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var host: CanvasHost
@@ -34,7 +48,12 @@ class AndroidStartupTest {
                 }
                 throw AssertionError("Startup did not become ready")
             }
-            val ready = waitFor { it.optBoolean("brush_ready") }
+            fun workspaceReady(): Boolean {
+                var ready = false
+                scenario.onActivity { ready = host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
+                return ready
+            }
+            val ready = waitFor { it.optBoolean("brush_ready") && workspaceReady() }
             assertTrue(ready.getBoolean("canvas_ready"))
             // Timing thresholds stay in the device benchmark. This assertion
             // verifies that ready drawing is not gated on all shaders.
