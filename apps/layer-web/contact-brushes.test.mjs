@@ -25,7 +25,7 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
     {
       await evaluate(`(async()=>{let blob;if(${JSON.stringify(photoUrl || null)}){const response=await fetch(${JSON.stringify(photoUrl || null)});if(!response.ok)throw Error('Photo unavailable');blob=await response.blob();}else{const c=new OffscreenCanvas(2048,1536),x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='#c5b58c';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}window.showOpenFilePicker=async()=>[{name:'brush-photo.jpg',async getFile(){return new File([blob],'brush-photo.jpg')}}]})()`);
       await invoke('open_document');
-      await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+      await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
       photoTab=await evaluate('Number(layerApp.app.document_tabs(0).selected)');
       if(photoUrl) assert.ok(await evaluate('layerApp.state().tabs.some(t=>t.width===9504&&t.height===6336)'), '61 MP photo opened');
     }

@@ -23,7 +23,7 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
     })()`);
     await invoke('open_document');
     await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
-    await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+    await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
     await invoke('fit_canvas');
     const extent = await evaluate('[layerApp.state().tabs[0].width,layerApp.state().tabs[0].height]');
     assert.deepEqual(extent, photoUrl ? [9504, 6336] : [4353, 769]);
@@ -55,7 +55,7 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
     const saved = await save();
     assert.ok(saved.blobs.length > 0);
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-paint.capy',async getFile(){return new File([[...photoPaint.files.values()].at(-1)],'photo-paint.capy')}}];`);
-    await invoke('open_document'); await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+    await invoke('open_document'); await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
     assert.deepEqual(opaque(await histogram()), painted);
     const reopened = await save();
     assert.deepEqual(reopened.blobs, saved.blobs, 'Native paint backing survives reopening exactly');
