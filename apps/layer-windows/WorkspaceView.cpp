@@ -98,7 +98,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     TextBlock camera;
     Grid cameraSlot;
-    Button fitCamera{nullptr},zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
+    Button fitCamera{nullptr},zenCapy{nullptr};Border cameraSurface,placementBar;std::vector<std::pair<Button,hstring>> placementActions;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
     Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -124,6 +124,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         zenCapy.Padding({0,0,0,0});zenCapy.Visibility(Visibility::Collapsed);Canvas::SetZIndex(zenCapy,1001);
         AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");ToolTipService::SetToolTip(zenCapy,box_value(L"Exit Zen mode"));
         root.Children().Append(zenCapy);
+        StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);
+        for(auto [id,text]:{std::pair{L"placement_original_size",L"Original Size (100%)"},std::pair{L"cancel_transform",L"Cancel"},std::pair{L"apply_transform",L"Apply"}}){
+            auto action=button(data,text,[data=data,command=hstring(id)]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(command)}}));});
+            action.MinHeight(44);action.Padding({12,0,12,0});action.Background(buttonBackground(data));
+            AutomationProperties::SetAutomationId(action,L"placement-"+hstring(id));actions.Children().Append(action);placementActions.emplace_back(action,id);
+        }
+        placementBar.Child(actions);placementBar.Padding({8,8,8,8});placementBar.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
+        placementBar.Shadow(ThemeShadow());placementBar.Translation({0,0,16});placementBar.Visibility(Visibility::Collapsed);Canvas::SetZIndex(placementBar,1000);
+        AutomationProperties::SetAutomationId(placementBar,L"image-placement-controls");AutomationProperties::SetName(placementBar,L"Image placement");
+        placementBar.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->placeControls();});
+        root.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->placeControls();});
+        root.Children().Append(placementBar);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
@@ -290,7 +302,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);root.Children().Append(placementBar);
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -357,6 +369,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
         updateZenCapy(snapshot);
+        bool placing=false;
+        for(auto const& [action,id]:placementActions){
+            bool enabled=flag(find(array(data->state,L"commands"),L"id",id),L"enabled");action.IsEnabled(enabled);
+            if(id==L"placement_original_size")placing=enabled;
+        }
+        placementBar.Background(data->brush(L"panel"));placementBar.Visibility(placing?Visibility::Visible:Visibility::Collapsed);placeControls();
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
         camera.Foreground(data->brush(L"text"));
         auto fit=find(array(data->state,L"commands"),L"id",L"fit_canvas");
@@ -695,6 +713,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
+    }
+    void placeControls(){
+        if(placementBar.Visibility()!=Visibility::Visible)return;
+        Canvas::SetLeft(placementBar,std::round((root.ActualWidth()-placementBar.ActualWidth())/2));
+        Canvas::SetTop(placementBar,std::max(0.,root.ActualHeight()-48-placementBar.ActualHeight()));
     }
     void updateZenCapy(J const& snapshot){
         bool keep=flag(snapshot,L"keep_zen_button");
