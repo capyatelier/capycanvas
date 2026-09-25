@@ -1,0 +1,70 @@
+import SwiftUI
+
+struct SquircleShape: InsettableShape {
+    enum Corner: Equatable { case radius(CGFloat), half }
+    static let surfaceRadius: CGFloat = 18
+    static let controlRadius: CGFloat = 12
+    static let surface = SquircleShape(surfaceRadius)
+    static let control = SquircleShape(controlRadius)
+    static let tile = SquircleShape(corners: [.half, .half, .half, .half])
+
+    var corners: [Corner]
+    var inset: CGFloat = 0
+
+    init(_ radius: CGFloat) { corners = Array(repeating: .radius(radius), count: 4) }
+    init(corners: [Corner]) { self.corners = corners }
+    init(topLeading: CGFloat = 0, topTrailing: CGFloat = 0, bottomTrailing: CGFloat = 0, bottomLeading: CGFloat = 0) {
+        corners = [.radius(topLeading), .radius(topTrailing), .radius(bottomTrailing), .radius(bottomLeading)]
+    }
+    static func tile(joined edge: String?) -> SquircleShape {
+        func corner(_ edges: String...) -> Corner { edges.contains(edge ?? "") ? .radius(0) : .half }
+        return SquircleShape(corners: [corner("top", "left"), corner("top", "right"),
+            corner("bottom", "right"), corner("bottom", "left")])
+    }
+
+    func inset(by amount: CGFloat) -> SquircleShape {
+        var shape = self; shape.inset += amount; return shape
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: inset, dy: inset)
+        guard r.width > 0, r.height > 0 else { return Path() }
+        var radii = corners.map { corner -> CGFloat in
+            switch corner {
+            case .radius(let value): max(0, value - inset)
+            case .half: min(r.width, r.height) / 2
+            }
+        }
+        let sides = [(radii[0] + radii[1], r.width), (radii[1] + radii[2], r.height),
+            (radii[2] + radii[3], r.width), (radii[3] + radii[0], r.height)]
+        let scale = sides.reduce(CGFloat(1)) { $1.0 > $1.1 ? min($0, $1.1 / $1.0) : $0 }
+        if scale < 1 { radii = radii.map { $0 * scale } }
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX + radii[0], y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - radii[1], y: r.minY))
+        p.squircle(center: CGPoint(x: r.maxX - radii[1], y: r.minY + radii[1]), start: CGVector(dx: 0, dy: -radii[1]), end: CGVector(dx: radii[1], dy: 0))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - radii[2]))
+        p.squircle(center: CGPoint(x: r.maxX - radii[2], y: r.maxY - radii[2]), start: CGVector(dx: radii[2], dy: 0), end: CGVector(dx: 0, dy: radii[2]))
+        p.addLine(to: CGPoint(x: r.minX + radii[3], y: r.maxY))
+        p.squircle(center: CGPoint(x: r.minX + radii[3], y: r.maxY - radii[3]), start: CGVector(dx: 0, dy: radii[3]), end: CGVector(dx: -radii[3], dy: 0))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + radii[0]))
+        p.squircle(center: CGPoint(x: r.minX + radii[0], y: r.minY + radii[0]), start: CGVector(dx: -radii[0], dy: 0), end: CGVector(dx: 0, dy: -radii[0]))
+        p.closeSubpath()
+        return p
+    }
+}
+
+extension Path {
+    static let squircleSegments = 24
+    static func squircleCorner(center: CGPoint, start: CGVector, end: CGVector) -> [CGPoint] {
+        (1...squircleSegments).map { step in
+            let angle = Double(step) * .pi / 2 / Double(squircleSegments)
+            let a = CGFloat(cos(angle).squareRoot()), b = CGFloat(sin(angle).squareRoot())
+            return CGPoint(x: center.x + start.dx * a + end.dx * b, y: center.y + start.dy * a + end.dy * b)
+        }
+    }
+    mutating func squircle(center: CGPoint, start: CGVector, end: CGVector) {
+        guard start != .zero || end != .zero else { return }
+        for point in Path.squircleCorner(center: center, start: start, end: end) { addLine(to: point) }
+    }
+}

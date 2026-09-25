@@ -30,7 +30,7 @@ struct HDRIntensityArc: View {
                 graphics.stroke(marker, with: .color(.black.opacity(0.65)), lineWidth: 4)
                 graphics.stroke(marker, with: .color(.white), lineWidth: 2)
             }.allowedDynamicRange(.high).allowsHitTesting(false)
-            ParameterInput(hdr: true, identity: "\(store.state["document_file"]["epoch"].uint):\(store.state["colors"]["paint_slot"].string)", nudge: { phase, _, delta in
+            ParameterInput(hdr: true, identity: "\(store.state["document_file"]["epoch"].uint):\(store.displayColors["paint_slot"].string)", nudge: { phase, _, delta in
                 if phase == "down" { original = model["intensity"].number }
                 if phase == "cancel" { if let original { set(original) }; original = nil; return }
                 if phase == "up" { original = nil; return }

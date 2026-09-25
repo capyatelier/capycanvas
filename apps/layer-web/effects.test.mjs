@@ -105,10 +105,10 @@ export async function benchmarkFilters({evaluate}) {
 // Use the visible endpoint, not a point calculated from the outer hit area:
 // SVG letterboxing used to put that handle outside its own pickup radius.
 export async function checkCurveEndpoint({call,evaluate,settle}) {
-  const count=()=>evaluate("document.querySelector('.curve-editor:not([hidden])').querySelectorAll('circle').length");
+  const count=()=>evaluate("document.querySelector('.curve-field:not([hidden]) .curve-editor').querySelectorAll('circle').length");
   const before=await count();assert.equal(before,2);
   const point=await evaluate(`(()=>{
-    const graph=document.querySelector('.curve-editor:not([hidden])'),endpoint=graph.querySelector('circle:last-child');
+    const graph=document.querySelector('.curve-field:not([hidden]) .curve-editor'),endpoint=graph.querySelector('circle:last-child');
     const p=new DOMPoint(endpoint.cx.baseVal.value,endpoint.cy.baseVal.value).matrixTransform(graph.getScreenCTM());
     // Press the visible inner part; the panel scrollbar overlaps the outer edge.
     return {x:p.x-3,y:p.y+1};
@@ -119,8 +119,35 @@ export async function checkCurveEndpoint({call,evaluate,settle}) {
   await call("Input.dispatchMouseEvent",{type:"mouseReleased",...target,button:"left",buttons:0,clickCount:1});
   await settle();
   assert.equal(await count(),before,"Dragging a visible curve endpoint must edit it without inserting another point");
-  const moved=await evaluate("document.querySelector('.curve-editor:not([hidden]) circle:last-child').cy.baseVal.value");
+  const moved=await evaluate("document.querySelector('.curve-field:not([hidden]) .curve-editor circle:last-child').cy.baseVal.value");
   assert.ok(Math.abs(moved-6)<0.01,"The endpoint must follow the drag; a missed hit is not a successful pickup");
+}
+
+export async function checkCurveEditing({call,evaluate,settle}) {
+  const visible=".curve-field:not([hidden])";
+  const count=()=>evaluate(`document.querySelector('${visible} .curve-editor').querySelectorAll('circle').length`);
+  const resetHidden=()=>evaluate(`document.querySelector('${visible} [data-action=curve-reset]').hidden`);
+  const box=await evaluate(`(()=>{const b=document.querySelector('${visible} .curve-editor').getBoundingClientRect();return {x:b.left,y:b.top,width:b.width,height:b.height};})()`);
+  const mouse=(type,p,clickCount=1)=>call("Input.dispatchMouseEvent",{type,...p,button:"left",buttons:type==="mouseReleased"?0:1,clickCount});
+  const click=async(p,clickCount=1)=>{await mouse("mousePressed",p,clickCount);await mouse("mouseReleased",p,clickCount);await settle();};
+  assert.equal(await resetHidden(),false,"An edited curve offers reset on the chart");
+  await evaluate(`document.querySelector('${visible} [data-action=curve-reset]').click()`);await settle();
+  assert.equal(await count(),2,"Reset removes every added point");
+  assert.equal(await resetHidden(),true,"An unedited curve hides reset");
+  const point={x:box.x+.4*box.width,y:box.y+.4*box.height};
+  await click(point);assert.equal(await count(),3,"Click adds a point");
+  await mouse("mousePressed",point,1);await mouse("mouseReleased",point,1);
+  await mouse("mousePressed",point,2);await mouse("mouseReleased",point,2);await settle();
+  assert.equal(await count(),2,"Double-click removes a point");
+  await click(point);assert.equal(await count(),3);
+  await mouse("mousePressed",point);
+  await mouse("mouseMoved",{x:point.x,y:box.y+box.height+60});await settle();
+  assert.equal(await count(),2,"Dragging a point off the graph removes it while dragging");
+  await mouse("mouseMoved",point);await settle();
+  assert.equal(await count(),3,"Returning before release restores the point");
+  await mouse("mouseMoved",{x:point.x,y:box.y+box.height+60});
+  await mouse("mouseReleased",{x:point.x,y:box.y+box.height+60});await settle();
+  assert.equal(await count(),2,"Releasing off the graph keeps the point removed");
 }
 
 export async function checkDiagnostics({evaluate,settle}) {
@@ -209,6 +236,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
     const gradient=view.controls.find(c=>c.kind.kind==="gradient");
     if(curve) {
       await checkCurveEndpoint({call,evaluate,settle});
+      await checkCurveEditing({call,evaluate,settle});
       await send({type:"effect",action:{op:"curve_point",layer:view.layer,key:curve.key,index:null,point:[.45,.65],remove:false}});
     }
     else if(number) await send({type:"effect",action:{op:"set",layer:view.layer,key:number.key,value:{kind:"number",value:number.kind.numeric.min}}});

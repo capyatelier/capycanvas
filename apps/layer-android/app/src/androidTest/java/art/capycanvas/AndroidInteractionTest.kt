@@ -1647,6 +1647,9 @@ class AndroidInteractionTest {
                 val command = listOf("selection_add", "selection_subtract", "selection_intersect")[i]
                 waitFor("$command selected") { state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("selected") } }
             }
+            val segments = bounds("toolbar-segments-selection-mode"); val choice = bounds("toolbar-choice-variant")
+            assertEquals("Segments match the dropdown height", 24 * density, segments.height, 1f)
+            assertEquals("Segments center with the dropdown", choice.center.y, segments.center.y, 1f)
             captureToolbar("photo-$theme")
         }
         invoke("auto_select"); waitFor("list choice remains") { exists("toolbar-choice-selection-source") }

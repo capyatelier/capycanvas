@@ -26,6 +26,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
@@ -60,13 +61,16 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     // document title and clock too, so every publication does not evict them.
     val text = rememberTextMeasurer(cacheSize = 64)
     val textStyle = LocalTextStyle.current
-    fun measure(label: String, bold: Boolean = false): Float = text.measure(label,
-        style = textStyle.copy(fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal), maxLines = 1).size.width / density
+    fun measure(label: String): Float = text.measure(label,
+        style = textStyle.copy(fontWeight = FontWeight.Normal), maxLines = 1).size.width / density
     val menus = snapshot.array("application_menus").objects()
     // Compose rounds each side's padding separately. Summing logical widths
     // first loses pixels at fractional scale and clips the final menu label.
-    val menuPadding = (6f * density).roundToInt()
-    val menuWidth = menus.sumOf { (measure(it.getString("label"), true) * density).roundToInt() + 2 * menuPadding } / density
+    val menuPadding = (8f * density).roundToInt()
+    val menuGap = (2f * density).roundToInt()
+    val menuInset = (4f * density).roundToInt()
+    val menuWidth = (menus.sumOf { (measure(it.getString("label")) * density).roundToInt() + 2 * menuPadding } +
+        2 * menuInset + menuGap * (menus.size - 1)) / density
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
@@ -121,6 +125,9 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         val geometry = input.preview?.objectOrNull("geometry") ?: resolved ?: input.geometry
         val heldId = input.held?.source?.takeIf { it.optString("kind") == "item" }?.getInt("value")
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
+        val bars = geometry?.optJSONArray("bars")?.objects() ?: emptyList()
+        val joined = bars.flatMap { bar -> bar.array("items").values().map { (it as Number).toInt() } }.toSet()
+        bars.forEach { bar -> Box(Modifier.placed(bar.getJSONObject("bounds"), density).background(colors.headerSurface, TileShape)) }
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
             val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
             Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
@@ -135,7 +142,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                     val x by animateFloatAsState(bounds.number("x"), tween(if (heldBounds != null) 0 else 120), label = "header-x")
                     val natural = metrics.objects().first { it.getInt("id") == id }.number("width")
                     HeaderItem(host, snapshot, input, entry, specs.getValue(id), size, title,
-                        compact = bounds.number("width") < natural - .5f,
+                        compact = bounds.number("width") < natural - .5f, inBar = id in joined,
                         modifier = Modifier.offset { IntOffset((x * density).roundToInt(), (bounds.number("y") * density).roundToInt()) }
                             .size(bounds.number("width").dp, bounds.number("height").dp).zIndex(if (heldBounds == null) 0f else 10f),
                         editing = editing)
@@ -150,7 +157,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
             Box(Modifier.placed(bounds, density).testTag("header-overflow-$zone")
                 .then(if (editing && single != null) Modifier.headerSource(input, obj("kind" to "item", "value" to single, "overflow_zone" to zone), specs.getValue(single).getString("label"), 1) else Modifier)) {
                 HeaderButton("More title bar items", false, true, false, Modifier.fillMaxSize(),
-                    onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", "More title bar items", Modifier.size(size.number("icon").dp)) }
+                    inBar = bars.any { it.optInt("overflow", -1) == zone }, onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", "More title bar items", Modifier.size(size.number("icon").dp)) }
             }
         }
         // Overflow rows remain inside the stable capture owner. A native popup
@@ -213,7 +220,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 }
 
 @Composable private fun HeaderItem(host: CanvasHost, snapshot: JSONObject, input: HeaderInteraction, entry: JSONObject,
-    spec: JSONObject, size: JSONObject, title: String, compact: Boolean, modifier: Modifier, editing: Boolean) {
+    spec: JSONObject, size: JSONObject, title: String, compact: Boolean, inBar: Boolean, modifier: Modifier, editing: Boolean) {
     val id = entry.getInt("id")
     val item = entry.getJSONObject("item")
     val kind = item.getString("kind")
@@ -254,15 +261,16 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, TileShape), verticalAlignment = Alignment.CenterVertically) {
+                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).background(colors.headerSurface, SquircleShape(50)).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
-                                Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
-                                fillWidth = false, surface = false,
+                                Modifier.height(26.dp).testTag("application-menu-${application.getString("id")}"),
+                                fillWidth = false, surface = false, shape = SquircleShape(50),
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
-                                Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text(application.getString("label"), Modifier.padding(horizontal = 8.dp), maxLines = 1)
                             }
                             if (menuLabel == menuId) menu?.let { WorkspaceMenu(host, it) { menu = null } }
                         }
@@ -275,16 +283,16 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)
                 else -> HeaderButton(label, spec.optBoolean("selected") && kind != "capy", !editing && spec.optBoolean("enabled"), open,
                     Modifier.fillMaxSize().testTag(if (kind == "menu_labels") "header-menu-labels-compact" else "header-control-$id"),
-                    onClick = {
+                    inBar = inBar, onClick = {
                         when (kind) {
                             "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
                             "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
                             else -> activate()
                         }
                     }) {
-                    val fill = if (item.objectOrNull("control")?.optString("kind") == "color") snapshot.getJSONObject("state").getJSONObject("brush").array("color").let { Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat()) } else null
                     val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
-                    SharedIcon(icon, label, Modifier.size(iconSize.dp), fill = fill)
+                    if (item.objectOrNull("control")?.optString("kind") == "color") PaintPairIcon(snapshot.getJSONObject("state"), label, Modifier.size(iconSize.dp))
+                    else SharedIcon(icon, label, Modifier.size(iconSize.dp))
                 }
             }
             if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }
@@ -294,22 +302,26 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
-    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
+    inBar: Boolean = false, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    val shape = drawerButtonShape(if (open) "bottom" else null)
+    val click = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(),
+        enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+    val inset = inBar && !open
     HoverTip(label, modifier) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
-        .background(if (surface) colors.headerSurface else Color.Transparent).background(when {
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight())
+        .then(if (inset) click.padding(vertical = 1.dp).clip(TileShape) else Modifier.clip(shape))
+        .background(if (surface && !inBar) colors.headerSurface else Color.Transparent).background(when {
+        selected && inBar -> colors.headerActive
         selected -> colors.active
         open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)
         enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
-    }).hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(), enabled = enabled,
-        role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }
+    }).then(if (inset) Modifier else click), contentAlignment = Alignment.Center) { content() }
     }
 }
 

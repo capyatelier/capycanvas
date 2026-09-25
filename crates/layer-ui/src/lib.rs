@@ -126,13 +126,13 @@ pub use settings::{
     PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
-    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
+    SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
-pub use theme::{HexColor, Theme, ThemePalette};
+pub use theme::{ACCENTS, DEFAULT_ACCENT, HexColor, Theme, ThemePalette};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     durable_layout, layout_change_description,
@@ -427,6 +427,7 @@ pub fn ui_catalog() -> UiCatalog {
             "up",
             "down",
             "color",
+            "colors",
             "swap",
             "color-swap",
             "color-circle",
@@ -648,7 +649,7 @@ impl CommandId {
             // Decode saved shortcuts/layouts from the original tonal editor.
             // These controls are retired and must not be offered or dispatched.
             Self::TonalDetails | Self::ApplyTonalSelection | Self::CancelTonalSelection | Self::TonalNewBand | Self::TonalRemoveBand | Self::TonalSaveBand | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff => false,
-            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
@@ -1481,6 +1482,8 @@ pub enum UiAction {
     },
     SystemThemeChanged {
         theme: Theme,
+        #[serde(default)]
+        accent: Option<HexColor>,
     },
     NewDocumentSettings {
         settings: NewDocumentSettings,

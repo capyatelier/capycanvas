@@ -1118,26 +1118,84 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
     assert_eq!(stamp.alpha.len(), (stamp.size * stamp.size) as usize);
     assert!(stamp.alpha.iter().any(|&a| a > 0));
     assert_eq!(stamp.alpha[0], 0);
-    let size = slider_preview_layout(ToolbarControl::BrushSizeSlider, 64., 180., 1.).unwrap();
+    let size = slider_preview_layout(
+        ToolbarControl::BrushSizeSlider,
+        TileStyle::Small,
+        64.,
+        180.,
+        1.,
+    )
+    .unwrap();
     assert_eq!(size.stamp.width, 64.);
     assert_eq!(size.stamp.y, size.stamp.x);
     assert_eq!(size.viewport, Bounds { x: 0., y: 0., width: 180., height: 180. });
-    assert!(size.header_fade > 32.);
+    assert_eq!(size.header_fade, 65. * 36. / 54.);
+    assert_eq!(size.header_fade_opacity, 0.5);
     assert_eq!(size.opacity, 1.);
     assert_eq!(size.text, "Size: 64 px");
-    let opacity =
-        slider_preview_layout(ToolbarControl::BrushOpacitySlider, 0.42, 180., 1.).unwrap();
+    let opacity = slider_preview_layout(
+        ToolbarControl::BrushOpacitySlider,
+        TileStyle::Small,
+        0.42,
+        180.,
+        1.,
+    )
+    .unwrap();
     assert_eq!(opacity.text, "Opacity: 42 %");
     assert_eq!(opacity.opacity, 0.42);
     assert_eq!(
         opacity.stamp,
-        slider_preview_layout(ToolbarControl::BrushOpacitySlider, 1., 180., 1.)
-            .unwrap()
-            .stamp
+        slider_preview_layout(
+            ToolbarControl::BrushOpacitySlider,
+            TileStyle::Small,
+            1.,
+            180.,
+            1.
+        )
+        .unwrap()
+        .stamp
     );
+    for (style, icon) in [
+        (TileStyle::Small, 16.),
+        (TileStyle::Medium, 24.),
+        (TileStyle::Large, 32.),
+        (TileStyle::Labeled, 32.),
+    ] {
+        let tile = style.size()[1];
+        let layout =
+            slider_preview_layout(ToolbarControl::BrushOpacitySlider, style, 1., 0., 1.).unwrap();
+        assert_eq!(layout.radius, style.corner_radius());
+        assert_eq!(
+            layout.bookmark,
+            Bounds {
+                x: layout.side - tile,
+                y: 0.,
+                width: tile,
+                height: tile
+            }
+        );
+        assert_eq!(layout.icon, icon);
+        assert_eq!(layout.caption.height, tile);
+        assert!(
+            layout.caption.width >= 104.,
+            "{style:?} leaves room for its value"
+        );
+        assert_eq!(layout.viewport.y, tile);
+        let size =
+            slider_preview_layout(ToolbarControl::BrushSizeSlider, style, 64., 0., 1.).unwrap();
+        assert_eq!(size.header_fade, 65. * tile / 54., "{style:?} header fade");
+        assert!(layout.stamp.y >= tile);
+    }
     assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 200.).is_err());
     assert!(
-        slider_preview_layout(ToolbarControl::BrushSizeSlider, f32::INFINITY, 180., 1.).is_err()
+        slider_preview_layout(
+            ToolbarControl::BrushSizeSlider,
+            TileStyle::Small,
+            f32::INFINITY,
+            180.,
+            1.
+        )
+        .is_err()
     );
     let invalid = r#"{"size":[64,32],"opacity":[]}"#;
     assert!(

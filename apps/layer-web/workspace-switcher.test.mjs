@@ -206,11 +206,9 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     assert.ok(await evaluate("!document.querySelector('#header-workspace-selector').hidden"));
     const compactSwitch=async id=>{
       await click('#header-workspace-selector > summary');
-      for(const label of ['Workspaces','Manage Workspaces…']) {
-        await evaluate(`(()=>{const b=[...document.querySelectorAll('#header-workspace-selector .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)});if(!b)throw Error('Missing '+${JSON.stringify(label)});b.dataset.compactSwitch='true';})()`);
-        await click('[data-compact-switch]');
-      }
-      await click(`.workspace-choice[data-id=${JSON.stringify(id)}]`);await click('.workspace-manager footer .suggested-action');
+      const title=(await view()).switcher_display.find(row=>row.id===id).title;
+      await evaluate(`(()=>{const b=[...document.querySelectorAll('#header-workspace-selector .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(title)});if(!b)throw Error('Missing '+${JSON.stringify(title)});b.dataset.compactSwitch='true';})()`);
+      await click('[data-compact-switch]');
     };
     const beforeRestart={pins:await pins(),order:await order()};
     await click(".workspace-manager footer button"); await reload(); await wait(ready); await idle();
@@ -225,6 +223,6 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     await compactSwitch(p);
     assert.deepEqual(await shown(),await pins());
     console.log("PASS: configurable Web pill, narrow grips on every row, mouse/touch/pen pickup and menus, same-contact drag, hidden-row order, keyboard, scrolling, cancel/blur, preview preservation, cross-tab refresh and restart");
-  } catch(error) {await shot("failure");console.error("Workspace switcher failure",await view());await writeFile(`${artifacts}/events.json`,JSON.stringify(await evaluate("workspaceEvents"),null,2));throw error;}
+  } catch(error) {await shot("failure");console.error("Workspace switcher failure",await view());await writeFile(`${artifacts}/events.json`,JSON.stringify(await evaluate("window.workspaceEvents ?? []"),null,2));throw error;}
   finally {if(pressed)await pointer(device==="touch"?"cancel":"up");}
 }

@@ -173,7 +173,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
         Text(view.getString("title"), fontWeight = FontWeight.Bold)
         if(curves.isNotEmpty()) {
             PropertyChoice("Channel", curves.map { it.getString("label") }, selectedCurve, enabled) { selectedCurve = it }
-            CurveControl(host, layer, curves[selectedCurve.coerceIn(curves.indices)], enabled, if(view.isNull("curve_max"))null else view.number("curve_max"))
+            CurveControl(host, layer, curves[selectedCurve.coerceIn(curves.indices)], enabled, if(view.isNull("curve_max"))null else view.number("curve_max"), if(view.isNull("curve_white"))null else view.number("curve_white"))
         }
         controls.forEachIndexed { index, control ->
             val section = control.takeUnless { it.isNull("section") }?.getString("section")
@@ -241,64 +241,70 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     }
 }
 
-@Composable private fun CurveControl(host: CanvasHost, layer: Long, control: JSONObject, enabled: Boolean, curveMax:Float?) {
+@Composable private fun CurveControl(host: CanvasHost, layer: Long, control: JSONObject, enabled: Boolean, curveMax:Float?, curveWhite:Float?) {
     val colors = LocalPalette.current
     val current by rememberUpdatedState(control)
     val key = control.getString("key")
     var selected by remember(layer, key) { mutableStateOf<Int?>(null) }
-    Canvas(Modifier.fillMaxWidth().aspectRatio(1f).testTag("effect-curve").clip(ControlShape).background(colors.input)
-        .pointerInput(layer, control.getString("key"), enabled) {
-            if(!enabled)return@pointerInput
-            awaitEachGesture {
-                val down = awaitFirstDown(); down.consume()
-                fun point(p: Offset) = JSONArray(listOf(p.x / size.width, 1f - p.y / size.height))
-                val points = current.getJSONObject("value").getJSONArray("value")
-                val index = (0 until points.length()).firstOrNull { i ->
-                    val p = points.getJSONArray(i)
-                    (Offset(p.getDouble(0).toFloat()*size.width, (1-p.getDouble(1).toFloat())*size.height)-down.position).getDistance() < 16.dp.toPx()
+    var lastTap by remember(layer, key) { mutableStateOf<Pair<Int, Long>?>(null) }
+    Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+        Canvas(Modifier.fillMaxSize().testTag("effect-curve").clip(ControlShape).background(colors.input)
+            .pointerInput(layer, control.getString("key"), enabled) {
+                if(!enabled)return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(); down.consume()
+                    fun point(p: Offset) = JSONArray(listOf(p.x / size.width, 1f - p.y / size.height))
+                    val points = current.getJSONObject("value").getJSONArray("value")
+                    val index = (0 until points.length()).firstOrNull { i ->
+                        val p = points.getJSONArray(i)
+                        (Offset(p.getDouble(0).toFloat()*size.width, (1-p.getDouble(1).toFloat())*size.height)-down.position).getDistance() < 16.dp.toPx()
+                    }
+                    fun update(phase: String, p: Offset, index: Int?, remove: Boolean = false) = host.effect(obj("op" to "gesture", "phase" to phase, "action" to obj("op" to "curve_point", "layer" to layer, "key" to current.getString("key"), "index" to index, "point" to point(p), "remove" to remove)))
+                    update("down", down.position, index)
+                    // A new point is inserted in sorted order by Rust. Its insertion
+                    // index follows that order; the renderer receives every move.
+                    val dragging = index ?: (0 until points.length()).count { points.getJSONArray(it).getDouble(0) < down.position.x / size.width }
+                    selected = dragging
+                    var released = false
+                    try {
+                        do {
+                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                            if(!change.pressed) {
+                                released = true
+                                val tapped = (change.position - down.position).getDistance() < viewConfiguration.touchSlop
+                                val double = tapped && index != null && lastTap?.let { it.first == index && change.uptimeMillis - it.second < viewConfiguration.doubleTapTimeoutMillis } == true
+                                lastTap = if(tapped && index != null && !double) index to change.uptimeMillis else null
+                                update("up", change.position, dragging, double)
+                                if(double) selected = null
+                                break
+                            }
+                            if(change.position != change.previousPosition) { change.consume(); update("move", change.position, dragging) }
+                        } while(true)
+                    } finally {
+                        if(!released) update("cancel", down.position, dragging)
+                    }
                 }
-                fun update(p: Offset, index: Int?) = host.effect(obj("op" to "curve_point", "layer" to layer, "key" to current.getString("key"), "index" to index, "point" to point(p), "remove" to false))
-                update(down.position, index)
-                // A new point is inserted in sorted order by Rust. Its insertion
-                // index follows that order; the renderer receives every move.
-                val dragging = index ?: (0 until points.length()).count { points.getJSONArray(it).getDouble(0) < down.position.x / size.width }
-                selected = dragging
-                do {
-                    val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                    if(!change.pressed) break
-                    if(change.position != change.previousPosition) { change.consume(); update(change.position, dragging) }
-                } while(true)
+            }) {
+            for(i in 1..3) {
+                drawLine(colors.text.copy(alpha=.2f),Offset(size.width*i/4,0f),Offset(size.width*i/4,size.height))
+                drawLine(colors.text.copy(alpha=.2f),Offset(0f,size.height*i/4),Offset(size.width,size.height*i/4))
             }
-        }) {
-        for(i in 1..3) {
-            drawLine(colors.text.copy(alpha=.2f),Offset(size.width*i/4,0f),Offset(size.width*i/4,size.height))
-            drawLine(colors.text.copy(alpha=.2f),Offset(0f,size.height*i/4),Offset(size.width,size.height*i/4))
+            curveWhite?.let{white->drawLine(colors.text,Offset(size.width*white,0f),Offset(size.width*white,size.height),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)));drawLine(colors.text,Offset(0f,size.height*(1-white)),Offset(size.width,size.height*(1-white)),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)))}
+            val path = Path()
+            control.getJSONArray("plot").values().forEachIndexed { i, raw ->
+                val p = raw as JSONArray; val x = p.getDouble(0).toFloat()*size.width; val y = (1-p.getDouble(1).toFloat())*size.height
+                if(i==0)path.moveTo(x,y) else path.lineTo(x,y)
+            }
+            drawPath(path, colors.text, style=Stroke(1.5.dp.toPx()))
+            control.getJSONObject("value").getJSONArray("value").values().forEachIndexed { i, raw ->
+                val p=raw as JSONArray;drawCircle(colors.text,(if(selected==i)5f else 3.5f).dp.toPx(),Offset(p.getDouble(0).toFloat()*size.width,(1-p.getDouble(1).toFloat())*size.height))
+            }
         }
-        curveMax?.let{peak->val white=1f/peak;drawLine(colors.text,Offset(size.width*white,0f),Offset(size.width*white,size.height),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)));drawLine(colors.text,Offset(0f,size.height*(1-white)),Offset(size.width,size.height*(1-white)),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)))}
-        val path = Path()
-        control.getJSONArray("plot").values().forEachIndexed { i, raw ->
-            val p = raw as JSONArray; val x = p.getDouble(0).toFloat()*size.width; val y = (1-p.getDouble(1).toFloat())*size.height
-            if(i==0)path.moveTo(x,y) else path.lineTo(x,y)
-        }
-        drawPath(path, colors.text, style=Stroke(1.5.dp.toPx()))
-        control.getJSONObject("value").getJSONArray("value").values().forEachIndexed { i, raw ->
-            val p=raw as JSONArray;drawCircle(colors.text,(if(selected==i)5f else 3.5f).dp.toPx(),Offset(p.getDouble(0).toFloat()*size.width,(1-p.getDouble(1).toFloat())*size.height))
-        }
+        if(control.optBoolean("modified")) Box(Modifier.align(Alignment.BottomEnd).padding(2.dp).size(32.dp).testTag("curve-reset")
+            .clickable(enabled = enabled) { selected = null; lastTap = null; host.effect(obj("op" to "reset", "layer" to layer, "key" to key)) },
+            contentAlignment = Alignment.Center) { SharedIcon("reset", "Reset curve", tint = colors.text.copy(alpha = .7f)) }
     }
     curveMax?.let{Text("SDR white · 0 EV; range 0–${it.toInt()} (+${kotlin.math.log2(it).toInt()} EV)",style=MaterialTheme.typography.labelSmall)}
-    val count = control.getJSONObject("value").getJSONArray("value").length()
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        TextButton(enabled = enabled && selected != null && selected!! > 0 && selected!! < count - 1,
-            onClick = {
-                host.effect(obj("op" to "curve_point", "layer" to layer, "key" to key, "index" to selected,
-                    "point" to JSONArray(listOf(0, 0)), "remove" to true))
-                selected = null
-            }) { Text("Remove point") }
-        TextButton(enabled = enabled, onClick = {
-            selected = null
-            host.effect(obj("op" to "reset", "layer" to layer, "key" to key))
-        }) { Text("Reset") }
-    }
 }
 
 @Composable internal fun RendererStatsPanel(host: CanvasHost) {

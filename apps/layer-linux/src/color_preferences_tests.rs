@@ -44,7 +44,7 @@ fn preferences(w: &Rc<Workspace>) {
 }
 
 #[test]
-#[ignore = "private Wayland display and hardware GPU"]
+#[ignore = "tools/performance/gtk-raster.sh: in-process GTK file chooser (no-portals) and hardware GPU"]
 fn native_color_preferences_profiles_and_untagged_photo_policy() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.ColorPreferences");

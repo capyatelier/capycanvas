@@ -47,7 +47,7 @@
           {
             "default": {"kind":"choice","value":0},
             "key": "domain",
-            "kind": {"kind":"choice","options":["Encoded RGB","Linear HDR"]},
+            "kind": {"kind":"choice","options":["Encoded RGB","Log HDR"]},
             "label": "Curve space"
           },
           {

@@ -7,19 +7,16 @@ using Windows::Foundation::Point;
 namespace {
 struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     std::shared_ptr<Property> property;
-    StackPanel root,details,coordinates;
-    ContentControl inputGate;
+    StackPanel root;
+    Grid chart;
     ContentControl focus;
     Canvas graph,grid,dots;
     Shapes::Polyline line;
-    Button remove{nullptr};
-    ComboBox pointChoice;
-    Bindings numbers,coordinateBindings;
-    hstring coordinateContext;
-    uint32_t generation=0;
+    Button reset{nullptr};
     std::optional<uint32_t> pointer;
+    std::optional<std::pair<int,uint64_t>> lastTap;
     Point press{},start{};
-    int selected=0,count=0;
+    int selected=0,pressed=-1;
     hstring drawn;
     A points()const{return array(object(property->model(),L"value"),L"value");}
     A point()const{auto p=points();return p.Size()?p.GetArrayAt(std::clamp(selected,0,int(p.Size())-1)):values({0,0});}
@@ -38,20 +35,9 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         pointer.reset();change(selected,{},false,L"cancel");graph.ReleasePointerCaptures();
     }
     ~CurveEditor(){cancel();}
-    void add(){
-        auto p=points();if(p.Size()<2||p.Size()>=32)return;
-        double gap=0,x=0;int at=1;
-        for(uint32_t i=1;i<p.Size();i++){double a=p.GetArrayAt(i-1).GetNumberAt(0),b=p.GetArrayAt(i).GetNumberAt(0);
-            if(b-a>gap){gap=b-a;x=(a+b)/2;at=i;}}
-        // Place the new handle on the sampled curve supplied by Rust.
-        auto plot=array(property->model(),L"plot");double y=x;
-        for(uint32_t i=1;i<plot.Size();i++){auto a=plot.GetArrayAt(i-1),b=plot.GetArrayAt(i);
-            if(x<=b.GetNumberAt(0)){double t=(x-a.GetNumberAt(0))/(b.GetNumberAt(0)-a.GetNumberAt(0));y=a.GetNumberAt(1)*(1-t)+b.GetNumberAt(1)*t;break;}}
-        selected=at;change(-1,{float(x),float(y)});
-    }
     void erase(){auto p=points();if(selected>0&&selected+1<int(p.Size())){int old=selected--;change(old,{},true);}}
     void init(){
-        auto data=property->data;auto weak=weak_from_this();root.Spacing(6);details.Spacing(6);details.Visibility(Visibility::Collapsed);
+        auto data=property->data;auto weak=weak_from_this();root.Spacing(6);
         graph.Background(data->brush(L"input"));graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
         grid.IsHitTestVisible(false);line.IsHitTestVisible(false);dots.IsHitTestVisible(false);
         line.Stroke(data->brush(L"text"));line.StrokeThickness(1.5);
@@ -59,7 +45,12 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         focus.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetName(focus,str(property->model(),L"label")+L" curve");
         AutomationProperties::SetAutomationId(focus,property->id()+L"-curve");
-        root.Children().Append(focus);
+        reset=button(data,L"Reset curve",[weak]{if(auto self=weak.lock()){self->selected=0;self->lastTap.reset();self->cancel();self->property->reset();self->refresh();}});
+        reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"undo",data->theme()));
+        reset.HorizontalAlignment(HorizontalAlignment::Right);reset.VerticalAlignment(VerticalAlignment::Bottom);reset.Visibility(Visibility::Collapsed);
+        ToolTipService::SetToolTip(reset,box_value(AutomationProperties::GetName(reset)));
+        AutomationProperties::SetAutomationId(reset,property->id()+L"-reset");
+        chart.Children().Append(focus);chart.Children().Append(reset);root.Children().Append(chart);
         graph.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
             if(self->graph.Height()!=e.NewSize().Width)self->graph.Height(e.NewSize().Width);self->refresh();
         }});
@@ -77,7 +68,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             if(index<0&&points.Size()>=32)return;
             if(!self->graph.CapturePointer(e.Pointer()))return;
             self->pointer=raw.PointerId();self->focus.Focus(FocusState::Programmatic);
-            self->selected=index;
+            self->selected=index;self->pressed=index;
             if(index<0){self->selected=0;for(auto p:points)if(p.GetArray().GetNumberAt(0)<at.X)self->selected++;}
             self->press=at;self->start=at;
             // Preserve the grab offset, including a click with no movement.
@@ -88,7 +79,12 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             self->change(self->selected,self->dragged(e.GetCurrentPoint(self->graph).Position()),false,L"move");e.Handled(true);
         }});
         graph.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            self->change(self->selected,self->dragged(e.GetCurrentPoint(self->graph).Position()),false,L"up");
+            auto raw=e.GetCurrentPoint(self->graph);auto at=self->position(raw.Position());
+            bool tapped=self->pressed>=0&&std::hypot((at.X-self->press.X)*self->graph.ActualWidth(),(at.Y-self->press.Y)*self->graph.ActualHeight())<4;
+            bool twice=tapped&&self->lastTap&&self->lastTap->first==self->pressed&&raw.Timestamp()-self->lastTap->second<uint64_t(GetDoubleClickTime())*1000;
+            self->lastTap.reset();if(tapped&&!twice)self->lastTap=std::pair{self->pressed,raw.Timestamp()};
+            int index=self->selected;if(twice&&index>0&&index+1<int(self->points().Size()))self->selected=index-1;
+            self->change(index,self->dragged(raw.Position()),twice,L"up");
             self->pointer.reset();self->graph.ReleasePointerCaptures();e.Handled(true);
         }});
         graph.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
@@ -111,50 +107,14 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             }
             self->change(self->selected,at);e.Handled(true);
         }});
-        StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(6);
-        auto add=button(data,L"Add point",[weak]{if(auto self=weak.lock())self->add();});
-        remove=button(data,L"Remove point",[weak]{if(auto self=weak.lock())self->erase();});
-        auto reset=button(data,L"Reset curve",[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->cancel();self->property->reset();self->refresh();}});
-        auto edit=button(data,L"Point values",[weak]{if(auto self=weak.lock())self->details.Visibility(self->details.Visibility()==Visibility::Visible?Visibility::Collapsed:Visibility::Visible);});
-        int i=0;for(auto pick:{add,remove,reset,edit}){
-            pick.Width(28);pick.Height(28);pick.Content(icon(std::array<hstring,4>{L"plus",L"minus",L"undo",L"properties"}[i],data->theme()));
-            ToolTipService::SetToolTip(pick,box_value(AutomationProperties::GetName(pick)));
-            AutomationProperties::SetAutomationId(pick,property->id()+L"-"+std::array<hstring,4>{L"add",L"remove",L"reset",L"values"}[i++]);actions.Children().Append(pick);
-        }
-        numbers.emplace_back([weak,add]{if(auto self=weak.lock())add.IsEnabled(self->points().Size()<32);});
-        root.Children().Append(actions);
-        pointChoice.MinWidth(0);pointChoice.MinHeight(32);pointChoice.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(pointChoice,L"Curve point");AutomationProperties::SetAutomationId(pointChoice,property->id()+L"-point");
-        pointChoice.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->property->data->updating&&self->pointChoice.SelectedIndex()>=0){
-            self->selected=self->pointChoice.SelectedIndex();self->refresh();
-        }});
-        details.Children().Append(pointChoice);
-        coordinates.Spacing(6);details.Children().Append(coordinates);root.Children().Append(details);
-        inputGate.IsTabStop(false);inputGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-    }
-    void rebuildCoordinates(){
-        coordinateBindings.clear();coordinates.Children().Clear();auto weak=weak_from_this();auto data=property->data;
-        for(int axis=0;axis<2;axis++){
-            auto field=number(data,axis?L"Output":L"Input",object(data->catalog,L"opacity"),
-                [weak,axis]{if(auto self=weak.lock())return self->point().GetNumberAt(axis);return 0.;},
-                [weak,axis,expected=coordinateContext](double v){if(auto self=weak.lock();self&&self->coordinateContext==expected){
-                    auto p=self->point();Point at{float(p.GetNumberAt(0)),float(p.GetNumberAt(1))};if(axis)at.Y=float(v);else at.X=float(v);self->change(self->selected,at);
-                }},coordinateBindings,nullptr,false,property->id()+(axis?L"-y":L"-x"));
-            if(!axis){inputGate.Content(field);coordinates.Children().Append(inputGate);}else coordinates.Children().Append(field);
-        }
     }
     void refresh(){
-        auto data=property->data;Updating updating(data);auto p=points();if(p.Size()<2)return;
+        auto data=property->data;auto p=points();if(p.Size()<2)return;
         // A submitted insertion can be ahead of its snapshot; preserve the
         // captured index until the owner acknowledges the new point.
         if(!pointer)selected=std::clamp(selected,0,int(p.Size())-1);
-        if(count!=int(p.Size())){count=p.Size();pointChoice.Items().Clear();for(int i=0;i<count;i++)pointChoice.Items().Append(box_value(L"Point "+to_hstring(i+1)));}
-        pointChoice.SelectedIndex(std::clamp(selected,0,count-1));remove.IsEnabled(selected>0&&selected+1<count);
-        auto nextContext=to_hstring(selected)+L"/"+to_hstring(count)+L"/"+to_hstring(generation);
-        if(nextContext!=coordinateContext){coordinateContext=nextContext;rebuildCoordinates();}
-        inputGate.IsEnabled(selected>0&&selected+1<count);
-        for(auto const& update:numbers)update();for(auto const& update:coordinateBindings)update();
-        auto model=property->model();double side=graph.ActualWidth();if(side<=0)return;
+        auto model=property->model();reset.Visibility(flag(model,L"modified")?Visibility::Visible:Visibility::Collapsed);
+        double side=graph.ActualWidth();if(side<=0)return;
         auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(selected)}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){

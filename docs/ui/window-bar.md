@@ -65,13 +65,29 @@ designer or opening shortcut.
   is one ordinary workspace-history change, separate from drawing history.
   Drag motion itself never mutates the session or saves intermediate layouts.
 
-Tool tiles have 6px gaps; drawer origins have square bottom corners while open.
+Adjacent icon controls (tools, Main Menu, Settings, Full Screen and a region's
+More button) join one bar, inset 1px so a Small bar matches the workspace
+switcher's 34px. Tiles inside a bar abut, keep whole-tile targets and fill the
+bar's full height with toolbar-style feedback. Capy gets its own single-tile
+bar. Multiple drawing tabs form one full-height strip in the same way. Every
+title-bar surface (bars, menu labels, the tab strip, the document title, clock,
+battery, compact menus, the native close button and the Zen Capy) uses the
+canvas surround at 75% opacity in both themes, so artwork behind it stays
+partly visible; the workspace switcher's well is the inactive-tab grey at 75%.
+Hover and press add overlays to that surface. The selected workspace and tool
+use the panels' opaque selection blue, and the selected drawing tab the opaque
+panel grey. Capy, menu labels, the switcher, the document title or
+tabs, clock, battery and Space stay separate with 6px gaps, and customization
+shows every item separately. Drawer origins
+fill their whole tile with square bottom corners while open.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;
 native keyboard-focus indication remains independent of both states. The same
 distinction applies to toolbar tiles, including those inside another drawer.
-Text menus retain their original 36px outer button height and 6px padding,
-centered in larger bars. The workspace selector keeps its pill background.
+Menu labels use the workspace selector's capsule: one continuous 34px bar with
+a 4px inset and 26px capsule items, centered in larger bars. Menu labels use
+8px side padding so the full menu still fits beside a centered title in a
+1200px-wide window.
 Native window-control targets grow equally in both axes, with 6px outer clearance.
 
 At narrow widths, each region overflows whole items into a More menu. Tools

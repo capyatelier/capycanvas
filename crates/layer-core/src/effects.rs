@@ -291,6 +291,15 @@ impl EffectInstance {
             .position(|p| &*p.key == key)
             .map(|i| &self.values[i])
     }
+    pub fn choice(&self, key: &str) -> Option<&str> {
+        let i = self.program.parameters.iter().position(|p| &*p.key == key)?;
+        match (&self.program.parameters[i].kind, &self.values[i]) {
+            (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
+                options.get(*v as usize).map(|o| &**o)
+            }
+            _ => None,
+        }
+    }
     pub fn new(program: Arc<EffectProgram>) -> Self {
         Self {
             values: program
@@ -630,6 +639,16 @@ fn gradient_parameters(
         data[2 + i * 2] = [color[3], 0., 0., 0.];
     }
     Ok(data)
+}
+
+pub const LOG_CURVE_FLOOR_STOPS: f32 = -8.;
+
+pub fn hdr_curve_white(space: &str, stops: f32) -> Option<f32> {
+    match space {
+        "Log HDR" => Some(-LOG_CURVE_FLOOR_STOPS / (stops - LOG_CURVE_FLOOR_STOPS)),
+        "Linear HDR" => Some(stops.exp2().recip()),
+        _ => None,
+    }
 }
 
 /// Shape-preserving cubic Hermite interpolation in [0,1], with linear endpoint

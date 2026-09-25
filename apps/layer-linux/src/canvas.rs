@@ -101,13 +101,8 @@ impl GpuCanvas {
         }
         session.renderer_mut().finish_startup_cache()?;
         session.dispatch(layer_ui::UiAction::RestoreSettings { settings })?;
-        session.dispatch(layer_ui::UiAction::SystemThemeChanged {
-            theme: if adw::StyleManager::default().is_dark() {
-                layer_ui::Theme::Dark
-            } else {
-                layer_ui::Theme::Light
-            },
-        })?;
+        let (theme, accent) = crate::workspace::system_appearance();
+        session.dispatch(layer_ui::UiAction::SystemThemeChanged { theme, accent })?;
         Ok(Self {
             session,
             cursor: CanvasCursor::default(),

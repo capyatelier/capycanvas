@@ -27,8 +27,8 @@
     },
     {
       "name": "Print proofing",
-      "commands": ["soft_proof_setup", "soft_proof", "gamut_warning"],
-      "checks": ["native/src/proof_tests.rs", "tests/proof-owner.swift", "Shared/Editor/ProofForm.swift", "../../crates/layer-ui/src/session_color_tests.rs"],
+      "commands": ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
+      "checks": ["native/src/proof_tests.rs", "tests/proof-owner.swift", "Shared/Editor/ProofForm.swift", "../../crates/layer-ui/src/session_color_tests.rs", "native/src/hdr_tests.rs", "Shared/Tests/HDRColorChecks.swift"],
       "ios": "partial: the native form, cancellable worker, exact ICC preservation and viewport presentation consume shared proof policy. Native bridge and both-policy Swift/Metal checks pass RGB/CMYK preparation, cancellation, stale rejection, exact artwork/ICC preservation, history, save/reopen and scene pause/resume. Native Mac Apply and six physical UIKit form captures plus iPad preparation/presentation/history pass. Physical touch/ICC-provider delivery and print/display accuracy remain open.",
       "mac": "partial: the native form, cancellable worker, exact ICC preservation and viewport presentation consume shared proof policy. Native bridge and both-policy Swift/Metal checks pass RGB/CMYK preparation, cancellation, stale rejection, exact artwork/ICC preservation, history, save/reopen and scene pause/resume. Native Mac Apply and six physical UIKit form captures plus iPad preparation/presentation/history pass. Physical touch/ICC-provider delivery and print/display accuracy remain open."
     },
@@ -48,7 +48,7 @@
     },
     {
       "name": "Drawing tools",
-      "commands": ["pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify"],
+      "commands": ["pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify", "drawing_brush", "sculpt"],
       "checks": ["native/src/workspace_tests.rs", "native/src/input_tests.rs", "native/src/tests.rs", "tests/canvas-hover.swift", "Shared/Tests/CanvasToolChecks.swift"],
       "ios": "partial: native selection, scrolling and size editing for all thirty painting/erasing presets including the twelve contact brushes, earlier Blend/Liquify control workflows, grouped catalog and synthetic pixel/input oracles; current catalog reconciliation maps all 34 presets (30 painting/erasing plus four Blend/Liquify) to retained passing native control workflows, with complete-catalog bridge setting edits covering the 317 brush-setting routes across 19 numeric IDs on both policies; supplied UIKit hover states verify accepted native exit/cancellation, active-contact exclusion and fresh-hover recovery; representative physical Pencil drawing, pressure variation, Undo/Redo and palm rejection pass by user report; the captured prediction stall is fixed by bounding unresolved sensor preview retention, with smooth physical Pencil drawing confirmed with iPadOS Prediction off and on; additional sensor modes and hover/interruption remain separate; actual numeric workflow also passes valid/invalid Brush size draft retirement on preset switches and destination-brush preservation; mounted components cover size/opacity late-callback rejection and ordinary draft retention on both Apple policies",
       "mac": "partial: real mouse strokes/erasure for all thirty painting/erasing presets including the twelve contact brushes, earlier contrasting-edge Blend/Liquify workflows, sampled artwork and one-step Undo/Redo, native selection, scrolling and size editing; current catalog reconciliation maps all 34 presets to retained passing native artwork/control workflows, with complete-catalog bridge setting edits covering the 317 brush-setting routes across 19 numeric IDs on both policies; representative physical XP-Pen 14-inch Ultra drawing, pressure variation and Undo/Redo pass by user report; additional sensor modes and interrupted contacts remain separate; actual numeric workflow also passes valid/invalid Brush size draft retirement on preset switches and destination-brush preservation; mounted components cover size/opacity late-callback rejection and ordinary draft retention on both Apple policies"
@@ -57,8 +57,8 @@
       "name": "Selection, fill, and shapes",
       "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
       "checks": ["native/src/tests.rs", "native/src/region_tests.rs", "tests/canvas-native-input.swift", "tests/property-slider-input.swift", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift", "tests/canvas-modifiers.swift"],
-      "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; UIKit native gap-closing, positive/negative expansion and smoothing controls pass 14 committed edits with published-value retention after switching tools; physical Pencil artwork and applicable native shape modifiers remain; shared Lasso/Auto select replace selection and expose no add/subtract modifier mode; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover all figure shape/paint combinations with/without Shift, all four gradients, cancellation and exact decoded PNG Undo/Redo; physical sensor/key delivery and visible editor hit targets remain separate",
-      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and assembled AppKit editor freehand selection/fill through verified canvas hit targets, Escape/focus/tool cancellation, shared lifecycle interruption/renderer restart without mouseUp, stale-movement exclusion, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; native Mac fields/scrolling/canvas clicks and PNG exports verify Fill/Auto select expansion, contraction, smoothing and gap-closing Fill with exact artwork/Undo and softened-result Redo; AppKit mouse/flagsChanged delivery verifies line, rectangle and ellipse constraints with Shift held, stationary press/release after movement, fresh unmodified contact, captured presented previews before mouse-up and exact PNG Undo/Redo on both Apple policies; OS-delivered mouse freehand selection/fill, cancellation and exact PNG history also pass on both policies; physical pen refinement remains; shared Lasso/Auto select expose replacement rather than modifier combination modes; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
+      "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; UIKit native gap-closing, positive/negative expansion and smoothing controls pass 14 committed edits with published-value retention after switching tools; physical Pencil artwork and applicable native shape modifiers remain; Lasso/Auto select share the New/Add/Subtract/Intersect modes (see Selection tools and masks); AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover all figure shape/paint combinations with/without Shift, all four gradients, cancellation and exact decoded PNG Undo/Redo; physical sensor/key delivery and visible editor hit targets remain separate",
+      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and assembled AppKit editor freehand selection/fill through verified canvas hit targets, Escape/focus/tool cancellation, shared lifecycle interruption/renderer restart without mouseUp, stale-movement exclusion, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; native Mac fields/scrolling/canvas clicks and PNG exports verify Fill/Auto select expansion, contraction, smoothing and gap-closing Fill with exact artwork/Undo and softened-result Redo; AppKit mouse/flagsChanged delivery verifies line, rectangle and ellipse constraints with Shift held, stationary press/release after movement, fresh unmodified contact, captured presented previews before mouse-up and exact PNG Undo/Redo on both Apple policies; OS-delivered mouse freehand selection/fill, cancellation and exact PNG history also pass on both policies; physical pen refinement remains; Lasso/Auto select share the New/Add/Subtract/Intersect modes (see Selection tools and masks); AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
     },
     {
       "name": "Object transforms",
@@ -100,8 +100,8 @@
       "name": "Pixel selection actions",
       "commands": ["fill_selection", "select_all", "deselect", "invert_selection"],
       "checks": ["native/src/tests.rs", "tests/canvas-native-input.swift", "Shared/Tests/SelectionTransformChecks.swift", "Shared/Tests/RegionSelectionChecks.swift"],
-      "ios": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; native freehand lasso delivery remains; shared pixel selection exposes no add/subtract modifier mode",
-      "mac": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; assembled AppKit editor freehand lasso through verified canvas hit targets, cancellation recovery including shared lifecycle interruption/renderer restart without mouseUp, and exact PNG history; OS-delivered mouse freehand selection/fill and exact PNG history also pass on both policies; physical UIKit/Pencil delivery remains; shared pixel selection exposes no add/subtract modifier mode"
+      "ios": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; native freehand lasso delivery remains; combination modes are covered by Selection tools and masks",
+      "mac": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; assembled AppKit editor freehand lasso through verified canvas hit targets, cancellation recovery including shared lifecycle interruption/renderer restart without mouseUp, and exact PNG history; OS-delivered mouse freehand selection/fill and exact PNG history also pass on both policies; physical UIKit/Pencil delivery remains; combination modes are covered by Selection tools and masks"
     },
     {
       "name": "Workspace and Zen",
@@ -134,8 +134,8 @@
     },
     {
       "name": "Native windows",
-      "commands": ["fullscreen", "new_window"],
-      "checks": ["tests/window-presentation.swift", "Shared/Tests/WindowChecks.swift"],
+      "commands": ["fullscreen", "new_window", "drawings"],
+      "checks": ["tests/window-presentation.swift", "Shared/Tests/WindowChecks.swift", "native/src/document_tabs_tests.rs", "Shared/Tests/DrawingTabChecks.swift"],
       "ios": "partial: independent simulator windows and user-confirmed physical iPad drawings, Undo history and continued input; selecting an occupied workspace focuses its owning window; native iPadOS window control explicitly accepted for full-screen parity, with the unsupported in-app toggle unavailable; physical scene/window lifecycle checks remain",
       "mac": "partial: independent windows, last-window close/reopen through File and Command-N with a fresh scene and formatted controls, direct full-screen request/observation/failure checks and actual light Paint full-screen canvas, mouse stroke/history and original-window restoration; complete preset/display/interruption matrix remains"
     },
@@ -145,26 +145,19 @@
       "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift", "Shared/Tests/MenuSettingsChecks.swift", "tests/application-links.swift", "tests/settings-links.swift"],
       "ios": "partial: simulator About information, search/close and real Safari handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; native AppKit Settings link clicks on both shared policies verify inline rejection and successful retry through supplied OpenURLAction results; physical UIKit and alternate-handler OS delivery remain separate",
       "mac": "partial: public OS app name, About information, search/close and real default-browser handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; native AppKit Settings link clicks on both shared policies verify inline rejection and successful retry through supplied OpenURLAction results; alternate-handler OS delivery remains separate"
+    },
+    {
+      "name": "Selection tools and masks",
+      "commands": ["select", "rectangle_select", "ellipse_select", "polygon_select", "color_select", "selection_brush", "selection_brush_pressure", "quick_mask", "return_to_artwork", "new_selection_layer", "save_selection_layer", "reselect", "selection_outline", "mask_overlay", "mask_overlay_protected", "reset_mask_colors", "swap_mask_colors", "fill_selection_mask", "clear_selection_mask", "selection_new", "selection_add", "selection_subtract", "selection_intersect", "selection_antialias", "selection_constrain_angles", "selection_fixed_ratio", "selection_fixed_size", "selection_from_center", "complete_selection", "cancel_selection", "selection_visible", "selection_editing", "selection_reference"],
+      "checks": ["native/src/selection_tests.rs", "Shared/Tests/SelectionMaskChecks.swift", "../../crates/layer-ui/src/selection_tests.rs", "../../crates/layer-ui/src/painted_selection_tests.rs"],
+      "ios": "partial: shared selection tools, Paint selection, Quick Mask, Selection Layers, Grow/Shrink and mask properties are available; both-policy bridge checks drive real pointer/key records through Metal for modifier latching, one-step history, Grow/Shrink apply/cancel, Quick Mask rows/thumbnails, independent mask colors and saved-layer load; the native Tool Set, connected mode group and Layers rows render on the physical iPad; the XCUITest journey awaits UI automation on the device and physical Pencil coverage remains",
+      "mac": "partial: same shared behavior and both-policy bridge checks; EditorLaunchTests/testSelectionMasks passes the Photo toolbar tools, connected mode group, Add combination, Selection Actions Grow dialog, Quick Mask row/thumbnail/Load and New Selection Layer through real AppKit input; Command-click thumbnail loading and physical tablet delivery remain manual checks"
     }
   ],
   "workspace_commands": {
-    "commands": [
-      "manage",
-      "new",
-      "reset_brushes",
-      "reset_layout",
-      "layout_history",
-      "switch",
-      "manage_toolbars",
-      "save_toolbar",
-      "new_toolbar"
-    ],
+    "commands": ["manage", "new", "reset_brushes", "reset_layout", "layout_history", "switch", "manage_toolbars", "save_toolbar", "new_toolbar"],
     "handler": "Shared/Editor/WorkspaceManager.swift",
-    "checks": [
-      "tests/workspace-manager.swift",
-      "tests/workspace-menu-actions.swift",
-      "Shared/Tests/WorkspaceLibraryChecks.swift"
-    ],
+    "checks": ["tests/workspace-manager.swift", "tests/workspace-menu-actions.swift", "Shared/Tests/WorkspaceLibraryChecks.swift"],
     "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and physical lifecycle validation remains",
     "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and display/lifecycle validation remains"
   },
@@ -182,7 +175,11 @@
     "adjustments": "Shared/Editor/AdjustmentPanel.swift",
     "properties": "Shared/Editor/PropertyControls.swift",
     "navigator": "Shared/Editor/NavigatorPanel.swift",
-    "stats": "Shared/Bridge/RendererStats.swift"
+    "stats": "Shared/Bridge/RendererStats.swift",
+    "brush_sets": "Shared/Editor/ToolControls.swift",
+    "sculpt_sets": "Shared/Editor/ToolControls.swift",
+    "tools": "Shared/Editor/ToolControls.swift",
+    "filter_types": "Shared/Editor/AdjustmentPanel.swift"
   },
   "property_kinds": {
     "number": "Shared/Editor/PropertyControls.swift",

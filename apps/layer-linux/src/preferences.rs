@@ -19,6 +19,7 @@ enum Field {
     Text(adw::ActionRow, gtk::Entry, gtk::EventControllerFocus),
     Choice(adw::ComboRow),
     ImageChoice(gtk::ListBoxRow, crate::image_selector::ImageSelector),
+    Swatches(gtk::ListBoxRow, Rc<crate::swatch_selector::SwatchSelector>),
     Spin(adw::SpinRow),
     Number(gtk::ListBoxRow, crate::number_control::NumberControl),
     Switch(adw::SwitchRow),
@@ -30,6 +31,7 @@ impl Field {
             Self::Text(w, _, _) => w.upcast_ref(),
             Self::Choice(w) => w.upcast_ref(),
             Self::ImageChoice(w, _) => w.upcast_ref(),
+            Self::Swatches(w, _) => w.upcast_ref(),
             Self::Number(w, _) => w.upcast_ref(),
             Self::Spin(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
@@ -49,6 +51,16 @@ impl Field {
             (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, .. }) => {
                 w.set_selected(*selected)
             }
+            (
+                Self::Swatches(_, w),
+                PreferenceKind::Swatches {
+                    swatches,
+                    selected,
+                    value,
+                    custom,
+                    ..
+                },
+            ) => w.update(swatches, *selected, value, custom),
             (Self::Number(_, w), PreferenceKind::Number { value, .. }) => {
                 w.set_value(*value as f64)
             }
@@ -143,6 +155,46 @@ fn commit_text(w: &Rc<Workspace>, id: PreferenceId, entry: &gtk::Entry) {
     {
         entry.set_text(&value);
     }
+}
+
+fn commit_swatch(w: &Rc<Workspace>, id: PreferenceId, selector: &crate::swatch_selector::SwatchSelector) {
+    send(
+        w,
+        PreferenceAction::Edit {
+            id,
+            value: PreferenceValue::Text(selector.entry.text().into()),
+        },
+    );
+    if w.gpu
+        .borrow()
+        .as_ref()
+        .is_some_and(|g| g.session.state().preferences.error.is_none())
+    {
+        selector.entry.set_text(&selector.custom());
+    }
+}
+
+fn titled_row(row: &PreferenceRow) -> (gtk::ListBoxRow, gtk::Box) {
+    let native_row = gtk::ListBoxRow::new();
+    native_row.set_activatable(false);
+    native_row.add_css_class("image-preference");
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let title = gtk::Label::builder().label(&row.title).xalign(0.0).build();
+    text.append(&title);
+    if !row.description.is_empty() {
+        let description = gtk::Label::builder()
+            .label(&row.description)
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        description.add_css_class("subtitle");
+        description.add_css_class("dim-label");
+        text.append(&description);
+    }
+    body.append(&text);
+    native_row.set_child(Some(&body));
+    (native_row, body)
 }
 
 fn install_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId) {
@@ -684,24 +736,7 @@ impl Preferences {
                             presentation: ChoicePresentation::ImageTiles { columns },
                             ..
                         } => {
-                            let native_row = gtk::ListBoxRow::new();
-                            native_row.set_activatable(false);
-                            native_row.add_css_class("image-preference");
-                            let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-                            let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
-                            let title = gtk::Label::builder().label(&row.title).xalign(0.0).build();
-                            text.append(&title);
-                            if !row.description.is_empty() {
-                                let description = gtk::Label::builder()
-                                    .label(&row.description)
-                                    .xalign(0.0)
-                                    .wrap(true)
-                                    .build();
-                                description.add_css_class("subtitle");
-                                description.add_css_class("dim-label");
-                                text.append(&description);
-                            }
-                            body.append(&text);
+                            let (native_row, body) = titled_row(row);
                             let selector = crate::image_selector::ImageSelector::new(
                                 options,
                                 icons,
@@ -720,8 +755,65 @@ impl Preferences {
                             );
                             // Center the choices; no import control in this version.
                             body.append(&selector.widget);
-                            native_row.set_child(Some(&body));
                             Field::ImageChoice(native_row, selector)
+                        }
+                        PreferenceKind::Swatches {
+                            swatches,
+                            placeholder,
+                            inline,
+                            ..
+                        } => {
+                            let selector = crate::swatch_selector::SwatchSelector::new(
+                                &w.window.widget_name(),
+                                id.key(),
+                                &row.title,
+                                swatches,
+                                placeholder,
+                                *inline,
+                                glib::clone!(
+                                    #[weak]
+                                    w,
+                                    move |value| send(
+                                        &w,
+                                        PreferenceAction::Edit {
+                                            id,
+                                            value: PreferenceValue::Text(value)
+                                        }
+                                    )
+                                ),
+                            );
+                            let weak = Rc::downgrade(&selector);
+                            selector.entry.connect_activate(glib::clone!(
+                                #[weak]
+                                w,
+                                move |_| {
+                                    if let Some(selector) = weak.upgrade() {
+                                        commit_swatch(&w, id, &selector);
+                                    }
+                                }
+                            ));
+                            let weak = Rc::downgrade(&selector);
+                            selector.focus.connect_leave(glib::clone!(
+                                #[weak]
+                                w,
+                                move |_| {
+                                    if let Some(selector) = weak.upgrade()
+                                        && selector.entry.text().trim() != selector.custom()
+                                    {
+                                        commit_swatch(&w, id, &selector);
+                                    }
+                                }
+                            ));
+                            let native_row = if *inline {
+                                let native_row = text_row(&row.title, &row.description);
+                                native_row.add_suffix(&selector.widget);
+                                native_row.upcast()
+                            } else {
+                                let (native_row, body) = titled_row(row);
+                                body.append(&selector.widget);
+                                native_row
+                            };
+                            Field::Swatches(native_row, selector)
                         }
                         PreferenceKind::Choice { options, icons, .. } => {
                             let model = gtk::StringList::new(

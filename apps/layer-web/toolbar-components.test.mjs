@@ -124,6 +124,8 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   }
   await capture('photo-options');
   await invoke('rectangle_select');
+  const segments = await rect('[data-toolbar-choice=selection-mode]'), dropdown = await rect('[data-toolbar-choice=variant] > button');
+  assert.deepEqual([segments.y, segments.height], [dropdown.y, dropdown.height], 'segments match the dropdown height');
   for (const [i, device] of ['mouse', 'touch', 'pen'].entries()) {
     await click(`[data-toolbar-segment=selection-mode-${i + 1}]`, device);
     assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(['selection_add', 'selection_subtract', 'selection_intersect'][i])}).selected`));
@@ -209,6 +211,10 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, re
     assert.ok(await evaluate(`(()=>{const p=document.querySelector('${preview}'),c=p.querySelector('canvas'),bg=getComputedStyle(p).backgroundColor.match(/[\\d.]+/g).slice(0,3).map(Number),ctx=c.getContext('2d'),pixel=y=>ctx.getImageData(c.width>>1,y,1,1).data,distance=y=>bg.reduce((n,v,i)=>n+Math.abs(v-pixel(y)[i]),0);return distance(4)<distance(20)&&distance(20)<distance(48)})()`), `${theme}: header fades gradually from the top using the current background`);
     await capture(`size-edge-fill-${theme}`);
   }
+  await send({type:'set_tool_setting',id:'size',value:3});
+  const fade = await evaluate(`(()=>{const p=document.querySelector('${preview}'),style=p.closest('[data-toolbar-component]').dataset.tileStyle,g=layerApp.app.toolbar_ui({type:'slider_preview',control:{kind:'brush_size_slider'},style,value:3,length:0,extent:1}),c=p.querySelector('canvas'),r=c.width/c.getBoundingClientRect().width,ctx=c.getContext('2d'),alpha=y=>ctx.getImageData(c.width>>1,Math.round(y*r),1,1).data[3];return {style,length:g.header_fade,opacity:g.header_fade_opacity,alpha:[0,g.header_fade/2,g.header_fade+4].map(alpha)}})()`);
+  assert.equal(fade.style, 'medium'); assert.equal(fade.length, 65);
+  assert.ok(Math.abs(fade.alpha[0]-255*fade.opacity)<8&&Math.abs(fade.alpha[1]-255*fade.opacity/2)<8&&fade.alpha[2]===0, `header fade follows the shared layout: ${JSON.stringify(fade)}`);
   await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');
   const alpha = () => evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.reduce((n,v,i)=>n+(i%4===3?v:0),0)})()`);
   await send({type:'set_tool_setting',id:'opacity',value:1}); const full = await alpha();

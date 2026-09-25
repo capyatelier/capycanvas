@@ -474,8 +474,8 @@ workspace IDs are synthetic; the inventory never opens user storage. The
 `--gpu` mode seeds a disposable drawing through shared fill actions so transform
 controls can be enumerated with a real hardware renderer.
 
-The [command review](command-coverage.json) classifies all 63 commands, nine
-workspace service commands, 14 panel control types, six preference kinds and
+The [command review](command-coverage.json) classifies all 114 commands, nine
+workspace service commands, 18 panel control types, six preference kinds and
 six property kinds,
 with Apple handler/check references. The audit detects catalog and availability
 drift, unvisited or unresolved tool choices, and missing control/service reviews:

@@ -70,6 +70,14 @@ impl WorkspacePreset {
         layout
     }
 
+    pub fn legacy_drawers_without_selection_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_selection_layout(platform);
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
+        layout
+    }
+
     /// Exact GTK default before the Sketch picker became a standalone tool.
     pub fn legacy_picker_category_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_without_picker_history_layout(platform);

@@ -19,10 +19,11 @@ component is hidden by a customized workspace. With one drawing, show the origin
 plain title and dimensions at the normal title width, with native window dragging;
 tab styling, the close button, and the dropdown appear only for multiple drawings.
 
-Tab appearance follows GNOME Web's native [AdwTabBar styling](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/src/stylesheet/widgets/_tab-view.scss):
-transparent idle tabs, a 9px rounded selected fill without an accent underline,
-full-tab hover/pressed fills, separators only between adjacent idle tabs, and
-24px circular close controls. Keyboard focus outlines the whole tab; high contrast
+Tabs keep GNOME Web's full-height [AdwTabBar shape](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/src/stylesheet/widgets/_tab-view.scss)
+without an accent underline. Tabs sit 6px apart in one full-height strip on the title
+bar's translucent canvas surround; the selected tab uses the opaque panel
+grey, with full-tab hover/pressed overlays, separators only between adjacent idle tabs, and 24px
+circular close controls. Keyboard focus outlines the whole tab; high contrast
 adds the native inset border. Titles stay centered across the full tab width.
 The application CSS provider follows Adwaita's high-contrast preference, including
 changes while a window is open, so its media query uses the same mode as the theme.

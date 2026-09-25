@@ -21,16 +21,27 @@ fn fx_preserve_luma(c:vec3<f32>,l:f32) -> vec3<f32> {
     if high>1. { v=vec3<f32>(l)+(v-l)*(1.-l)/max(high-l,.000001); }
     return v;
 }
+const FX_LOG_CURVE_FLOOR_STOPS:f32=-8.;
+fn fx_log_curve_toe() -> f32 { return exp2(FX_LOG_CURVE_FLOOR_STOPS)*2.718281828; }
+fn fx_log_curve_encode(v:vec3<f32>,span:f32) -> vec3<f32> {
+    let toe=fx_log_curve_toe();
+    let stops=(log2(max(v,vec3<f32>(toe)))-FX_LOG_CURVE_FLOOR_STOPS)/span;
+    return select(stops,v/(toe*.6931471806*span),v<=vec3<f32>(toe));
+}
+fn fx_log_curve_decode(x:vec3<f32>,span:f32) -> vec3<f32> {
+    let knee=1.442695041/span;
+    return select(exp2(x*span+FX_LOG_CURVE_FLOOR_STOPS),x*fx_log_curve_toe()*.6931471806*span,x<=vec3<f32>(knee));
+}
 fn capy_curves(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     if FX_EXTENDED && fx_parameter(base,0u).y==1. && fx_parameter(base,65u).y==1.
         && fx_parameter(base,130u).y==1. && fx_parameter(base,195u).y==1. {return c;}
     let hdr=fx_parameter(base,260u).x>0.5;
-    let scale=exp2(fx_parameter(base,261u).x);
+    let span=fx_parameter(base,261u).x-FX_LOG_CURVE_FLOOR_STOPS;
     var rgb=fx_rgb(c);
-    if hdr {rgb=fx_unassociate(c)/scale;}
+    if hdr {rgb=fx_log_curve_encode(fx_unassociate(c),span);}
     let channel=vec3<f32>(fx_lut(base,65u,rgb.r).r,fx_lut(base,130u,rgb.g).r,fx_lut(base,195u,rgb.b).r);
     let result=vec3<f32>(fx_lut(base,0u,channel.r).r,fx_lut(base,0u,channel.g).r,fx_lut(base,0u,channel.b).r);
-    if hdr {return vec4(result*scale*c.a,c.a);}
+    if hdr {return vec4(fx_log_curve_decode(result,span)*c.a,c.a);}
     return fx_rgba(result,c.a);
 }
 fn capy_levels(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {

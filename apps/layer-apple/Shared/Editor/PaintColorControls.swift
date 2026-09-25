@@ -14,8 +14,9 @@ struct PaintColorControls: View {
         let intensity: Double?
     }
     private func open() {
-        let colors = store.state["colors"], panel = store.snapshot["color_panel"]
-        let slot = colors["paint_slot"].string == "background" ? "background" : "foreground"
+        let colors = store.displayColors, panel = store.snapshot["color_panel"]
+        let slot = colors["slot"].string
+        guard slot != "transparent" else { return }
         selection = Selection(epoch: store.state["document_file"]["epoch"].uint,
             slot: slot, color: colors[slot], space: colors["rgb_space"].string,
             intensity: panel["hdr"].bool ? panel["intensity"].number : nil)
@@ -31,7 +32,8 @@ struct PaintColorControls: View {
         Button(action: open) {
             if compact { Image(systemName: "square.and.pencil").resizable().scaledToFit().padding(3).frame(maxWidth: .infinity, maxHeight: .infinity) }
             else { Text("Edit Color…") }
-        }.buttonStyle(.plain).accessibilityLabel("Edit Color").accessibilityIdentifier("paint-edit-color")
+        }.buttonStyle(.plain).disabled(store.displayColors["slot"].string == "transparent")
+            .accessibilityLabel("Edit Color").accessibilityIdentifier("paint-edit-color")
             .help("Edit Color…")
             .sheet(item: $selection) { selection in
                 ColorEditor(value: selection.color, documentSpace: selection.space, intensity: selection.intensity,

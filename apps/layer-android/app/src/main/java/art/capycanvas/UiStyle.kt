@@ -75,16 +75,18 @@ import androidx.compose.ui.window.PopupPositionProvider
 internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
     val surround = role("bg")
-    val headerSurface = if (dark) Color.Transparent else surround.copy(alpha = .5f)
+    val headerSurface = surround.copy(alpha = .75f)
     val panel = role("panel")
     val tabs = role("tabbar")
     val sidebar = role("sidebar")
     val input = role("input")
     val text = role("text")
     val secondary = text.copy(alpha = .55f)
-    val accent = Color(0xff3584e4)
+    val accent = role("accent")
+    val accentForeground = role("accent_foreground")
     val sliderFill = lerp(panel, text, .5f)
-    val active = accent.copy(alpha = .22f)
+    val active = role("selection")
+    val headerActive = role("header_selection")
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")
     val divider = text.copy(alpha = .12f)
@@ -229,7 +231,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Box(Modifier.size(16.dp).clip(SquircleShape(4.dp))
             .then(if (checked) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.text.copy(alpha = .35f), SquircleShape(4.dp)))) {
-            if (checked) SharedIcon("check", null, tint = Color.White)
+            if (checked) SharedIcon("check", null, tint = colors.accentForeground)
         }
     }
 }
@@ -317,7 +319,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
                     val active = index == selected
                     val shape = RoundedCornerShape(6.dp)
                     Box(Modifier.size(64.dp).testTag("image-choice-$index").clip(shape)
-                        .background(if (active) colors.accent.copy(alpha = .18f) else colors.text.copy(alpha = .05f))
+                        .background(if (active) colors.active else colors.text.copy(alpha = .05f))
                         .then(if (active) Modifier.border(2.dp, colors.accent, shape) else Modifier)
                         .alpha(if (enabled) 1f else .4f)
                         .selectable(active, enabled = enabled, role = Role.RadioButton) { onSelect(index) },

@@ -39,12 +39,12 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const format = () => app.number_input({ control: field.numeric, value: current, operation: { type: 'format' } });
     function change(value) { send(context, { type: 'set_tool_setting', id: field.id, value }); }
     function position(e) {
-      const b = slider.getBoundingClientRect(), travel = Math.max(1, (vertical ? b.height : b.width) - 10);
-      return Math.max(0, Math.min(1, vertical ? 1 - (e.clientY - b.y - 5) / travel : (e.clientX - b.x - 5) / travel));
+      const b = slider.getBoundingClientRect(), travel = Math.max(1, (vertical ? b.height : b.width) - 12);
+      return Math.max(0, Math.min(1, vertical ? 1 - (e.clientY - b.y - 6) / travel : (e.clientX - b.x - 6) / travel));
     }
     function pick(e, snap) {
       const positionValue = position(e);
-      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control: tile.control, values: model.bookmarks.map(m => m.value), position: positionValue, travel: Math.max(1, (vertical ? slider.clientHeight : slider.clientWidth) - 10) })
+      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control: tile.control, values: model.bookmarks.map(m => m.value), position: positionValue, travel: Math.max(1, (vertical ? slider.clientHeight : slider.clientWidth) - 12) })
         : app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: positionValue } }).value);
     }
     function show() {
@@ -70,8 +70,10 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     function paintPreview() {
       if (!popup || popup !== preview) return;
-      const geometry = app.toolbar_ui({ type: 'slider_preview', control: tile.control, value: current, length: Math.max(...extent), extent: stamp.extent });
-      popup.style.width = popup.style.height = `${geometry.side}px`;
+      const geometry = app.toolbar_ui({ type: 'slider_preview', control: tile.control, style: view.tile_style, value: current, length: Math.max(...extent), extent: stamp.extent });
+      popup.style.width = popup.style.height = `${geometry.side}px`; popup.style.setProperty('--tile-radius', `${geometry.radius}px`);
+      for (const [node, b] of [[caption, geometry.caption], [bookmark, geometry.bookmark]]) Object.assign(node.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.width}px`, height: `${b.height}px` });
+      bookmark.style.setProperty('--preview-icon', `${geometry.icon}px`);
       const a = root.getBoundingClientRect(), side = geometry.side;
       const x = vertical ? (a.right + side + 8 <= innerWidth ? a.right + 8 : a.x - side - 8) : a.x;
       const y = vertical ? a.y + (a.height - side) / 2 : (a.bottom + side + 8 <= innerHeight ? a.bottom + 8 : a.y - side - 8);
@@ -91,7 +93,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       if (geometry.header_fade) {
         const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).backgroundColor;
         fade.addColorStop(0, background); fade.addColorStop(1, 'transparent');
-        ctx.save(); ctx.globalAlpha = .65; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
+        ctx.save(); ctx.globalAlpha = geometry.header_fade_opacity; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
       }
     }
     function update(option) {
@@ -130,8 +132,16 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       slider.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
       const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal' });
       place(cap, capBounds);
-      place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: Math.max(0, trackBounds.height - 4) }
-        : { ...trackBounds, x: trackBounds.x + 2, y: (extent[1] - 28) / 2, width: Math.max(0, trackBounds.width - 4), height: 28 });
+      const along = Math.max(0, (vertical ? trackBounds.height : trackBounds.width) - 4);
+      place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: along }
+        : { ...trackBounds, x: trackBounds.x + 2, y: (extent[1] - 28) / 2, width: along, height: 28 });
+      track.style.setProperty('--track-shape', trackShape(along - 12, field.id === 'opacity' ? 8 : 2.5));
+    }
+    function trackShape(length, narrow) {
+      if (length < 4) return 'none';
+      const point = (a, b) => vertical ? `${14 + b} ${length + 6 - a}` : `${6 + a} ${14 + b}`;
+      return `path('M ${point(0, -narrow)} L ${point(length - 3, -8)} C ${point(length + 1, -8)} ${point(length + 1, 8)} ${point(length - 3, 8)} `
+        + `L ${point(0, narrow)} C ${point(-3, narrow)} ${point(-3, -narrow)} ${point(0, -narrow)} Z')`;
     }
     update(); return { row, update, orient, dispose() { closePopup(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); window.removeEventListener('blur', blur); } };
   }
@@ -255,18 +265,20 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     root.classList.toggle('vertical-component', vertical); root.dataset.tileStyle = view.tile_style;
     fields.forEach(f => f.orient?.());
     if (standalone) return;
+    const fieldHeight = 24;
     const sizes = fields.map(f => {
-      if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, style.size[1]];
+      if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, fieldHeight];
       if (vertical || f.action) return style.size;
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
-      return [f.row.scrollWidth, Math.max(24, f.row.scrollHeight)];
+      return [f.row.scrollWidth, Math.max(fieldHeight, f.row.scrollHeight)];
     });
     const geometry = app.toolbar_ui({ type: 'options_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', sizes, button: style.size, gap: vertical ? 2 : 10 });
     place(more, geometry.more);
     fields.forEach((f, i) => {
       const bounds = geometry.fields[i];
       if (!bounds && f.row.contains(document.activeElement)) more.focus();
-      f.row.hidden = !bounds; if (bounds) place(f.row, bounds);
+      f.row.hidden = !bounds;
+      if (bounds) place(f.row, f.segmented && !vertical ? { ...bounds, y: bounds.y + (bounds.height - fieldHeight) / 2, height: fieldHeight } : bounds);
     });
   }
   root.updateComponent = next => {

@@ -5,28 +5,53 @@ window.background.capy-workspace.native-canvas-background { background: transpar
 /* Pen fallback for GTK's mouse-position tooltip query; match native Adwaita. */
 popover.pen-tooltip { padding:0; margin:0; }
 popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }
-window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
+window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; --accent-bg-color: var(--capy-accent); --accent-fg-color: var(--capy-accent-foreground); --selection-bg: var(--capy-selection); --header-selection: var(--capy-header-selection); --header-selection-hover: var(--capy-header-selection-hover); }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
-/* Dark-mode plain controls keep their halo over artwork. Light mode uses
-   translucent surfaces below; the opaque workspace pill never needs a halo. */
-.window-bar image { -gtk-icon-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color), 0 0 2px var(--window-bg-color); }
-.window-bar label { text-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color); }
-.window-bar popover image, .window-bar .header-editor image { -gtk-icon-shadow: none; }
-.window-bar popover label, .window-bar .header-editor label, .window-bar .workspace-switcher label { text-shadow: none; }
-.window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control, .window-bar .document-title { background: transparent; box-shadow: none; padding: 0; }
+.window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control { background: transparent; box-shadow: none; padding: 0; }
 .window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: var(--header-radius); }
-.window-bar { --header-radius: calc(18px * var(--corner-fit)); }
+.window-bar { --header-radius: calc(18px * var(--corner-fit)); --header-control-bg: alpha(var(--window-bg-color), .75); }
 .window-bar.header-medium { --header-radius: calc(24px * var(--corner-fit)); }
 .window-bar.header-large { --header-radius: calc(30px * var(--corner-fit)); }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: var(--header-radius); }
 .window-bar .header-tool.capy-button { padding: 0; }
-.window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
-.window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
+/* The live canvas is an app-owned Wayland subsurface, outside GTK's render
+   tree. Use translucent fills: a GTK backdrop-filter cannot sample that canvas. */
+.window-bar .header-tool,
+.window-bar menubutton.chrome-control > button,
+.window-bar .header-readout,
+.window-bar #document-selector > button,
+.window-bar windowcontrols > button > image { background-color: var(--header-control-bg); }
+.window-bar .header-readout { border-radius: var(--header-radius); min-height: 36px; }
+.window-bar #document-selector > button { border-radius: var(--header-radius); }
+.window-bar .document-title { padding: 6px; }
+.window-bar .header-tool:hover,
+.window-bar menubutton.chrome-control > button:hover,
+.window-bar #document-selector > button:hover,
+.window-bar windowcontrols > button:hover > image { background-image: image(alpha(var(--window-fg-color), .10)); }
+.window-bar .header-tool:active,
+.window-bar menubutton.chrome-control > button:active,
+.window-bar menubutton.chrome-control > button:checked,
+.window-bar #document-selector > button:active,
+.window-bar #document-selector > button:checked,
+.window-bar windowcontrols > button:active > image { background-image: image(alpha(var(--window-fg-color), .16)); }
+.window-bar .header-tool.selected-tool { background-image: image(var(--header-selection)); }
+/* Open neutral tiles, their connectors and drawers share one opaque surface. */
 .window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
+.window-bar .header-bar { background: var(--header-control-bg); border-radius: var(--header-radius); }
+.window-bar .header-menu-labels menubutton.chrome-control > button,
+.window-bar .header-item.in-bar .header-tool:not(.drawer-open):not(.selected-tool),
+.window-bar .header-item.in-bar menubutton > button,
+.window-bar menubutton.chrome-control.in-bar > button { background-color: transparent; }
+.window-bar .header-item.in-bar .header-tool,
+.window-bar .header-item.in-bar menubutton > button,
+.window-bar menubutton.chrome-control.in-bar > button { min-width: 0; min-height: 0; padding: 0; border-style: solid; border-color: transparent; border-width: 1px 0; border-radius: var(--header-radius); background-clip: padding-box; }
+.window-bar .header-item.in-bar .header-tool.selected-tool { background-color: var(--header-selection); background-image: none; }
+.window-bar .header-item.in-bar .header-tool.drawer-open { border-width: 0; }
+.window-bar .header-item.in-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
 .header-editor-content { padding: 8px 12px; }
 .header-editor button { min-height: 24px; padding: 4px 8px; border-radius: var(--control-radius); }
@@ -43,34 +68,14 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
 .document-title { font-weight: 600; min-height: 24px; padding: 6px; }
 .header-clock { min-height: 36px; padding: 0 6px; }
-/* The live canvas is an app-owned Wayland subsurface, outside GTK's render
-   tree. Use translucent fills: a GTK backdrop-filter cannot sample that canvas. */
-.light-theme .window-bar { --header-control-bg: alpha(var(--window-bg-color), .5); }
-.light-theme .window-bar label { text-shadow: none; }
-.light-theme .window-bar image { -gtk-icon-shadow: none; }
-.light-theme .window-bar .header-tool,
-.light-theme .window-bar menubutton.chrome-control > button,
-.light-theme .window-bar .header-menu-labels,
-.light-theme .window-bar .header-readout { background: var(--header-control-bg); }
-.light-theme .window-bar .header-menu-labels,
-.light-theme .window-bar .header-readout { border-radius: var(--header-radius); }
-.light-theme .window-bar .header-readout { min-height: 36px; }
-.light-theme .window-bar .document-title { padding: 6px; }
-/* Keep the labels' existing button padding, with one fill behind the whole row. */
-.light-theme .window-bar .header-menu-labels menubutton.chrome-control > button { background-color: transparent; }
-.light-theme .window-bar .header-tool:hover,
-.light-theme .window-bar menubutton.chrome-control > button:hover { background-image: linear-gradient(alpha(var(--window-fg-color), .10), alpha(var(--window-fg-color), .10)); }
-.light-theme .window-bar .header-tool.selected-tool { background-image: linear-gradient(alpha(var(--accent-bg-color), .22), alpha(var(--accent-bg-color), .22)); }
-.light-theme .window-bar .header-tool:active,
-.light-theme .window-bar menubutton.chrome-control > button:active,
-.light-theme .window-bar menubutton.chrome-control > button:checked { background-image: linear-gradient(alpha(var(--window-fg-color), .16), alpha(var(--window-fg-color), .16)); }
-/* Open neutral tiles, their connectors and drawers share one opaque surface. */
-.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
-.workspace-switcher { background: var(--tabbar-bg); border: 0; border-radius: calc(17px * var(--corner-fit)); padding: 4px; }
+.window-bar .workspace-switcher { background: alpha(var(--tabbar-bg), .75); }
+.window-bar .header-menu-labels { background: var(--header-control-bg); }
+.window-bar .workspace-switcher, .window-bar .header-menu-labels { border: 0; border-radius: calc(17px * var(--corner-fit)); padding: 4px; }
 .workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
-.workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
-.workspace-switcher button:checked { background: mix(var(--window-bg-color), var(--accent-bg-color), .28); color: var(--window-fg-color); }
-.workspace-switcher button:checked:hover { background: mix(var(--window-bg-color), var(--accent-bg-color), .36); }
+.window-bar .header-menu-labels menubutton.chrome-control > button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); font-weight: 500; }
+.workspace-switcher button:hover { background: alpha(var(--window-fg-color), .08); }
+.workspace-switcher button:checked { background: var(--header-selection); color: var(--window-fg-color); }
+.workspace-switcher button:checked:hover { background: var(--header-selection-hover); }
 .workspace-manager-row > box.header:dir(ltr) { margin-left: 6px; }
 .workspace-manager-row > box.header:dir(rtl) { margin-right: 6px; }
 .workspace-manager-row .prefixes { margin-left: 0; margin-right: 0; }
@@ -80,7 +85,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .workspace-notice { background: var(--window-bg-color); padding: 6px 12px; border-radius: var(--surface-radius); }
 .workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
-.status-bubble { background: var(--window-bg-color); border-radius: calc(12px * var(--corner-fit)); padding: 3px 10px; }
+.status-bubble, button.flat.status-bubble { background-color: alpha(var(--window-bg-color), .75); border-radius: calc(12px * var(--corner-fit)); padding: 3px 10px; }
+button.flat.status-bubble:hover { background-image: image(alpha(var(--window-fg-color), .10)); }
+button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg-color), .16)); }
 .dock-panel { background: var(--panel-bg); border-radius: var(--surface-radius); box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .collapsed-column { border-radius: var(--surface-radius); }
 .content-drawer { box-shadow: none; }
@@ -113,7 +120,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .collapsed-column .tile-button { min-width: 36px; min-height: 36px; padding: 0; }
 .collapsed-column .panel-footer { min-height: 20px; }
 .dock-panel .heading { font-size: inherit; }
-.selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
+.selected-tool { background: var(--selection-bg); box-shadow: none; }
 .dock-panel button, .dock-panel entry { border-radius: var(--control-radius); }
 .dock-panel button { min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
@@ -130,7 +137,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .layer-list > row { padding: 0; margin: 0; border-radius: 0; }
 .dock-panel button.layer-swipe-delete { border-radius: 0; padding: 0 8px; background: #c01c28; color: white; }
 .layer-row { min-height: 36px; padding: 2px 6px; border-radius: 0; }
-.layer-row.selected { background: alpha(var(--accent-bg-color), .22); }
+.layer-row.selected { background: var(--selection-bg); }
 .layers-panel button.layer-column { min-width: 24px; }
 .layers-panel button.layer-reference:checked { background: alpha(var(--window-fg-color), .12); color: var(--window-fg-color); }
 .layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: 3px; background: var(--input-bg); }
@@ -164,7 +171,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .image-preference { padding: 12px 14px; }
 .image-selector button { min-width: 48px; min-height: 48px; padding: 8px; border-radius: 8px; background: alpha(var(--window-fg-color), .04); }
 .image-selector button:hover { background: alpha(var(--window-fg-color), .08); }
-.image-selector button:checked { background: alpha(var(--accent-bg-color), .22); box-shadow: inset 0 0 0 2px var(--accent-bg-color); }
+.image-selector button:checked { background: var(--selection-bg); box-shadow: inset 0 0 0 2px var(--accent-bg-color); }
 .number-preference button.number-value, .number-preference entry.number-entry { min-height: 34px; padding: 0 9px; }
 .number-preference .number-track { margin-top: 3px; }
 .number-preference scale trough { background: alpha(var(--window-fg-color), .12); }
@@ -188,6 +195,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
 .dock-panel .tool-group { padding: 0 6px; }
 .selection-modes > button { min-width: 0; padding: 0; }
+.selection-modes > button:checked, .toolbar-component .option-action button:checked { background: var(--selection-bg); }
 .dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
 .toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .dock-panel.expanded-panel { background: transparent; box-shadow: none; }
@@ -207,6 +215,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .toolbar-component .option-segments.horizontal > button:last-child { border-top-right-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component .option-segments.vertical > button:first-child { border-top-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-top-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component .option-segments.vertical > button:last-child { border-bottom-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-component:not(.vertical-component) .option-segments > button { min-height: 24px; }
+.toolbar-component:not(.vertical-component) .option-segments > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
+.toolbar-component:not(.vertical-component) .option-segments > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
 .toolbar-component dropdown { margin: 0; }
 .toolbar-component.vertical-component dropdown > button { padding: 2px; background: transparent; }
 .toolbar-component.vertical-component.labeled-component dropdown > button { padding-left: 8px; padding-right: 6px; }
@@ -225,7 +236,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
-.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: calc(18px * var(--corner-fit)); }
+.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: alpha(var(--window-bg-color), .75); border-radius: calc(18px * var(--corner-fit)); }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */
@@ -280,13 +291,13 @@ scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */
-.document-tabs { border-spacing: 0; }
-.document-tab { min-height: 26px; padding: 4px; border-radius: calc(17px * var(--corner-fit)); background: transparent; transition: background-color 150ms ease-in-out; }
-.document-tab:hover { background-color: alpha(currentColor, .07); }
-.document-tab:active { background-color: alpha(currentColor, .16); }
-.document-tab.selected { background-color: alpha(currentColor, .10); }
-.document-tab.selected:hover { background-color: alpha(currentColor, .13); }
-.document-tab.selected:active { background-color: alpha(currentColor, .19); }
+.document-tabs { border-spacing: 6px; margin: 1px 0; border-radius: var(--header-radius); background-color: var(--header-control-bg); }
+.document-tab { min-height: 26px; padding: 4px; border-radius: calc(17px * var(--corner-fit)); background-color: transparent; transition: background-color 150ms ease-in-out; }
+.document-tab:hover { background-image: image(alpha(currentColor, .07)); }
+.document-tab:active { background-image: image(alpha(currentColor, .16)); }
+.document-tab.selected { background-color: var(--panel-bg); }
+.document-tab.selected:hover { background-image: image(alpha(currentColor, .03)); }
+.document-tab.selected:active { background-image: image(alpha(currentColor, .09)); }
 /* Only adjacent idle tabs need a divider; selection/hover supplies the edge. */
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active) { background-image: image(color-mix(in srgb, currentColor var(--border-opacity), transparent)); background-size: 1px 80%; background-position: left center; background-repeat: no-repeat; }
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active):dir(rtl) { background-position: right center; }
@@ -303,5 +314,9 @@ scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 .selection-modes > button { border-radius: 0; margin: 0; }
 .selection-modes > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .selection-modes > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
-.brush-preview > contents { padding: 0; border-radius: var(--surface-radius); background: var(--panel-bg); }
-.brush-preview button { min-width: 0; min-height: 0; padding: 6px; border-radius: var(--control-radius); }
+.brush-preview > contents { padding: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); background: var(--panel-bg); }
+.brush-preview button { min-width: 0; min-height: 0; padding: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.swatch-selector button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 9999px; background-color: alpha(var(--window-fg-color), .1); box-shadow: inset 0 0 0 1px alpha(var(--window-fg-color), .15); }
+.swatch-selector.inline button { min-width: 28px; min-height: 28px; }
+.swatch-selector button:hover { filter: brightness(1.08); }
+.swatch-selector button:checked { outline: 2px solid var(--window-fg-color); outline-offset: 2px; }

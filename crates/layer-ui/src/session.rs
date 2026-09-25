@@ -121,6 +121,7 @@ pub struct UiSession<R: CanvasRenderer> {
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
+    system_accent: Option<HexColor>,
     platform_prediction_available: Option<bool>,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -195,6 +196,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
+            system_accent: None,
             platform_prediction_available: None,
             logical_viewport: None,
             initial_fit: true,
@@ -254,7 +256,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
-                palette: Settings::default().palette(Theme::Light, Platform::Generic),
+                palette: Settings::default().palette(Theme::Light, Platform::Generic, None),
                 settings_open: false,
                 preferences: PreferencesState::default(),
                 customization: CustomizationState::default(),
@@ -325,7 +327,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.state.platform = platform;
         self.refresh_feedback_config();
-        self.state.palette = self.state.settings.palette(self.state.theme, platform);
+        self.state.palette = self
+            .state
+            .settings
+            .palette(self.state.theme, platform, self.system_accent);
         self.refresh_commands();
         self.refresh_shortcuts();
     }
@@ -335,6 +340,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 &self.state.settings,
                 self.state.platform,
                 self.platform_prediction_available(),
+                self.system_accent,
             )
         })
     }
@@ -1973,6 +1979,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff | CommandId::TonalRemoveBand | CommandId::TonalNewBand => false,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
+            CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
+                idle && self.layer_interaction.tool.selection_tool().is_some()
+            }
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
@@ -3046,10 +3055,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.fullscreen = fullscreen;
                 (if changed { DOCUMENT } else { 0 }, false)
             }
-            UiAction::SystemThemeChanged { theme } => {
+            UiAction::SystemThemeChanged { theme, accent } => {
                 self.system_theme = theme;
+                let accent_changed = std::mem::replace(&mut self.system_accent, accent) != accent;
                 if self.state.settings.theme.is_none() && self.state.theme != theme {
                     (SETTINGS, true)
+                } else if accent_changed {
+                    (SETTINGS, false)
                 } else {
                     (0, false)
                 }
@@ -4640,7 +4652,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.palette = self
                 .state
                 .settings
-                .palette(self.state.theme, self.state.platform);
+                .palette(self.state.theme, self.state.platform, self.system_accent);
         }
         if regions != 0 {
             self.state.revision += 1;
@@ -4773,7 +4785,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let color = l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
                     .linear_in(layer_core::color::RgbSpace::Srgb).unwrap_or([1.; 4]);
                 let luminance = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
-                self.state.settings.palette(if luminance < 0.35 { Theme::Dark } else { Theme::Light }, self.state.platform).text
+                self.state.settings.palette(if luminance < 0.35 { Theme::Dark } else { Theme::Light }, self.state.platform, None).text
             }),
             label: l.name.to_string(),
             description: {
@@ -15640,7 +15652,7 @@ mod tests {
     }
 
     #[test]
-    fn sketch_color_and_layers_drawers_survive_canvas_contacts_and_replace_each_other() {
+    fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session(); s.set_platform(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
@@ -15649,11 +15661,10 @@ mod tests {
                     e.item == HeaderItem::Tool { control }).unwrap().id;
                 s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }] }).unwrap();
                 s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
-                let drawer = s.state.customization.drawer.clone().unwrap();
-                assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
+                assert_eq!(s.state.customization.drawer.as_ref().unwrap().dismissal, DrawerDismissal::OutsideContact);
                 let reply = chrome(&mut s, ChromeEvent::Contact { position: [700., 500.], canvas: true }, ChromeFacts::default());
-                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
-                assert!(!reply.handled, "canvas input continues with the drawer open");
+                assert!(s.state.customization.drawer.is_none());
+                assert!(reply.handled && !reply.paint, "the dismissing contact does not paint");
             }
         }
     }
@@ -15825,9 +15836,12 @@ mod tests {
             },
             ChromeFacts::default(),
         );
-        assert!(!reply.handled);
-        assert!(s.state.customization.drawer.is_some());
-        // Color remains open until toggled or replaced.
+        assert!(reply.handled && !reply.paint);
+        assert!(s.state.customization.drawer.is_none());
+        // Explicit policy is for persistent column drawers: outside does not
+        // dismiss, without a per-platform special case.
+        activate(&mut s, 6);
+        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
         chrome(
             &mut s,
             ChromeEvent::Contact {
@@ -16140,7 +16154,10 @@ mod tests {
         check_menu(&app.state);
         for theme in [Theme::Dark, Theme::Light] {
             let change = app
-                .dispatch(UiAction::SystemThemeChanged { theme })
+                .dispatch(UiAction::SystemThemeChanged {
+                    theme,
+                    accent: None,
+                })
                 .unwrap();
             assert_eq!(app.state.theme, theme);
             assert!(change.canvas_wake);
@@ -16153,7 +16170,10 @@ mod tests {
         })
         .unwrap();
         let change = app
-            .dispatch(UiAction::SystemThemeChanged { theme: Theme::Dark })
+            .dispatch(UiAction::SystemThemeChanged {
+                theme: Theme::Dark,
+                accent: None,
+            })
             .unwrap();
         assert_eq!(app.state.theme, Theme::Light);
         assert!(!change.canvas_wake);
@@ -16217,6 +16237,48 @@ mod tests {
         preference(s, PreferenceAction::Edit { id, value });
     }
     #[test]
+    fn system_accent_recolors_until_an_accent_is_saved() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let teal = crate::ACCENTS[1].1;
+        let red = crate::ACCENTS[5].1;
+        let change = s
+            .dispatch(UiAction::SystemThemeChanged {
+                theme: Theme::Light,
+                accent: Some(teal),
+            })
+            .unwrap();
+        assert_ne!(change.regions & regions::SETTINGS, 0);
+        assert!(!change.canvas_wake);
+        assert_eq!(s.state.palette.accent, teal);
+        let unchanged = s
+            .dispatch(UiAction::SystemThemeChanged {
+                theme: Theme::Light,
+                accent: Some(teal),
+            })
+            .unwrap();
+        assert_eq!(unchanged.regions, 0);
+        invoke(&mut s, CommandId::Settings);
+        edit_preference(&mut s, PreferenceId::Accent, PreferenceValue::Text(red.to_string()));
+        assert_eq!(s.state.palette.accent, red);
+        assert!(s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. })));
+        s.dispatch(UiAction::SystemThemeChanged {
+            theme: Theme::Light,
+            accent: Some(crate::ACCENTS[2].1),
+        })
+        .unwrap();
+        assert_eq!(s.state.palette.accent, red);
+        preference(&mut s, PreferenceAction::Reset { id: PreferenceId::Accent });
+        assert_eq!(s.state.palette.accent, crate::ACCENTS[2].1);
+        let mut next = session();
+        next.inherit_window_state(&s).unwrap();
+        next.dispatch(UiAction::RestoreSettings {
+            settings: s.state.settings.clone(),
+        })
+        .unwrap();
+        assert_eq!(next.state.palette.accent, crate::ACCENTS[2].1);
+    }
+    #[test]
     fn base_colors_validate_save_and_follow_the_resolved_theme() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
@@ -16263,13 +16325,14 @@ mod tests {
             s.dispatch(UiAction::SetTheme { theme: None }).unwrap();
             s.dispatch(UiAction::SystemThemeChanged {
                 theme: Theme::Light,
+                accent: None,
             })
             .unwrap();
             assert_eq!(s.state.palette.bg, s.state.settings.light_base);
             let json = serde_json::to_string(&s.state.settings).unwrap();
             let restored: Settings = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, s.state.settings);
-            assert_eq!(restored.palette(s.state.theme, platform), s.state.palette);
+            assert_eq!(restored.palette(s.state.theme, platform, None), s.state.palette);
             assert!(serde_json::from_str::<Settings>(&json.replace("#1c2c3c", "bad")).is_err());
             let mut legacy = serde_json::to_value(&restored).unwrap();
             legacy.as_object_mut().unwrap().remove("dark_base");

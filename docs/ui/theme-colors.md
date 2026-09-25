@@ -8,6 +8,11 @@ stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.
 System/Light/Dark selection remains independent of both colors.
 
+GTK, Web and Android show each base color inline on its title row as four grey
+circles and a Custom circle that reveals a hex entry beside them: dark
+`#1f1f1f`, `#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`,
+`#cccccc`, `#dedede`. Apple and Windows still show hex text fields.
+
 ## Inventory and existing relationships
 
 Before this change, most surfaces were independently chosen constants, not
@@ -21,9 +26,13 @@ in the table is transformed per channel using the same rule as a grey.
 
 | Color role and consumers | Dark default / relationship | Light default / relationship | Treatment |
 | --- | --- | --- | --- |
-| Canvas surround, header button/title backgrounds, status numbers, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
+| Canvas surround, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
 | Panel bodies, selected tabs and concave joins, tool ribbons, expanded drawers, popovers/menus | `#414141` = mix(B,W,14/204) | `#ededed` = mix(B,W,53/71) | Regenerate |
-| Inactive tab bar, GTK/Web/Android workspace-switcher pill | `#2e2e2e` = mix(B,K,5/51) | `#dedede` = mix(B,W,38/71) | Regenerate |
+| Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
+| Workspace switcher well | Inactive tab bar at 75% opacity | Same | Translucent over artwork |
+| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy, footer zoom/HDR/proof status | B at 75% opacity | B at 75% opacity | Translucent over artwork |
+| Selected workspace and title-bar tool | Accent tint of reference grey 82 (`#40546e` from `#3584e4`) | Accent tint of reference grey 196 (`#afc6e5`) | See [Accent color](#accent-color); stays visible on the light title-bar well |
+| Selected drawing tab | Panel body, opaque | Same | Matches selected panel tabs |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
 | Native GTK view background | `#2b2b2b` = mix(B,K,8/51) | `#e4e4e4` = mix(B,W,44/71) | Regenerate |
 | Preferences and web dialog background | `#333333` = B | `#fafafb`: white mix 66/71 for R,G, 67/71 for B | Regenerate |
@@ -45,7 +54,8 @@ in the table is transformed per channel using the same rule as a grey.
 | Checkbox/radio outlines, separators, scroll thumbs, disabled controls | Foreground overlays, usually 10–35%; disabled opacity 36–50% | Same pattern | Keep opacity, recomposite |
 | Web preference row divider | `#80808026` | Same | Keep translucent neutral |
 | Settings slider inactive track / inactive switch | Text at 12% / 20% | Same | Keep overlay |
-| Accent, selection, focus, links, checked controls, drop indicators | Web/Android `#3584e4`; GTK native accent (drop hint currently separate blue) | Same | Do not tint; selection remains accent at 22% |
+| Accent, focus, links, checked controls, drop indicators | Resolved accent: saved, else system (GTK, Android 12+), else `#3584e4` (drop hint currently separate blue) | Same | Not derived from the base |
+| Panel and toolbar selection | Accent tint of reference grey 82, same as the title bar | Accent tint of reference grey 213 (`#c0d7f6`) | See [Accent color](#accent-color) |
 | Error / warning text, invalid numeric border | Web `#ff7b63` / `#e5a50a`, border `#ee5555`; native semantic roles | Web `#c01c28` / `#9c5700`, same border; native semantic roles | Fixed semantic colors per mode |
 | Shadows, inset shades, modal dimming | Black with existing opacities; panel 16%, expanded drawer 40%, web modal 8/15 | Same shadows; web modal 2/15 | Keep; already blends over new surfaces |
 | Cursor outline, marker and dash contrast | Black + white | Black + white | Unchanged: must contrast against artwork, not UI |
@@ -53,8 +63,8 @@ in the table is transformed per channel using the same rule as a grey.
 | Brush preview PNGs | Existing light-stroke variant, transparent background | Existing dark-stroke variant, transparent background | Keep; no baked panel background to regenerate |
 | Branding, favicon, install icons, manifest/splash launch colors | Fixed branded/launch assets | Fixed branded/launch assets | Unchanged; install assets cannot follow a per-user setting |
 
-Native toolkit focus/selection/error colors remain native rather than replacing
-their complete semantic palettes. New surface roles map to libadwaita's
+Native toolkit error colors remain native rather than replacing their complete
+semantic palettes; GTK's accent follows the resolved accent. New surface roles map to libadwaita's
 [documented CSS variables](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/css-variables.html),
 including inactive header/sidebar variants. GTK's native card and shade overlays
 continue to composite normally. Transparent areas remain transparent.
@@ -67,6 +77,47 @@ has no outline in light mode; workspace-switcher text has no outline in either
 mode. Web adds a 3px backdrop blur where supported. GTK's app-owned Wayland
 canvas and Android's SurfaceView are outside their UI render trees, so those
 hosts use the translucent fill without backdrop blur.
+
+## Accent color
+
+Below the base colors, GTK, Web and Android Appearance offer **Accent color**: System, libadwaita's nine accent colors
+(Blue `#3584e4`, Teal, Green, Yellow, Orange, Red, Pink, Purple, Slate) and a
+Custom circle that reveals a `#RRGGBB` entry prefilled with the current accent.
+The entry commits on Enter or when it loses focus after an edit; invalid hex is
+rejected in Rust like the base colors. Selecting a circle commits immediately.
+Settings store only a chosen color; an absent value follows the system accent
+that the host reports with `SystemThemeChanged`, and hosts without one use Blue.
+GTK reports libadwaita's accent; Android 12 and later report Material You's
+`system_accent1_500`. The web has no System circle, and there choosing Blue
+stores nothing, so Reset stays disabled.
+
+The resolved accent is published as `palette.accent`. GTK assigns it to
+`--accent-bg-color`, so libadwaita switches, checks, suggested buttons and
+focus rings follow it, and derives `--accent-color` from it as usual.
+`palette.accent_foreground` is the text and icon color on accent fills: white,
+as libadwaita uses for its nine accents, or the dark text color when a custom
+accent is lighter than OKLab 0.72. GTK assigns it to `--accent-fg-color`; Web
+and Android use it for suggested buttons, checkboxes and Material `onPrimary`.
+Selected rows and tiles (workspace rows, Zen icon tiles, toolbar-manager
+buttons, vertical drawing tabs) use `selection`; drop-target overlays keep a
+translucent accent so the content beneath stays visible. Web binds
+the palette roles to `--accent`, `--selection`, `--header-selection` and
+`--header-selection-hover`; Android reads the same roles into its palette.
+
+Selection tints keep only the accent's OKLCH hue. Each tint takes the OKLab
+lightness of a base-relative reference grey (computed with the same transform as
+every surface below), chroma `min(0.05, accent chroma)` so grey accents stay
+grey, and reduces chroma further only if the color would leave sRGB:
+
+| Role | Dark reference grey | Light reference grey |
+| --- | --- | --- |
+| `selection` (panels, toolbars, lists) | 82 | 213 |
+| `header_selection` (workspace switcher, title-bar tools) | 82 | 196 |
+| `header_selection_hover` | `header_selection` lightness + 0.03 | `header_selection` lightness − 0.03 |
+
+With the default bases every accent gives the same lightness, so warm accents
+look more muted than the old HSL formula and Slate's tints read as blue-grey.
+A custom light base moves the light tints with it.
 
 ## Transformation
 
@@ -98,8 +149,9 @@ hex value.
 
 ## Ownership and cost
 
-- `layer-ui::Settings` owns the two validated colors and the text-field schema.
-  `theme.rs` is the only source of surface transformation/calibration.
+- `layer-ui::Settings` owns the two validated base colors, the optional accent
+  and their preference schemas. `theme.rs` is the only source of surface and
+  accent-tint calibration.
 - `UiState.palette` contains resolved colors. Hosts bind them to GTK variables,
   DOM variables, or Compose colors, with no copies of the transformation.
 - The GPU surround uses the same base converted with the complete sRGB transfer

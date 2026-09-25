@@ -796,6 +796,17 @@ fn tab_joins(header: &gtk::Box) -> gtk::DrawingArea {
     joins
 }
 
+pub(crate) fn system_appearance() -> (Theme, Option<HexColor>) {
+    let style = adw::StyleManager::default();
+    let accent = style.accent_color_rgba();
+    (
+        if style.is_dark() { Theme::Dark } else { Theme::Light },
+        style
+            .is_system_supports_accent_colors()
+            .then(|| HexColor([accent.red(), accent.green(), accent.blue()].map(|v| (v * 255.0).round() as u8))),
+    )
+}
+
 pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
@@ -1120,14 +1131,8 @@ impl Workspace {
             tooltips: Rc::default(),
         });
         this.hdr_status.connect_clicked(glib::clone!(#[weak] this, move |_| crate::hdr::display_details(&this)));
-        this.apply_palette(Settings::default().palette(
-            if adw::StyleManager::default().is_dark() {
-                Theme::Dark
-            } else {
-                Theme::Light
-            },
-            Platform::Gtk,
-        ));
+        let (theme, accent) = system_appearance();
+        this.apply_palette(Settings::default().palette(theme, Platform::Gtk, accent));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.placement_actions.bind(&this);
@@ -1364,17 +1369,19 @@ impl Workspace {
         ));
         // Leave the default manager following the system; apply explicit
         // overrides only to the display manager, so system changes stay observable.
-        adw::StyleManager::default().connect_dark_notify(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |style| this.dispatch(UiAction::SystemThemeChanged {
-                theme: if style.is_dark() {
-                    Theme::Dark
-                } else {
-                    Theme::Light
-                },
-            })
-        ));
+        for property in ["dark", "accent-color-rgba", "system-supports-accent-colors"] {
+            adw::StyleManager::default().connect_notify_local(
+                Some(property),
+                glib::clone!(
+                    #[weak(rename_to = this)]
+                    self,
+                    move |_, _| {
+                        let (theme, accent) = system_appearance();
+                        this.dispatch(UiAction::SystemThemeChanged { theme, accent })
+                    }
+                ),
+            );
+        }
         self.header.bind(self);
         // Observe native title-bar grabs without claiming events from Adw's
         // window handle. WM grabs can consume release; the next unpressed
@@ -2478,6 +2485,11 @@ impl Workspace {
             ("dialog", palette.dialog),
             ("thumb", palette.thumb),
             ("text", palette.text),
+            ("accent", palette.accent),
+            ("accent-foreground", palette.accent_foreground),
+            ("selection", palette.selection),
+            ("header-selection", palette.header_selection),
+            ("header-selection-hover", palette.header_selection_hover),
         ];
         let mut css = format!("window#{} {{", self.window.widget_name());
         for (name, color) in roles {

@@ -1199,7 +1199,7 @@ window.addEventListener(
   "pointermove",
   (e) => {
     pointerStyle(e);
-    if (e.target.closest("dialog[open]")) return;
+    if (e.target.closest?.("dialog[open]")) return;
     if (!e.buttons) chromeHeld = false;
     // A captured paint contact cannot reveal chrome. The canvas listener owns
     // its samples/cursor; querying popups and hit-testing here duplicates work
@@ -1456,7 +1456,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
-  if (e.target instanceof Element && e.target.closest("dialog[open]")) return;
+  if (e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-capture, #shortcut-editor)")) return;
   updateZen();
   const reply = input({
     type: "key",

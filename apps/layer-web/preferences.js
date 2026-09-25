@@ -149,6 +149,19 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   const shortcuts = new Map();
   let shortcutList, shortcutSearch;
+  function paintSwatches(widget, input, kind) {
+    if (widget.saved !== kind.value) { widget.saved = kind.value; widget.editing = false; }
+    const custom = kind.swatches.findIndex(s => s.custom), active = widget.editing ? custom : kind.selected;
+    widget.querySelectorAll("[data-swatch]").forEach((circle, index) => {
+      const swatch = kind.swatches[index], glyph = swatch.icon ?? (index === active ? "check" : "");
+      circle.style.backgroundColor = swatch.color ?? "";
+      circle.style.color = swatch.foreground ?? "";
+      circle.setAttribute("aria-checked", String(index === active));
+      if (circle.dataset.icon !== glyph) { circle.dataset.icon = glyph; circle.replaceChildren(...(glyph ? [icon(glyph)] : [])); }
+    });
+    input.hidden = active !== custom;
+    if (document.activeElement !== input && input.value !== kind.custom) input.value = kind.custom;
+  }
   function build(model) {
     for (const page of model.pages) {
       const tab = button("", () => { send({ type: "page", page: page.id }); root.classList.add("show-content"); });
@@ -186,6 +199,37 @@ export function createPreferences({ app, element, button, icon, numberField, pan
                 if (e.key === "Enter") { e.preventDefault(); commit(); }
               });
               widget = input; break;
+            case "swatches": {
+              const kind = row.kind, current = () => modelRow(row.id).kind;
+              widget = element("div", `preference-swatches${kind.inline ? " inline" : ""}`);
+              if (!kind.inline) line.classList.add("image-preference");
+              const circles = element("div", "swatch-circles");
+              circles.setAttribute("role", "radiogroup"); circles.setAttribute("aria-label", row.title);
+              input = element("input", "preference-entry swatch-entry"); input.type = "text";
+              input.maxLength = 7; input.placeholder = kind.placeholder; input.hidden = true;
+              input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("autocapitalize", "off");
+              const commit = () => {
+                send({ type: "edit", id: row.id, value: input.value });
+                if (!view()?.error) input.value = current().custom;
+              };
+              input.addEventListener("keydown", e => {
+                if (e.key === "Enter") { e.preventDefault(); commit(); }
+              });
+              input.addEventListener("change", () => { if (input.value.trim() !== current().custom) commit(); });
+              kind.swatches.forEach((swatch, index) => {
+                const circle = button("", () => {
+                  widget.editing = swatch.custom;
+                  if (!swatch.custom) { send({ type: "edit", id: row.id, value: swatch.value }); return; }
+                  paintSwatches(widget, input, current());
+                  input.value = current().custom; input.focus(); input.select();
+                }, "swatch");
+                circle.dataset.swatch = index; circle.setAttribute("role", "radio");
+                circle.setAttribute("aria-label", swatch.label); circle.title = swatch.label;
+                circles.append(circle);
+              });
+              widget.append(...(kind.inline ? [input, circles] : [circles, input]));
+              break;
+            }
             case "choice":
               if (row.kind.presentation.type === "image_tiles") {
                 input = element("input"); input.type = "hidden";
@@ -230,7 +274,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
-          if (!["number", "text"].includes(row.kind.type)) input.addEventListener("input", () => {
+          if (!["number", "text", "swatches"].includes(row.kind.type)) input.addEventListener("input", () => {
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
           });
@@ -319,6 +363,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === row.kind.selected));
         }
       }
+      else if (row.kind.type === "swatches") paintSwatches(widget, input, row.kind);
       else if (row.kind.type === "switch" && input.checked !== row.kind.active) input.checked = row.kind.active;
       else if (row.kind.type === "text" && document.activeElement !== input && input.value !== row.kind.value) input.value = row.kind.value;
     }

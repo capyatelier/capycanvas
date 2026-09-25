@@ -5,6 +5,8 @@ use super::*;
 mod canvas_pen_buttons;
 #[path = "color_picker_tests.rs"]
 mod color_picker_tests;
+#[path = "accent_preferences_tests.rs"]
+mod accent_preferences_tests;
 
 fn assert_shared_icons(widget: &gtk::Widget) {
     if let Some(image) = widget.downcast_ref::<gtk::Image>()
@@ -1103,8 +1105,13 @@ fn native_header_spacing_visual() {
                     .named(&format!("header-item-{}", pair[1].id))
                     .compute_bounds(&d.w.surface)
                     .unwrap();
+                let gap = if pair[0].item.joins_bar() && pair[1].item.joins_bar() {
+                    0.
+                } else {
+                    6.
+                };
                 assert!(
-                    (b.x() - a.x() - a.width() - 6.).abs() < 1.,
+                    (b.x() - a.x() - a.width() - gap).abs() < 1.,
                     "tile gap {a:?} {b:?}"
                 );
             }
@@ -1185,18 +1192,23 @@ fn native_header_spacing_visual() {
             button = button.parent().unwrap();
         }
         let button_bounds = button.compute_bounds(&d.w.surface).unwrap();
+        let mut bar = button.clone();
+        while !bar.has_css_class("header-menu-labels") {
+            bar = bar.parent().unwrap();
+        }
+        let bar_bounds = bar.compute_bounds(&d.w.surface).unwrap();
         assert_eq!(
-            button_bounds.height(),
-            36.,
-            "menu text buttons retain baseline height at {size:?}"
+            (bar_bounds.height(), button_bounds.height()),
+            (34., 26.),
+            "menu labels share the workspace switcher pill at {size:?}"
         );
         let label_bounds = label.compute_bounds(&d.w.surface).unwrap();
         assert!(
-            label_bounds.x() - button_bounds.x() >= 6.
+            label_bounds.x() - button_bounds.x() >= 8.
                 && button_bounds.x() + button_bounds.width()
                     - label_bounds.x()
                     - label_bounds.width()
-                    >= 6.
+                    >= 8.
         );
         let p = d.point(&label);
         d.perform(serde_json::json!([{"point":p}]));

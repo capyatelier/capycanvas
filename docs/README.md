@@ -26,7 +26,8 @@ The [developer guide](development/README.md) lists the build entry points and
 explains where to make changes. Setup is documented separately for
 [Linux](development/linux.md), [web](development/web.md),
 [Android](development/android.md), [macOS and iPadOS](development/apple.md), and
-[Windows](development/windows.md).
+[Windows](development/windows.md). The [Apple porting guide](APPLE_PORTING_GUIDE.md)
+describes how features that land first on GTK, Web and Android reach macOS and iPadOS.
 
 [Testing](development/testing.md) covers shared tests, host checks and GPU
 measurements. [Publication](development/publication.md) covers source and binary

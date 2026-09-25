@@ -1119,6 +1119,13 @@ fn native_toolbar_visual_audit_input() {
                     .unwrap();
                 assert!(caption.text().contains("2048 px"));
                 assert!(caption.layout().pixel_size().0 <= caption.width());
+                capture_popover(
+                    &d.named("brush-slider-preview").downcast().unwrap(),
+                    d.dir
+                        .join(format!("audit-slider-preview-{theme:?}-{edge:?}-{style:?}.png"))
+                        .to_str()
+                        .unwrap(),
+                );
                 d.key(0xff1b);
             }
         }
@@ -1486,6 +1493,16 @@ fn native_toolbar_segments_input() {
                 if edge == Edge::Top {
                     assert_eq!(a.y(), b.y());
                     assert!((b.x() - a.x() - 3. * style.size()[0]).abs() <= 1.);
+                    let bar = bar.compute_bounds(&d.w.window).unwrap();
+                    let choice = d
+                        .named("toolbar-choice-variant")
+                        .compute_bounds(&d.w.window)
+                        .unwrap();
+                    assert_eq!(
+                        (bar.y(), bar.height()),
+                        (choice.y(), choice.height()),
+                        "segments match the dropdown height"
+                    );
                 } else {
                     assert_eq!(a.x(), b.x());
                     assert!((b.y() - a.y() - 3. * style.size()[1]).abs() <= 1.);

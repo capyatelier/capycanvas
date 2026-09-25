@@ -93,8 +93,9 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         let id = row["id"].uint, currentEpoch = epoch
         contactLayer = id
         let mask = row["has_mask"].bool && frame.mask.contains(point)
-        return ReorderTarget(id: identity(id), surface: frame.grip.contains(point) ? .handle : .row,
-            canDrag: row["can_drop_below"].bool,
+        let grip = frame.grip.contains(point)
+        return ReorderTarget(id: identity(id), surface: grip ? .handle : .row,
+            canDrag: row["can_drop_below"].bool && (grip || ThumbnailSelectionLoad.current() == nil),
             valid: { [weak self] _ in
                 guard let self else { return false }
                 return enabled && epoch == currentEpoch && renaming != id && layers.contains { $0["id"].uint == id }

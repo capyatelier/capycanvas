@@ -476,7 +476,7 @@ try {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {
-    await checkPreferences({ call, evaluate, settle });
+    await checkPreferences({ call, evaluate, settle, errors });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--parity")) {
     await checkParity({ call, evaluate, settle });
@@ -931,7 +931,7 @@ try {
       );
       assert.equal(
         surfaces.bar,
-        theme === "dark" ? "rgb(46, 46, 46)" : "rgb(222, 222, 222)",
+        theme === "dark" ? "rgb(46, 46, 46)" : "rgb(210, 210, 210)",
       );
       assert.equal(surfaces.active, surfaces.panel);
       assert.equal(

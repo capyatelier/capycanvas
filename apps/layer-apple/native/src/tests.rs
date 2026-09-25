@@ -37,6 +37,8 @@ mod navigator;
 mod recovery;
 #[path = "region_tests.rs"]
 mod region;
+#[path = "selection_tests.rs"]
+mod selection;
 #[path = "renderer_tests.rs"]
 mod renderer;
 #[path = "workspace_tests.rs"]
@@ -169,12 +171,16 @@ fn compact_color_layout_and_circle_picking_use_shared_shapes() {
             unsafe { serde_json::from_slice(CStr::from_ptr(pointer).to_bytes()).unwrap() };
         unsafe { capy_apple_string_free(pointer) };
         let layout = layer_ui::ColorPanelLayout::new(226.).unwrap();
-        // Direct f32 JSON is shorter than Value's widened f64 spelling, but
-        // reconstructs the same radius. The remaining layout uses whole points.
-        assert_eq!(resources["readout_radius"].as_f64().unwrap() as f32, layout.readout_radius);
-        let mut expected = serde_json::to_value(layout).unwrap();
-        expected["readout_radius"] = resources["readout_radius"].clone();
-        assert_eq!(resources, expected);
+        fn same_f32(actual: &Value, expected: &Value) -> bool {
+            match (actual, expected) {
+                (Value::Number(a), Value::Number(b)) => a.as_f64().unwrap() as f32 == b.as_f64().unwrap() as f32,
+                (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_f32(a, b)),
+                (Value::Object(a), Value::Object(b)) => a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| same_f32(v, w))),
+                _ => actual == expected,
+            }
+        }
+        let expected = serde_json::to_value(layout).unwrap();
+        assert!(same_f32(&resources, &expected), "{resources} != {expected}");
         for platform in [0, 1] {
             let app = App::new(platform);
             app.action(json!({"type":"color","action":{"op":"shape","shape":shape}}));
@@ -1483,13 +1489,12 @@ fn layer_panel_actions_preserve_targets_masks_hierarchy_and_menu_policy() {
         let locked = app
             .request(2, json!({"type":"layer_menu","id":id,"mask":false}))
             .unwrap();
-        let rename = locked["sections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|s| s.as_array().unwrap())
-            .find(|item| item["action"]["action"]["op"] == "begin_rename")
-            .unwrap();
+        fn find_rename(sections: &Value) -> Option<Value> {
+            sections.as_array()?.iter().flat_map(|s| s.as_array().into_iter().flatten()).find_map(|item| {
+                if item["action"]["action"]["op"] == "begin_rename" { Some(item.clone()) } else { find_rename(&item["sections"]) }
+            })
+        }
+        let rename = find_rename(&locked["sections"]).unwrap();
         assert_eq!(
             rename["enabled"], false,
             "Menu capabilities must come from shared policy"

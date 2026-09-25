@@ -70,6 +70,31 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Bounded display composition — 2026-09-24
+
+At `f697427e` the physical M4 iPad aborted the `layered-4k` workload during
+setup: `IOGPUMetalCommandBufferStorageAllocResourceAtIndex` failed while
+`Scene::compose` encoded a render pass. Complete display pyramids had allowed
+128 tiles per command buffer (`f2f9020b`), and eight translucent layers put
+several jobs on each tile. Display composition now also submits after 256
+encoded jobs. One- and two-layer compositions (at most two jobs per tile) keep
+their 128-tile batches; an instrumented run showed 4–6 jobs per tile in the
+layered fixture.
+
+Release, 60 measured seconds, synthetic input (M4 iPad at 120 Hz; M2 Pro Mac at
+90 Hz, `layered-4k` 20 seconds). Owner service and GPU queue span are p50/p99 ms:
+
+| Run | Before | After |
+| --- | --- | --- |
+| iPad `ink` | 112.8 frames/s, 1.53/1.97, GPU 1.26/1.96 | 112.6 frames/s, 1.49/1.99, GPU 1.22/1.89 |
+| iPad `layered-4k` | aborts during setup | 113.1 frames/s, 1.95/2.88, GPU 1.92/3.53 |
+| Mac `ink` | 84.7 frames/s, 1.95/3.18, GPU 3.82/5.98 | 84.8 frames/s, 1.90/3.08, GPU 4.72/6.39 |
+| Mac `layered-4k` | 84.5 frames/s, 2.52/4.26, GPU 4.49/6.92 | 85.0 frames/s, 2.42/4.15, GPU 4.72/7.22 |
+
+Mac GPU queue spans vary between runs of the same binary: repeating the unchanged
+baseline `ink` build after the change measured GPU p50 4.68 ms. Traces are in
+ignored `artifacts/apple-port-0924/perf/`.
+
 ## Wide-brush source reuse — 2026-09-18
 
 Alternating independent composition-tile traversal retains more decoded sources

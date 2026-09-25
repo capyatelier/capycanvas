@@ -34,6 +34,12 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
+    pub fn system_accent(self) -> bool {
+        matches!(self, Self::Gtk | Self::Android)
+    }
+    pub fn swatch_preferences(self) -> bool {
+        matches!(self, Self::Gtk | Self::Web | Self::Android)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +102,8 @@ pub struct Settings {
     pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<HexColor>,
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
@@ -131,6 +139,7 @@ impl Default for Settings {
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
+            accent: None,
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
@@ -307,6 +316,7 @@ pub enum PreferenceId {
     ZenRevealAtEdges,
     DarkBase,
     LightBase,
+    Accent,
     Cursor,
     HideCursorWhileDrawing,
     PanSpeed,
@@ -340,6 +350,7 @@ impl PreferenceId {
             Self::ZenRevealAtEdges => "zen-reveal-at-edges",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
+            Self::Accent => "accent",
             Self::Cursor => "cursor",
             Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
             Self::PanSpeed => "pan-speed",
@@ -408,6 +419,14 @@ pub enum PreferenceKind {
         icons: Vec<String>,
         presentation: ChoicePresentation,
     },
+    Swatches {
+        swatches: Vec<Swatch>,
+        selected: u32,
+        value: String,
+        custom: String,
+        placeholder: String,
+        inline: bool,
+    },
     Number {
         control: NumericControl,
         value: f32,
@@ -430,6 +449,7 @@ impl PreferenceKind {
             Self::Number { value, .. } => PreferenceValue::Number(*value),
             Self::Text { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Choice { selected, .. } => PreferenceValue::Choice(*selected),
+            Self::Swatches { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Switch { active } => PreferenceValue::Bool(*active),
             Self::Info { .. } | Self::Link { .. } => return None,
         })
@@ -447,8 +467,39 @@ impl PreferenceKind {
             Self::Choice {
                 options, selected, ..
             } => options[*selected as usize].clone(),
+            Self::Swatches {
+                swatches,
+                selected,
+                custom,
+                ..
+            } => match &swatches[*selected as usize] {
+                swatch if swatch.custom => custom.clone(),
+                swatch => swatch.label.clone(),
+            },
             Self::Switch { active } => if *active { "On" } else { "Off" }.into(),
             Self::Info { .. } | Self::Link { .. } => String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Swatch {
+    pub label: String,
+    pub value: String,
+    pub color: Option<HexColor>,
+    pub foreground: Option<HexColor>,
+    pub icon: Option<String>,
+    pub custom: bool,
+}
+impl Swatch {
+    fn new(label: &str, value: String, color: Option<HexColor>, icon: Option<&str>) -> Self {
+        Self {
+            label: label.into(),
+            value,
+            color,
+            foreground: color.map(HexColor::contrasting),
+            icon: icon.map(Into::into),
+            custom: false,
         }
     }
 }
@@ -622,6 +673,43 @@ fn row(id: PreferenceId, title: &str, description: &str, kind: PreferenceKind) -
         visible: true,
         reset: None,
     }
+}
+fn swatch_row(
+    id: PreferenceId,
+    title: &str,
+    mut swatches: Vec<Swatch>,
+    value: Option<HexColor>,
+    custom: HexColor,
+    placeholder: HexColor,
+    inline: bool,
+) -> PreferenceRow {
+    let preset = value.and_then(|value| {
+        swatches
+            .iter()
+            .position(|s| !s.value.is_empty() && s.color == Some(value))
+    });
+    swatches.push(Swatch {
+        custom: true,
+        ..Swatch::new("Custom", String::new(), value.filter(|_| preset.is_none()), Some("pencil"))
+    });
+    let selected = match (value, preset) {
+        (None, _) => 0,
+        (Some(_), Some(index)) => index,
+        (Some(_), None) => swatches.len() - 1,
+    };
+    row(
+        id,
+        title,
+        "",
+        PreferenceKind::Swatches {
+            selected: selected as u32,
+            value: value.map(|c| c.to_string()).unwrap_or_default(),
+            custom: custom.to_string(),
+            placeholder: placeholder.to_string(),
+            inline,
+            swatches,
+        },
+    )
 }
 fn number(
     id: PreferenceId,
@@ -800,28 +888,8 @@ impl Settings {
                                 .unwrap() as u32,
                         },
                     ),
-                    row(
-                        DarkBase,
-                        "Dark theme base color",
-                        "",
-                        PreferenceKind::Text {
-                            value: self.dark_base.to_string(),
-                            constraint: TextConstraint::HexColor,
-                            max_length: 7,
-                            placeholder: crate::Theme::Dark.default_base().to_string(),
-                        },
-                    ),
-                    row(
-                        LightBase,
-                        "Light theme base color",
-                        "",
-                        PreferenceKind::Text {
-                            value: self.light_base.to_string(),
-                            constraint: TextConstraint::HexColor,
-                            max_length: 7,
-                            placeholder: crate::Theme::Light.default_base().to_string(),
-                        },
-                    ),
+                    self.base_row(crate::Theme::Dark, platform),
+                    self.base_row(crate::Theme::Light, platform),
                 ],
             }],
             vec![
@@ -984,6 +1052,11 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
+        if platform.swatch_preferences() {
+            let rows = &mut groups[0][0].rows;
+            let light = rows.iter().position(|r| r.id == LightBase).unwrap();
+            rows.insert(light + 1, self.accent_row(platform));
+        }
         groups.insert(2, self.color_groups(platform));
         SettingsPage::ALL
             .into_iter()
@@ -996,6 +1069,50 @@ impl Settings {
                 groups,
             })
             .collect()
+    }
+    fn accent_row(&self, platform: Platform) -> PreferenceRow {
+        let presets = platform
+            .system_accent()
+            .then(|| Swatch::new("System", String::new(), Some(DEFAULT_ACCENT), Some("appearance")))
+            .into_iter()
+            .chain(ACCENTS.iter().map(|&(label, color)| {
+                Swatch::new(label, color.to_string(), Some(color), None)
+            }))
+            .collect();
+        swatch_row(
+            PreferenceId::Accent,
+            "Accent color",
+            presets,
+            self.accent,
+            self.accent.unwrap_or(DEFAULT_ACCENT),
+            DEFAULT_ACCENT,
+            false,
+        )
+    }
+    fn base_row(&self, theme: crate::Theme, platform: Platform) -> PreferenceRow {
+        let (id, title, value) = match theme {
+            crate::Theme::Dark => (PreferenceId::DarkBase, "Dark theme base color", self.dark_base),
+            crate::Theme::Light => (PreferenceId::LightBase, "Light theme base color", self.light_base),
+        };
+        if !platform.swatch_preferences() {
+            return row(
+                id,
+                title,
+                "",
+                PreferenceKind::Text {
+                    value: value.to_string(),
+                    constraint: TextConstraint::HexColor,
+                    max_length: 7,
+                    placeholder: theme.default_base().to_string(),
+                },
+            );
+        }
+        let presets = theme
+            .base_choices()
+            .iter()
+            .map(|&c| Swatch::new(&c.to_string(), c.to_string(), Some(c), None))
+            .collect();
+        swatch_row(id, title, presets, Some(value), value, theme.default_base(), true)
     }
     pub(crate) fn zen_menu(&self, _platform: Platform) -> Result<ContextMenu, String> {
         Ok(ContextMenu {
@@ -1039,7 +1156,8 @@ impl Settings {
                 PreferenceKind::Text {
                     constraint: TextConstraint::HexColor,
                     ..
-                },
+                }
+                | PreferenceKind::Swatches { .. },
                 PreferenceValue::Text(text),
             ) if text.trim().is_empty() => self.default_value(id, platform)?,
             (_, value) => value,
@@ -1054,6 +1172,11 @@ impl Settings {
             (PreferenceKind::Switch { .. }, PreferenceValue::Bool(_)) => {}
             (PreferenceKind::Text { constraint, .. }, PreferenceValue::Text(text)) => {
                 constraint.validate(text)?;
+            }
+            (PreferenceKind::Swatches { .. }, PreferenceValue::Text(text)) => {
+                if !text.trim().is_empty() {
+                    HexColor::try_from(text.trim().to_owned())?;
+                }
             }
             _ => return Err("Invalid setting value".into()),
         }
@@ -1084,12 +1207,22 @@ impl Settings {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
                 };
-                let color = HexColor::try_from(text)?;
+                let color = HexColor::try_from(text.trim().to_owned())?;
                 if id == DarkBase {
                     self.dark_base = color;
                 } else {
                     self.light_base = color;
                 }
+            }
+            Accent => {
+                let PreferenceValue::Text(text) = value else {
+                    unreachable!()
+                };
+                self.accent = match text.trim() {
+                    "" => None,
+                    text => Some(HexColor::try_from(text.to_owned())?),
+                }
+                .filter(|color| platform.system_accent() || *color != DEFAULT_ACCENT);
             }
             Pressure => self.pressure_gamma = n,
             PanSpeed => self.pan_speed = n,
@@ -1130,6 +1263,7 @@ impl PreferencesState {
         settings: &Settings,
         platform: Platform,
         platform_prediction_available: bool,
+        system_accent: Option<HexColor>,
     ) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
         let mut pages = settings.pages(platform);
@@ -1153,6 +1287,22 @@ impl PreferencesState {
                 && let Some(reset) = &mut row.reset
             {
                 reset.enabled = false;
+            }
+            if let PreferenceKind::Swatches {
+                swatches,
+                value,
+                custom,
+                ..
+            } = &mut row.kind
+            {
+                let system = system_accent.unwrap_or(DEFAULT_ACCENT);
+                for swatch in swatches.iter_mut().filter(|s| !s.custom && s.value.is_empty()) {
+                    swatch.color = Some(system);
+                    swatch.foreground = Some(system.contrasting());
+                }
+                if value.is_empty() {
+                    *custom = system.to_string();
+                }
             }
         }
         let mut search_results = Vec::new();
@@ -1459,6 +1609,129 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    fn accent_row(settings: &Settings, system: Option<HexColor>) -> (Vec<Swatch>, u32, String) {
+        let row = PreferencesState::default()
+            .view(settings, Platform::Gtk, false, system)
+            .pages
+            .into_iter()
+            .flat_map(|p| p.groups)
+            .flat_map(|g| g.rows)
+            .find(|r| r.id == PreferenceId::Accent)
+            .unwrap();
+        let PreferenceKind::Swatches { swatches, selected, custom, .. } = row.kind else {
+            panic!("accent row is swatches");
+        };
+        (swatches, selected, custom)
+    }
+
+    #[test]
+    fn accent_swatches_follow_system_presets_and_custom_hex() {
+        let teal = ACCENTS[1].1;
+        let mut state = PreferencesState::default();
+        let mut settings = Settings::default();
+        let (swatches, selected, custom) = accent_row(&settings, Some(teal));
+        assert_eq!(swatches.len(), ACCENTS.len() + 2);
+        assert_eq!((swatches[0].label.as_str(), swatches[0].color, selected), ("System", Some(teal), 0));
+        assert_eq!(custom, teal.to_string());
+        let custom_swatch = swatches.last().unwrap();
+        assert!(custom_swatch.custom && custom_swatch.color.is_none());
+        let mut apply = |settings: &mut Settings, action| {
+            state.edit(settings, action, Platform::Gtk);
+            state.error.clone()
+        };
+        let edit = |text: &str| PreferenceAction::Edit {
+            id: PreferenceId::Accent,
+            value: PreferenceValue::Text(text.into()),
+        };
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[5].1.to_string())), None);
+        assert_eq!(settings.accent, Some(ACCENTS[5].1));
+        assert_eq!(accent_row(&settings, Some(teal)).1, 6);
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[0].1.to_string())), None);
+        assert_eq!(settings.accent, Some(DEFAULT_ACCENT), "Blue differs from System here");
+        assert_eq!(apply(&mut settings, edit(" #12AB56 ")), None);
+        let (swatches, selected, custom) = accent_row(&settings, Some(teal));
+        assert_eq!(selected as usize, swatches.len() - 1);
+        assert_eq!(swatches[selected as usize].color, Some(HexColor([0x12, 0xab, 0x56])));
+        assert_eq!(custom, "#12ab56");
+        assert!(apply(&mut settings, edit("#12")).is_some());
+        assert_eq!(settings.accent, Some(HexColor([0x12, 0xab, 0x56])));
+        let field = settings.field(PreferenceId::Accent, Platform::Gtk).unwrap();
+        assert!(field.reset.as_ref().unwrap().enabled);
+        assert_eq!(field.reset.unwrap().value, "System");
+        let reset = PreferenceAction::Reset { id: PreferenceId::Accent };
+        assert_eq!(apply(&mut settings, reset), None);
+        assert_eq!(settings.accent, None);
+        assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
+        assert_eq!(apply(&mut settings, edit("")), None);
+        assert_eq!(settings.accent, None);
+        assert!(settings.field(PreferenceId::Accent, Platform::Windows).is_err());
+        let PreferenceKind::Swatches { swatches, selected, .. } =
+            settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
+        else {
+            unreachable!()
+        };
+        assert_eq!((swatches[0].label.as_str(), selected), ("Blue", 0), "the web has no system accent");
+        let mut web = Settings::default();
+        let blue = PreferenceValue::Text(DEFAULT_ACCENT.to_string());
+        let mut state = PreferencesState::default();
+        state.edit(&mut web, PreferenceAction::Edit { id: PreferenceId::Accent, value: blue }, Platform::Web);
+        assert_eq!(web.accent, None, "Blue is the web default");
+    }
+
+    #[test]
+    fn base_colors_are_inline_grey_swatches_above_the_accent() {
+        let rows = |settings: &Settings, platform| -> Vec<PreferenceRow> {
+            settings.pages(platform)[0].groups[0].rows.clone()
+        };
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let ids: Vec<_> = rows(&Settings::default(), platform).iter().map(|r| r.id).collect();
+            assert_eq!(&ids[ids.len() - 3..], [PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]);
+        }
+        let mut state = PreferencesState::default();
+        let mut settings = Settings::default();
+        for theme in [crate::Theme::Dark, crate::Theme::Light] {
+            let id = if theme == crate::Theme::Dark { PreferenceId::DarkBase } else { PreferenceId::LightBase };
+            let base = |settings: &Settings| {
+                if theme == crate::Theme::Dark { settings.dark_base } else { settings.light_base }
+            };
+            let kind = |settings: &Settings| rows(settings, Platform::Gtk).into_iter().find(|r| r.id == id).unwrap().kind;
+            let PreferenceKind::Swatches { swatches, selected, inline, .. } = kind(&settings) else {
+                panic!("GTK base colors are swatches");
+            };
+            assert!(inline);
+            assert_eq!(swatches.len(), 5);
+            assert_eq!(swatches[selected as usize].color, Some(theme.default_base()));
+            let mut edit = |settings: &mut Settings, text: &str| {
+                let value = PreferenceValue::Text(text.into());
+                state.edit(settings, PreferenceAction::Edit { id, value }, Platform::Gtk);
+                state.error.clone()
+            };
+            assert_eq!(edit(&mut settings, &swatches[0].value), None);
+            assert_eq!(base(&settings), theme.base_choices()[0]);
+            assert_eq!(edit(&mut settings, " #445566 "), None);
+            let PreferenceKind::Swatches { swatches, selected, custom, .. } = kind(&settings) else { unreachable!() };
+            assert!(swatches[selected as usize].custom);
+            assert_eq!(custom, "#445566");
+            assert!(edit(&mut settings, "#4455").is_some());
+            assert_eq!(edit(&mut settings, ""), None);
+            assert_eq!(base(&settings), theme.default_base());
+            assert!(matches!(
+                rows(&settings, Platform::Windows).into_iter().find(|r| r.id == id).unwrap().kind,
+                PreferenceKind::Text { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn accent_setting_is_omitted_until_chosen() {
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert!(json.get("accent").is_none());
+        let saved = Settings { accent: Some(ACCENTS[3].1), ..Settings::default() };
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(json.contains("\"accent\":\"#c88800\""));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), saved);
+    }
 
     #[test]
     fn cursor_choices_preserve_saved_modes_and_reset_after_reordering() {
@@ -1953,7 +2226,7 @@ mod copy_tests {
                 state.capture.as_mut().unwrap().conflict = Some(definition.label);
                 check(
                     &state
-                        .view(&settings, platform, true)
+                        .view(&settings, platform, true, None)
                         .capture
                         .unwrap()
                         .notice,
@@ -1961,7 +2234,7 @@ mod copy_tests {
                 state.error = Some("Choose another key for this shortcut.".into());
                 assert_eq!(
                     state
-                        .view(&settings, platform, true)
+                        .view(&settings, platform, true, None)
                         .capture
                         .unwrap()
                         .notice,

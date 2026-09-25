@@ -208,3 +208,52 @@ fn windows_filter_drawer_uses_shared_replacement_cancel_and_history() {
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
     assert!(s.engine.document().layers.iter().any(|layer| layer.id == id));
 }
+
+#[test]
+fn curve_points_detach_off_the_graph_until_release_and_commit_one_step() {
+    let mut s = session();
+    choose(&mut s, "curves");
+    let layer = s.state.layer_properties.layer.unwrap();
+    let curve = |s: &UiSession<Recorder>| match &s.state.layer_properties.controls.iter().find(|c| c.key == "curve_0").unwrap().value {
+        layer_core::EffectValue::Curve(points) => points.clone(),
+        _ => unreachable!(),
+    };
+    let point = |index, point| EffectAction::CurvePoint { layer, key: "curve_0".into(), index, point, remove: false };
+    let drag = |s: &mut UiSession<Recorder>, phase, index, at| {
+        s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(point(index, at)) } }).unwrap();
+    };
+    s.dispatch(UiAction::Effect { action: point(None, [0.5, 0.75]) }).unwrap();
+    let placed = vec![[0., 0.], [0.5, 0.75], [1., 1.]];
+    assert_eq!(curve(&s), placed);
+
+    drag(&mut s, ContactPhase::Down, Some(1), [0.5, 0.75]);
+    drag(&mut s, ContactPhase::Move, Some(1), [0.5, 1.05]);
+    assert_eq!(curve(&s), [[0., 0.], [0.5, 1.], [1., 1.]], "Overshoot inside the margin clamps");
+    drag(&mut s, ContactPhase::Move, Some(1), [0.5, 1.2]);
+    assert_eq!(curve(&s), [[0., 0.], [1., 1.]]);
+    drag(&mut s, ContactPhase::Move, Some(1), [1.3, 0.25]);
+    assert_eq!(curve(&s), [[0., 0.], [1., 1.]]);
+    drag(&mut s, ContactPhase::Move, Some(1), [0.25, 0.5]);
+    assert_eq!(curve(&s), [[0., 0.], [0.25, 0.5], [1., 1.]], "Returning restores the point");
+    drag(&mut s, ContactPhase::Move, Some(1), [-0.5, 0.5]);
+    drag(&mut s, ContactPhase::Up, Some(1), [-0.5, 0.5]);
+    assert_eq!(curve(&s), [[0., 0.], [1., 1.]]);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(curve(&s), placed);
+
+    drag(&mut s, ContactPhase::Down, Some(1), [0.5, 0.75]);
+    drag(&mut s, ContactPhase::Move, Some(1), [0.5, -0.5]);
+    drag(&mut s, ContactPhase::Cancel, Some(1), [0.5, -0.5]);
+    assert_eq!(curve(&s), placed);
+
+    drag(&mut s, ContactPhase::Down, Some(0), [0., 0.]);
+    drag(&mut s, ContactPhase::Move, Some(0), [-0.5, 0.25]);
+    drag(&mut s, ContactPhase::Up, Some(0), [-0.5, 0.25]);
+    assert_eq!(curve(&s), [[0., 0.25], [0.5, 0.75], [1., 1.]], "Endpoints stay and follow the pointer");
+
+    let modified = |s: &UiSession<Recorder>| s.state.layer_properties.controls.iter().find(|c| c.key == "curve_0").unwrap().modified;
+    assert!(modified(&s));
+    s.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: "curve_0".into() } }).unwrap();
+    assert_eq!(curve(&s), [[0., 0.], [1., 1.]]);
+    assert!(!modified(&s), "Reset hides the on-chart reset control");
+}
