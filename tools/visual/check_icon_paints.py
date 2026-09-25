@@ -25,7 +25,7 @@ colors = ET.parse(args.sources / "layer-colors-symbolic.svg").getroot()
 # Coordinates are in the canonical 16-unit viewbox; paints come from the SVG.
 checks = [("color", [8, 8], color[0].get("fill")), ("color", [8, 2.5], None),
           ("colors", [5, 5], colors[2].get("fill")), ("colors", [12, 12], colors[0].get("fill")),
-          ("colors", [8, 8], colors[2].get("fill")), ("colors", [6, 1], None)]
+          ("colors", [8, 8], colors[2].get("fill")), ("colors", [6.25, .75], None)]
 
 
 def rgb(value):

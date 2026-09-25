@@ -36,7 +36,7 @@ mod imp {
             ));
             round.scale(size / 16., size / 16.);
             // Exact viewBox coordinates from layer-colors-symbolic.svg.
-            for (i, center, radius) in [(1, 11., 4.25), (0, 6., 5.)] {
+            for (i, center, radius) in [(1, 11., 4.25), (0, 6.25, 5.5)] {
                 let square =
                     |r: f32| gtk::graphene::Rect::new(center - r, center - r, 2. * r, 2. * r);
                 append_checker(&round, square(radius), radius, &textures[i]);
