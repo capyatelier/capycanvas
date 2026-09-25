@@ -1528,8 +1528,12 @@ fn native_header_cancel_caption_input() {
     d.perform(serde_json::json!([{ "point": [600.,400.] }]));
     assert!(state(&d.w).workspace.zen_mode && !d.w.header.root.can_target());
     d.perform(serde_json::json!([{ "point": [6.,6.] }]));
-    assert!(d.w.header.root.can_target());
-    d.click_name(&format!("header-item-{capy}"));
+    assert!(
+        !d.w.header.root.can_target(),
+        "edge reveal is off by default"
+    );
+    let zen_capy = d.w.zen_capy.clone().upcast::<gtk::Widget>();
+    d.click(&zen_capy);
     assert!(!state(&d.w).workspace.zen_mode);
     // Close is native and cannot be removed by customization.
     let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap();

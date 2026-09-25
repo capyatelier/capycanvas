@@ -1491,6 +1491,7 @@ impl Workspace {
                 }
                 let was_held = this.chrome_held.get();
                 if event.event_type() == gdk::EventType::ButtonPress
+                    && this.header.root.can_target()
                     && point.is_some_and(|[_, y]| y < this.header.height())
                 {
                     this.chrome_held.set(true);
