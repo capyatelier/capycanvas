@@ -454,7 +454,20 @@ fn native_workspace_ownership_input() {
     let manager = d.w.workspaces.manager.as_ref().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(target_id));
     assert!(manager.error().is_none());
-    assert_eq!(manager.current().unwrap().working, saved.entity.working);
+    let mut adopted = saved.entity.working.unwrap();
+    let depth =
+        d.w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .color
+            .depth;
+    adopted.colors.set_document_depth(depth).unwrap();
+    adopted.colors.library.ensure_starters();
+    assert_eq!(manager.current().unwrap().working, Some(adopted));
 
     // Context menus created while an item was occupied use SwitchToWindow.
     // That stale action must now reclaim the item too, rather than get stuck.

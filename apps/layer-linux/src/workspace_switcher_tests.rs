@@ -427,12 +427,24 @@ fn check_active_workspace_delete(occupied_default: bool) {
         other.activate(incoming);
     }
     let replacement = DEFAULT_WORKSPACES[if occupied_default { 0 } else { 1 }].0;
-    let expected = glib::MainContext::default()
+    let mut expected = glib::MainContext::default()
         .block_on(manager.load(replacement))
         .unwrap()
         .entity
         .capture()
         .unwrap();
+    let depth = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .color
+        .depth;
+    expected.working.colors.set_document_depth(depth).unwrap();
+    expected.working.colors.library.ensure_starters();
     for confirm in [false, true] {
         w.workspaces.ui.show(&w, ManagerPage::Workspaces);
         pump(400);
