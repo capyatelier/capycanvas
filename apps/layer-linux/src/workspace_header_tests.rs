@@ -1782,6 +1782,7 @@ fn native_panel_pen_input() {
     scroll.set_max_content_height(180);
     scroll.set_propagate_natural_height(false);
     scroll.set_height_request(180);
+    scroll.set_valign(gtk::Align::Start);
     pump(200);
     let overflow = scroll.vadjustment().upper() - scroll.vadjustment().page_size();
     assert!(overflow > 20., "fixture has scrollable tools");
