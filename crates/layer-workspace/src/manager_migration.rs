@@ -161,6 +161,11 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
     let previous_selection = layer_ui::WorkspacePreset::Painter.legacy_selection_layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
     let previous_paint_drawer = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
+    let previous_windows = if platform == Platform::Windows {
+        layer_ui::WorkspacePreset::Painter.legacy_windows_without_selection_layouts().to_vec()
+    } else {
+        Vec::new()
+    };
     let mut previous_native_settings = previous.clone();
     previous_native_settings.header.add(
         layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
@@ -192,7 +197,8 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
             && baseline.as_ref() != &previous_bottom_controls
             && baseline.as_ref() != &previous_brush_controls
             && baseline.as_ref() != &previous_components
-            && baseline.as_ref() != &previous_selection)
+            && baseline.as_ref() != &previous_selection
+            && !previous_windows.contains(baseline.as_ref()))
 
     {
         return None;
@@ -402,6 +408,11 @@ pub(super) fn updated_photographer_default(
     let previous_unselected_drawers = WorkspacePreset::Photographer.legacy_drawers_without_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
+    let previous_windows = if platform == Platform::Windows {
+        WorkspacePreset::Photographer.legacy_windows_without_selection_layouts().to_vec()
+    } else {
+        Vec::new()
+    };
     let mut previous = previous_columns.clone();
     for panel in [Panel::Toolbar, Panel::Commands] {
         previous
@@ -424,7 +435,8 @@ pub(super) fn updated_photographer_default(
             && baseline.as_ref() != &previous_mask_panels
             && baseline.as_ref() != &previous_unselected_drawers
             && baseline.as_ref() != &previous_palettes
-            && baseline.as_ref() != &previous_separate)
+            && baseline.as_ref() != &previous_separate
+            && !previous_windows.contains(baseline.as_ref()))
     {
         return None;
     }
@@ -598,13 +610,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
 #[test]
 fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
     use layer_ui::{WorkspacePreset, LayoutHistory};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         for (preset, id, migrate) in [
             (WorkspacePreset::Painter, DEFAULT_WORKSPACES[0].0, updated_painter_default as fn(&Entity,Platform)->Option<ItemContent>),
             (WorkspacePreset::Photographer, DEFAULT_WORKSPACES[2].0, updated_photographer_default),
         ] {
-            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform),
-                preset.legacy_drawers_without_selection_layout(platform)] {
+            let mut olds = vec![preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform),
+                preset.legacy_drawers_without_selection_layout(platform)];
+            if platform == Platform::Windows {
+                olds.extend(preset.legacy_windows_without_selection_layouts());
+            }
+            for old in olds {
             if preset == WorkspacePreset::Painter && old == preset.layout(platform) { continue; }
             let mut working=preset.working_state();
             working.selection.tool=layer_ui::SelectionTool::Ellipse;

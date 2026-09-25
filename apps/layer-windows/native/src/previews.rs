@@ -92,12 +92,14 @@ pub fn layer_menu(host: &mut NativeHost, json: &str) -> Result<CapyPreview, Stri
         .unwrap_or(document.active_layer.0);
     let mask = query.mask.unwrap_or(document.active_mask);
     let epoch_matches = query.epoch.parse::<u64>().map_err(|e| e.to_string())? == epoch;
-    let exists = host
-        .session
-        .engine()
-        .document()
-        .layer(layer_core::LayerId(id))
-        .is_some_and(|layer| !mask || layer.mask.is_some());
+    let quick_mask = id == 0 && !mask && host.session.state().layer_tools.quick_mask;
+    let exists = quick_mask
+        || host
+            .session
+            .engine()
+            .document()
+            .layer(layer_core::LayerId(id))
+            .is_some_and(|layer| !mask || layer.mask.is_some());
     let menu = if epoch_matches && exists {
         serde_json::to_value(host.session.layer_menu(id, mask)?).map_err(|e| e.to_string())?
     } else {
@@ -278,6 +280,28 @@ mod tests {
             metadata["menu"],
             serde_json::to_value(host.session.layer_menu(target, false).unwrap()).unwrap()
         );
+    }
+    #[test]
+    fn quick_mask_row_menu_targets_reserved_id() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let epoch = host.session.state().document_file.epoch.to_string();
+        let query = |mask: bool| serde_json::json!({"epoch":epoch,"id":"0","mask":mask}).to_string();
+        let menu = |host: &mut NativeHost, mask| -> serde_json::Value {
+            let packet = layer_menu(host, &query(mask)).unwrap();
+            serde_json::from_str::<serde_json::Value>(packet.metadata.to_str().unwrap()).unwrap()["menu"].clone()
+        };
+        assert!(menu(&mut host, false).is_null());
+        host.dispatch(layer_ui::UiAction::Invoke {
+            command: layer_ui::CommandId::QuickMask,
+        })
+        .unwrap();
+        assert!(host.session.state().layer_tools.quick_mask);
+        assert_eq!(
+            menu(&mut host, false),
+            serde_json::to_value(host.session.layer_menu(0, false).unwrap()).unwrap()
+        );
+        assert!(menu(&mut host, false).to_string().contains("Save as Selection Layer"));
+        assert!(menu(&mut host, true).is_null());
     }
     #[test]
     fn thumbnail_identity_bounds_and_epoch_are_lossless() {

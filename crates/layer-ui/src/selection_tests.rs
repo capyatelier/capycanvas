@@ -37,7 +37,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn geometric_selection_constraints_history_cancel_and_workspace_memory() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             for command in [CommandId::RectangleSelect, CommandId::EllipseSelect] {
                 let mut s = session();
                 s.set_platform(platform);
@@ -214,7 +214,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn sampling_sources_require_a_selection_tool() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             let mut s = session();
             s.set_platform(platform);
             for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
@@ -239,16 +239,13 @@ mod selection_tools_checks {
             Platform::Windows,
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
-            assert_eq!(
-                layout.header.entries().any(|e| e.item
-                    == HeaderItem::Tool {
-                        control: ToolbarControl::Command {
-                            command: CommandId::Select
-                        }
-                    }),
-                platform != Platform::Windows
-            );
-            assert_eq!(CommandId::TonalSelect.available_on(platform), platform != Platform::Windows);
+            assert!(layout.header.entries().any(|e| e.item
+                == HeaderItem::Tool {
+                    control: ToolbarControl::Command {
+                        command: CommandId::Select
+                    }
+                }));
+            assert!(CommandId::TonalSelect.available_on(platform));
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
                 assert!(!layout.panels.iter().flat_map(|p| p.tiles()).any(|t| t.control
@@ -261,19 +258,13 @@ mod selection_tools_checks {
                 CommandId::PolygonSelect,
                 CommandId::ColorSelect,
             ] {
-                assert_eq!(
-                    command.available_on(platform),
-                    platform != Platform::Windows
-                );
-                assert_eq!(
-                    photo
-                        .panel(Panel::Toolbar)
-                        .unwrap()
-                        .tiles()
-                        .iter()
-                        .any(|t| t.control == ToolbarControl::Command { command }),
-                    platform != Platform::Windows
-                );
+                assert!(command.available_on(platform));
+                assert!(photo
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .any(|t| t.control == ToolbarControl::Command { command }));
             }
         }
     }

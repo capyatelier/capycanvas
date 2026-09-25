@@ -169,6 +169,21 @@ public static class CapyRowPointer {
  public static void Key(ushort key) {
   Guard(last);Key(owner,key);
  }
+ static readonly System.Collections.Generic.HashSet<ushort> held=new System.Collections.Generic.HashSet<ushort>();
+ public static void Hold(ushort key,bool down) {
+  lock(gate){
+   if(down)Guard(last);else if(!held.Contains(key))return;
+   var input=new Input{type=1,keyboard=new Keyboard{key=key,flags=down?0u:2u}};
+   if(SendInput(1,new[]{input},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
+   if(down)held.Add(key);else held.Remove(key);
+  }
+ }
+ static void ReleaseHeld() {
+  foreach(var key in new System.Collections.Generic.List<ushort>(held)){
+   var input=new Input{type=1,keyboard=new Keyboard{key=key,flags=2}};SendInput(1,new[]{input},40);
+  }
+  held.Clear();
+ }
  // Standalone keyboard reviews do not need a synthetic pointer device.
  public static void Key(uint process,ushort key) {
   uint foreground;GetWindowThreadProcessId(GetForegroundWindow(),out foreground);
@@ -178,7 +193,7 @@ public static class CapyRowPointer {
   if(SendInput(2,new[]{down,up},40)!=2)throw new Win32Exception(Marshal.GetLastWin32Error());
  }
  public static void Dispose() {
-  try{Cancel();}finally{
+  try{lock(gate)ReleaseHeld();Cancel();}finally{
    if(pulse!=null){
     using(var completed=new ManualResetEvent(false)){if(pulse.Dispose(completed))completed.WaitOne();}
     pulse=null;

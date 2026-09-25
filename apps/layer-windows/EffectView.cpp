@@ -122,7 +122,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                         row.Children().Append(color);
                         auto bucket=button(data,L"Use selected color",[property,action]{if(property->current()&&!property->data->updating&&flag(property->view(),L"enabled"))property->data->dispatchDocument(action,to_hstring(uint64_t(property->epoch)));});
                         bucket.Content(icon(L"fill",data->theme()));bucket.Height(36);bucket.VerticalAlignment(VerticalAlignment::Top);
-                        AutomationProperties::SetAutomationId(bucket,L"paper-color-bucket");Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
+                        ToolTipService::SetToolTip(bucket,box_value(L"Use selected color"));AutomationProperties::SetAutomationId(bucket,L"paper-color-bucket");Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
                     }else body.Children().Append(color);
                 }else if(type==L"curve"){
                     curves.emplace_back(name,CurveField(property,fields));

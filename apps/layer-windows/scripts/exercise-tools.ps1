@@ -90,9 +90,13 @@ function Check-Projection {
             }
             foreach($action in $state.tool_actions){
                 $command=$state.commands|Where-Object id -eq $action.command
-                $type=if($action.checkable){[System.Windows.Automation.ControlType]::CheckBox}else{[System.Windows.Automation.ControlType]::Button}
+                $mode=$action.command -in @('selection_new','selection_add','selection_subtract','selection_intersect')
+                $source=$action.command -in @('selection_visible','selection_editing','selection_reference')
+                $type=if($mode){[System.Windows.Automation.ControlType]::Button}elseif($source){[System.Windows.Automation.ControlType]::RadioButton}elseif($action.checkable){[System.Windows.Automation.ControlType]::CheckBox}else{[System.Windows.Automation.ControlType]::Button}
                 $native=Find ('tool-action-'+$action.command) $type -Id
                 if(!$native -or $native.Current.Name -ne $command.label -or $native.Current.IsEnabled -ne $command.enabled){return $false}
+                if($mode){if(($native.Current.ItemStatus -eq 'Selected') -ne $command.selected){return $false};continue}
+                if($source){if($native.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected -ne $command.selected){return $false};continue}
                 if($action.checkable){
                     $checked=$native.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
                     if($checked -ne $command.selected){return $false}
@@ -170,7 +174,6 @@ $tools=@('pen','pencil','brush','eraser','airbrush','decoration','blend','liquif
 foreach($tool in $tools){
     Select-Tool $tool;Check-Projection
     if($tool -eq 'eyedropper'){
-        # The shared Eyedropper is temporary picking; a second press cancels it.
         if((Model).state.layer_tools.tool -notlike 'pick_*'){throw 'Eyedropper did not start temporary picking'}
         Select-Tool 'eyedropper' -Cancel
         Wait-Until {(Model).state.layer_tools.tool -notlike 'pick_*'} 'Eyedropper did not cancel temporary picking'

@@ -153,6 +153,10 @@ struct WorkspaceData {
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
 inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"bg",191);}
 inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"selection");}
+inline J displayColors(J const& state){
+    auto masked=object(object(object(state,L"layer_tools"),L"mask_editing"),L"colors");
+    return masked.Size()?masked:object(state,L"colors");
+}
 inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());

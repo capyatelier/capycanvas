@@ -120,7 +120,6 @@ function Check-CurveGestures {
     function Curve-Json {ConvertTo-Json -InputObject ((Property 'curve_0').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
         # The graph is square; UIA can report only its visible, clipped height.
-        # Fitted groups grow after the new content height is measured.
         $hit=@{at=$null}
         Wait-Until {
             $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
@@ -223,7 +222,6 @@ try {
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    # Fitted Paint groups leave one filter row at the default size; review the rows at a working size.
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1040
     Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Initial resize did not reach the canvas'
     Select-Panel 'adjustments'
@@ -302,7 +300,6 @@ try {
     Wait-Until {(Control 'filter-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'Curves'} 'Search text differs from its acknowledged query'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after filter edits and theme not ready' 20
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
-    # New drawings open in their own tab; older hosts replaced the document after a discard prompt.
     $discard=@{item=$null};try{Wait-Until {$discard.item=Find 'Discard Changes' -Name;$null -ne $discard.item -or $null -ne (Find 'document-width')} 'New drawing did not open' 5}catch{}
     if($discard.item){$discard.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name

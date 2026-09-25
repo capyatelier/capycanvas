@@ -1,6 +1,6 @@
 # Tonal range selections
 
-GTK, Web, Android, macOS and iPadOS expose **Tonal range** in the Select family. It writes ordinary byte-coverage
+GTK, Web, Android, macOS, iPadOS and Windows expose **Tonal range** in the Select family. It writes ordinary byte-coverage
 selections and saved selection masks. The shared Rust model supplies the same
 choice, numeric and selection-mode controls to each host's panel and Tool Options bar.
 The panel presents five SDR tones (Shadows through Highlights, with Midtones in
@@ -148,6 +148,9 @@ See [photographic-size performance](tonal-performance.md) for memory bounds,
   artwork sampling inside Quick Mask. `EditorLaunchTests/testTonalSelection` on
   macOS and iPad covers the tone bar, a range handle drag, typed endpoints, the
   compact drawer form and removal when leaving the tool.
+- Windows: `exercise-selection.ps1` drags the compact panel range and the Tool
+  Options range with the synthetic pointer driver and checks the shared
+  endpoints; physical pen acceptance remains open.
 
 Host tests replay input events on the device; they do not verify physical pen
 pressure or the feel of moving the attached pen by hand.

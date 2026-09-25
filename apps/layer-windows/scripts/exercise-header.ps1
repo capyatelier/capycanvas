@@ -213,7 +213,7 @@ function Add-Tools {
     Wait-Until {!((Model).picker) -and (Model).header.editing -and !(Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker cancellation left the titlebar editor'
     if((HeaderJson) -ne $before){throw 'Picker Cancel changed the header'}
     Drop-Component -Kind tools -Picker
-    foreach($tool in @(@('Color','picker-choice-color-0'),@('Brush','picker-choice-command-brush'))){
+    foreach($tool in @(@('choose current paint color','picker-choice-color-0'),@('Brush','picker-choice-command-brush'))){
         Picker-Search $tool[0]
         (Control $tool[1]).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     }

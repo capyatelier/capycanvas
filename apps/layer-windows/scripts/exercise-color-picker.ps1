@@ -51,7 +51,6 @@ function Tile([string]$Kind,[string]$Command){
         if($tile.control.kind -eq $Kind -and (!$Command -or $tile.control.command -eq $Command)){return "tile-$($panel.id)-$($tile.id)"}
     }}
 }
-# Synthetic pens leave range without frames; physical pens keep reporting hover.
 function Hover-Until($at,[scriptblock]$Condition,[string]$Message,[switch]$Mouse){
     $watch=[Diagnostics.Stopwatch]::StartNew();$i=0
     do{
@@ -220,11 +219,9 @@ try {
     Escape-Picker
 
     $null=Control 'color-wheel'
-    # Speculative shader completion changes the host snapshot key once; measure after it.
     Wait-Until {(Model).shaders_ready} 'Startup shaders did not finish' 180
     Key 0x49;Wait-Until {Picking} 'I did not start wheel preview picking'
     Hover-Until $paper {$null -ne (Preview)} 'No preview before sweep'
-    # Let unrelated drawer and measurement publications settle, keeping the pen in range.
     $quiet=@{full=-1;since=[Diagnostics.Stopwatch]::StartNew()}
     Hover-Until $paper {$f=(Presentation).full_updates;if($f -ne $quiet.full){$quiet.full=$f;$quiet.since.Restart()};$quiet.since.ElapsedMilliseconds -gt 1200} 'Workspace publications did not settle before the sweep'
     $before=Presentation;$modelBefore=(Model)|ConvertTo-Json -Depth 60

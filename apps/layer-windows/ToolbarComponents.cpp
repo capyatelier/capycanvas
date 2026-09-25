@@ -2,10 +2,12 @@
 #include "ToolbarComponents.h"
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
+#include "RangeControl.h"
 #include <robuffer.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <optional>
+#include <limits>
 
 using namespace CapyUi;
 namespace Shapes=Microsoft::UI::Xaml::Shapes;
@@ -73,7 +75,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         std::function<void()> orient;
         std::function<winrt::Windows::Foundation::Size()> natural;
         std::function<void()> dispose;
-        int segmented=0;bool action=false;
+        int segmented=0;bool action=false,interval=false;
     };
     struct Contact {uint32_t id;Point start;bool moved=false;};
     std::shared_ptr<WorkspaceData> data;
@@ -168,6 +170,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         for(auto option:array(key,L"options")){
             auto entry=option.GetObject();
             if(auto value=object(entry,L"Numeric");value.Size())value.SetNamedValue(L"value",N(0));
+            if(auto range=object(entry,L"Range");range.Size())
+                for(auto bound:array(range,L"bounds"))bound.GetObject().SetNamedValue(L"value",N(0));
             if(auto choice=object(entry,L"Choice");choice.Size())
                 for(auto choiceItem:array(choice,L"items"))choiceItem.GetObject().SetNamedValue(L"selected",B(false));
             if(auto action=object(entry,L"Action");action.Size()){
@@ -186,7 +190,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(standalone)buildSlider(tile);
             else for(auto option:array(model,L"options")){
                 auto entry=option.GetObject();
-                if(entry.HasKey(L"Numeric"))fields.push_back(numericField(object(entry,L"Numeric")));
+                if(entry.HasKey(L"Range"))fields.push_back(rangeField(object(entry,L"Range")));
+                else if(entry.HasKey(L"Numeric"))fields.push_back(numericField(object(entry,L"Numeric")));
                 else if(entry.HasKey(L"Choice"))fields.push_back(choiceField(object(entry,L"Choice")));
                 else fields.push_back(actionField(object(entry,L"Action")));
                 root.Children().Append(fields.back().row);
@@ -219,7 +224,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(f.segmented){
                 bool stacked=vertical&&width<tileW*f.segmented;
                 pair.Append(N(vertical?width:tileW*f.segmented));pair.Append(N(vertical?tileH*(stacked?f.segmented:1):24));
-            }else if(vertical||f.action){pair.Append(N(tileW));pair.Append(N(tileH));}
+            }else if(!f.interval&&(vertical||f.action)){pair.Append(N(tileW));pair.Append(N(tileH));}
             else{auto extent=f.natural();pair.Append(N(extent.Width));pair.Append(N(extent.Height));}
             sizes.Append(pair);
         }
@@ -584,6 +589,26 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             double value=0;for(auto sample:array(info,L"samples"))value=std::max(value,textWidth(self->data,eights(sample.GetString())));
             double lead=self->text?textWidth(self->data,title):16;
             return winrt::Windows::Foundation::Size{float(lead+4+value+14+(self->sliders?60:0)),24.f};
+        };
+        return result;
+    }
+    Field rangeField(J const& interval){
+        auto weak=weak_from_this();auto bounds=array(interval,L"bounds");
+        std::array<hstring,2> ids{str(bounds.GetObjectAt(0),L"id"),str(bounds.GetObjectAt(1),L"id")};
+        auto range=RangeControl::Create(data,bounds.GetObjectAt(0),bounds.GetObjectAt(1),str(interval,L"label"),L"toolbar",sliders,
+            [weak,ids](int index,double value){if(auto self=weak.lock())
+                self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(ids[index])},{L"value",N(value)}}));});
+        Field result;result.row=range->root;result.interval=true;
+        result.update=[range](J const& option){
+            auto current=array(object(option,L"Range"),L"bounds");
+            range->Update(num(current.GetObjectAt(0),L"value"),num(current.GetObjectAt(1),L"value"));
+        };
+        result.dispose=[range]{range->Dispose();};
+        result.natural=[weak,range]{
+            auto self=weak.lock();if(!self)return winrt::Windows::Foundation::Size{};
+            range->root.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
+            auto desired=range->root.DesiredSize();
+            return winrt::Windows::Foundation::Size{std::max(desired.Width,self->sliders?280.f:0.f),std::max(desired.Height,24.f)};
         };
         return result;
     }
