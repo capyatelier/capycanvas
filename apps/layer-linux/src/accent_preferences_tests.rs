@@ -43,6 +43,55 @@ fn native_accent_preferences_input() {
         assert!(near(rgb(&d, &shot, &d.named(&swatch(0)), 5., 16.), system));
         assert!(near(rgb(&d, &shot, &d.named(&swatch(6)), 5., 16.), red));
 
+        let (key, default) = match theme {
+            Theme::Dark => ("dark-base", 2),
+            Theme::Light => ("light-base", 1),
+        };
+        let base = |i: usize| format!("setting-{key}-swatch-{i}");
+        let choices = theme.base_choices();
+        assert!(
+            d.named(&base(default))
+                .downcast::<gtk::ToggleButton>()
+                .unwrap()
+                .is_active()
+        );
+        let row = d.named(&format!("setting-{key}"));
+        let circle = d.named(&base(0));
+        assert!(circle.is_ancestor(&row));
+        assert!(
+            circle.compute_bounds(&row).unwrap().height() < row.height() as f32,
+            "base circles share the title row"
+        );
+        d.click_name(&base(0));
+        assert_eq!(state(&d.w).palette.bg, choices[0]);
+        d.click_name(&base(choices.len()));
+        let base_entry = d
+            .named(&format!("setting-text-{key}"))
+            .downcast::<gtk::Entry>()
+            .unwrap();
+        assert!(
+            base_entry
+                .state_flags()
+                .contains(gtk::StateFlags::FOCUS_WITHIN)
+        );
+        assert_eq!(base_entry.text(), choices[0].to_string());
+        d.key(0xff57);
+        for _ in 0..6 {
+            d.key(0xff08);
+        }
+        for c in "445566".chars() {
+            d.key(c as u32);
+        }
+        d.key(0xff0d);
+        assert_eq!(state(&d.w).palette.bg, HexColor([0x44, 0x55, 0x66]));
+        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        crate::snapshot(&d.w)
+            .save_to_png(d.dir.join(format!("base-custom-{suffix}.png")))
+            .unwrap();
+        d.click_name(&base(default));
+        assert_eq!(state(&d.w).palette.bg, theme.default_base());
+        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+
         d.click_name(&swatch(6));
         assert_eq!(state(&d.w).settings.accent, Some(red));
         assert_eq!(state(&d.w).palette.accent, red);

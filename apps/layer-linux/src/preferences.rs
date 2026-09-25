@@ -760,14 +760,16 @@ impl Preferences {
                         PreferenceKind::Swatches {
                             swatches,
                             placeholder,
+                            inline,
                             ..
                         } => {
-                            let (native_row, body) = titled_row(row);
                             let selector = crate::swatch_selector::SwatchSelector::new(
                                 &w.window.widget_name(),
                                 id.key(),
+                                &row.title,
                                 swatches,
                                 placeholder,
+                                *inline,
                                 glib::clone!(
                                     #[weak]
                                     w,
@@ -802,7 +804,15 @@ impl Preferences {
                                     }
                                 }
                             ));
-                            body.append(&selector.widget);
+                            let native_row = if *inline {
+                                let native_row = text_row(&row.title, &row.description);
+                                native_row.add_suffix(&selector.widget);
+                                native_row.upcast()
+                            } else {
+                                let (native_row, body) = titled_row(row);
+                                body.append(&selector.widget);
+                                native_row
+                            };
                             Field::Swatches(native_row, selector)
                         }
                         PreferenceKind::Choice { options, icons, .. } => {

@@ -417,6 +417,7 @@ pub enum PreferenceKind {
         value: String,
         custom: String,
         placeholder: String,
+        inline: bool,
     },
     Number {
         control: NumericControl,
@@ -665,6 +666,43 @@ fn row(id: PreferenceId, title: &str, description: &str, kind: PreferenceKind) -
         reset: None,
     }
 }
+fn swatch_row(
+    id: PreferenceId,
+    title: &str,
+    mut swatches: Vec<Swatch>,
+    value: Option<HexColor>,
+    custom: HexColor,
+    placeholder: HexColor,
+    inline: bool,
+) -> PreferenceRow {
+    let preset = value.and_then(|value| {
+        swatches
+            .iter()
+            .position(|s| !s.value.is_empty() && s.color == Some(value))
+    });
+    swatches.push(Swatch {
+        custom: true,
+        ..Swatch::new("Custom", String::new(), value.filter(|_| preset.is_none()), Some("pencil"))
+    });
+    let selected = match (value, preset) {
+        (None, _) => 0,
+        (Some(_), Some(index)) => index,
+        (Some(_), None) => swatches.len() - 1,
+    };
+    row(
+        id,
+        title,
+        "",
+        PreferenceKind::Swatches {
+            selected: selected as u32,
+            value: value.map(|c| c.to_string()).unwrap_or_default(),
+            custom: custom.to_string(),
+            placeholder: placeholder.to_string(),
+            inline,
+            swatches,
+        },
+    )
+}
 fn number(
     id: PreferenceId,
     title: &str,
@@ -842,28 +880,8 @@ impl Settings {
                                 .unwrap() as u32,
                         },
                     ),
-                    row(
-                        DarkBase,
-                        "Dark theme base color",
-                        "",
-                        PreferenceKind::Text {
-                            value: self.dark_base.to_string(),
-                            constraint: TextConstraint::HexColor,
-                            max_length: 7,
-                            placeholder: crate::Theme::Dark.default_base().to_string(),
-                        },
-                    ),
-                    row(
-                        LightBase,
-                        "Light theme base color",
-                        "",
-                        PreferenceKind::Text {
-                            value: self.light_base.to_string(),
-                            constraint: TextConstraint::HexColor,
-                            max_length: 7,
-                            placeholder: crate::Theme::Light.default_base().to_string(),
-                        },
-                    ),
+                    self.base_row(crate::Theme::Dark, platform),
+                    self.base_row(crate::Theme::Light, platform),
                 ],
             }],
             vec![
@@ -1027,7 +1045,9 @@ impl Settings {
             }
         }
         if matches!(platform, Platform::Gtk) {
-            groups[0][0].rows.insert(1, self.accent_row(platform));
+            let rows = &mut groups[0][0].rows;
+            let light = rows.iter().position(|r| r.id == LightBase).unwrap();
+            rows.insert(light + 1, self.accent_row(platform));
         }
         groups.insert(2, self.color_groups(platform));
         SettingsPage::ALL
@@ -1043,7 +1063,7 @@ impl Settings {
             .collect()
     }
     fn accent_row(&self, platform: Platform) -> PreferenceRow {
-        let mut swatches: Vec<Swatch> = platform
+        let presets = platform
             .system_accent()
             .then(|| Swatch::new("System", String::new(), Some(DEFAULT_ACCENT), Some("appearance")))
             .into_iter()
@@ -1051,37 +1071,40 @@ impl Settings {
                 Swatch::new(label, color.to_string(), Some(color), None)
             }))
             .collect();
-        let preset = self.accent.and_then(|accent| {
-            swatches
-                .iter()
-                .position(|s| !s.value.is_empty() && s.color == Some(accent))
-        });
-        swatches.push(Swatch {
-            custom: true,
-            ..Swatch::new(
-                "Custom",
-                String::new(),
-                self.accent.filter(|_| preset.is_none()),
-                Some("pencil"),
-            )
-        });
-        let selected = match (self.accent, preset) {
-            (None, _) => 0,
-            (Some(_), Some(index)) => index,
-            (Some(_), None) => swatches.len() - 1,
-        };
-        row(
+        swatch_row(
             PreferenceId::Accent,
             "Accent color",
-            "",
-            PreferenceKind::Swatches {
-                selected: selected as u32,
-                value: self.accent.map(|c| c.to_string()).unwrap_or_default(),
-                custom: self.accent.unwrap_or(DEFAULT_ACCENT).to_string(),
-                placeholder: DEFAULT_ACCENT.to_string(),
-                swatches,
-            },
+            presets,
+            self.accent,
+            self.accent.unwrap_or(DEFAULT_ACCENT),
+            DEFAULT_ACCENT,
+            false,
         )
+    }
+    fn base_row(&self, theme: crate::Theme, platform: Platform) -> PreferenceRow {
+        let (id, title, value) = match theme {
+            crate::Theme::Dark => (PreferenceId::DarkBase, "Dark theme base color", self.dark_base),
+            crate::Theme::Light => (PreferenceId::LightBase, "Light theme base color", self.light_base),
+        };
+        if platform != Platform::Gtk {
+            return row(
+                id,
+                title,
+                "",
+                PreferenceKind::Text {
+                    value: value.to_string(),
+                    constraint: TextConstraint::HexColor,
+                    max_length: 7,
+                    placeholder: theme.default_base().to_string(),
+                },
+            );
+        }
+        let presets = theme
+            .base_choices()
+            .iter()
+            .map(|&c| Swatch::new(&c.to_string(), c.to_string(), Some(c), None))
+            .collect();
+        swatch_row(id, title, presets, Some(value), value, theme.default_base(), true)
     }
     pub(crate) fn zen_menu(&self, _platform: Platform) -> Result<ContextMenu, String> {
         Ok(ContextMenu {
@@ -1125,7 +1148,8 @@ impl Settings {
                 PreferenceKind::Text {
                     constraint: TextConstraint::HexColor,
                     ..
-                },
+                }
+                | PreferenceKind::Swatches { .. },
                 PreferenceValue::Text(text),
             ) if text.trim().is_empty() => self.default_value(id, platform)?,
             (_, value) => value,
@@ -1175,7 +1199,7 @@ impl Settings {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
                 };
-                let color = HexColor::try_from(text)?;
+                let color = HexColor::try_from(text.trim().to_owned())?;
                 if id == DarkBase {
                     self.dark_base = color;
                 } else {
@@ -1634,6 +1658,51 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
         assert!(settings.field(PreferenceId::Accent, Platform::Web).is_err());
+    }
+
+    #[test]
+    fn base_colors_are_inline_grey_swatches_above_the_accent_on_gtk() {
+        let rows = |settings: &Settings, platform| -> Vec<PreferenceRow> {
+            settings.pages(platform)[0].groups[0].rows.clone()
+        };
+        let ids: Vec<_> = rows(&Settings::default(), Platform::Gtk).iter().map(|r| r.id).collect();
+        assert_eq!(
+            ids,
+            [PreferenceId::Theme, PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]
+        );
+        let mut state = PreferencesState::default();
+        let mut settings = Settings::default();
+        for theme in [crate::Theme::Dark, crate::Theme::Light] {
+            let id = if theme == crate::Theme::Dark { PreferenceId::DarkBase } else { PreferenceId::LightBase };
+            let base = |settings: &Settings| {
+                if theme == crate::Theme::Dark { settings.dark_base } else { settings.light_base }
+            };
+            let kind = |settings: &Settings| rows(settings, Platform::Gtk).into_iter().find(|r| r.id == id).unwrap().kind;
+            let PreferenceKind::Swatches { swatches, selected, inline, .. } = kind(&settings) else {
+                panic!("GTK base colors are swatches");
+            };
+            assert!(inline);
+            assert_eq!(swatches.len(), 5);
+            assert_eq!(swatches[selected as usize].color, Some(theme.default_base()));
+            let mut edit = |settings: &mut Settings, text: &str| {
+                let value = PreferenceValue::Text(text.into());
+                state.edit(settings, PreferenceAction::Edit { id, value }, Platform::Gtk);
+                state.error.clone()
+            };
+            assert_eq!(edit(&mut settings, &swatches[0].value), None);
+            assert_eq!(base(&settings), theme.base_choices()[0]);
+            assert_eq!(edit(&mut settings, " #445566 "), None);
+            let PreferenceKind::Swatches { swatches, selected, custom, .. } = kind(&settings) else { unreachable!() };
+            assert!(swatches[selected as usize].custom);
+            assert_eq!(custom, "#445566");
+            assert!(edit(&mut settings, "#4455").is_some());
+            assert_eq!(edit(&mut settings, ""), None);
+            assert_eq!(base(&settings), theme.default_base());
+            assert!(matches!(
+                rows(&settings, Platform::Web).into_iter().find(|r| r.id == id).unwrap().kind,
+                PreferenceKind::Text { .. }
+            ));
+        }
     }
 
     #[test]

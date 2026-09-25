@@ -12,6 +12,22 @@ impl Theme {
     pub const fn default_base(self) -> HexColor {
         HexColor([if matches!(self, Self::Dark) { 51 } else { 184 }; 3])
     }
+    pub const fn base_choices(self) -> [HexColor; 4] {
+        match self {
+            Self::Dark => [
+                HexColor([31; 3]),
+                HexColor([41; 3]),
+                HexColor([51; 3]),
+                HexColor([61; 3]),
+            ],
+            Self::Light => [
+                HexColor([164; 3]),
+                HexColor([184; 3]),
+                HexColor([204; 3]),
+                HexColor([222; 3]),
+            ],
+        }
+    }
 }
 
 pub const ACCENTS: [(&str, HexColor); 9] = [

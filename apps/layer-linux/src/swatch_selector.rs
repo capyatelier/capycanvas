@@ -31,34 +31,61 @@ impl SwatchSelector {
     pub fn new(
         scope: &str,
         name: &str,
+        title: &str,
         swatches: &[Swatch],
         placeholder: &str,
+        inline: bool,
         select: impl Fn(String) + 'static,
     ) -> Rc<Self> {
-        let widget = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let widget = if inline {
+            gtk::Box::new(gtk::Orientation::Horizontal, 8)
+        } else {
+            gtk::Box::new(gtk::Orientation::Vertical, 12)
+        };
         widget.add_css_class("swatch-selector");
-        let flow = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(10)
-            .row_spacing(10)
-            .max_children_per_line(swatches.len() as u32)
-            .halign(gtk::Align::Start)
-            .build();
-        widget.append(&flow);
         let entry = gtk::Entry::builder()
             .width_chars(9)
             .max_width_chars(9)
             .max_length(7)
             .placeholder_text(placeholder)
             .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
             .build();
         entry.add_css_class("preference-entry");
         entry.set_widget_name(&format!("setting-text-{name}"));
-        entry.update_property(&[gtk::accessible::Property::Label("Custom accent color")]);
+        entry.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Custom {}",
+            title.to_lowercase()
+        ))]);
         let focus = gtk::EventControllerFocus::new();
         entry.add_controller(focus.clone());
-        let editor = gtk::Revealer::builder().child(&entry).build();
-        widget.append(&editor);
+        let editor = gtk::Revealer::builder()
+            .child(&entry)
+            .transition_type(if inline {
+                gtk::RevealerTransitionType::SlideLeft
+            } else {
+                gtk::RevealerTransitionType::SlideDown
+            })
+            .build();
+        let circles: gtk::Widget = if inline {
+            widget.add_css_class("inline");
+            widget.set_valign(gtk::Align::Center);
+            widget.append(&editor);
+            gtk::Box::new(gtk::Orientation::Horizontal, 10).upcast()
+        } else {
+            gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .column_spacing(10)
+                .row_spacing(10)
+                .max_children_per_line(swatches.len() as u32)
+                .halign(gtk::Align::Start)
+                .build()
+                .upcast()
+        };
+        widget.append(&circles);
+        if !inline {
+            widget.append(&editor);
+        }
         let colors = gtk::CssProvider::new();
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
@@ -78,11 +105,15 @@ impl SwatchSelector {
             if let Some((first, _)) = buttons.first() {
                 button.set_group(Some(first));
             }
-            let child = gtk::FlowBoxChild::builder()
-                .child(&button)
-                .focusable(false)
-                .build();
-            flow.append(&child);
+            if let Some(flow) = circles.downcast_ref::<gtk::FlowBox>() {
+                let child = gtk::FlowBoxChild::builder()
+                    .child(&button)
+                    .focusable(false)
+                    .build();
+                flow.append(&child);
+            } else {
+                circles.downcast_ref::<gtk::Box>().unwrap().append(&button);
+            }
             buttons.push((button, image));
         }
         let this = Rc::new(Self {

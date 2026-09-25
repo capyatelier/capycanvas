@@ -8,6 +8,11 @@ stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.
 System/Light/Dark selection remains independent of both colors.
 
+GTK shows each base color inline on its title row as four grey circles and a
+Custom circle that slides in a hex entry beside them: dark `#1f1f1f`,
+`#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`, `#cccccc`,
+`#dedede`. Other hosts still show hex text fields.
+
 ## Inventory and existing relationships
 
 Before this change, most surfaces were independently chosen constants, not
@@ -75,7 +80,7 @@ hosts use the translucent fill without backdrop blur.
 
 ## Accent color
 
-GTK Appearance offers **Accent color**: System, libadwaita's nine accent colors
+Below the base colors, GTK Appearance offers **Accent color**: System, libadwaita's nine accent colors
 (Blue `#3584e4`, Teal, Green, Yellow, Orange, Red, Pink, Purple, Slate) and a
 Custom circle that reveals a `#RRGGBB` entry prefilled with the current accent.
 The entry commits on Enter or when it loses focus after an edit; invalid hex is
