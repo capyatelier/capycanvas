@@ -21,6 +21,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -136,7 +137,10 @@ class AndroidColorPanelTest {
         val coords = arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = if (action in listOf(MotionEvent.ACTION_UP,MotionEvent.ACTION_HOVER_ENTER,MotionEvent.ACTION_HOVER_MOVE,MotionEvent.ACTION_HOVER_EXIT)) 0f else .7f })
         val source = when (tool) { MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; else -> InputDevice.SOURCE_TOUCHSCREEN }
         val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) button else 0
-        val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, buttons, 1f, 1f, 0, 0, source, 0)
+        deliver(MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, buttons, 1f, 1f, 0, 0, source, 0))
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
+    }
+    private fun deliver(motion: MotionEvent) {
         try {
             if (systemInput) {
                 val origin = replayOrigin ?: IntArray(2).also { instrumentation.runOnMainSync { owner.view.getLocationOnScreen(it) } }
@@ -144,7 +148,6 @@ class AndroidColorPanelTest {
                 assertTrue("Android accepts typed pointer input", instrumentation.uiAutomation.injectInputEvent(motion, waitForInput))
             } else instrumentation.runOnMainSync { owner.view.dispatchTouchEvent(motion) }
         } finally { motion.recycle() }
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
     }
     private fun tap(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(30); event(MotionEvent.ACTION_UP); settle() }
     private fun capture(name: String): Bitmap {
@@ -166,18 +169,14 @@ class AndroidColorPanelTest {
     private fun secondFinger(down:Boolean) {
         val properties=(7..8).map{id->MotionEvent.PointerProperties().apply{this.id=id;toolType=MotionEvent.TOOL_TYPE_FINGER}}.toTypedArray()
         val coords=(0..1).map{i->MotionEvent.PointerCoords().apply{x=point.x+i*100f;y=point.y;pressure=.7f}}.toTypedArray()
-        val event=MotionEvent.obtain(downAt,SystemClock.uptimeMillis(),(if(down)MotionEvent.ACTION_POINTER_DOWN else MotionEvent.ACTION_POINTER_UP) or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),2,properties,coords,0,0,1f,1f,0,0,InputDevice.SOURCE_TOUCHSCREEN,0)
-        try {
-            val origin=IntArray(2);instrumentation.runOnMainSync{owner.view.getLocationOnScreen(origin)}
-            event.offsetLocation(origin[0].toFloat(),origin[1].toFloat())
-            assertTrue(instrumentation.uiAutomation.injectInputEvent(event,true))
-        } finally {event.recycle()}
+        deliver(MotionEvent.obtain(downAt,SystemClock.uptimeMillis(),(if(down)MotionEvent.ACTION_POINTER_DOWN else MotionEvent.ACTION_POINTER_UP) or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),2,properties,coords,0,0,1f,1f,0,0,InputDevice.SOURCE_TOUCHSCREEN,0))
     }
     private fun fullCapture(name:String) {
         val image=instrumentation.uiAutomation.takeScreenshot()
         File(output,"$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG,100,it) };image.recycle()
     }
     @Test fun glassPickerInputAndSettings() {
+        assumeTrue("Requires -e systemInput true", systemInput)
         action(obj("type" to "invoke","command" to "fit_canvas"))
         val p=canvasPoint()
         tool=MotionEvent.TOOL_TYPE_STYLUS
@@ -308,14 +307,8 @@ class AndroidColorPanelTest {
         }.toTypedArray()
         // The OS cancellation must contain both live pointers. Compose may
         // replace it with an anonymous cancellation when forwarding to canvas.
-        for (action in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_CANCEL)) {
-            val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 2, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-            try {
-                val origin = IntArray(2); instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
-                motion.offsetLocation(origin[0].toFloat(), origin[1].toFloat())
-                assertTrue(instrumentation.uiAutomation.injectInputEvent(motion, true))
-            } finally { motion.recycle() }
-        }
+        for (action in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_CANCEL))
+            deliver(MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 2, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0))
         contact = false
         waitFor("two finger navigation") { state().getJSONObject("camera").getDouble("zoom") != before.getDouble("zoom") }
         assertNotEquals(before.getDouble("rotation"), state().getJSONObject("camera").getDouble("rotation"))
@@ -327,6 +320,7 @@ class AndroidColorPanelTest {
         assertEquals("Anonymous cancellation retires every captured finger", cancelled, state().getJSONObject("camera").toString())
     }
     @Test fun pickerWheelPreviewPerformance() {
+        assumeTrue("Requires -e systemInput true", systemInput)
         action(obj("type" to "invoke","command" to "fit_canvas"))
         val p=canvasPoint()
         tool=MotionEvent.TOOL_TYPE_STYLUS
