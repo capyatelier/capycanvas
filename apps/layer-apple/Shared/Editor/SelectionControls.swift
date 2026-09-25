@@ -37,10 +37,16 @@ struct SelectionModeGroup: View {
 
 private struct SelectionSegmentStyle: ButtonStyle {
     let selected: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.background {
-            if selected { Rectangle().fill(EditorPalette.sharedAccent.opacity(0.22)) }
-            else if configuration.isPressed { Rectangle().fill(.foreground).opacity(0.16) }
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, selected: selected) }
+    private struct Face: View {
+        let configuration: Configuration
+        let selected: Bool
+        @Environment(\.editorPalette) private var palette
+        var body: some View {
+            configuration.label.background {
+                if selected { Rectangle().fill(palette.active) }
+                else if configuration.isPressed { Rectangle().fill(.foreground).opacity(0.16) }
+            }
         }
     }
 }

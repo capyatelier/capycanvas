@@ -3,7 +3,7 @@
 use super::*;
 
 /// A reversible visual proposal; producing it never edits colors or history.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ColorReorderPreview {
     pub order: Vec<u64>,
     pub action: Option<ColorLibraryAction>,

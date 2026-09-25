@@ -133,9 +133,12 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             finally { transition(false); if(currentCoroutineContext().isActive && selected!=0L)resume() }
         }
     }
-    fun order(request:JSONObject) {
+    fun order(request:JSONObject) { host.viewModelScope.launch { reorder(request) } }
+    suspend fun reorder(request:JSONObject) {
         if(blocked) return
-        host.viewModelScope.launch { try { query(request);refresh();host.documentChanged() } catch(e:Exception){host.reportActionError(e.message ?: "Could not reorder drawings")} }
+        try { query(request);val next=JSONObject(query(obj("op" to "view")));if(next.toString()!=view.toString())view=next;host.documentChanged() }
+        catch(e:CancellationException){throw e}
+        catch(e:Exception){host.reportActionError(e.message ?: "Could not reorder drawings")}
     }
     fun key(event:KeyEvent):Boolean {
         if(event.action!=KeyEvent.ACTION_DOWN) return false

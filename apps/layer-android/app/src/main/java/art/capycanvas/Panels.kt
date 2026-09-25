@@ -106,6 +106,10 @@ import kotlin.math.roundToInt
         LayerPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
         return
     }
+    if (panel.getString("id") == "palettes") {
+        PalettePanel(host, modifier) { onContent(it); onHeight(it.height) }
+        return
+    }
     if (panel.getString("id") == "filter_types") {
         FilterTypesPanel(host, state, modifier)
         return
@@ -124,7 +128,7 @@ import kotlin.math.roundToInt
         val hasColor = controls.any { it.getString("control") == "color_wheel" }
         val displayedHeight = contentHeight
         val measured = PanelContentSize(displayedHeight + (if (hasColor) colorHeightDeficit else 0f) + (if (hasNavigator) navigatorHeightDeficit else 0f),
-            fixedHeight = if (controls.size == 1 && hasColor) null else 0f)
+            fixedHeight = if (controls.size == 1 && (hasColor || hasNavigator)) null else 0f)
         SideEffect {
             if (displayedHeight > 0f) { onHeight(displayedHeight); onContent(measured) }
         }

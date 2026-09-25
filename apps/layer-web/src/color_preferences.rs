@@ -113,3 +113,16 @@ pub fn raster_worker_profile_library(request: &str, bytes: js_sys::Uint8Array) -
     let result = action.execute(&bytes.to_vec()).map_err(js)?;
     js_sys::JSON::parse(&serde_json::to_string(&result).map_err(js)?)
 }
+
+#[wasm_bindgen]
+pub fn raster_worker_palette_file(
+    request: &str,
+    bytes: js_sys::Uint8Array,
+) -> Result<js_sys::Array, JsValue> {
+    let request: layer_ui::PaletteFileRequest = serde_json::from_str(request).map_err(js)?;
+    let (metadata, bytes) = layer_ui::palette_file(request, &bytes.to_vec()).map_err(js)?;
+    Ok(js_sys::Array::of2(
+        &js_sys::JSON::parse(&serde_json::to_string(&metadata).map_err(js)?)?,
+        &js_sys::Uint8Array::from(bytes.as_slice()),
+    ))
+}

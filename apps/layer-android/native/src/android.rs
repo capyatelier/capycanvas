@@ -1159,6 +1159,26 @@ pub extern "system" fn Java_art_capycanvas_Native_toolbarUi(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_automaticTabNames(
+    mut env: JNIEnv,
+    _: JClass,
+    request: JString,
+) -> jstring {
+    #[derive(serde::Deserialize)]
+    struct Request {
+        available: f32,
+        widths: Vec<[f32; 2]>,
+    }
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str::<Request>(&s).map_err(error))
+        .and_then(|r| {
+            serde_json::to_string(&layer_ui::TabStyle::automatic_names(r.available, &r.widths))
+                .map_err(error)
+        });
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
     mut env: JNIEnv,
     _: JClass,

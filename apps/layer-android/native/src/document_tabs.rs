@@ -113,6 +113,13 @@ enum Request {
         point: [f32; 2],
         vertical: bool,
     },
+    Slide {
+        id: u64,
+        hits: Vec<layer_ui::DocumentTabHit>,
+        clip: layer_ui::Bounds,
+        press: [f32; 2],
+        point: [f32; 2],
+    },
     Storage {
         error: Option<String>,
     },
@@ -147,6 +154,17 @@ pub extern "system" fn Java_art_capycanvas_Native_documentTabs(
                 a.documents
                     .drop_target(&hits, point, vertical)
                     .map(|before| json!({"before":before}))
+            ),
+            Request::Slide {
+                id,
+                hits,
+                clip,
+                press,
+                point,
+            } => json!(
+                a.documents
+                    .drag(id, press, &hits, clip)
+                    .and_then(|drag| drag.preview(point))
             ),
             Request::Storage { error } => {
                 a.documents.storage_completed(error.map_or(Ok(()), Err));

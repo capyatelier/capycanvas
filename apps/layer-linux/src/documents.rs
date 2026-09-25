@@ -1,5 +1,9 @@
 //! One window, one live canvas, retained document sessions with reclaimable tiles.
-use crate::{canvas::GpuCanvas, recovery::Recovery, workspace::Workspace};
+use crate::{
+    canvas::GpuCanvas,
+    recovery::Recovery,
+    workspace::{NativeTabSlide, SlidingTab, Workspace},
+};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use layer_core::{Project, raster_storage::RetainedTiles};
@@ -28,6 +32,12 @@ struct TabDrag {
     device: Option<gdk::Device>,
     button: gtk::Widget,
     width: i32,
+    slide: Option<TabSlide>,
+}
+struct TabSlide {
+    policy: layer_ui::DocumentTabDrag,
+    view: NativeTabSlide,
+    surface: gtk::Widget,
 }
 pub(crate) struct Parked {
     canvas: GpuCanvas,
@@ -74,36 +84,119 @@ impl Documents {
     fn cancel_drag(&self) {
         if let Some(drag) = self.drag.borrow_mut().take() {
             Self::reset_button(&drag.button);
-        }
-        self.dragging.set(false);
-        self.drop_at(None);
-    }
-    // Return an insertion point only over a visible tab. The root controller
-    // keeps the native implicit contact grab stable while GTK buttons arbitrate
-    // clicks. Like the existing workspace tabs, every device uses native slop.
-    fn drop_at(&self, point: Option<[f32; 2]>) -> Option<Option<u64>> {
-        let mut result = None;
-        let mut child = self.strip.first_child();
-        for &id in self.model.borrow().order() {
-            let Some(row) = child else {
-                break;
-            };
-            child = row.next_sibling();
-            row.remove_css_class("drop-before");
-            row.remove_css_class("drop-after");
-            if let Some(p) = point
-                && let Some(b) = row.compute_bounds(&self.root)
-                && b.contains_point(&gtk::graphene::Point::new(p[0], p[1]))
-            {
-                result = self.model.borrow().drop_target(&[layer_ui::DocumentTabHit {
-                    id,
-                    bounds: layer_ui::Bounds { x: b.x(), y: b.y(), width: b.width(), height: b.height() },
-                }], p, false);
-                row.add_css_class(if result == Some(Some(id)) { "drop-before" } else { "drop-after" });
+            if let Some(slide) = drag.slide {
+                slide.view.restore();
+                slide.surface.queue_draw();
             }
         }
-        result
+        self.dragging.set(false);
     }
+    fn begin_slide(&self, w: &Workspace) {
+        let mut held = self.drag.borrow_mut();
+        let Some(drag) = held.as_mut() else {
+            return;
+        };
+        let surface: &gtk::Widget = w.surface.upcast_ref();
+        let palette = w.gpu.borrow().as_ref().map(|g| g.session.state().palette);
+        let Some(clip) = self.strip.compute_bounds(surface) else {
+            return;
+        };
+        let order = self.model.borrow().order().to_vec();
+        let mut tabs = Vec::new();
+        let mut hits = Vec::new();
+        let mut child = self.strip.first_child();
+        for &id in &order {
+            let Some(row) = child else {
+                return;
+            };
+            child = row.next_sibling();
+            let backing = palette.filter(|_| id == drag.id).map(|p| {
+                let [r, g, b] = if row.has_css_class("selected") {
+                    p.panel
+                } else {
+                    p.tabbar
+                }
+                .0;
+                gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.)
+            });
+            let Some(tab) = SlidingTab::capture(row, surface, |snapshot, rect| {
+                if let Some(color) = backing {
+                    let shape = gtk::gsk::RoundedRect::from_rect(
+                        *rect,
+                        rect.height() / 2. * crate::squircle::CORNER_FIT,
+                    );
+                    snapshot.push_rounded_clip(&shape);
+                    snapshot.append_color(&color, rect);
+                    snapshot.pop();
+                }
+            }) else {
+                return;
+            };
+            hits.push(layer_ui::DocumentTabHit {
+                id,
+                bounds: tab.bounds,
+            });
+            tabs.push(tab);
+        }
+        let clip = layer_ui::Bounds {
+            x: clip.x(),
+            y: clip.y(),
+            width: clip.width(),
+            height: clip.height(),
+        };
+        let Some(policy) = self.model.borrow().drag(drag.id, drag.origin, &hits, clip) else {
+            return;
+        };
+        let Some(view) = order
+            .iter()
+            .position(|&id| id == drag.id)
+            .and_then(|source| NativeTabSlide::new(tabs, source, clip, 0))
+        else {
+            return;
+        };
+        view.hide();
+        surface.queue_draw();
+        drag.slide = Some(TabSlide {
+            policy,
+            view,
+            surface: surface.clone(),
+        });
+    }
+    fn slide_to(&self, point: [f32; 2]) {
+        if let Some(slide) = self
+            .drag
+            .borrow_mut()
+            .as_mut()
+            .and_then(|d| d.slide.as_mut())
+            && let Some(preview) = slide.policy.preview(point)
+        {
+            slide
+                .view
+                .retarget(&slide.surface, preview.bounds, |index| {
+                    preview.offsets[index]
+                });
+            slide.surface.queue_draw();
+        }
+    }
+    fn drop_at(&self, point: [f32; 2]) -> Option<Option<u64>> {
+        let held = self.drag.borrow();
+        let policy = &held.as_ref()?.slide.as_ref()?.policy;
+        if !policy.is_current(self.model.borrow().order()) {
+            return None;
+        }
+        policy
+            .preview(point)
+            .filter(|preview| preview.attached)
+            .map(|preview| preview.before)
+    }
+    pub fn snapshot_drag(&self, snapshot: &gtk::Snapshot, now: i64, scale: f32) {
+        if let Some(slide) = self.drag.borrow().as_ref().and_then(|d| d.slide.as_ref()) {
+            slide.view.snapshot(snapshot, now, scale);
+        }
+    }
+    // The root controller keeps the native implicit contact grab stable while
+    // GTK buttons arbitrate clicks. Like the existing workspace tabs, every
+    // device uses native slop.
     fn bind_input(&self, w: &Rc<Workspace>) {
         let input = gtk::EventControllerLegacy::new();
         input.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -139,7 +232,7 @@ impl Documents {
                 let sequence = touch.then(|| event.event_sequence());
                 let point = event
                     .position()
-                    .and_then(|(x, y)| crate::input::widget_point(&docs.root, x, y))
+                    .and_then(|(x, y)| crate::input::widget_point(&w.surface, x, y))
                     .map(|p| [p.x(), p.y()]);
                 if matches!(kind, ButtonPress | TouchBegin) {
                     if docs.drag.borrow().is_some()
@@ -164,7 +257,7 @@ impl Documents {
                             let Some(button) = row.first_child() else {
                                 continue;
                             };
-                            if button.compute_bounds(&docs.root).is_some_and(|b| {
+                            if button.compute_bounds(&w.surface).is_some_and(|b| {
                                 b.contains_point(&gtk::graphene::Point::new(p[0], p[1]))
                             }) {
                                 *docs.drag.borrow_mut() = Some(TabDrag {
@@ -174,6 +267,7 @@ impl Documents {
                                     device: event.device(),
                                     button,
                                     width: docs.root.width(),
+                                    slide: None,
                                 });
                                 break;
                             }
@@ -194,28 +288,30 @@ impl Documents {
                     || !drag.button.is_mapped()
                     || !docs.root.is_sensitive()
                     || docs.root.visible_child_name().as_deref() != Some("tabs");
-                if !cancelled
-                    && let Some(p) = point
+                let pickup = !cancelled
                     && !docs.dragging.get()
-                    && docs.root.drag_check_threshold(
-                        drag.origin[0] as i32,
-                        drag.origin[1] as i32,
-                        p[0] as i32,
-                        p[1] as i32,
-                    )
-                {
+                    && point.is_some_and(|p| {
+                        docs.root.drag_check_threshold(
+                            drag.origin[0] as i32,
+                            drag.origin[1] as i32,
+                            p[0] as i32,
+                            p[1] as i32,
+                        )
+                    });
+                if pickup {
                     docs.dragging.set(true);
                     Self::reset_button(&drag.button);
                 }
                 let started = docs.dragging.get();
                 // Release the RefCell guard before cancellation takes ownership.
                 drop(held);
+                if pickup {
+                    docs.begin_slide(&w);
+                }
                 if cancelled || matches!(kind, ButtonRelease | TouchEnd) {
-                    let before = if started && !cancelled {
-                        docs.drop_at(point)
-                    } else {
-                        None
-                    };
+                    let before = point
+                        .filter(|_| started && !cancelled)
+                        .and_then(|p| docs.drop_at(p));
                     if started || cancelled {
                         docs.cancel_drag();
                     } else {
@@ -227,8 +323,8 @@ impl Documents {
                     if started {
                         docs.refresh(&w);
                     }
-                } else if started {
-                    docs.drop_at(point);
+                } else if started && let Some(p) = point {
+                    docs.slide_to(p);
                 }
                 if started {
                     glib::Propagation::Stop
@@ -955,6 +1051,13 @@ impl Documents {
     #[cfg(test)]
     pub fn drag_active(&self) -> bool {
         self.dragging.get()
+    }
+    #[cfg(test)]
+    pub fn slide(&self) -> Option<(f32, Vec<f32>)> {
+        let held = self.drag.borrow();
+        let view = &held.as_ref()?.slide.as_ref()?.view;
+        assert!(view.tabs.iter().all(|t| t.widget.opacity() == 0.));
+        Some((view.bounds.x, view.tabs.iter().map(|t| t.to).collect()))
     }
     #[cfg(test)]
     pub fn parked_memory(&self) -> (usize, bool) {

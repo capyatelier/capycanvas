@@ -1476,10 +1476,12 @@ name = "layer-ui"
 version = "0.1.0"
 dependencies = [
  "fasteval",
+ "flate2",
  "layer-color",
  "layer-core",
  "layer-engine",
  "layer-render",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2 0.10.9",

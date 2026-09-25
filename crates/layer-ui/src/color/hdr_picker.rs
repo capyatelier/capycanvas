@@ -54,6 +54,12 @@ pub(super) fn validate_intensity(depth: layer_core::color::SampleDepth, stops: f
     Ok(())
 }
 impl ColorState {
+    pub fn mapped_swatch(&self, color: RgbColor, recipe: layer_core::color::hdr::SdrRendition) -> [f32; 4] {
+        if self.hdr_picker.is_none() {
+            return self.preview(color);
+        }
+        super::form::mapped_preview(color, self.rgb_space, RgbSpace::Srgb, Some(recipe)).unwrap().rgba
+    }
     pub fn view_mapped(&self, recipe: layer_core::color::hdr::SdrRendition) -> ColorPanelView {
         let mut view=self.view();
         if self.hdr_picker.is_none() {return view;}
@@ -66,7 +72,7 @@ impl ColorState {
                 (f64::from(v)*gain).clamp(-f64::from(f32::MAX),f64::from(f32::MAX)) as f32));
             [RgbSpace::Srgb.encode(rgb[0] as f64) as f32,RgbSpace::Srgb.encode(rgb[1] as f64) as f32,RgbSpace::Srgb.encode(rgb[2] as f64) as f32,1.]
         }).collect();
-        let preview=|color| super::form::mapped_preview(color,self.rgb_space,RgbSpace::Srgb,Some(recipe)).unwrap().rgba;
+        let preview=|color| self.mapped_swatch(color,recipe);
         view.marker_color=preview(self.definition())[..3].try_into().unwrap();
         for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4],ColorSlot::Temporary=>preview(self.temporary)};}
         view.outside_document_gamut=!self.definition().in_hdr_gamut(self.rgb_space).unwrap();

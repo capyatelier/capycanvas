@@ -127,6 +127,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
                 StrokeRecordingSave(host)
+                PaletteFiles(host)
                 DocumentRequests(host)
                 WorkspaceManager(host)
                 // Status/navigation bars overlay this immersive workspace. Their
@@ -372,6 +373,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
         state?.let { SelectionResizeDialog(host, it) }
         WorkspaceDropHint(dock)
+        PaletteDragOverlay(host, dock.origin)
         dock.contextMenu?.let { menu ->
             val anchor = dock.contextAnchor
             Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
@@ -495,7 +497,9 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                 Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.strip).dragSource(dock, groupItem)
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
                         onLongClick = { dock.holdContext(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin) }
+                    var strip by remember { mutableFloatStateOf(0f) }
+                    val names = automaticTabNames(host, group.getInt("id"), group.array("panels").values().map { panels[it.toString()] }, strip)
+                    Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin); strip = it.size.width / dock.density }
                         .horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
                         group.array("panels").values().forEachIndexed { index, id ->
                             val p = panels[id.toString()] ?: return@forEachIndexed
@@ -509,7 +513,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                                     dock.tabSlots["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
                                         "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
                                 }
-                            WorkspaceTab(host, dock, p, group.getInt("id"), index, id == active, tab)
+                            WorkspaceTab(host, dock, p, group.getInt("id"), index, id == active, tab, fittedName = names?.getOrNull(index))
                         }
                     }
                     Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
@@ -520,6 +524,10 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             Box(Modifier.weight(1f).testTag("panel-body-$active").then(if (tabsVisible) Modifier.background(colors.panelFill) else Modifier)) {
                 if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
                 else PanelControls(host, state, panel, Modifier.fillMaxSize(), onContent = { dock.measure(active, content = it) })
+                if (active != "palettes" && group.array("panels").values().contains("palettes"))
+                    PaletteMeasurement(host) { dock.measure("palettes", content = it) }
+                if (active != "color" && group.array("panels").values().contains("color"))
+                    ColorMeasurement(host) { dock.measure("color", content = it) }
             }
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)

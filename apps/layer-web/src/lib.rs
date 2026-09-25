@@ -249,6 +249,14 @@ impl CanvasRenderer for WebRenderer {
 fn js(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
 }
+#[wasm_bindgen]
+pub fn automatic_tab_names(available: f32, widths: &[f32]) -> Vec<u8> {
+    let widths: Vec<[f32; 2]> = widths.chunks_exact(2).map(|w| [w[0], w[1]]).collect();
+    layer_ui::TabStyle::automatic_names(available, &widths)
+        .into_iter()
+        .map(u8::from)
+        .collect()
+}
 fn serialize(value: &impl Serialize) -> Result<JsValue, JsValue> {
     value
         .serialize(
@@ -350,6 +358,48 @@ impl WebApp {
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
+    }
+    pub fn palette_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
+        let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
+        serialize(
+            &self
+                .session
+                .state()
+                .colors
+                .library
+                .menu(target)
+                .map_err(js)?,
+        )
+    }
+    pub fn palette_reorder_preview(
+        &self,
+        palette: u64,
+        id: u64,
+        slot: usize,
+    ) -> Result<JsValue, JsValue> {
+        let preview = self
+            .session
+            .state()
+            .colors
+            .library
+            .preview_reorder(palette, id, slot);
+        serialize(&preview)
+    }
+    pub fn palette_action_error(&self, action: JsValue) -> Result<Option<String>, JsValue> {
+        let action: layer_ui::ColorLibraryAction =
+            serde_wasm_bindgen::from_value(action).map_err(js)?;
+        Ok(self.session.state().colors.library.check(action).err())
+    }
+    pub fn group_tab_style(&self, group: u32) -> Result<JsValue, JsValue> {
+        serialize(
+            &self
+                .session
+                .state()
+                .workspace
+                .layout
+                .group_tab_style(group)
+                .map_err(js)?,
+        )
     }
     pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
         if !self.startup.complete || self.session.engine().has_pending_document_edits() {

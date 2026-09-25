@@ -28,7 +28,10 @@ struct PanelControls: View {
     private var fitsColorWheel: Bool {
         panel["id"].string == "color" && panel["controls"].array.filter { $0["visible_in_panel"].bool }.map { $0["control"].string } == ["color_wheel"]
     }
-    private var padding: CGFloat { panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8 }
+    private var padding: CGFloat {
+        if !measureForWorkspace && store.state["customization"]["drawer"]["compact"].bool { return 12 }
+        return panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8
+    }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
             .background {

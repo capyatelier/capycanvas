@@ -12,17 +12,18 @@ struct ColorWheelDrawing: View {
     // Use panel coordinates to control the backing surface's pixel alignment.
     let bounds: JSON
     var viewing = JSON()
+    var previewing = false
     @Environment(\.displayScale) private var displayScale
     @StateObject private var field = ColorFieldImageCache()
     @StateObject private var guide = ColorFieldImageCache()
-    @StateObject private var hdrField = HDRColorFieldImageCache()
+    @StateObject private var asyncField = AsyncColorFieldImageCache()
     var body: some View {
         let side = bounds[2].number
         let pixels = ceil(((bounds[0].number + side).rounded() - bounds[0].number.rounded()) * displayScale)
         let hdrRequest = viewing.isNull ? JSON() : viewing.replacing("stops", with: model["intensity"])
-        let request = viewing.isNull ? JSON() : JSON(["side": pixels, "hue": model["wheel_components"][0].number,
+        let request = viewing.isNull && !previewing ? JSON() : JSON(["side": pixels, "hue": model["wheel_components"][0].number,
             "shape": model["shape"].string, "space": model["rgb_space"].string, "viewing": hdrRequest.raw])
-        let hdrImage = hdrField.image
+        let asyncImage = asyncField.image
         Canvas(colorMode: .extendedLinear) { graphics, _ in
             var graphics = graphics
             let side = bounds[2].number
@@ -37,8 +38,8 @@ struct ColorWheelDrawing: View {
             let geometry = model["geometry"], shape = ColorWheelShape(model["shape"].string)
             func point(_ value: JSON) -> CGPoint { CGPoint(x: value[0].number * side, y: value[1].number * side) }
             let center = point(geometry["center"])
-            let image = viewing.isNull ? field.image(side: pixels,
-                hue: Float(model["wheel_components"][0].number), shape: shape, rgbSpace: model["rgb_space"].string) : hdrImage
+            let image = !viewing.isNull ? asyncImage : previewing ? asyncImage ?? field.last : field.image(side: pixels,
+                hue: Float(model["wheel_components"][0].number), shape: shape, rgbSpace: model["rgb_space"].string)
             if let image {
                 var clipped = graphics
                 if shape == .circle {
@@ -76,22 +77,22 @@ struct ColorWheelDrawing: View {
                 graphics.stroke(marker, with: .color(.black.opacity(0.5)), lineWidth: 4)
                 graphics.stroke(marker, with: .color(.white), lineWidth: 2)
             }
-        }.onChange(of: request.stableKey, initial: true) { _, _ in hdrField.request(request) }
-            .onDisappear { hdrField.cancel() }
+        }.onChange(of: request.stableKey, initial: true) { _, _ in asyncField.request(request) }
+            .onDisappear { asyncField.cancel() }
     }
 }
 
 /// UI bitmap work has one running job and one replaceable pending request.
 /// Shared Rust still owns every color sample. Native drawing never waits for it.
-@MainActor final class HDRColorFieldImageCache: ObservableObject {
+@MainActor final class AsyncColorFieldImageCache: ObservableObject {
     @Published private(set) var image: CGImage?
-    private let worker = HDRFieldWorker()
+    private let worker = ColorFieldWorker()
     private var pending: JSON?
     private var running = false
     private var generation: UInt64 = 0
     private var requested = ""
     func request(_ value: JSON) {
-        guard !value["viewing"].isNull else { cancel(); return }
+        guard !value.isNull else { cancel(); return }
         let key = value.stableKey
         guard key != requested else { return }
         requested = key; pending = value; start()
@@ -119,8 +120,8 @@ struct ColorWheelDrawing: View {
 
 /// The mutable raster cache is private and touched only on this serial queue.
 /// Immutable CGImages are the only results crossing back to the main actor.
-private final class HDRFieldWorker: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "art.capycanvas.hdr-picker", qos: .userInitiated)
+private final class ColorFieldWorker: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "art.capycanvas.color-field", qos: .userInitiated)
     private let cache = ColorFieldImageCache()
     func clear() { queue.async { self.cache.clear() } }
     func render(_ value: JSON, completion: @escaping @Sendable (CGImage?) -> Void) {
@@ -150,6 +151,7 @@ final class ColorPanelLayoutCache: ObservableObject {
 final class ColorFieldImageCache: ObservableObject {
     private var key: Key?
     private var cached: CGImage?
+    var last: CGImage? { cached }
     private var baseKey: Key?
     private var base = [Float]()
     private struct Key: Equatable { let side: UInt32; let hue: Float; let shape: ColorWheelShape; let space: String; let guide: Bool; let hdr: String }

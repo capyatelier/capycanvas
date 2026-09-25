@@ -1880,7 +1880,7 @@ impl CustomizationState {
                     _ => unreachable!(),
                 };
                 drawer.configure_picker(layout, platform);
-                if platform == Platform::Gtk && drawer.columns == [vec![Panel::Color]] {
+                if Panel::palettes_presented_on(platform) && drawer.columns == [vec![Panel::Color]] {
                     drawer.columns[0].push(Panel::Palettes);
                 }
                 if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {

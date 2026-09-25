@@ -115,9 +115,6 @@ struct SettingsView: View {
                 Toggle(row["title"].string, isOn: Binding(get: { kind["active"].bool }, set: { edit(row, $0) }))
             case "choice":
                 choice(row)
-            case "text":
-                PreferenceText(label: row["title"].string, value: kind["value"].string,
-                    placeholder: kind["placeholder"].string, maxLength: Int(kind["max_length"].uint)) { edit(row, $0) }
             case "number":
                 let reset = numberResets[row["id"].string, default: 0]
                 NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { value, completion in
@@ -126,6 +123,8 @@ struct SettingsView: View {
                     guard reset == numberResets[row["id"].string, default: 0] else { completion(nil); return }
                     store.edit(["type": "preferences", "action": ["type": "edit", "id": row["id"].raw, "value": value]], completion: completion)
                 }.id(reset)
+            case "swatches":
+                PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"])) { edit(row, $0) }
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
             case "link":
@@ -161,7 +160,7 @@ struct SettingsView: View {
                         selected: selected, size: 48, background: Color.primary.opacity(0.05)) { edit(row, index) }
                         .frame(height: 64)
                         .overlay { RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(selected ? EditorPalette.sharedAccent : .clear, lineWidth: 2).allowsHitTesting(false) }
+                            .strokeBorder(selected ? EditorPalette(source: store.state["palette"]).accent : .clear, lineWidth: 2).allowsHitTesting(false) }
                         .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
                 }
             }.padding(.vertical, 6)
@@ -194,35 +193,116 @@ private struct SettingsDoneButton: View {
     }
 }
 
-private struct PreferenceText: View {
-    let label: String
-    let value: String
-    let placeholder: String
-    let maxLength: Int
+private struct PreferenceSwatches: View {
+    let row: JSON
+    let palette: EditorPalette
     let commit: (String) -> Void
+    @State private var editing = false
     @State private var text = ""
-    @FocusState private var editing: Bool
+    @FocusState private var focused: Bool
+    private var kind: JSON { row["kind"] }
     var body: some View {
-        // Keep the label outside the native editor's hit area so its Reset menu
-        // remains available while the field owns text selection and editing.
-        HStack {
-            Text(label)
-            Spacer()
-            field.labelsHidden().accessibilityLabel(label)
-                .multilineTextAlignment(.trailing).frame(width: 132)
+        if kind["inline"].bool {
+            HStack(spacing: 8) {
+                Text(row["title"].string).layoutPriority(1)
+                Spacer(minLength: 8)
+                if editing { field.frame(width: 96) }
+                HStack(spacing: 10) { circles(28) }
+            }
+        } else {
+            VStack(spacing: 12) {
+                Text(row["title"].string).frame(maxWidth: .infinity, alignment: .leading)
+                CenteredFlow(spacing: 10) { circles(32) }
+                if editing { field.frame(width: 120) }
+            }
+        }
+    }
+    private func circles(_ side: CGFloat) -> some View {
+        ForEach(kind["swatches"].array.indices, id: \.self) { index in
+            let swatch = kind["swatches"][index], selected = Int(kind["selected"].uint) == index
+            Button {
+                if swatch["custom"].bool {
+                    text = kind["custom"].string; editing = true; focused = true
+                } else {
+                    editing = false; commit(swatch["value"].string)
+                }
+            } label: {
+                ZStack {
+                    if swatch["color"].isNull {
+                        Circle().fill(palette["text"].opacity(0.10))
+                        Circle().strokeBorder(palette["text"].opacity(0.15), lineWidth: 1)
+                    } else {
+                        Circle().fill(Color(hex: swatch["color"].string))
+                    }
+                    if !swatch["icon"].isNull && !(selected && !swatch["custom"].bool) {
+                        SharedIcon(name: swatch["icon"].string, size: 16)
+                            .foregroundStyle(swatch["foreground"].isNull ? palette["text"] : Color(hex: swatch["foreground"].string))
+                    } else if selected && !swatch["custom"].bool {
+                        SharedIcon(name: "check", size: 16)
+                            .foregroundStyle(swatch["foreground"].isNull ? palette["text"] : Color(hex: swatch["foreground"].string))
+                    }
+                }.frame(width: side, height: side)
+                    .overlay { if selected { Circle().strokeBorder(palette["text"], lineWidth: 2).padding(-4) } }
+                    .contentShape(Circle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel(swatch["label"].string)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
         }
     }
     private var field: some View {
-        TextField(label, text: $text, prompt: Text(placeholder)).focused($editing).onSubmit { commit(text) }
+        TextField(row["title"].string, text: $text, prompt: Text(kind["placeholder"].string))
+            .labelsHidden().focused($focused).monospaced()
+            .onSubmit { submit() }
             .autocorrectionDisabled()
             #if os(iOS)
             .textInputAutocapitalization(.never).keyboardType(.asciiCapable)
             #endif
-            .focusedValue(\.editorTextCommit, { commit(text) })
-            .onAppear { text = value }.onChange(of: value) { _, next in text = next }
-            .onChange(of: text) { _, next in
-                if next.count > maxLength { text = String(next.prefix(maxLength)) }
-            }
-            .onChange(of: editing) { old, next in if old && !next { commit(text) } }
+            .focusedValue(\.editorTextCommit, { submit() })
+            .onChange(of: text) { _, next in if next.count > 7 { text = String(next.prefix(7)) } }
+            .onChange(of: focused) { old, next in if old && !next { submit() } }
+            .onChange(of: kind["value"].string) { _, _ in editing = false }
+            .accessibilityIdentifier("preference-" + row["id"].string + "-custom")
+    }
+    private func submit() {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed != kind["custom"].string else { return }
+        commit(trimmed)
+        text = kind["custom"].string
     }
 }
+
+private struct CenteredFlow: Layout {
+    let spacing: CGFloat
+    private func rows(_ width: CGFloat, _ subviews: Subviews) -> [[(Int, CGSize)]] {
+        var rows: [[(Int, CGSize)]] = [[]], used: CGFloat = 0
+        for (index, view) in subviews.enumerated() {
+            let size = view.sizeThatFits(.unspecified)
+            if !rows[rows.count - 1].isEmpty && used + spacing + size.width > width { rows.append([]); used = 0 }
+            used += (rows[rows.count - 1].isEmpty ? 0 : spacing) + size.width
+            rows[rows.count - 1].append((index, size))
+        }
+        return rows
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let lines = rows(width, subviews)
+        let height = lines.map { $0.map(\.1.height).max() ?? 0 }.reduce(0, +) + spacing * CGFloat(max(0, lines.count - 1))
+        let widest = lines.map { $0.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, $0.count - 1)) }.max() ?? 0
+        return CGSize(width: proposal.width ?? widest, height: height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in rows(bounds.width, subviews) {
+            let width = line.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, line.count - 1))
+            var x = bounds.midX - width / 2
+            let height = line.map(\.1.height).max() ?? 0
+            for (index, size) in line {
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += height + spacing
+        }
+    }
+}
+

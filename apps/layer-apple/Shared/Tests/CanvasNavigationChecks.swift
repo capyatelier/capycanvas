@@ -114,21 +114,29 @@ extension XCTestCase {
             }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
         }
-        #endif
-        editorTool("Eyedropper", in: app)
-        editorChoice("Visible color", in: app)
-        #if os(macOS)
+        func source(_ label: String) {
+            editorTool("Eyedropper", in: app)
+            let menu = app.popUpButtons["picker-setting-source"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10), "Picking shows its source setting")
+            workspaceActivate(menu)
+            workspaceActivate(app.menuItems[label].firstMatch)
+            expectation(for: NSPredicate(format: "value == %@", label), evaluatedWith: menu)
+            waitForExpectations(timeout: 5)
+        }
         // Independently calculated sRGB result of 50% red over blue in linear light.
+        source("Visible color")
         pick(0.53, expected: [0.672824, 0.366774, 0.599931, 1])
         attachEditor(in: app, name: "eyedropper-visible")
-        #endif
-        editorChoice("Layer color", in: app)
-        #if os(macOS)
+        source("Selected layer")
         pick(0.53, expected: [0.9, 0.25, 0.2, 1])
+        editorTool("Eyedropper", in: app)
         pick(0.66, expected: [0.9, 0.25, 0.2, 1]) // Transparent layer pixels preserve the current color.
         attachEditor(in: app, name: "eyedropper-layer")
-        editorChoice("Visible color", in: app)
+        source("Visible color")
         pick(0.66, expected: [0.2, 0.45, 0.8, 1])
+        #else
+        editorTool("Eyedropper", in: app)
+        XCTAssertTrue(app.buttons["picker-setting-source"].waitForExistence(timeout: 10), "Picking shows its source setting")
         #endif
         attachEditor(in: app, name: "eyedropper-controls")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

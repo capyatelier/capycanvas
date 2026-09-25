@@ -127,9 +127,7 @@ import QuartzCore
     }
     func clearHover() {
         guard contact == nil else { return } // Pointer capture survives view exit.
-        store.native?.pointer(id: 0, tool: 1, button: 0,
-            records: [0, 0, 0, 0, 0, 0, 0, CACurrentMediaTime() * 1_000_000_000, 4],
-            predicted: false, revision: store.cameraRevision)
+        store.input(["type": "cursor_leave"])
         view?.wake()
     }
     func interrupt() {

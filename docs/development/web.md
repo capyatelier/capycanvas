@@ -147,6 +147,18 @@ to verify mouse and touch through the private Mutter compositor, plus pen throug
 CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;
 the compositor run verifies actual touch activation of the corner buttons.
 
+For the Palettes panel, run `node apps/layer-web/test.mjs --headless --palettes`.
+It covers Paint/Photo placement and group fitting, starters, usage history,
+history expansion, adding and naming, the chooser, menus from secondary click,
+touch/pen holds and Shift+F10, immediate mouse/touch/pen reordering with
+cancellation and one-step undo/redo, imports through the file input and worker,
+exports through the save picker and download fallback, reload persistence, the
+Sketch drawer, a float, both themes and measured automatic tab names. Set
+`LAYER_PALETTE_SAMPLES` to a directory with `gpl`, `aco`, `ase`, `swatches` and
+`kpl` subdirectories to import files exported by other applications; otherwise
+the test imports its own exports. `device.test.mjs --palettes` runs the same
+scenario on a tablet; it edits the built-in workspaces of its dedicated origin.
+
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
 or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the

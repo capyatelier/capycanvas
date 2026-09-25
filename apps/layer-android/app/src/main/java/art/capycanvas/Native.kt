@@ -63,6 +63,7 @@ internal object Native {
     @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
     @JvmStatic external fun recoveryUpdate(state: String, event: String): String
     @JvmStatic external fun profileLibrary(request: String, bytes: ByteArray): String
+    @JvmStatic external fun paletteFile(request: String, bytes: ByteArray): Array<Any>
     @JvmStatic external fun inspectProfileSummary(bytes: ByteArray): String
     @JvmStatic external fun inspectProfile(bytes: ByteArray): String
     @JvmStatic external fun projectProfilePrompt(task: Long): String
@@ -121,6 +122,7 @@ internal object Native {
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
     @JvmStatic external fun toolbarUi(request: String): String
+    @JvmStatic external fun automaticTabNames(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String
     @JvmStatic external fun colorPanelLayout(size: Float): String

@@ -29,6 +29,8 @@ extension XCTestCase {
         }
         open(); ready()
         XCTAssertTrue(app.buttons["histogram-close"].isHittable)
+        workspaceActivate(app.buttons["histogram-details"])
+        XCTAssertTrue(app.staticTexts["histogram-channel-0"].waitForExistence(timeout: 10), "Details list each channel")
         let before = text(app.staticTexts["histogram-channel-0"])
         // The inspector remains open while the real editor changes artwork.
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
@@ -37,7 +39,7 @@ extension XCTestCase {
         expectation(for: NSPredicate { _,_ in text(app.staticTexts["histogram-channel-0"]) != before }, evaluatedWith: app)
         waitForExpectations(timeout: 60); ready()
         attachEditor(in: app, name: "histogram-rgb-nonmodal")
-        workspaceActivate(app.checkBoxes["Log scale"])
+        workspaceActivate(app.checkBoxes["Log counts"])
         workspaceActivate(app.popUpButtons["histogram-channel"])
         workspaceActivate(app.menuItems["Luminance"].firstMatch)
         XCTAssertTrue(app.staticTexts["histogram-channel-3"].waitForExistence(timeout: 10))
@@ -50,12 +52,16 @@ extension XCTestCase {
         workspaceActivate(app.buttons["histogram-close"])
         XCTAssertTrue(status.waitForNonExistence(timeout: 10))
         editorTool("Eyedropper", in: app)
-        for label in ["Point sample", "3×3 average", "5×5 average", "Layer color", "Visible color"] {
-            editorChoice(label, in: app)
-            let button = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier BEGINSWITH %@", label, "tool-subtool-")).firstMatch
-            expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button); waitForExpectations(timeout: 10)
+        for (setting, label) in [("size", "Single pixel"), ("size", "5 px circle"), ("size", "15 px circle"), ("size", "51 px circle"),
+            ("size", "101 px circle"), ("source", "Selected layer"), ("source", "Visible color")] {
+            let menu = app.popUpButtons["picker-setting-" + setting]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            workspaceActivate(menu)
+            workspaceActivate(app.menuItems[label].firstMatch)
+            expectation(for: NSPredicate(format: "value == %@", label), evaluatedWith: menu); waitForExpectations(timeout: 10)
         }
         attachEditor(in: app, name: "eyedropper-sample-areas")
+        editorTool("Eyedropper", in: app)
         open(); ready(); workspaceActivate(app.buttons["histogram-close"])
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #endif

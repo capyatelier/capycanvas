@@ -102,3 +102,36 @@ pub extern "system" fn Java_art_capycanvas_Native_recoveryUpdate(
     })();
     crate::android::string(&mut env, result)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_paletteFile(
+    mut env: JNIEnv,
+    _: JClass,
+    request: JString,
+    bytes: JByteArray,
+) -> jobjectArray {
+    let result = (|| {
+        let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
+        let bytes = env.convert_byte_array(bytes).map_err(error)?;
+        let (metadata, bytes) = layer_ui::palette_file(request, &bytes)?;
+        let result = env
+            .new_object_array(2, "java/lang/Object", JObject::null())
+            .map_err(error)?;
+        let json = env
+            .new_string(serde_json::to_string(&metadata).map_err(error)?)
+            .map_err(error)?;
+        env.set_object_array_element(&result, 0, json)
+            .map_err(error)?;
+        let bytes = env.byte_array_from_slice(&bytes).map_err(error)?;
+        env.set_object_array_element(&result, 1, bytes)
+            .map_err(error)?;
+        Ok(result.into_raw())
+    })();
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            fail(&mut env, Err(e));
+            std::ptr::null_mut()
+        }
+    }
+}

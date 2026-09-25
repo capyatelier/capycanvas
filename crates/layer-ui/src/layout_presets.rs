@@ -35,7 +35,7 @@ impl WorkspacePreset {
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_without_palettes_layout(platform);
-        if platform == crate::Platform::Gtk && self != Self::Painter {
+        if Panel::palettes_presented_on(platform) && self != Self::Painter {
             for (panel, anchor) in [
                 (Panel::Palettes, Panel::Color),
                 (Panel::Proof, Panel::Navigator),
@@ -862,7 +862,7 @@ mod tests {
             for (id, expected) in [
                 (
                     14,
-                    if platform == crate::Platform::Gtk {
+                    if Panel::palettes_presented_on(platform) {
                         vec![Panel::Color, Panel::Palettes]
                     } else if Panel::Proof.available_on(platform) {
                         vec![Panel::Color, Panel::Proof, Panel::Stats]
@@ -874,7 +874,7 @@ mod tests {
                 (16, vec![Panel::Layers]),
                 (
                     6,
-                    if platform == crate::Platform::Gtk {
+                    if Panel::palettes_presented_on(platform) {
                         vec![Panel::Brushes, Panel::Stats]
                     } else {
                         vec![Panel::Brushes]
@@ -883,7 +883,7 @@ mod tests {
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
                 (
                     10,
-                    if platform == crate::Platform::Gtk {
+                    if Panel::palettes_presented_on(platform) {
                         vec![Panel::Navigator, Panel::Proof]
                     } else {
                         vec![Panel::Navigator]
@@ -902,7 +902,7 @@ mod tests {
                 let color = group(Panel::Color);
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
-                if platform != crate::Platform::Gtk {
+                if !Panel::palettes_presented_on(platform) {
                     assert_eq!(color, group(Panel::Stats));
                 }
                 assert_eq!(properties, group(Panel::Adjustments));
@@ -986,10 +986,16 @@ mod tests {
     }
 
     #[test]
-    fn gtk_palette_defaults_are_adjacent_bounded_and_portable() {
-        for preset in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer] {
-            let mut layout = preset.layout(crate::Platform::Gtk);
-            layout.open_default_columns(crate::Platform::Gtk);
+    fn palette_defaults_are_adjacent_bounded_and_portable() {
+        for (preset, platform) in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer]
+            .into_iter()
+            .flat_map(|preset| {
+                [crate::Platform::Gtk, crate::Platform::Web, crate::Platform::Android]
+                    .map(|platform| (preset, platform))
+            })
+        {
+            let mut layout = preset.layout(platform);
+            layout.open_default_columns(platform);
             layout.validate().unwrap();
             for (panel, anchor) in [
                 (Panel::Palettes, Panel::Color),
@@ -1019,8 +1025,6 @@ mod tests {
                 crate::durable_layout(&layout)
             );
             for platform in [
-                crate::Platform::Web,
-                crate::Platform::Android,
                 crate::Platform::Ios,
                 crate::Platform::Mac,
                 crate::Platform::Windows,

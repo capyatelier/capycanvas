@@ -75,9 +75,10 @@ struct WorkspaceResizeHandle: View {
     let action: JSON
     var label = "Resize panel"
     @State private var hovering = false
+    @Environment(\.editorPalette) private var palette
     var body: some View {
         Color.clear.contentShape(Rectangle())
-            .background(hovering ? EditorPalette.sharedAccent.opacity(0.3) : Color.clear)
+            .background(hovering ? palette.accent.opacity(0.3) : Color.clear)
             .onHover { hovering = $0 }.accessibilityElement().accessibilityLabel(label)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: action))
     }
@@ -182,9 +183,12 @@ private struct WorkspaceTile: View {
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.paintPreview, drawerOpen: drawerOpen) {
+                ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: store.paintPair, drawerOpen: drawerOpen) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
-                    store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                    let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]
+                    PickerActivation.activate(tile["control"], anchor: anchor, store: store) {
+                        store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                    }
                 }
             }
         }.accessibilityLabel(tile["label"].string).help(tile["tooltip"].string)

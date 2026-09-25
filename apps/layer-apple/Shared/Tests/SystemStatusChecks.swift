@@ -67,7 +67,7 @@ extension XCTestCase {
         workspaceActivate(app.buttons["Filters panel"])
         let bucket = app.buttons["paper-color-bucket"]
         XCTAssertTrue(bucket.waitForExistence(timeout: 10))
-        let paperPoint = CGPoint(x: 0.35, y: 0.7) // Exposed paper below the drawer.
+        let paperPoint = CGPoint(x: 0.5, y: 0.65) // Exposed paper below the drawer.
         let beforePaper = editorPixels(in: app, at: paperPoint)
         workspaceActivate(bucket)
         expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: paperPoint) != beforePaper }, evaluatedWith: app)
@@ -95,7 +95,7 @@ extension XCTestCase {
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10))
         workspaceActivate(app.buttons["zen-button"])
         XCTAssertTrue(sketch.waitForNonExistence(timeout: 10))
-        workspaceActivate(app.buttons["zen-button"])
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
         XCTAssertTrue(sketch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

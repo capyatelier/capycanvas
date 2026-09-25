@@ -268,7 +268,7 @@ fn color_picker_touch_tracks_one_contact_toggles_source_and_commits_on_lift() {
 
 #[test]
 fn color_picker_retires_touches_that_predate_toolbar_entry() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
             for finger_cancels in [false, true] {
                 let mut s = session();
@@ -554,7 +554,7 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
 
 #[test]
 fn picker_preview_keeps_workspace_models_retained_on_supported_hosts() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut s = session();
         s.set_platform(platform);
         invoke(&mut s, CommandId::Eyedropper);

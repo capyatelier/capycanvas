@@ -16,7 +16,7 @@ import org.json.JSONObject
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
 
-private val TabSlideEasing = Easing { t -> 1f - (1f - t) * (1f - t) * (1f - t) }
+internal val TabSlideEasing = Easing { t -> 1f - (1f - t) * (1f - t) * (1f - t) }
 
 /** Absolute logical geometry for one shared Rust model revision. No widget models
  * or bitmap copies cross the bridge during ordinary movement. */

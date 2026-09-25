@@ -44,6 +44,9 @@ import UIKit
         fonts[key] = font
         return font
     }
+    static func ascent(size: Double, weight: Weight = .regular) -> CGFloat {
+        CTFontGetAscent(nativeFont(size: size, weight: weight))
+    }
     static func width(_ text: String, size: Double, weight: Weight, monospacedDigits: Bool = false) -> CGFloat {
         let key = Key(text: text, size: size, weight: weight, monospacedDigits: monospacedDigits)
         if let width = widths[key] { return width }

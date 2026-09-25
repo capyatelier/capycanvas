@@ -6,12 +6,35 @@ import UIKit
 #endif
 
 struct EditorPalette {
-    static let sharedAccent = Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255)
     let source: JSON
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
-    var accent: Color { Self.sharedAccent }
-    var active: Color { accent.opacity(0.22) }
-    func headerBackground(light: Bool) -> Color { self["bg"].opacity(light ? 0.5 : 1) }
+    private func role(_ name: String, _ fallback: String) -> Color { Color(hex: source[name].isNull ? fallback : source[name].string) }
+    var accent: Color { role("accent", "#3584e4") }
+    var accentForeground: Color { role("accent_foreground", "#ffffff") }
+    var active: Color { role("selection", "#c0d7f6") }
+    var headerSelection: Color { role("header_selection", "#afc6e5") }
+    var headerSelectionHover: Color { role("header_selection_hover", "#a6bddb") }
+    var chromeSurface: Color { self["bg"].opacity(0.75) }
+    var checkerLight: Color { role("checker_light", "#dcdcdc") }
+    var checkerDark: Color { role("checker_dark", "#aaaaaa") }
+}
+extension GraphicsContext {
+    func fillTransparencyChecker(_ size: CGSize, palette: EditorPalette) {
+        let cell: CGFloat = 5
+        for row in 0..<Int(ceil(size.height / cell)) {
+            for column in 0..<Int(ceil(size.width / cell)) {
+                fill(Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell)),
+                    with: .color((row + column) % 2 == 0 ? palette.checkerLight : palette.checkerDark))
+            }
+        }
+    }
+}
+private struct EditorPaletteKey: EnvironmentKey { static let defaultValue = EditorPalette(source: JSON()) }
+extension EnvironmentValues {
+    var editorPalette: EditorPalette {
+        get { self[EditorPaletteKey.self] }
+        set { self[EditorPaletteKey.self] = newValue }
+    }
 }
 extension Color {
     init(hex: String) {
@@ -111,18 +134,58 @@ struct EditorControlButtonStyle: ButtonStyle {
             bottomTrailingRadius: joinedEdge == "bottom" || joinedEdge == "right" ? 0 : 6,
             topTrailingRadius: joinedEdge == "top" || joinedEdge == "right" ? 0 : 6)
     }
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.background {
-            ZStack {
-                if let background, keepsBackground || !(selected || configuration.isPressed || active) {
-                    shape.fill(background)
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, style: self) }
+    private struct Face: View {
+        let configuration: Configuration
+        let style: EditorControlButtonStyle
+        @Environment(\.editorPalette) private var palette
+        var body: some View {
+            configuration.label.background {
+                ZStack {
+                    if let background = style.background, style.keepsBackground || !(style.selected || configuration.isPressed || style.active) {
+                        style.shape.fill(background)
+                    }
+                    if style.selected {
+                        style.shape.fill(palette.active)
+                    } else if let drawerBackground = style.drawerBackground {
+                        style.shape.fill(drawerBackground)
+                    } else if configuration.isPressed || style.active {
+                        style.shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+                    }
                 }
-                if selected {
-                    shape.fill(EditorPalette.sharedAccent.opacity(0.22))
-                } else if let drawerBackground {
-                    shape.fill(drawerBackground)
-                } else if configuration.isPressed || active {
-                    shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+            }
+        }
+    }
+}
+
+/// Title-bar controls: one translucent surface, or none inside a joined bar,
+/// with full-height feedback in the bar and the drawer origin filling the tile.
+struct HeaderButtonStyle: ButtonStyle {
+    var selected = false
+    var hovering = false
+    var inBar = false
+    var drawerOpen = false
+    let radius: CGFloat
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, style: self) }
+    private struct Face: View {
+        let configuration: Configuration
+        let style: HeaderButtonStyle
+        @Environment(\.editorPalette) private var palette
+        var body: some View {
+            let r = style.radius
+            let shape = style.drawerOpen ? SquircleShape(topLeading: r, topTrailing: r) : SquircleShape(r)
+            configuration.label.background {
+                ZStack {
+                    if !style.inBar { shape.fill(palette.chromeSurface) }
+                    Group {
+                        if style.selected {
+                            shape.fill(palette.headerSelection)
+                        } else if style.drawerOpen {
+                            shape.fill(palette["panel"])
+                        } else if configuration.isPressed || style.hovering {
+                            shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+                        }
+                    }.padding(.vertical, style.inBar && !style.drawerOpen ? 1 : 0)
                 }
             }
         }

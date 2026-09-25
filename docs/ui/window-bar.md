@@ -120,9 +120,11 @@ original behavior. There is no partial-Zen toolbar projection or Total Zen
 preference. A minimal persistent UI belongs in a workspace instead.
 
 The builder's model, validation, overflow policy, tool activation, drawer
-origins and history are shared Rust. GTK owns native widgets, measurements,
-caption behavior and device timing. Other hosts retain their current header
-projection until ported; this is not a claim of macOS/Windows tablet testing.
+origins, bar membership and history are shared Rust. GTK owns native widgets,
+measurements, caption behavior and device timing. Web, Android, Windows, macOS and
+iPadOS paint the same bars, surfaces and selection roles; macOS has no Main Menu or
+menu labels because the system menu bar owns them. This is not a claim of
+macOS/Windows tablet testing.
 
 ## Regression checks
 

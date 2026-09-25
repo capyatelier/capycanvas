@@ -1,5 +1,5 @@
 // Shared dock projections. The browser supplies widgets and measured body sizes.
-export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel}) {
+export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs}) {
   const columns=new Map(),drawers=new Map(),connections=new Map();
   let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
@@ -128,7 +128,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     }
     for(const[id,node]of connections)if(!live.has(id)){node.remove();connections.delete(id);}
   }
-  function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
+  function dispose(record) {releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
     const live=new Set();
@@ -205,13 +205,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         if(!tabs){
           const item={kind:"group",group:r.drawer.tabs.group};
           tabs=draggable(element("nav","drawer-tabs"),item);customization.target(tabs,item);r.root.append(tabs);
-          const strip=element("div","drawer-tab-strip");tabs.append(strip);
+          const strip=element("div","drawer-tab-strip"),automatic=app.group_tab_style(r.drawer.tabs.group)==="automatic";tabs.append(strip);
           for(const panel of r.drawer.tabs.panels){
             const v=customization.view(panel),b=button("",()=>dispatch({type:"select_panel_tab",group:r.drawer.tabs.group,panel}),"dock-tab");
-            if(v.tab.show_icon)b.append(icon(v.icon));if(v.tab.show_name)b.append(document.createTextNode(v.title));
+            if(automatic)tabLabel(b,v,true);else{if(v.tab.show_icon)b.append(icon(v.icon));if(v.tab.show_name)b.append(document.createTextNode(v.title));}
             b.dataset.panel=panel;b.setAttribute("aria-label",v.title);b.setAttribute("aria-selected",String(panel===r.drawer.tabs.active));
             customization.target(b,{kind:"panel",panel});strip.append(draggable(b,{kind:"panel",panel}));
           }
+          if(automatic)automaticTabs(strip);
           const handle=grip(item);handle.classList.add("column-drawer-grip");handle.setAttribute("aria-label","Move panel group");tabs.append(handle);
         }
         // Shared placement includes tabs in the first column body.

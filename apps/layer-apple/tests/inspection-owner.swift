@@ -64,10 +64,10 @@ import QuartzCore
             try await edit(store, ["type":"invoke","command":"histogram"])
             try await wait("Reopen", store: store) { !model.result.isNull && !model.busy }
             try await edit(store, ["type":"invoke","command":"eyedropper"])
-            for width in [1,3,5] {
+            for width in [1,5,15] {
                 try await edit(store, ["type":"set_color_sample_size","width":width])
                 try await wait("Sampling selection", store: store) {
-                    store.state["tool_set"]["subtools"].array.contains { $0["selected"].bool && $0["action"]["width"].uint == UInt64(width) }
+                    store.state["color_picker"]["sample_width"].uint == UInt64(width)
                 }
             }
             model.close()

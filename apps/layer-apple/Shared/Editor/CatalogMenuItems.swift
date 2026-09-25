@@ -6,31 +6,52 @@ struct ApplicationMenus: View {
     @ObservedObject var store: EditorStore
     var iconSize: CGFloat = 16
     var tileSize: CGFloat = 36
+    var radius: CGFloat = 18
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var light: Bool { store.state["theme"].string == "light" }
     private var textSize: Double {
         store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
     }
+    static func naturalWidth(_ menus: [JSON], textSize: Double) -> CGFloat {
+        menus.reduce(0) { $0 + EditorTextMetrics.width($1["label"].string, size: textSize, weight: .medium) + 16 }
+            + 8 + 2 * CGFloat(max(0, menus.count - 1))
+    }
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 0) {
+            HStack(spacing: 2) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
                     ApplicationMenuButton(store: store, id: menu["id"].string) {
-                        Text(menu["label"].string).fontWeight(.bold).fixedSize()
-                            .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
-                            .padding(.horizontal, 8).frame(height: tileSize)
-                    }.buttonStyle(EditorControlButtonStyle(background: light ? nil : palette["bg"]))
+                        Text(menu["label"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).fixedSize()
+                            .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .medium))
+                            .padding(.horizontal, 8).frame(height: 26)
+                    }.buttonStyle(MenuLabelStyle(palette: palette))
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.font(.system(size: textSize)).fixedSize()
-                .background(light ? palette.headerBackground(light: true) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            }.padding(4).frame(height: 34).background(palette.chromeSurface, in: Capsule()).fixedSize()
+                .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
-            }.buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
+            }.buttonStyle(HeaderButtonStyle(radius: radius))
                 .accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
+        }
+    }
+}
+
+private struct MenuLabelStyle: ButtonStyle {
+    let palette: EditorPalette
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, palette: palette) }
+    private struct Face: View {
+        let configuration: Configuration
+        let palette: EditorPalette
+        @State private var hovering = false
+        var body: some View {
+            configuration.label.background {
+                if configuration.isPressed || hovering {
+                    Capsule().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
+                }
+            }.onHover { hovering = $0 }
         }
     }
 }

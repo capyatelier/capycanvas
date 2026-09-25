@@ -7,6 +7,12 @@ extension CanvasView: UIPointerInteractionDelegate {
     }
 }
 
+struct PickerHold {
+    let key: ObjectIdentifier
+    let start: CGPoint
+    let work: DispatchWorkItem
+}
+
 struct PencilContact {
     let id: UInt64
     let tool: UInt32
@@ -95,6 +101,11 @@ extension CanvasView {
                         : buttons.contains(.secondary) || buttons.contains(.button(3)) ? 1 : 2
                 }
                 contacts[key] = PencilContact(id: nextContact, tool: tool, button: button)
+                cancelPickerHold()
+                if tool == 3 && contacts.count == 1 { armPickerHold(key, id: nextContact, at: touch.preciseLocation(in: self)) }
+            } else if let hold = pickerHold, hold.key == key {
+                let point = touch.preciseLocation(in: self)
+                if phase >= 3 || hypot(point.x - hold.start.x, point.y - hold.start.y) > 10 { cancelPickerHold() }
             }
             guard var contact = contacts[key] else { continue }
             let history = event?.coalescedTouches(for: touch) ?? []
@@ -161,7 +172,23 @@ extension CanvasView {
             predicted: false, revision: sample.revision, updates: sample.metadata, correction: true)
     }
     func finishEstimates() { for sample in estimates.finish() { sendCorrection(sample) } }
+    private func armPickerHold(_ key: ObjectIdentifier, id: UInt64, at start: CGPoint) {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, pickerHold?.key == key, let contact = contacts[key], contact.last.count == 9 else { return }
+            pickerHold = nil
+            store.input(["type": "color_picker_hold", "id": id, "position": [contact.last[0], contact.last[1]],
+                "offset": 44 * Double(contentScaleFactor)])
+            wake()
+        }
+        pickerHold = PickerHold(key: key, start: start, work: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+    func cancelPickerHold() {
+        pickerHold?.work.cancel()
+        pickerHold = nil
+    }
     func interruptContacts() {
+        cancelPickerHold()
         finishEstimates()
         ignoredContacts.formUnion(contacts.keys)
         contacts.removeAll()
@@ -174,6 +201,7 @@ extension CanvasView {
     @objc func hovered(_ recognizer: UIHoverGestureRecognizer) {
         guard contacts.values.allSatisfy({ $0.tool != 0 }) else { return }
         updateModifiers(recognizer.modifierFlags)
+        if recognizer.state == .ended || recognizer.state == .cancelled { leave(); return }
         let point = recognizer.location(in: self)
         let altitude = recognizer.altitudeAngle
         let azimuth = recognizer.azimuthAngle(in: self)
@@ -181,17 +209,21 @@ extension CanvasView {
             atan2(cos(altitude) * cos(azimuth), sin(altitude)),
             atan2(cos(altitude) * sin(azimuth), sin(altitude)),
             recognizer.rollAngle, recognizer.zOffset,
-            CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
+            CACurrentMediaTime() * 1_000_000_000, 0]
         store.native?.pointer(id: 0, tool: 0, button: 0, records: record, predicted: false, revision: store.cameraRevision)
+        wake()
+    }
+    private func leave() {
+        store.input(["type": "cursor_leave"])
         wake()
     }
     @objc func mouseHovered(_ recognizer: UIHoverGestureRecognizer) {
         guard contacts.isEmpty else { return }
         updateModifiers(recognizer.modifierFlags)
+        if recognizer.state == .ended || recognizer.state == .cancelled { leave(); return }
         let point = recognizer.location(in: self)
         let record: [Double] = [point.x * contentScaleFactor, point.y * contentScaleFactor,
-            1, 0, 0, 0, 0, CACurrentMediaTime() * 1_000_000_000,
-            recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
+            1, 0, 0, 0, 0, CACurrentMediaTime() * 1_000_000_000, 0]
         store.native?.pointer(id: 0, tool: 1, button: 0, records: record, predicted: false, revision: store.cameraRevision)
         wake()
     }

@@ -39,7 +39,7 @@ private struct NativeMenuContent<Content: View>: View {
         content.environment(\.editorPopupStore, values.editorPopupStore)
             .environment(\.colorScheme, values.colorScheme)
             .environment(\.isEnabled, values.isEnabled)
-            .font(values.font).tint(EditorPalette.sharedAccent)
+            .font(values.font).tint(values.editorPalette.accent).environment(\.editorPalette, values.editorPalette)
             .foregroundStyle(values.editorPopupStore.map { EditorPalette(source: $0.state["palette"])["text"] } ?? .primary)
     }
 }

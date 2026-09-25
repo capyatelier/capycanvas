@@ -8,10 +8,10 @@ stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.
 System/Light/Dark selection remains independent of both colors.
 
-GTK, Web, Android and Windows show each base color inline on its title row as four grey
-circles and a Custom circle that reveals a hex entry beside them: dark
+GTK, Web, Android, Windows, macOS and iPadOS show each base color inline on its title
+row as four grey circles and a Custom circle that reveals a hex entry beside them: dark
 `#1f1f1f`, `#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`,
-`#cccccc`, `#dedede`. Apple still shows hex text fields.
+`#cccccc`, `#dedede`.
 
 ## Inventory and existing relationships
 
@@ -70,21 +70,19 @@ semantic palettes; GTK's accent follows the resolved accent. New surface roles m
 including inactive header/sidebar variants. GTK's native card and shade overlays
 continue to composite normally. Transparent areas remain transparent.
 
-GTK, Web and Android light-mode title-bar controls use the chosen base at 50%
-opacity. Each button retains its shape, while Menu Labels shares one rounded
-surface behind the full row with the existing label padding and hover shapes.
-Hover, press and selection feedback composite over this surface. Header text
-has no outline in light mode; workspace-switcher text has no outline in either
-mode. Web adds a 3px backdrop blur where supported. GTK's app-owned Wayland
-canvas and Android's SurfaceView are outside their UI render trees. Android uses
-the translucent fill without backdrop blur. GTK follows its
+Title-bar controls use the chosen base at 75% opacity in both themes, and the
+workspace switcher's well uses the tab-bar color at 75%. Joined bars and Menu
+Labels share one surface behind their members; standalone controls carry their
+own. Hover, press and selection feedback composite over this surface. Header text
+has no outline; no host adds a backdrop blur. Web, Android, macOS and iPadOS use
+the translucent fill directly. GTK follows its
 [panel transparency](panel-transparency.md) setting instead: title-bar controls
 are opaque when it is Off and frosted glass, blurred in the canvas renderer,
 otherwise.
 
 ## Accent color
 
-Below the base colors, GTK, Web, Android and Windows Appearance offer **Accent color**: System, libadwaita's nine accent colors
+Below the base colors, GTK, Web, Android, Windows, macOS and iPadOS Appearance offer **Accent color**: System, libadwaita's nine accent colors
 (Blue `#3584e4`, Teal, Green, Yellow, Orange, Red, Pink, Purple, Slate) and a
 Custom circle that reveals a `#RRGGBB` entry prefilled with the current accent.
 The entry commits on Enter or when it loses focus after an edit; invalid hex is
@@ -93,8 +91,9 @@ Settings store only a chosen color; an absent value follows the system accent
 that the host reports with `SystemThemeChanged`, and hosts without one use Blue.
 GTK reports libadwaita's accent; Android 12 and later report Material You's
 `system_accent1_500`; Windows reports the personalization accent (`UISettings`
-Accent) and follows its changes. The web has no System circle, and there choosing Blue
-stores nothing, so Reset stays disabled.
+Accent) and macOS reports `NSColor.controlAccentColor`, and both follow its changes.
+The web and iPadOS have no System circle, and there choosing Blue stores nothing,
+so Reset stays disabled.
 
 The resolved accent is published as `palette.accent`. GTK assigns it to
 `--accent-bg-color`, so libadwaita switches, checks, suggested buttons and

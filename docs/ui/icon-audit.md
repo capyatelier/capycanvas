@@ -40,7 +40,7 @@ The Reference column identifies the relevant functional/conventional family. The
 | `close` | Cancel transform / dismiss dialog | Centered geometric cross | Added | [interface](https://developers.google.com/fonts/docs/material_symbols) |
 | `color` | Current paint color | Live filled circular swatch with foreground rim | Retained | [tools](https://docs.krita.org/en/reference_manual/tools.html) |
 | `color_balance` | Color balance adjustment | Balanced scales with solid pans | Redrawn | [adjustments](https://helpx.adobe.com/photoshop/desktop/create-manage-layers/color-adjustment-fill-layers/adjustment-layers-options.html) |
-| `colors` | Foreground/background color pair; the Color tool | Larger foreground circle over a smaller background circle at its lower right; live paints on hosts | Redrawn | [tools](https://docs.krita.org/en/reference_manual/tools.html) |
+| `colors` | Foreground/background color pair; the Color tool | Larger foreground circle over a smaller background circle at its lower right; live paints on every host | Redrawn | [tools](https://docs.krita.org/en/reference_manual/tools.html) |
 | `column-expand` | Legacy sidebar expand resource | Paired outward chevrons; foreground tint | Redrawn | [interface](https://developers.google.com/fonts/docs/material_symbols) |
 | `cursor-brush-cross` | Brush outline and cross cursor preference | Broken ring plus crosshair | Retained | [interface](https://developers.google.com/fonts/docs/material_symbols) |
 | `cursor-brush` | Brush outline cursor preference | Broken ring showing the cursor contour | Retained | [interface](https://developers.google.com/fonts/docs/material_symbols) |

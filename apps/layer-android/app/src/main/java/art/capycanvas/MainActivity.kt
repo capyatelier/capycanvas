@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (host.headerKeyHandler?.invoke(event) == true) return true
         if (host.drawingTabs.key(event)) return true
+        if (host.palettes.key(event)) return true
         host.key(event)
         return super.dispatchKeyEvent(event)
     }

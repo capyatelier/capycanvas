@@ -44,6 +44,7 @@ import Foundation
                 guard workspace.accepts(motion, full: false) else { return .ignored }
                 changes = workspace.stage(motion)
                 var patch = ["workspace_update": motion]
+                if !next["color_preview"].isNull { patch["color_preview"] = next["color_preview"] }
                 if !next["camera"].isNull {
                     changes += stateFields.stagePatch(["camera": next["camera"]])
                     patch["state"] = stateFields.unobserved

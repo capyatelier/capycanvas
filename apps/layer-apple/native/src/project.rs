@@ -659,7 +659,7 @@ unsafe fn adopt_project(
                 context.center, context.destination)?;
             let mut change = session.complete_document_request(*request, Ok(true))?;
             change.canvas_wake = true;
-            change.regions |= 255;
+            change.regions |= layer_ui::regions::ALL;
             app.host.apply_change(previous, change);
             return Ok(());
         }

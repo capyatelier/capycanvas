@@ -35,19 +35,20 @@ import org.json.JSONObject
 
 /** Header menus, context menus and configuration options render the same Rust
  * items. They never reconstruct eligibility, naming, defaults or commands. */
-@Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false, dismiss: () -> Unit) {
+@Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
+    command: ((JSONObject) -> Unit)? = null, dismiss: () -> Unit) {
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
     BackHandler(preserveContact, dismiss)
     DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu"),
         properties = PopupProperties(focusable = !preserveContact),
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
-        WorkspaceMenuItems(host, menu.array("sections"), dismiss, menu.getString("title"))
+        WorkspaceMenuItems(host, menu.array("sections"), dismiss, if (menu.has("title")) menu.getString("title") else null, command)
     }
 }
 
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,
-    dismiss: () -> Unit = {}, title: String? = null) {
+    dismiss: () -> Unit = {}, title: String? = null, command: ((JSONObject) -> Unit)? = null) {
     val colors = LocalPalette.current
     var pages by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     val page = pages.lastOrNull()
@@ -68,7 +69,8 @@ import org.json.JSONObject
                 .clip(RoundedCornerShape(6.dp)).alpha(if (enabled) 1f else .4f)
                 .clickable(enabled = enabled) {
                     if (item.array("sections").length() > 0) pages = pages + item
-                    else item.objectOrNull("action")?.let { action -> dismiss(); host.dispatch(action) }
+                    else item.objectOrNull("command")?.takeIf { command != null }?.let { dismiss(); command!!(it) }
+                        ?: item.objectOrNull("action")?.let { action -> dismiss(); host.dispatch(action) }
                 }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(item.getString("label"), Modifier.weight(1f), fontWeight = FontWeight.Bold)

@@ -25,7 +25,7 @@ pub enum Platform {
 }
 impl Platform {
     pub fn color_picker(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios)
     }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
@@ -35,10 +35,10 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn system_accent(self) -> bool {
-        matches!(self, Self::Gtk | Self::Android | Self::Windows)
+        matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)
     }
     pub fn swatch_preferences(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn transparency_preference(self) -> bool {
         matches!(self, Self::Gtk | Self::Web | Self::Android)
@@ -1701,7 +1701,13 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Mac).is_err());
+        assert!(settings.field(PreferenceId::Accent, Platform::Generic).is_err());
+        for (platform, system) in [(Platform::Mac, true), (Platform::Ios, false)] {
+            let PreferenceKind::Swatches { swatches, .. } = settings.field(PreferenceId::Accent, platform).unwrap().kind else {
+                unreachable!()
+            };
+            assert_eq!(swatches[0].label == "System", system, "{platform:?}");
+        }
         let PreferenceKind::Swatches { swatches, selected, .. } =
             settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
         else {
@@ -1720,7 +1726,7 @@ mod copy_tests {
         let rows = |settings: &Settings, platform| -> Vec<PreferenceRow> {
             settings.pages(platform)[0].groups[0].rows.clone()
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let ids: Vec<_> = rows(&Settings::default(), platform).iter().map(|r| r.id).collect();
             assert_eq!(&ids[ids.len() - 3..], [PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]);
         }
@@ -1753,7 +1759,7 @@ mod copy_tests {
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
             assert!(matches!(
-                rows(&settings, Platform::Mac).into_iter().find(|r| r.id == id).unwrap().kind,
+                rows(&settings, Platform::Generic).into_iter().find(|r| r.id == id).unwrap().kind,
                 PreferenceKind::Text { .. }
             ));
         }

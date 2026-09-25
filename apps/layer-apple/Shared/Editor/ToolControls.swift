@@ -113,6 +113,13 @@ struct ToolSettingsControls: View {
             + ":" + String(store.state["layer_tools"]["editing_layer"]["mask_selected"].bool)
     }
     var body: some View {
+        if ["pick_visible", "pick_layer"].contains(store.state["layer_tools"]["tool"].string) {
+            PickerSettingsRows(store: store)
+        } else {
+            settingsBody
+        }
+    }
+    @ViewBuilder private var settingsBody: some View {
         let editingContext = context
         let actions = store.state["tool_actions"].array
         let modes = actions.filter { SelectionModes.commands.contains($0["command"].string) }
@@ -146,4 +153,36 @@ struct ToolSettingsControls: View {
 
 private extension JSON {
     var settingID: String { self["id"].string }
+}
+
+private struct PickerSettingsRows: View {
+    @ObservedObject var store: EditorStore
+    var body: some View {
+        let picker = store.state["color_picker"]
+        VStack(alignment: .leading, spacing: 8) {
+            row("Source") {
+                Picker("Source", selection: Binding(get: { picker["layer"].bool }, set: { layer in
+                    store.dispatch(["type": "color_picker", "action": ["kind": "source", "layer": layer]])
+                })) {
+                    Text("Visible color").tag(false)
+                    if picker["can_sample_layer"].bool { Text("Selected layer").tag(true) }
+                }.accessibilityIdentifier("picker-setting-source")
+            }
+            row("Sample size") {
+                Picker("Sample size", selection: Binding(get: { picker["sample_width"].uint }, set: { width in
+                    store.dispatch(["type": "set_color_sample_size", "width": width])
+                })) {
+                    ForEach(picker["sample_sizes"].array.map(\.uint), id: \.self) { width in
+                        Text(width == 1 ? "Single pixel" : "\(width) px circle").tag(width)
+                    }
+                }.accessibilityIdentifier("picker-setting-size")
+            }
+        }.font(.system(size: 13))
+    }
+    private func row(_ label: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            Text(label).lineLimit(1).fixedSize().frame(minWidth: 76, alignment: .leading)
+            control().pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 }

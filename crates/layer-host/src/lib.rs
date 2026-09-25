@@ -687,6 +687,22 @@ impl NativeHost {
                 id: u64,
                 mask: bool,
             },
+            PaletteMenu {
+                target: layer_ui::PaletteMenuTarget,
+            },
+            RevealPanel {
+                panel: layer_ui::Panel,
+            },
+            PaletteReorderPreview {
+                palette: u64,
+                id: u64,
+                slot: usize,
+            },
+            PaletteAction {
+                action: layer_ui::ColorLibraryAction,
+                #[serde(default)]
+                dry_run: bool,
+            },
             LayerDrop {
                 epoch: u64,
                 id: u64,
@@ -805,6 +821,32 @@ impl NativeHost {
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::PaletteMenu { target } => {
+                json!(self.session.state().colors.library.menu(target)?)
+            }
+            Query::RevealPanel { panel } => {
+                let previous = self.session.state().revision;
+                let change = self.session.reveal_panel(panel)?;
+                self.apply_change(previous, change);
+                json!(null)
+            }
+            Query::PaletteReorderPreview { palette, id, slot } => json!(
+                self.session
+                    .state()
+                    .colors
+                    .library
+                    .preview_reorder(palette, id, slot)
+            ),
+            Query::PaletteAction { action, dry_run } => {
+                let result = if dry_run {
+                    self.session.state().colors.library.check(action)
+                } else {
+                    self.dispatch(UiAction::Color {
+                        action: layer_ui::ColorAction::Library { action },
+                    })
+                };
+                json!({"error": result.err()})
+            }
             Query::LayerDrop {
                 epoch,
                 id,
@@ -1317,6 +1359,72 @@ mod tests {
         assert_eq!(
             app.snapshot()["toolbar_prompt"]["title"],
             "Duplicate Toolbar"
+        );
+    }
+
+    #[test]
+    fn palette_queries_preview_validate_and_apply_through_the_session() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        let view = app.snapshot()["palette_panel"].clone();
+        let palette = view["palette"].as_u64().unwrap();
+        let ids: Vec<u64> = view["swatches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_u64().unwrap())
+            .collect();
+        assert!(ids.len() > 3);
+        let preview = app
+            .query(json!({"type":"palette_reorder_preview","palette":palette,"id":ids[0],"slot":2}))
+            .unwrap();
+        assert_eq!(preview["order"][2], ids[0]);
+        assert_eq!(
+            app.snapshot()["palette_panel"]["swatches"][0]["id"],
+            ids[0],
+            "previews never edit"
+        );
+        let action = preview["action"].clone();
+        let name = view["swatches"][1]["name"].clone();
+        let duplicate = json!({"op":"rename","id":ids[0],"name":name});
+        for dry_run in [true, false] {
+            let result = app
+                .query(json!({"type":"palette_action","action":duplicate,"dry_run":dry_run}))
+                .unwrap();
+            assert!(result["error"].is_string());
+        }
+        assert!(
+            app.query(json!({"type":"palette_action","action":action,"dry_run":true}))
+                .unwrap()["error"]
+                .is_null()
+        );
+        assert_eq!(
+            app.snapshot()["palette_panel"]["swatches"][0]["id"],
+            ids[0],
+            "dry runs never edit"
+        );
+        assert!(
+            app.query(json!({"type":"palette_action","action":action}))
+                .unwrap()["error"]
+                .is_null()
+        );
+        let view = app.snapshot()["palette_panel"].clone();
+        assert_eq!(view["swatches"][2]["id"], ids[0]);
+        assert_eq!(view["can_undo"], true);
+        let menu = app
+            .query(json!({"type":"palette_menu","target":{"kind":"color","id":ids[0]}}))
+            .unwrap();
+        assert_eq!(menu[1][0]["enabled"], true);
+        let panel = layer_ui::Panel::Palettes;
+        assert_ne!(
+            app.session.state().workspace.layout.active_panel(panel),
+            Some(panel)
+        );
+        app.query(json!({"type":"reveal_panel","panel":"palettes"}))
+            .unwrap();
+        assert_eq!(
+            app.session.state().workspace.layout.active_panel(panel),
+            Some(panel)
         );
     }
 

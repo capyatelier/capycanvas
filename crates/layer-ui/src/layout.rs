@@ -690,10 +690,14 @@ impl Panel {
         }
     }
 
+    pub fn palettes_presented_on(platform: crate::Platform) -> bool {
+        matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+    }
+
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
         if self == Self::Palettes {
-            return matches!(platform, crate::Platform::Gtk | crate::Platform::Generic);
+            return Self::palettes_presented_on(platform) || platform == crate::Platform::Generic;
         }
         if matches!(self, Self::FilterTypes | Self::BrushSets | Self::SculptSets | Self::Tools) {
             return true;

@@ -1,10 +1,16 @@
-# GTK color palettes
+# Color palettes
 
-GTK places the Palettes tab immediately after Color in the Paint and Photo defaults,
-and the same component below the wheel in Sketch’s color drawer. Untouched
-included layouts migrate; customized layouts keep their placement and can show
-Palettes through the Window menu or the wheel’s Palettes action. Other hosts do
-not expose the new panel yet.
+GTK, Web and Android place the Palettes tab immediately after Color in the Paint
+and Photo defaults, and the same component below the wheel in Sketch’s color
+drawer. Untouched included layouts migrate; customized layouts keep their
+placement and can show Palettes through the Window menu (GTK and Android also
+through the color swatch menu's Palettes action). Windows, macOS and iPadOS do
+not expose the panel yet. GTK ([`color_library.rs`](../../apps/layer-linux/src/color_library.rs)),
+Web ([`palettes.js`](../../apps/layer-web/palettes.js)) and Android
+([`Palettes.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Palettes.kt))
+render the shared [`PalettePanelView`](../../crates/layer-ui/src/color/palette_view.rs),
+its menus and reorder previews; the descriptions below apply to all three
+unless a host is named.
 
 ## Layout and interaction
 
@@ -92,7 +98,7 @@ their existing behavior, and the same fitting component is used in retained draw
 
 ## Starter palettes
 
-GTK installs ten original editable starter palettes with 11–17 named sRGB
+Each host installs ten original editable starter palettes with 11–17 named sRGB
 colors (two or three rows including the + tile at minimum width). Existing user
 palettes and IDs are retained. A persisted installation marker prevents deleted
 starters from reappearing. A pristine empty “My colors” palette is replaced;
@@ -127,8 +133,8 @@ starter swatches. Deleted palettes are not recreated.
 ## Color data and history
 
 Palettes continue to belong to the workspace’s working state. Names, palette
-selection, imports, and bounded recent colors are shared Rust state; native GTK
-owns rendering, focus, menus, and file pickers. Workspace persistence retains
+selection, imports, and bounded recent colors are shared Rust state; the native
+hosts own rendering, focus, menu presentation, and file pickers. Workspace persistence retains
 these values. This increment does not introduce an application-wide library.
 
 History contains at most 64 exact definitions, newest first, deduplicated by
@@ -139,17 +145,66 @@ are not color-use events. Successful fills, figures, and gradients record the
 source definitions they use. Undo does not remove usage history.
 
 Saved colors and history retain tagged RGB space, alpha, and HDR values. GTK
-renders managed previews through the existing ColorPatch path. Hex is an sRGB
+renders managed previews through the existing ColorPatch path; Web and Android
+paint the shared view's swatch preview, tone-mapped for HDR documents exactly
+as their Color panel swatches are. Hex is an sRGB
 preview, not the storage format; HDR uses the picker’s base color and EV readout.
 The full color name and space remain available in tooltips/accessibility text.
 
-Imports accept GIMP GPL (sRGB) and native Capycolor (`.capycolor`) palettes.
-Capycolor uses JSON internally and preserves color definitions exactly. Existing
-native `.json` exports remain importable; new exports use `.capycolor`.
-Files are limited to 1 MB; libraries retain the existing limits of 64 palettes
-and 4096 total swatches. File reading is asynchronous and bounded, and failed
-imports leave the library unchanged. Library mutations
-retain existing tile widgets; brush frames do not rebuild the palette chooser.
+## Import and export
+
+Import Palette… accepts every supported file through one chooser. Shared Rust
+selects the reader from the file's contents, not its extension. Export Palette
+is a submenu of formats, ordered by the target applications' priority; choosing
+one opens the platform's ordinary save picker with that extension.
+
+| Format | Import | Export | Applications |
+| --- | --- | --- | --- |
+| Capycolor `.capycolor` (JSON; legacy `.json`) | Exact | Exact | Capy Canvas |
+| Adobe Color Swatch `.aco` v1/v2 | RGB, HSB, CMYK, Lab, gray; names | 16-bit sRGB with names | Clip Studio Paint (documented both ways), Photoshop, Procreate, Krita |
+| Clip Studio color set `.cls` | 8-bit sRGB and names | — | Clip Studio Paint |
+| Procreate `.swatches` | Procreate 4 and 5 files; sRGB and Display P3 | 30 sRGB slots | Procreate |
+| Adobe Swatch Exchange `.ase` | RGB, CMYK, Lab, gray; groups | sRGB in one named group | Affinity (documented import), Adobe, Procreate, Krita |
+| Affinity `.afpalette` | Solid RGB, CMYK and Lab fills | — | Affinity |
+| GIMP `.gpl` | 8-bit sRGB | 8-bit sRGB | Krita, GIMP |
+| Krita `.kpl` | RGB profiles, CMYK, gray, XYZ, Lab; grid order | — | Krita |
+
+Every external format stores fewer properties than a Capycolor palette. Exports
+other than Capycolor convert each color to opaque, clipped sRGB (Procreate keeps
+its first 30), and the panel's message line states how many colors were clipped,
+became opaque or were left out. External RGB without a profile is sRGB. Krita
+profiles named Display P3, Adobe/Clay RGB or ProPhoto/Large RGB, and linear
+(`g10`) profiles, keep their meaning; other profiles are read as sRGB. Lab is
+D50 and XYZ is D50; each import keeps the smallest of sRGB, Display P3 and
+ProPhoto that contains the color, so wide colors are not clipped. CMYK has no
+embedded profile in these formats and uses the device formula; applications
+that apply a press profile show different RGB for the same inks. Pantone and
+other color-book references are rejected rather than guessed. Affinity's 16-bit
+Lab scaling is inferred from sample files. Zero-alpha Clip Studio entries are
+empty cells; Affinity fills keep their alpha. Gradients are skipped. Imported
+names are clipped to 64 characters, control characters are removed, and GIMP's
+“Untitled” placeholder receives a suggested name.
+
+Files are limited to 1 MB. ZIP-based formats read only their palette member,
+with expansion bounded to 8 MB and CRC-checked; ZIP64 size records from macOS
+are accepted. Libraries retain the limits of 64 palettes and 4096 total swatches.
+Hosts read and parse files off their UI thread (Web in its worker, Android on
+an I/O dispatcher, GTK through GIO's blocking pool), and failed imports leave the
+library unchanged. Library mutations retain existing tile widgets; brush frames
+do not rebuild the palette chooser.
+
+Cross-application validation on 2026-09-24 used 93 files exported by Photoshop
+2022, Adobe Color, Procreate 4 and 5, Clip Studio Paint, Affinity (2019–2026),
+Krita 6.0.2 and GIMP 3.2.4, plus third-party writers with known quirks. Imports
+matched independent readers (`swatch`, `adobe-color-swatch`, `ase-util`,
+`procreate-swatches`, Krita and GIMP) in names, order and 8-bit sRGB for 6461 of
+6476 colors. The differences are Krita's profile-based CMYK and its clipping of
+out-of-gamut Lab, and Solarized Lab, where ours matches the published sRGB and
+Krita's quantized Lab does not. Krita 6
+and GIMP 3.2 reloaded our ACO/ASE/GPL exports, and the independent ACO, ASE and
+Procreate readers decoded every name and value exactly. Procreate, Clip Studio
+and Affinity imports of our exports have not been checked on those applications.
+These third-party samples are not committed; several have no stated license.
 
 ## Validation and review
 
@@ -181,6 +236,53 @@ immediate reordering, held-menu dragging, cancellation, undo/redo, selection,
 hold recognition, click suppression, and gutter scrolling; its synthetic serials cannot
 authorize compositor popup grabs, so physical stylus popup behavior still needs
 hardware review.
+### Web and Android
+
+Web and Android consume the shared view, menus, reorder previews and codecs;
+their files are read and encoded off the UI thread. Web tiles use Pointer
+Events with pointer capture, CSS transforms with a 140 ms ease-out transition
+(none under `prefers-reduced-motion`) and a fixed-position ghost; its file
+chooser and download or `showSaveFilePicker` handle files. Android uses Compose
+pointer input with the actual tool type, animates neighbors with the system
+animator scale, draws the lifted tile in the workspace overlay, and uses the
+Storage Access Framework. Both hosts measure automatic tab names at the current
+font and call the shared `TabStyle::automatic_names`. A touch or pen opener
+focuses the active chooser row, so the soft keyboard stays closed until search
+is tapped; a keyboard (or, on Web, a mouse) opener focuses search as GTK does.
+Web chooser buttons keep search focused during a mouse press: hiding the soft
+keyboard would move the visual viewport between press and release.
+
+```sh
+bash apps/layer-web/build.sh
+node apps/layer-web/test.mjs --headless --palettes   # LAYER_PALETTE_SAMPLES=<dir> adds real files
+node apps/layer-web/device.test.mjs --palettes       # Android Chrome, see web.md
+adb shell am instrument -w -e class art.capycanvas.AndroidPaletteTest \
+  art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+`AndroidPaletteTest` covers default placement and the Sketch drawer, history
+boundaries and expansion, adding and naming, the chooser, shared menus from mouse
+secondary click and stylus/touch holds, immediate mouse/touch/stylus reordering
+with cancellation and one-step undo/redo, the swatch menu's Palettes action,
+codec round trips for every format, persistence across relaunch and measured tab
+names. `-e paletteBenchmark true` records frames during a steady stylus drag;
+`-e paletteDirectory <device dir>` imports every pushed sample file.
+
+Tablet qualification on 2026-09-25 used a Wacom MovinkPad 14 (DTHA140, Android 15,
+arm64-v8a, 2880×1800 at 120 Hz) with injected native input; physical stylus and
+mouse acceptance remain open. `AndroidPaletteTest` passed 11/11. A 2 s stylus
+drag rendered at a median 8.33 ms frame interval (worst 16.7 ms, UI thread p99
+under 12 ms) with no model publications; touch/stylus holds opened menus after
+454–497 ms. In Chrome 153 `device.test.mjs --palettes` passed; touch and pen
+drags held 8.33 ms frames (p99 8.5 ms) without long tasks or model calls, and
+`adb shell input` touch, stylus and mouse taps, drags and holds matched the
+expected results (injected mouse holds arrive as touch in Chrome). Export used
+Chrome's save picker and the download fallback; import used the Android picker.
+`AndroidInteractionTest` failures in `menuBodyAndExtendedTabDropsAcrossDevices`
+and `drawerTabsKeepActiveColorsAndPadding` also occur on the base revision.
+Avoid `AndroidColorPanelTest`'s two-pointer helpers on this tablet: their stale
+down times restarted Android's system server.
+
 GTK is the reference implementation for subsequent host ports. The earlier
 [research](color-palettes-research.md) and [HTML study](prototypes/color-palettes.html)
 provide design context; this document describes the current implementation.
