@@ -52,6 +52,7 @@ export async function checkLongPressDragging({call, evaluate, settle}) {
       const drawer = mode === "drawer";
       if (drawer) {
         await send({type:"customize",action:{type:"set_column_collapsed",group:43,collapsed:true}});
+        await send({type:"customize",action:{type:"set_column_drawers",column:43,drawers:true}});
         await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"layers"}});
       }
       const scope = drawer ? '.content-drawer[data-drawer="43"]' : '.dock-group[data-group="43"]';

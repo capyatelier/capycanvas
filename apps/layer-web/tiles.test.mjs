@@ -59,6 +59,7 @@ export async function checkMediumTiles({ call, evaluate, settle }) {
       const column = (await group("navigator")).id;
       await send({ type: "move_panel", panel: "toolbar", target: { kind: "tab", group: column, index: null } });
       await customize({ type: "set_column_collapsed", group: column, collapsed: true });
+      await customize({ type: "set_column_drawers", column, drawers: true });
       await evaluate("document.querySelector('.collapsed-column [data-panel=toolbar]').click()");
       // Drawer measurement follows its opening animation; wait for geometry,
       // since a fixed delay can observe the initial button size on the tablet.

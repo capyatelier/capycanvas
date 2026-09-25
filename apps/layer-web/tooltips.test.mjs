@@ -21,7 +21,7 @@ export async function checkTooltips({call,evaluate,settle}) {
       await send({type:"restore_workspace",workspace:fixture});await send({type:"set_theme",theme});
       for(const source of ["toolbar","column","drawer"]) {
         if(source==="column")await send({type:"customize",action:{type:"set_column_collapsed",group:43,collapsed:true}});
-        if(source==="drawer")await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"layers"}});
+        if(source==="drawer"){await send({type:"customize",action:{type:"set_column_drawers",column:43,drawers:true}});await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"layers"}});}
         const selector={toolbar:'.toolbar-controls [data-tile] > button:not(:disabled)',column:'.column-tab[data-panel=properties]',drawer:'.content-drawer .layer-footer button[aria-label="New layer"]'}[source];
         await away();const r=await hover(selector,device),t=await rect("#hover-tooltip");
         assert.ok(Math.abs(t.y-r.bottom-4)<1,"Tooltip is below the element with a 4px gap");
