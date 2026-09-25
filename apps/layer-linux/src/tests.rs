@@ -6341,11 +6341,7 @@ fn native_toolbar_sizing() {
             pump(100);
             assert_eq!(
                 placement().bounds.width,
-                if next == TileStyle::Large {
-                    220.0
-                } else {
-                    112.0
-                }
+                3.0 * (next.size()[0] + next.gap()) - next.gap()
             );
             assert!(state(&w).workspace.layout.floating[0].height.is_none());
             w.dispatch(UiAction::Invoke {
@@ -6394,10 +6390,15 @@ fn native_toolbar_sizing() {
             });
             pump(150);
             assert!(!placement().tabs_visible);
+            let position = grouped.layout.floating[0].position;
             assert_eq!(
                 placement().bounds,
-                natural.bounds,
-                "a lone toolbar regains its default grid"
+                Bounds {
+                    x: position[0],
+                    y: position[1],
+                    ..natural.bounds
+                },
+                "a lone toolbar regains its default grid where the group was"
             );
             capture_reference(
                 &w,
@@ -7748,7 +7749,10 @@ fn native_workspace_management() {
             } else {
                 3.0
             };
-            assert_eq!(p.bounds.width, columns * (style.size()[0] + 2.0) - 2.0);
+            assert_eq!(
+                p.bounds.width,
+                columns * (style.size()[0] + style.gap()) - style.gap()
+            );
             let strip = w.panel_widget(panel);
             let tile = strip
                 .first_child()
