@@ -10,7 +10,7 @@ export async function checkRuntimeFilters({call,evaluate,settle,host}) {
   assert.equal(await evaluate("layerApp.state().adjustments.length"),41);
   await evaluate(`(()=>{const pixels=new Uint8Array(1024*768*4);for(let i=0;i<1024*768;i++)pixels.set((Math.floor(i%1024/32)+Math.floor(i/1024/32))%2?[30,160,220,255]:[230,50,80,255],i*4);layerApp.app.import_layer_image('Runtime checker',1024,768,pixels);layerApp.wake();})()`);
   await settle();
-  await evaluate("layerApp.dispatch({type:'filter_picker',action:{op:'category',category:'examples'}});layerApp.dispatch({type:'select_panel_tab',group:8,panel:'adjustments'})");
+  await evaluate("layerApp.dispatch({type:'filter_picker',action:{op:'category',category:'examples'}});layerApp.dispatch({type:'select_panel_tab',group:layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('adjustments')).id,panel:'adjustments'})");
   await settle();
   assert.equal(await evaluate("document.querySelector('.filter-picker select').selectedOptions[0].textContent"),"Examples");
   await evaluate("document.querySelector('[data-effect=\"example:tent_blur\"]').click()");

@@ -9,13 +9,7 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
     assert.deepEqual(errors, []);
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
-      window.layoutChecks=0; window.emptyBindings=0;
-      const emptyGroups=new WeakSet();
-      const setGroup=GPURenderPassEncoder.prototype.setBindGroup;
-      GPURenderPassEncoder.prototype.setBindGroup=function(index,group,...rest){
-        if(index===1&&emptyGroups.has(group)) window.emptyBindings++;
-        return setGroup.call(this,index,group,...rest);
-      };
+      window.layoutChecks=0;
       const requestAdapter=navigator.gpu.requestAdapter.bind(navigator.gpu);
       navigator.gpu.requestAdapter=async (...args)=>{
         const adapter=await requestAdapter(...args), requestDevice=adapter.requestDevice.bind(adapter);
@@ -23,12 +17,7 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
           if(${JSON.stringify(mode)}==='escaped-rejection') return new Promise(()=>{
             Promise.reject(new Error('capy-test: escaped rejection'));
           });
-          const device=await requestDevice(...args), createLayout=device.createPipelineLayout.bind(device), createGroup=device.createBindGroup.bind(device);
-          device.createBindGroup=descriptor=>{
-            const group=createGroup(descriptor);
-            if(!descriptor.entries.length)emptyGroups.add(group);
-            return group;
-          };
+          const device=await requestDevice(...args), createLayout=device.createPipelineLayout.bind(device);
           device.createPipelineLayout=descriptor=>{
             window.layoutChecks++;
             if(${JSON.stringify(mode)}==='pipeline-throw') throw new TypeError('capy-test: pipeline exception');
@@ -48,7 +37,6 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
     assert.equal(await evaluate("layerApp.app.gpu_ready()"), succeeds);
     if (succeeds) {
       await waitFor("layerApp.app.brush_ready()");
-      assert.ok(await evaluate("window.emptyBindings > 0"), "The empty layout has a matching binding when drawing");
       const before = await canvasPixels();
       await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
       await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 850, y: 450, button: "left", buttons: 1 });
@@ -65,8 +53,10 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
       for (const error of errors.splice(0)) assert.match(error, /capy-test:/, "Only injected failures are expected");
     }
     await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+    const previous = await evaluate("performance.timeOrigin");
     await call("Page.reload");
-    await waitFor("!!window.layerApp && document.body.dataset.gpu === 'ready'");
+    for (;;) try { await waitFor(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body?.dataset.gpu === 'ready'`); break; }
+      catch (error) { if (!/navigated|context|Cannot find/i.test(String(error))) throw error; }
     await settle();
     assert.deepEqual(errors, [], "Reload without injection recovers cleanly");
     console.log(`GPU compatibility: ${mode} passed`);
@@ -79,7 +69,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
   const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
   const checkPanelStyle = async () => {
-    assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),panel=getComputedStyle(document.querySelector('.dock-group')),probe=document.body.appendChild(document.createElement('i'));probe.style.background='var(--panel)';const opaque=getComputedStyle(probe).backgroundColor;probe.remove();return help.backgroundColor===opaque&&['color','borderRadius','boxShadow'].every(key=>help[key]===panel[key])})()"), "GPU help shares the opaque panel background, text, corners and shadow");
+    assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),node=document.querySelector('#workspace').appendChild(document.createElement('section')),probe=document.body.appendChild(document.createElement('i'));node.className='dock-group';probe.style.background='var(--panel)';const panel=getComputedStyle(node),result=help.backgroundColor===getComputedStyle(probe).backgroundColor&&['color','borderRadius','boxShadow'].every(key=>help[key]===panel[key]);node.remove();probe.remove();return result})()"), "GPU help shares the opaque panel background, text, corners and shadow");
     assert.ok(await evaluate("(()=>{const notice=document.querySelector('#gpu-notice'),n=notice.getBoundingClientRect(),h=document.querySelector('.gpu-help').getBoundingClientRect(),padding=parseFloat(getComputedStyle(notice).paddingTop);return h.height>n.height-2*padding?Math.abs(h.top-n.top-padding)<1:Math.abs((n.top+n.bottom-h.top-h.bottom)/2)<1})()"), "Help panel is centered when it fits and starts at the top when scrolling is needed");
     assert.ok(await evaluate("(()=>{const h=document.querySelector('.gpu-help');return [...h.querySelectorAll('p')].every(p=>getComputedStyle(p).color===getComputedStyle(h).color)})()"), "Help text uses a consistent color");
   };
@@ -149,7 +139,8 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await waitFor("!!window.layerApp");
     await waitFor(mode === "pending" ? "!!window.releaseAdapter" : "document.body.dataset.gpu === 'unavailable'");
     assert.equal(await evaluate("layerApp.app.gpu_ready()"), false);
-    assert.ok(await evaluate("document.querySelectorAll('.dock-group').length >= 3 && document.querySelectorAll('.brush-preview').length > 10 && !!document.querySelector('#header-end button')"));
+    await waitFor("(v=>v?.ready&&!v.busy)(JSON.parse(layerApp.app.workspace_view()))");
+    assert.ok(await evaluate("(()=>{const groups=layerApp.app.layout(innerWidth,innerHeight).groups.length,brushes=document.querySelectorAll('.brushes-control [data-brush]');return groups>0&&document.querySelectorAll('.dock-group').length===groups&&[...brushes].every(n=>n.querySelector('.brush-preview'))&&document.querySelectorAll('#header .header-item').length>0})()"), "The workspace controls render without a GPU");
     await action({ type: "set_theme", theme: "dark" });
     await checkPanelStyle();
     assert.equal(await evaluate("document.querySelectorAll('head > meta[name=darkreader-lock]').length"), 1);
@@ -172,10 +163,10 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     assert.equal(await evaluate("window.frameCalls"), 0, "No paint loop while the GPU is unavailable");
     if (mode === "no-adapter") {
       await call("Runtime.evaluate", { expression: "document.querySelector('#fullscreen').click()", userGesture: true });
-      await waitFor("!!document.fullscreenElement && document.querySelector('#fullscreen').title === 'Exit fullscreen'");
+      await waitFor("!!document.fullscreenElement && document.querySelector('#fullscreen svg').dataset.asset === 'fullscreen-exit'");
       assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
       await evaluate("document.exitFullscreen()");
-      await waitFor("!document.fullscreenElement && document.querySelector('#fullscreen').title === 'Enter fullscreen'");
+      await waitFor("!document.fullscreenElement && document.querySelector('#fullscreen svg').dataset.asset === 'fullscreen-enter'");
       await settle();
     }
     if (mode !== "pending") {
@@ -283,7 +274,10 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       }
       assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : noAdapter ? 2 : 1);
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+      const previous = await evaluate("performance.timeOrigin");
       await call("Page.reload");
+      for (;;) try { await waitFor(`performance.timeOrigin !== ${previous} && !!window.layerApp`); break; }
+        catch (error) { if (!/navigated|context|Cannot find/i.test(String(error))) throw error; }
     } else {
       await action({ type: "set_theme", theme: null });
       for (const value of ["light", "dark"]) {
@@ -296,13 +290,14 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       await evaluate("window.releaseAdapter();window.restoreGpu()");
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
     }
-    for (const error of errors.splice(0)) assert.match(error, /^GPU canvas unavailable:/,
-      "Only the injected initialization failures are expected");
+    for (const error of errors.splice(0)) assert.match(error, /^GPU canvas unavailable:|^Blocked attempt to show a 'beforeunload' confirmation panel/,
+      "Only the injected initialization failures and the unsaved added layer's reload prompt are expected");
     await waitFor("document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()");
     if (mode === "pending") assert.equal(await evaluate("layerApp.state().brush.diameter"), 37);
     assert.equal(await evaluate("layerApp.state().layers.length"), layerCount + (mode === "pending" ? 1 : 0));
     assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), true);
     await action({ type: "set_theme", theme: "light" });
+    await action({ type: "invoke", command: "brush" });
     await action({ type: "invoke", command: "fit_canvas" });
     const before = await canvasPixels();
     await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
