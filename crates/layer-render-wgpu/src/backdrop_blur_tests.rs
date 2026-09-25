@@ -74,6 +74,22 @@ fn glass_blurs_only_inside_rounded_regions() {
 }
 
 #[test]
+fn glass_larger_than_the_surface_fills_it() {
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    let raw = present(&r, &mut presenter, &surface, 0.);
+    presenter.set_backdrop(&r, &[region([-32., -32., 320., 192.], [16.; 4])], Default::default());
+    let glass = present(&r, &mut presenter, &surface, 0.);
+    let row = |bytes: &[u8]| (16..64).map(|x| bytes[((64 * 256 + x) * 4) as usize]).collect::<Vec<u8>>();
+    let spread = |row: &[u8]| row.iter().max().unwrap() - row.iter().min().unwrap();
+    let (checkers, frosted) = (row(&raw), row(&glass));
+    assert!(spread(&checkers) > 12, "the document is checkered: {checkers:?}");
+    assert!(spread(&frosted) < 6 && frosted.iter().all(|v| *v > 200), "the checkers are frosted: {frosted:?}");
+}
+
+#[test]
 fn concave_corners_leave_the_fillet_sharp() {
     let size = [256, 128];
     let r = document(size);

@@ -580,9 +580,9 @@ impl BackdropBlur {
     }
 
     pub fn draw(&self, pass: &mut wgpu::RenderPass, repaint: PixelRect) {
-        let Some(buffer) = self.region_buffer.as_ref().filter(|_| !self.drawn.is_empty()) else {
+        if self.drawn.is_empty() {
             return;
-        };
+        }
         pass.set_bind_group(0, &self.levels[0].1, &[0]);
         pass.set_pipeline(&self.fill);
         for area in self.interiors.iter().map(|i| i.intersect(repaint)).filter(|a| !a.is_empty()) {
@@ -590,8 +590,10 @@ impl BackdropBlur {
             pass.draw(0..3, 0..1);
         }
         pass.set_scissor_rect(repaint.min_x(), repaint.min_y(), repaint.width(), repaint.height());
-        pass.set_pipeline(&self.region);
-        pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..6, 0..self.edges);
+        if let Some(buffer) = self.region_buffer.as_ref().filter(|_| self.edges > 0) {
+            pass.set_pipeline(&self.region);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..6, 0..self.edges);
+        }
     }
 }
