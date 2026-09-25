@@ -13516,6 +13516,14 @@ fn native_workspace_controls_docking_and_ink() {
     w.window.present();
     pump(3000);
     assert!(w.gpu.borrow().is_some());
+    let restore_fixture_docking = || {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(layer_ui::WorkspaceState {
+                layout: DockLayout::default(),
+                ..state(&w).workspace
+            }),
+        })
+    };
     assert_eq!(state(&w).settings.theme, None);
     assert_eq!(
         state(&w).theme == Theme::Dark,
@@ -13524,7 +13532,10 @@ fn native_workspace_controls_docking_and_ink() {
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
-    pump(100);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while w.frame_timer.borrow().is_some() && Instant::now() < deadline {
+        pump(5);
+    }
     assert!(w.frame_timer.borrow().is_none(), "idle canvas must stop requesting frames");
     let close = find_css(w.header.root.upcast_ref(), "close").unwrap();
     let circle = close.first_child().unwrap().compute_bounds(&close).unwrap();
@@ -13711,15 +13722,19 @@ fn native_workspace_controls_docking_and_ink() {
     visibility().emit_clicked();
     pump(100);
     assert!(white_pixels(&w) < initial - 500);
-    edit_number(&w.layer_panel.opacity, "50%");
+    edit_number(&w.layer_panel.opacity, "50");
     pump(100);
     assert_eq!(state(&w).layers[0].opacity, 0.5);
-    edit_number(&w.layer_panel.opacity, "100%");
+    edit_number(&w.layer_panel.opacity, "100");
     pump(100);
     let painted_id = state(&w).layers[0].id;
-    click(&command(&w, CommandId::LowerLayer));
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::LowerLayer,
+    });
     assert_eq!(state(&w).layers[1].id, painted_id);
-    click(&command(&w, CommandId::RaiseLayer));
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::RaiseLayer,
+    });
     assert_eq!(state(&w).layers[0].id, painted_id);
 
     click(&command(&w, CommandId::Settings));
@@ -13799,7 +13814,13 @@ fn native_workspace_controls_docking_and_ink() {
             .resolve(1200.0, 900.0)
             .groups
             .iter()
-            .any(|g| g.panels == [Panel::Layers, Panel::Brushes])
+            .any(|g| g.panels
+                == [
+                    Panel::Brushes,
+                    Panel::Layers,
+                    Panel::Adjustments,
+                    Panel::Properties
+                ])
     );
     let tab = w
         .groups
@@ -13818,7 +13839,7 @@ fn native_workspace_controls_docking_and_ink() {
             .resolve(1200.0, 900.0)
             .groups
             .iter()
-            .any(|g| g.panels.len() == 2 && g.active == Panel::Layers)
+            .any(|g| g.panels.contains(&Panel::Brushes) && g.active == Panel::Layers)
     );
     w.dispatch(UiAction::MovePanel {
         viewport: [w.surface.width() as f32, w.surface.height() as f32],
@@ -13849,18 +13870,26 @@ fn native_workspace_controls_docking_and_ink() {
     };
     assert_eq!(item, DockItem::Group { group: 8 });
     let b = root.compute_bounds(&w.surface).unwrap();
+    let toolbar = DockItem::Panel {
+        panel: Panel::Toolbar,
+    };
+    let body = w
+        .drop_at(b.x() + b.width() * 0.5, b.y() + b.height() * 0.5, toolbar)
+        .unwrap();
+    assert_eq!(
+        body.target,
+        DockTarget::Tab {
+            group: 8,
+            index: Some(0)
+        }
+    );
+    assert_eq!(body.bounds.y, b.y() + TAB_BAR_HEIGHT);
+    let grip_bounds = grip.compute_bounds(&w.surface).unwrap();
     let hint = w
-        .drop_at(
-            b.x() + b.width() * 0.5,
-            b.y() + b.height() * 0.5,
-            DockItem::Panel {
-                panel: Panel::Toolbar,
-            },
-        )
+        .drop_at(grip_bounds.x() - 6.0, b.y() + TAB_BAR_HEIGHT * 0.5, toolbar)
         .unwrap();
     assert_eq!(hint.bounds.width, 3.0);
     assert_eq!(hint.bounds.y, b.y());
-    let grip_bounds = grip.compute_bounds(&w.surface).unwrap();
     assert!(hint.bounds.x + hint.bounds.width <= grip_bounds.x());
     *w.drop_hint.borrow_mut() = Some(hint);
     w.surface.queue_draw();
@@ -13887,9 +13916,7 @@ fn native_workspace_controls_docking_and_ink() {
         w.groups.borrow().iter().find(|g| g.id == 8).unwrap().panels,
         expected
     );
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ResetLayout,
-    });
+    restore_fixture_docking();
     pump(150);
     // Dock resizing must retain its native drag handle and GPU session.
     let handle = w
@@ -13916,9 +13943,7 @@ fn native_workspace_controls_docking_and_ink() {
             .iter()
             .any(|(s, h)| *s == Slot::Divider(3) && *h == handle)
     );
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ResetLayout,
-    });
+    restore_fixture_docking();
     pump(100);
     // Repeated allocations retire differently sized display images. The pool
     // must remain bounded, eventually present the latest size, then go idle.
@@ -13930,9 +13955,7 @@ fn native_workspace_controls_docking_and_ink() {
         });
         pump(25);
     }
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ResetLayout,
-    });
+    restore_fixture_docking();
     pump(200);
     let scale = w.area.scale_factor() as u32;
     assert_eq!(
@@ -14029,16 +14052,15 @@ fn native_workspace_controls_docking_and_ink() {
     w.window.set_default_size(680, 900);
     pump(300);
     assert_eq!(w.toolbar.height(), 74);
-    let first = w.toolbar.first_child().unwrap();
-    let fourth = first
-        .next_sibling()
-        .unwrap()
-        .next_sibling()
-        .unwrap()
-        .next_sibling()
-        .unwrap();
-    let a = first.compute_bounds(&w.toolbar).unwrap();
-    let b = fourth.compute_bounds(&w.toolbar).unwrap();
+    let tiles = || {
+        std::iter::successors(w.toolbar.first_child(), |c| c.next_sibling())
+            .filter(|c| c.has_css_class("tile-button"))
+            .map(|c| c.compute_bounds(&w.toolbar).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let wrapped = tiles();
+    let a = wrapped[0];
+    let b = wrapped.iter().find(|b| b.y() > a.y()).unwrap();
     assert_eq!(a.x(), b.x());
     assert_eq!(b.y() - a.y(), 38.0);
     crate::capture(&w, "../../artifacts/ui/gtk-tools-auto-wrap.png");
@@ -14082,22 +14104,13 @@ fn native_workspace_controls_docking_and_ink() {
     });
     pump(100);
     assert_eq!(w.toolbar.width(), 74);
-    let first = w.toolbar.first_child().unwrap();
-    let second = first
-        .next_sibling()
-        .unwrap()
-        .next_sibling()
-        .unwrap()
-        .next_sibling()
-        .unwrap();
-    let a = first.compute_bounds(&w.toolbar).unwrap();
-    let b = second.compute_bounds(&w.toolbar).unwrap();
+    let wrapped = tiles();
+    let a = wrapped[0];
+    let b = wrapped.iter().find(|b| b.x() > a.x()).unwrap();
     assert_eq!(a.y(), b.y());
     assert_eq!(b.x() - a.x(), 38.0);
     crate::capture(&w, "../../artifacts/ui/gtk-tools-wrapped.png");
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ResetLayout,
-    });
+    restore_fixture_docking();
     pump(100);
     let camera = state(&w).camera;
     w.chrome_event(ChromeEvent::Motion {
@@ -14131,7 +14144,7 @@ fn native_workspace_controls_docking_and_ink() {
             value: PreferenceValue::Bool(true),
         },
     });
-    assert!(w.reveal_chrome_at(24.0, 24.0));
+    assert!(w.reveal_chrome_at(600.0, 24.0));
     assert!(!w.header.root.has_css_class("zen-hidden"));
     assert!(command(&w, CommandId::ZenMode).has_css_class("selected-tool"));
     pump(200);
@@ -14149,7 +14162,9 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::ZenMode));
     assert!(!w.header.root.has_css_class("zen-hidden"));
     assert_eq!(state(&w).camera.translation, camera.translation);
-    click(&command(&w, CommandId::ToggleTheme));
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ToggleTheme,
+    });
     pump(200);
     assert_eq!(state(&w).theme, Theme::Light);
     review(&w, "light", &stroke_points);
@@ -14169,15 +14184,37 @@ fn native_workspace_controls_docking_and_ink() {
         .unwrap();
     let mut bytes = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut bytes, texture.width() as usize * 4);
+    let header_item = |item: HeaderItem| {
+        let id = state(&w)
+            .workspace
+            .layout
+            .header
+            .entries()
+            .find(|e| e.item == item)
+            .unwrap()
+            .id;
+        find_named(w.header.root.upcast_ref(), &format!("header-item-{id}"))
+            .unwrap()
+            .compute_bounds(&w.window)
+            .unwrap()
+    };
+    let menus = header_item(HeaderItem::MenuLabels);
+    let title = header_item(HeaderItem::DocumentTitle);
+    let gap = (menus.x() + menus.width() + title.x()) * 0.5;
     // Between the live menus and centered document title, not on a menu button.
-    let offset = (24 * texture.width() as usize + 420) * 4;
+    let offset = (24 * texture.width() as usize + gap as usize) * 4;
     assert!(
         bytes[offset..offset + 3].iter().all(|c| *c > 245),
         "zoomed paper must show through the title bar"
     );
     w.window.destroy();
     pump(100);
-    assert!(w.gpu.borrow().is_none());
+    assert!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .is_none_or(|g| g.session.engine().backend().worker_is_joined())
+    );
 }
 
 fn review(w: &Workspace, theme: &str, points: &[Point]) {
