@@ -276,13 +276,14 @@ impl EffectInstance {
         self.program.time && self.value("animate") == Some(&EffectValue::Toggle(true))
     }
     pub fn time_seconds(&self, elapsed: f32) -> f32 {
-        if self.animated() {
-            elapsed * self.playback_rate()
+        let seconds = if self.animated() {
+            elapsed
         } else if let Some(EffectValue::Number(time)) = self.value("time") {
             *time
         } else {
             0.
-        }
+        };
+        seconds * self.playback_rate()
     }
     pub fn value(&self, key: &str) -> Option<&EffectValue> {
         self.program
