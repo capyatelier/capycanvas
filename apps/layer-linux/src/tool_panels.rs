@@ -226,7 +226,7 @@ pub struct ToolSettings {
     extra_context: Cell<Option<layer_ui::ToolbarContext>>,
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
-    actions: RefCell<Vec<(ToolSettingAction, gtk::Widget)>>,
+    actions: RefCell<Vec<(ToolSettingAction, &'static str, gtk::Widget)>>,
     updating: Rc<Cell<bool>>,
 }
 impl ToolSettings {
@@ -235,6 +235,7 @@ impl ToolSettings {
         let form = body();
         let picker = crate::color_picker::Settings::new();
         let completion=body();
+        completion.set_orientation(gtk::Orientation::Horizontal);
         root.append(&completion);
         let extra=body();
         root.append(&extra);
@@ -282,7 +283,8 @@ impl ToolSettings {
             && actions
                 .iter()
                 .zip(&state.tool_actions)
-                .all(|((old, _), next)| old == next);
+                .all(|((old, label, _), next)| old == next
+                    && state.commands.iter().any(|c| c.id == next.command && c.label == *label));
         if !same_schema {
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
@@ -399,14 +401,18 @@ impl ToolSettings {
                             command: action.command,
                         },
                     );
-                    button.set_child(Some(&icon_label(command.label, command.icon.unwrap())));
+                    let content=icon_label(command.label, command.icon.unwrap());
+                    if matches!(action.command,layer_ui::CommandId::ApplyTonalSelection | layer_ui::CommandId::CancelTonalSelection) {
+                        if let Some(label)=content.last_child().and_downcast::<gtk::Label>() {label.set_max_width_chars(-1);}
+                    }
+                    button.set_child(Some(&content));
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
                 if matches!(action.command,layer_ui::CommandId::ApplyTonalSelection | layer_ui::CommandId::CancelTonalSelection) {self.completion.append(&widget);}
                 else if mode { mode_row.append(&widget); }
                 else { self.form.append(&widget); }
-                actions.push((*action, widget));
+                actions.push((*action, command.label, widget));
             }
             if state.layer_tools.tool.selection_tool().is_some() {
                 let menu = crate::selection_masks::menu_button(workspace, "Selection Actions…", crate::selection_masks::Menu::Selection);
@@ -417,7 +423,7 @@ impl ToolSettings {
         for ((_, input), control) in fields.iter().zip(controls) {
             input.set_value(control.value as f64);
         }
-        for (action, widget) in actions.iter() {
+        for (action, _, widget) in actions.iter() {
             if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {
                 widget.set_sensitive(command.enabled);
                 widget.set_tooltip_text(Some(&command.tooltip));

@@ -541,6 +541,7 @@ pub enum CommandId {
     ColorSelect,
     SelectionBrush,
     TonalSelect,
+    TonalDetails,
     ApplyTonalSelection,
     CancelTonalSelection,
     TonalNewBand,
@@ -635,7 +636,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::TonalSelect | Self::ApplyTonalSelection | Self::CancelTonalSelection | Self::TonalNewBand | Self::TonalRemoveBand | Self::TonalSaveBand | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff => matches!(platform, Platform::Gtk),
+            Self::TonalSelect | Self::TonalDetails | Self::ApplyTonalSelection | Self::CancelTonalSelection | Self::TonalNewBand | Self::TonalRemoveBand | Self::TonalSaveBand | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff => matches!(platform, Platform::Gtk),
             Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -703,7 +704,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::TonalDetails | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::ZenMode
@@ -749,6 +750,7 @@ impl CommandId {
             Self::ColorSelect => "color-select",
             Self::SelectionBrush => "selection-brush",
             Self::TonalSelect => "color-select",
+            Self::TonalDetails => "settings",
             Self::ApplyTonalSelection => "check",
             Self::CancelTonalSelection => "deselect",
             Self::TonalNewBand => "plus",
@@ -835,7 +837,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 124] = [
+    pub const ALL: [Self; 125] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -874,6 +876,7 @@ impl CommandId {
         Self::ColorSelect,
         Self::SelectionBrush,
         Self::TonalSelect,
+        Self::TonalDetails,
         Self::ApplyTonalSelection,
         Self::CancelTonalSelection,
         Self::TonalNewBand,
@@ -1036,12 +1039,13 @@ impl CommandId {
             Self::ColorSelect => "Select by color",
             Self::SelectionBrush => "Paint selection",
             Self::TonalSelect => "Tonal range",
+            Self::TonalDetails => "Edit range",
             Self::ApplyTonalSelection => "Apply selection",
-            Self::CancelTonalSelection => "Cancel preview",
-            Self::TonalNewBand => "Add band",
-            Self::TonalRemoveBand => "Remove band",
-            Self::TonalSaveBand => "Save named band",
-            Self::TonalInvert => "Invert tones",
+            Self::CancelTonalSelection => "Cancel",
+            Self::TonalNewBand => "New range",
+            Self::TonalRemoveBand => "Remove range",
+            Self::TonalSaveBand => "Save range",
+            Self::TonalInvert => "Invert",
             Self::TonalLowerOpen => "Include darker tones",
             Self::TonalUpperOpen => "Include brighter tones",
             Self::TonalLinkFalloff => "Link falloff",

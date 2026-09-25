@@ -175,7 +175,7 @@ impl ToolOption {
                     state: b,
                     checkable: y,
                 },
-            ) => a.id == b.id && x == y,
+            ) => a.id == b.id && a.label == b.label && x == y,
             _ => false,
         }
     }
@@ -314,7 +314,7 @@ impl UiState {
                 options.extend(choice("sample-size", "Sample size", false, samples));
             }
         }
-        options.extend(self.tool_extra.iter().cloned());
+        options.extend(self.tool_extra.iter().filter(|o| !matches!(o,ToolOption::Info {..})).cloned());
         for group in [
             ToolActionGroup::SelectionMode,
             ToolActionGroup::SelectionSource,
@@ -341,6 +341,7 @@ impl UiState {
                 .filter(|a| !completion(a.command) && a.group().is_none())
                 .filter_map(action),
         );
+        options.extend(self.tool_extra.iter().filter(|o| matches!(o,ToolOption::Info {..})).cloned());
         options
     }
 }

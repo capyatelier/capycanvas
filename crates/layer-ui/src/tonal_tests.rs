@@ -294,7 +294,25 @@ mod tonal_checks {
             invoke(&mut s, CommandId::QuickMask);
             assert_eq!(s.selection_masks.quick(), quick);
             assert!(s.tonal_active());
-            assert!(s.tonal_tools.ready,"quick={quick} draft={} docrev={}",s.tonal_tools.draft.as_ref().map_or(999,|d|d.revision),s.engine.document().revision);
+            assert_eq!(
+                s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::ApplyTonalSelection)
+                    .unwrap()
+                    .label,
+                if quick {
+                    "Apply mask"
+                } else {
+                    "Apply selection"
+                }
+            );
+            assert!(
+                s.tonal_tools.ready,
+                "quick={quick} draft={} docrev={}",
+                s.tonal_tools.draft.as_ref().map_or(999, |d| d.revision),
+                s.engine.document().revision
+            );
             assert_eq!(s.tonal_tools.preview, preview);
             assert_eq!(s.tonal_tools.source, Some(artwork));
             s.frame(2, 2).unwrap();
@@ -360,5 +378,59 @@ mod tonal_checks {
         invoke(&mut s, CommandId::CancelTonalSelection);
         assert_eq!(s.mask_coverage(target).unwrap(), preview);
         assert_eq!(s.engine.document().selection, current);
+    }
+    #[test]
+    fn tonal_simple_controls_and_global_softness_preserve_named_ranges() {
+        let mut s = start();
+        invoke(&mut s, CommandId::TonalSelect);
+        reply(&mut s, None);
+        assert_eq!(
+            s.state
+                .tool_settings
+                .iter()
+                .map(|f| f.id)
+                .collect::<Vec<_>>(),
+            vec!["tonal_softness", "selection_feather"]
+        );
+        assert!(
+            !s.state
+                .tool_extra
+                .iter()
+                .any(|o| matches!(o, ToolOption::Text { .. }))
+        );
+        assert!(
+            !s.state
+                .tool_extra
+                .iter()
+                .any(|o| matches!(o,ToolOption::Info {text,..} if text.len()>32))
+        );
+        let factory = s.selection_tools.options.tonal.bands.clone();
+        s.dispatch(UiAction::Tonal {
+            action: TonalAction::ToggleBand { index: 0 },
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "tonal_softness".into(),
+            value: 0.25,
+        })
+        .unwrap();
+        reply(&mut s, None);
+        let RegionSource::Tonal(request) = &s.renderer_mut().region_requests.last().unwrap().source
+        else {
+            panic!("tone")
+        };
+        assert_eq!(request.bands.len(), 2);
+        assert!(request.bands.iter().all(|b| b.falloff == [0.125; 2]));
+        assert_eq!(s.selection_tools.options.tonal.bands, factory);
+        invoke(&mut s, CommandId::TonalDetails);
+        assert!(s.state.tool_settings.iter().any(|f| f.id == "tonal_upper"));
+        assert!(
+            s.state
+                .tool_extra
+                .iter()
+                .any(|o| matches!(o, ToolOption::Text { .. }))
+        );
+        invoke(&mut s, CommandId::TonalDetails);
+        assert_eq!(s.state.tool_settings.len(), 2);
     }
 }

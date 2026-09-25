@@ -6,16 +6,19 @@ Mask, saved selections, layer masks, and selection combination need no new
 mask type. The GTK Tools panel and Tool Options bar consume the same shared
 list, text, numeric, and command definitions.
 
-Choose a visible composite or a specific raw artwork layer in **Sample from**.
-The layer choice stays pinned when changing the editing destination. Raw layers
+The default controls are **Tones**, **Sample from**, **Softness**, and **Feather**,
+plus the standard selection combination modes, Invert, and Apply/Cancel.
+Choose **Visible image** (the default) or a specific artwork layer in **Sample from**.
+The source stays pinned when changing the editing destination. Raw layers
 are sampled before opacity and masks; composite sampling includes their rendered
 appearance but excludes selection overlays, proofing, and display mapping.
+Quick Mask and selection layers are destinations and never sampling sources.
 
-Check one or more entries in **Include tones**. **Edit band** chooses which
-entry the bounds and falloff controls edit. Editing a built-in preset creates
+Check one or more entries in **Tones**. **Edit range** reveals the active range,
+its name, From/To bounds, edge widths, and saved-range controls. Editing a built-in preset creates
 an enabled custom copy and disables that preset; other included bands remain.
-Custom names and recipes survive workspace capture. **Save named band** adds or
-updates an application preset by name; **Add saved band** copies one into the
+Custom names and recipes survive workspace capture. **Save range** adds or
+updates an application preset by name; **Saved ranges** copies one into the
 current recipe. Up to 16 bands, including built-ins, can be in the recipe.
 
 | Preset | Full-strength interval, stops relative to white |
@@ -34,8 +37,10 @@ RGB 1 is reference white (203 cd/m²); values above 1 stay available in HDR.
 Zero and negative luminance use the black endpoint. Transparent pixels supply
 no selection coverage or sample weight.
 
-The default smooth falloff extends 0.5 stops beyond each finite bound. Linked
-falloff edits both shoulders; unlinking allows independent values. Include
+The default smooth falloff extends 0.5 stops beyond each finite bound.
+**Softness** scales every included range's falloff from 0% (hard threshold) to
+200%, with 100% as the default. It does not modify named presets. Under Edit range,
+linked **Edge width** edits both shoulders; unlinking allows independent values. Include
 Darker/Brighter controls remove the corresponding bound. Bands combine by
 maximum coverage, so overlap does not strengthen a mask. Invert applies to the
 combined tonal criterion; source alpha still limits coverage. Spatial feathering
@@ -50,7 +55,18 @@ are selected throughout the source. To restrict the result spatially, make a
 lasso selection first and choose Intersect. GTK retains its existing finger
 navigation; touch controls use normal native widgets.
 
-Previews retain an immutable starting selection. Every recomputation combines
+| Editing destination | Preview | Apply result |
+| --- | --- | --- |
+| Ordinary selection | Standard marching ants | Current selection |
+| Quick Mask | Existing Quick Mask shading and overlay settings | Current selection, staying in Quick Mask |
+| Selection layer | That layer's mask shading and overlay settings | That selection layer; current selection is unchanged |
+
+Toggling Quick Mask preserves a ready current-selection preview and the artwork
+source. Switching to a different selection layer restarts the preview against
+that layer's mask. The source choice stays unchanged. A short destination label
+and **Apply selection** / **Apply mask** identify where the result will go.
+
+Previews retain an immutable starting selection or destination mask. Every recomputation combines
 against that baseline, rather than repeatedly intersecting an already-softened
 result. Apply commits one history edit. Cancel, Escape, and tool changes discard
 the draft. Shift/Alt combination modifiers latch for a sampling gesture and its
@@ -64,20 +80,22 @@ summaries. It never downloads a full color image for CPU classification.
 
 - `cargo test --locked -p layer-ui tonal_` covers drafts, baseline combination,
   completion-frame display publication, single-step history, cancellation,
-  saved bands, workspace capture, stale controls, and shared options.
+  mask destinations, global softness, saved bands, workspace capture, stale
+  controls, and shared options.
 - `cargo test --locked -p layer-render-wgpu tonal_` needs a hardware GPU. It
   compares HDR masks with a scalar luminance oracle, checks SDR paint and
   composites across tiles, and exercises transparent samples and percentiles.
 - `tools/performance/workspace-motion.sh gtk --native-test=native_tonal_selection_input`
-  exercises mouse sampling, touch presets, text/numeric entry, actual tinted
-  preview pixels, global mask coverage, cancellation, and undo/redo.
+  exercises mouse sampling, touch presets, text/numeric entry, neutral ordinary
+  previews, Quick Mask shading, pinned artwork sources, selection-layer writes,
+  global mask coverage, cancellation, and undo/redo.
 - `native_tonal_toolbar_input` checks horizontal and narrow vertical Tool Options,
   retained lists, text entry, pinned source choice, and the complete overflow form.
 - `cargo test --locked --release -p layer-render-wgpu tonal_preview_latency -- --ignored --test-threads=1 --nocapture`
   measures complete 24MP HDR preview/readback and full-image sampling on an
   opaque uniform composite (seven bands, no spatial feather). Run serially.
 - Run `native_tonal_selection_pen_input` through the same harness with `--tablet`
-  for injected Wayland pen input. This is not a physical-device test.
+  for injected Wayland pen sampling in Quick Mask. This is not a physical-device test.
 
 Use the isolated harness, not the user's desktop. Screenshots and machine-specific
 logs belong in ignored `artifacts/` or `/tmp`.

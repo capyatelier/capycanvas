@@ -1856,13 +1856,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// controls use `state.commands`; dispatch always rechecks this live state.
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
-        let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-            "Restore Starting Layout…"
-        } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
-            "Proof"
-        } else {
-            id.label()
-        };
+        let label = self.command_label(id);
         CommandState {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
@@ -1880,6 +1874,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .state
                 .settings
                 .action_shortcut(&UiAction::Invoke { command: id }, self.state.platform),
+        }
+    }
+    fn command_label(&self, id: CommandId) -> &'static str {
+        if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+            "Restore Starting Layout…"
+        } else if id == CommandId::ApplyTonalSelection && self.selection_masks.target().is_some() {
+            "Apply mask"
+        } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
+            "Proof"
+        } else {
+            id.label()
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
@@ -1970,7 +1975,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::ApplyTonalSelection => self.tonal_active() && self.tonal_tools.ready && self.tonal_tools.draft.as_ref().is_some_and(|d|d.revision==document.revision),
             CommandId::CancelTonalSelection => self.tonal_tools.draft.is_some(),
-            CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => self.tonal_active() && idle,
+            CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => self.tonal_active() && idle,
             CommandId::TonalRemoveBand => self.tonal_active() && self.selection_tools.options.tonal.active>=7,
             CommandId::TonalNewBand => self.tonal_active() && self.selection_tools.options.tonal.bands.len()<layer_core::tonal::MAX_BANDS,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
@@ -2026,6 +2031,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
             || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
+            || (id == CommandId::TonalDetails && self.tonal_tools.details)
             || (id == CommandId::TonalInvert && self.selection_tools.options.tonal.invert)
             || (id == CommandId::TonalLinkFalloff && self.selection_tools.options.tonal.linked)
             || (id == CommandId::TonalLowerOpen && self.selection_tools.options.tonal.bands[self.selection_tools.options.tonal.active].lower.is_none())
@@ -4002,7 +4008,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
-            CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
+            CommandId::TonalDetails | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
                 self.tonal_command(command)?;Ok((DOCUMENT | BRUSH | COMMANDS | HOST,true))
             }
             CommandId::SelectionBrushPressure => {
@@ -4496,7 +4502,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal {
-                &[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalNewBand,CommandId::TonalRemoveBand,CommandId::TonalSaveBand,CommandId::TonalInvert,CommandId::TonalLowerOpen,CommandId::TonalUpperOpen,CommandId::TonalLinkFalloff]
+                if self.tonal_tools.details {
+                    &[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalInvert,CommandId::TonalDetails,CommandId::TonalNewBand,CommandId::TonalRemoveBand,CommandId::TonalSaveBand,CommandId::TonalLowerOpen,CommandId::TonalUpperOpen,CommandId::TonalLinkFalloff]
+                } else {&[CommandId::ApplyTonalSelection,CommandId::CancelTonalSelection,CommandId::TonalInvert,CommandId::TonalDetails]}
             } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
@@ -4557,7 +4565,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls()}
+            if kind == SelectionTool::Tonal {self.tonal_controls()}
             else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
             else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
@@ -4679,13 +4687,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
-            let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Restore Starting Layout…"
-            } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
-                "Proof"
-            } else {
-                id.label()
-            };
+            let label = self.command_label(id);
             if let Some(previous) = self.state.commands.get_mut(index) {
                 // A canvas contact must not flash disabled styling across the
                 // editor. Keep the published availability until it finishes;

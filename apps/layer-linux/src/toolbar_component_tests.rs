@@ -1760,6 +1760,8 @@ fn native_tonal_toolbar_input() {
         assert_eq!(d.named("tool-list-tonal-bands"),bands);
         assert!(bands.downcast_ref::<gtk::MenuButton>().unwrap().popover().unwrap().is_mapped(),"band changes retain the open list");
         d.key(0xff1b);ready(&d);
+        assert!(!state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Text {..})),"range editing is collapsed by default");
+        d.w.dispatch(UiAction::Invoke {command:CommandId::TonalDetails});pump(120);
         let name=d.named("tool-text-open-tonal-name");
         if name.is_mapped() {
             d.click(&name);
@@ -1768,11 +1770,16 @@ fn native_tonal_toolbar_input() {
             for c in "Photo detail".chars() {d.key(c as u32);}d.key(0xff0d);d.key(0xff1b);
             assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Text {value,..} if value=="Photo detail")));
         }
+        d.w.dispatch(UiAction::Invoke {command:CommandId::TonalDetails});pump(120);
         let _=crate::snapshot(&d.w);pump(120);
         crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-full-{edge:?}.png"))).unwrap();
     }
     d.click_name(&format!("tile-{options}"));pump(150);
     let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());
+    let softness=find_named(&drawer,"tool-setting-tonal_softness").unwrap();
+    d.number(&softness,"75");ready(&d);
+    assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_softness").unwrap().value,0.75);
+    let details=find_named(&drawer,"tool-action-TonalDetails").unwrap();d.click(&details);pump(120);
     let control=find_named(&drawer,"tool-setting-tonal_falloff_low").unwrap();
     d.number(&control,"0.8");ready(&d);
     d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSaveBand});pump(120);
