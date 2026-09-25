@@ -1741,6 +1741,45 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
+    @Test fun canvasFocusOutsideTouchModeKeepsPresentedColors() {
+        val window = compose.activity.window.decorView
+        val touchMode = window.isInTouchMode
+        try {
+            instrumentation.setInTouchMode(false)
+            compose.waitUntil(5_000) { !window.isInTouchMode }
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, .2, 1, 1))))
+            action(obj("type" to "set_brush_opacity", "value" to 1))
+            action(obj("type" to "invoke", "command" to "figure"))
+            action(state().getJSONObject("tool_set").array("groups").objects().first { it.getString("label") == "Rectangle" }.getJSONObject("action"))
+            action(state().getJSONObject("tool_set").array("subtools").objects().first { it.getString("label") == "Fill" }.getJSONObject("action"))
+            val from = androidx.compose.ui.geometry.Offset(.4f, .4f)
+            val to = androidx.compose.ui.geometry.Offset(.6f, .6f)
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(from), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(to), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_UP, listOf(to), MotionEvent.TOOL_TYPE_STYLUS)
+            val center = IntArray(2)
+            instrumentation.runOnMainSync {
+                val canvas = findCanvas(window)!!
+                assertTrue("Canvas takes focus outside touch mode", canvas.isFocused)
+                canvas.getLocationOnScreen(center)
+                center[0] += canvas.width / 2; center[1] += canvas.height / 2
+            }
+            fun presented(): Int {
+                val screen = instrumentation.uiAutomation.takeScreenshot()!!
+                return try { screen.getPixel(center[0], center[1]) } finally { screen.recycle() }
+            }
+            compose.waitUntil(20_000) { android.graphics.Color.blue(presented()) > 220 }
+            val ink = capture("canvas-focus-ink").getPixel(center[0], center[1])
+            assertEquals("Presented red", 0f, android.graphics.Color.red(ink).toFloat(), 4f)
+            assertEquals("Presented green", 51f, android.graphics.Color.green(ink).toFloat(), 4f)
+            assertEquals("Presented blue", 255f, android.graphics.Color.blue(ink).toFloat(), 4f)
+        } finally {
+            instrumentation.setInTouchMode(touchMode)
+        }
+        assertNull(host.failure)
+        assertNull(host.actionError)
+    }
+
     @Test fun stylusDrawsAndUndoRedoChangePixels() {
         penStroke()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }

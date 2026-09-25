@@ -74,6 +74,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         holder.addCallback(this)
         isFocusable = true
         isFocusableInTouchMode = true
+        defaultFocusHighlightEnabled = false
         isLongClickable = false
         pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
         contentDescription = "Drawing canvas"
