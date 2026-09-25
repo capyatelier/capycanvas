@@ -13,6 +13,7 @@ fn native_drawer_style_input() {
     w.window.maximize();
     w.window.present();
     pump(1400);
+    super::use_transparency(&w, layer_ui::Transparency::Off);
     let ready_deadline = Instant::now() + Duration::from_secs(20);
     while !w.workspaces.ready.get() || w.workspaces.busy.get() {
         assert!(

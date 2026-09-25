@@ -75,8 +75,11 @@ surface behind the full row with the existing label padding and hover shapes.
 Hover, press and selection feedback composite over this surface. Header text
 has no outline in light mode; workspace-switcher text has no outline in either
 mode. Web adds a 3px backdrop blur where supported. GTK's app-owned Wayland
-canvas and Android's SurfaceView are outside their UI render trees, so those
-hosts use the translucent fill without backdrop blur.
+canvas and Android's SurfaceView are outside their UI render trees. Android uses
+the translucent fill without backdrop blur. GTK follows its
+[panel transparency](panel-transparency.md) setting instead: title-bar controls
+are opaque when it is Off and frosted glass, blurred in the canvas renderer,
+otherwise.
 
 ## Accent color
 

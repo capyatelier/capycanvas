@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_2;
 
-const KEEP_ROUND: &str = "capy-keep-round";
+pub(crate) const KEEP_ROUND: &str = "capy-keep-round";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
 pub const CORNER_FIT: f32 = 0.54;

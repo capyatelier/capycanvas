@@ -202,6 +202,9 @@ impl View {
         });
         root.add_css_class("dock-panel");
         root.add_css_class("content-drawer");
+        if drawer.tabs.is_some() {
+            root.add_css_class("tabbed");
+        }
 
         root.set_overflow(gtk::Overflow::Hidden);
         let shadow = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -340,6 +343,7 @@ impl View {
                 grip.set_valign(gtk::Align::Center);
                 header.append(&grip);
                 container.append(&header);
+                scroller.add_css_class("panel-body");
                 scroller.set_vexpand(true);
                 container.append(&scroller);
                 container.upcast::<gtk::Widget>()

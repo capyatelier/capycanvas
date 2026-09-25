@@ -7,6 +7,7 @@ mod hdr;
 mod hdr_color_scale;
 mod effects;
 mod files;
+mod glass;
 mod histogram;
 mod color_editor;
 mod color_picker;
@@ -39,6 +40,7 @@ mod tiles;
 mod timing;
 mod tool_panels;
 mod tooltips;
+mod transparency_choice;
 mod wayland;
 mod workspace;
 

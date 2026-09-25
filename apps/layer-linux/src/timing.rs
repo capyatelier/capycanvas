@@ -45,6 +45,7 @@ pub struct Stats {
     /// Frame id and enqueue timestamp for a native raster publication.
     pub raster_commits: Vec<[u64; 2]>,
     pub overview_revisions: Vec<u64>,
+    pub backdrop_frames: [u64; 2],
     pub overview_frames: usize,
 }
 struct Slot {
@@ -192,6 +193,9 @@ impl Timing {
             encoder.write_timestamp(&self.slots[index].query, 0);
             renderer.queue().submit([encoder.finish()]);
         }
+    }
+    pub fn backdrop(&self, frames: [u64; 2]) {
+        self.stats.lock().unwrap().backdrop_frames = frames;
     }
     pub fn encoded(&self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(index) = self.active {

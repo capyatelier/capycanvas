@@ -77,6 +77,8 @@ mod session;
 mod settings;
 mod shortcuts;
 mod theme;
+mod glass;
+pub use glass::{BlurStyle, GlassColor, GlassPalette, Transparency};
 mod workspace;
 mod workspace_manager_ui;
 pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
