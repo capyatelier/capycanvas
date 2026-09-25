@@ -38,9 +38,11 @@ public:
     uint64_t Id()const{return windowId;}
     HWND Handle()const;
     void Open();
+    void OpenFiles(std::vector<std::wstring> paths);
     ~CanvasWindow();
 private:
     CanvasLatencyTrace latencyTrace{GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0};
+    std::vector<std::wstring> launchFiles;
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
     uint64_t const windowId;

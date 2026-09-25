@@ -49,7 +49,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto id=num(envelope,L"id");
         auto file=object(object(model,L"state"),L"document_file");
         // Approval applies to the document shown when this dialog opened.
-        J response=O({{L"operation",S(L"cancel")},{L"id",N(id)}});
+        J response=O({{L"operation",S(L"cancel")},{L"id",N(id)}});A queued;
         if(type==L"confirm_close")response=O({{L"operation",S(L"respond_close")},
             {L"id",N(id)},{L"epoch",N(num(file,L"epoch"))},
             {L"revision",N(num(file,L"revision"))},{L"decision",S(L"cancel")}});
@@ -154,16 +154,17 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         open.CommitButtonText(str(options,L"open_label"));
                         open.FileTypeFilter().Append(extension);
                         for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif",L".exr",L".avif",L".heic",L".heif",L".hif"})open.FileTypeFilter().Append(ext);
-                        picker=open.PickSingleFileAsync();
+                        multiplePicker=open.PickMultipleFilesAsync();auto selected=co_await multiplePicker;multiplePicker=nullptr;
+                        for(uint32_t i=0;selected&&i<selected.Size();++i){if(i)queued.Append(S(selected.GetAt(i).Path()));else path=selected.GetAt(i).Path();}
                     } else {
                         Pickers::FileSavePicker save(window.AppWindow().Id());
                         save.CommitButtonText(str(options,exporting?L"export_label":L"save_label"));
                         save.DefaultFileExtension(extension);save.SuggestedFileName(str(request,L"name"));
                         save.FileTypeChoices().Insert(str(options,exporting?L"export_filter_label":L"filter_label"),single_threaded_vector<hstring>({extension}));
                         picker=save.PickSaveFileAsync();
+                        auto selected=co_await picker;
+                        if(selected)path=selected.Path();
                     }
-                    auto selected=co_await picker;
-                    if(selected)path=selected.Path();
                 }
                 if(!path.empty()) {
                     response=O({{L"operation",S(type)},{L"id",N(id)},{L"path",S(path)}});
@@ -193,6 +194,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         }
         picker=nullptr;dialog=nullptr;
         if(!stopping)send(to_string(response.Stringify()));
+        if(!stopping&&queued.Size())send(to_string(O({{L"operation",S(L"open_paths")},{L"paths",queued}}).Stringify()));
         showing=false;
         changed();
     }
@@ -244,15 +246,20 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             if(str(request,L"kind")==L"paste"){
                 using namespace winrt::Windows::ApplicationModel::DataTransfer;
                 auto content=Clipboard::GetContent();
+                winrt::Windows::Storage::Streams::IRandomAccessStream input{nullptr};
                 if(content.Contains(StandardDataFormats::StorageItems())){
                     auto items=co_await content.GetStorageItemsAsync();for(auto item:items)if(auto file=item.try_as<winrt::Windows::Storage::StorageFile>())paths.Append(S(file.Path()));
-                }else if(content.Contains(StandardDataFormats::Bitmap())){
-                    auto reference=co_await content.GetBitmapAsync();auto input=co_await reference.OpenReadAsync();
+                }else{
+                    if(content.Contains(L"PNG"))input=(co_await content.GetDataAsync(L"PNG")).try_as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
+                    if(!input&&content.Contains(StandardDataFormats::Bitmap()))input=co_await (co_await content.GetBitmapAsync()).OpenReadAsync();
+                    if(!input)report("The clipboard has no image or image files.");
+                }
+                if(input){
                     auto target=object(details,L"clipboard");auto folder=co_await winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(str(target,L"folder"));
                     auto file=co_await folder.CreateFileAsync(str(target,L"name"),winrt::Windows::Storage::CreationCollisionOption::ReplaceExisting);
                     auto output=co_await file.OpenAsync(winrt::Windows::Storage::FileAccessMode::ReadWrite);
                     co_await winrt::Windows::Storage::Streams::RandomAccessStream::CopyAsync(input,output);co_await output.FlushAsync();output.Close();input.Close();paths.Append(S(file.Path()));
-                }else report("The clipboard has no image or image files.");
+                }
             }else{
                 Pickers::FileOpenPicker open(window.AppWindow().Id());open.CommitButtonText(L"Import images");
                 for(auto extension:array(details,L"extensions"))open.FileTypeFilter().Append(L"."+extension.GetString());
@@ -396,7 +403,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 }else if(kind==L"export"&&stage==L"options"){
                     action=O({{L"op",S(L"export_options")},{L"recipe",exportForm->current()},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});
                 }else if(kind==L"export"&&stage==L"preview"){
-                    Pickers::FileSavePicker save(window.AppWindow().Id());auto extension=L"."+str(details,L"extension");save.DefaultFileExtension(extension);save.SuggestedFileName(L"Export");
+                    Pickers::FileSavePicker save(window.AppWindow().Id());auto extension=L"."+str(details,L"extension");save.DefaultFileExtension(extension);save.SuggestedFileName(str(details,L"suggested_name",L"Export"));
                     save.FileTypeChoices().Insert(str(details,L"format_name"),single_threaded_vector<hstring>({extension}));picker=save.PickSaveFileAsync();
                     auto selected=co_await picker;if(selected)action=O({{L"op",S(L"export_write")},{L"path",S(selected.Path())}});
                 }else if(stage==L"preview"){

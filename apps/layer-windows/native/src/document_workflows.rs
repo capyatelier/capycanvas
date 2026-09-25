@@ -135,10 +135,10 @@ impl Task {
         let (kind, payload) = match request {
             HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id)?))),
             HostRequestKind::Document {
-                request: DocumentRequest::Export { .. },
+                request: DocumentRequest::Export { name },
             } => (
                 "export",
-                Payload::Export(Box::new(export::Task::capture(session, id)?)),
+                Payload::Export(Box::new(export::Task::capture(session, id, name)?)),
             ),
             HostRequestKind::Document {
                 request: DocumentRequest::Place | DocumentRequest::Paste,
@@ -270,12 +270,24 @@ impl Task {
             Payload::Proof(task) => task.details(self.control.cancellation_flag())?,
             Payload::Export(task) => {
                 if self.preset_view.is_null() {
-                    self.preset_view = serde_json::to_value(crate::color_storage::presets(
-                        layer_ui::ExportPresetAction::List,
+                    let view = crate::color_storage::presets(
+                        layer_ui::ExportPresetAction::Get { index: 0 },
                         &task.original.project.document,
                         self.control.cancellation_flag(),
-                    )?)
-                    .map_err(|e| e.to_string())?;
+                    )
+                    .or_else(|_| {
+                        crate::color_storage::presets(
+                            layer_ui::ExportPresetAction::List,
+                            &task.original.project.document,
+                            self.control.cancellation_flag(),
+                        )
+                    })?;
+                    if let Some(recipe) = &view.recipe
+                        && task.configure(recipe.clone()).is_err()
+                    {
+                        task.configure(layer_ui::ExportRecipe::web_share())?;
+                    }
+                    self.preset_view = serde_json::to_value(view).map_err(|e| e.to_string())?;
                 }
                 let mut details = task.details()?;
                 details["presets"] = self.preset_view.clone();
@@ -403,6 +415,17 @@ impl Task {
                         self.control.cancellation_flag(),
                         |file| task.write(file, self.control.clone()),
                     )?;
+                    let remember = layer_ui::ExportPresetAction::Remember {
+                        index: task.destination.min(3),
+                        recipe: task.recipe().clone(),
+                    };
+                    if let Err(error) = crate::color_storage::presets(
+                        remember,
+                        &task.original.project.document,
+                        self.control.cancellation_flag(),
+                    ) {
+                        task.notice = Some(format!("Image saved; export preferences were not saved: {error}"));
+                    }
                     self.stage = "saved";
                     Ok(())
                 }
@@ -437,6 +460,9 @@ impl Task {
                     )?;
                     if let Some(recipe) = &view.recipe {
                         task.configure(recipe.clone())?;
+                    }
+                    if let Some(index) = view.index {
+                        task.destination = index;
                     }
                     self.preset_view = serde_json::to_value(view).map_err(|e| e.to_string())?;
                     self.stage = "options";
@@ -521,7 +547,11 @@ impl Task {
             let path = std::path::Path::new(&path);
             let file = std::fs::File::open(path)
                 .map_err(|e| crate::document_io::io_error("read image", e))?;
-            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Image");
+            let name = if task.clipboard.as_deref() == Some(path) {
+                "Pasted image"
+            } else {
+                path.file_stem().and_then(|s| s.to_str()).unwrap_or("Image")
+            };
             task.images.read(
                 crate::document_io::Stream {
                     inner: file,
@@ -631,6 +661,12 @@ impl Task {
             let change = host.session.complete_document_request(self.id, Ok(saved))?;
             host.apply_change(previous, change);
             Ok(())
+        }
+    }
+    pub fn notice(&self) -> Option<&str> {
+        match &self.payload {
+            Payload::Export(task) => task.notice.as_deref(),
+            _ => None,
         }
     }
     pub fn retain_proof(&self, view: &mut layer_ui::proof_workflow::ProofView) -> Result<(), String> {
@@ -801,6 +837,7 @@ mod tests {
         settle(&mut host);
         let revision = host.session.engine().document().revision;
         let mut photo = None;
+        let mut remembered = None;
         for format in [
             layer_ui::ExportFormat::Png,
             layer_ui::ExportFormat::Jpeg,
@@ -808,6 +845,11 @@ mod tests {
         ] {
             let mut task = begin(&mut host, CommandId::ExportDocument);
             ready(&mut task, Action::Describe);
+            assert_eq!(task.details["suggested_name"], "Untitled");
+            if let Some(previous) = remembered.replace(format) {
+                assert_eq!(task.details["recipe"]["format"], serde_json::to_value(previous).unwrap());
+                assert_eq!(task.details["presets"]["index"], 0);
+            }
             let mut recipe = layer_ui::ExportRecipe::web_share();
             recipe.format = format;
             recipe.background = layer_ui::ExportBackground::White;

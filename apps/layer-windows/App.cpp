@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "CanvasWindow.h"
 #include <fstream>
+#include <shellapi.h>
 #include <map>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
@@ -30,7 +31,20 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         }
         MoveFileExW(pending.c_str(),name.c_str(),MOVEFILE_REPLACE_EXISTING);
     }
-    void AddWindow() {
+    static std::vector<std::wstring> LaunchFiles() {
+        std::vector<std::wstring> files;int count=0;
+        auto arguments=CommandLineToArgvW(GetCommandLineW(),&count);
+        if(!arguments)return files;
+        for(int i=1;i<count;++i){
+            wchar_t full[32768];auto length=GetFullPathNameW(arguments[i],32768,full,nullptr);
+            if(length==0||length>=32768)continue;
+            auto attributes=GetFileAttributesW(full);
+            if(attributes!=INVALID_FILE_ATTRIBUTES&&!(attributes&FILE_ATTRIBUTE_DIRECTORY))files.emplace_back(full,length);
+        }
+        LocalFree(arguments);
+        return files;
+    }
+    void AddWindow(std::vector<std::wstring> files={}) {
         auto next=std::make_shared<CanvasWindow>(
             [weak=get_weak()]{if(auto self=weak.get())self->AddWindow();},
             [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
@@ -40,6 +54,7 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         windows.emplace(next->Id(),next);
         launchedWindow=true;
         TraceWindows();
+        if(!files.empty())next->OpenFiles(std::move(files));
         next->Open();
     }
     App() {
@@ -58,7 +73,7 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions() { return metadata.GetXmlnsDefinitions(); }
     void OnLaunched(LaunchActivatedEventArgs const&) {
         Resources().MergedDictionaries().Append(Controls::XamlControlsResources());
-        AddWindow();
+        AddWindow(LaunchFiles());
     }
 };
 }

@@ -11,9 +11,12 @@ pub(super) struct Task {
     recipe: ExportRecipe,
     pub(super) previews: Vec<color::Preview>,
     clipped: u64,
+    name: String,
+    pub(super) destination: usize,
+    pub(super) notice: Option<String>,
 }
 impl Task {
-    pub(super) fn capture(session: &UiSession<Renderer>, request: u32) -> Result<Self, String> {
+    pub(super) fn capture(session: &UiSession<Renderer>, request: u32, name: &str) -> Result<Self, String> {
         Ok(Self {
             original: session.capture_project_export(request)?,
             gpu: session
@@ -27,6 +30,9 @@ impl Task {
             recipe: ExportRecipe::web_share(),
             previews: Vec::new(),
             clipped: 0,
+            name: name.to_owned(),
+            destination: 0,
+            notice: None,
         })
     }
     pub(super) fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
@@ -98,9 +104,13 @@ impl Task {
         let extent = [document.width, document.height];
         Ok(serde_json::json!({"color":document.color,"extent":extent,
             "resolution":document.resolution,"recipe":self.recipe,"form":layer_ui::ExportForm::new(document),
+            "suggested_name":std::path::Path::new(&self.name).file_stem().and_then(|s| s.to_str()).unwrap_or("Export"),
             "extension":self.recipe.format.extension(),"format_name":self.recipe.format.name(),"output_extent":self.recipe.size.extent(extent)?,"clipped_channels":self.clipped,
             "preview_labels":if self.recipe.format.gainmap().is_some() { ["Decoded HDR (SDR display)", "Encoded SDR base"] } else { ["Before", "After"] },
             "sampled_time":document.has_animated_effects().then_some(self.original.time)}))
+    }
+    pub(super) fn recipe(&self) -> &ExportRecipe {
+        &self.recipe
     }
     pub(super) fn write(
         &mut self,

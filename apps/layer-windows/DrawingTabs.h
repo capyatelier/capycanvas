@@ -3,6 +3,7 @@
 #include "NativeMenus.h"
 #include "WorkspaceRowDrag.h"
 #include "WorkspaceGeometry.h"
+#include "ExternalImages.h"
 #include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Windows.UI.ViewManagement.h>
@@ -185,6 +186,16 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         plain.TextAlignment(TextAlignment::Center);plain.VerticalAlignment(VerticalAlignment::Center);plain.Padding({8,0,8,0});plain.IsHitTestVisible(false);AutomationProperties::SetAutomationId(plain,L"drawing-title");
         root.Children().Append(plain);root.Children().Append(strip);root.Children().Append(selector);selector.MinWidth(0);selector.HorizontalAlignment(HorizontalAlignment::Stretch);selector.VerticalAlignment(VerticalAlignment::Stretch);AutomationProperties::SetAutomationId(selector,L"drawing-selector");AutomationProperties::SetItemStatus(selector,L"Closed");AutomationProperties::SetName(root,L"Drawings");AutomationProperties::SetAutomationId(root,L"drawing-tabs");
         selector.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->show();});root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->layout();});
+        root.AllowDrop(true);
+        auto dropKind=std::make_shared<DropKind>(DropKind::Images);
+        root.DragEnter([dropKind](auto&&,DragEventArgs const& event){if(fileDrag(event))classifyDrop(event,dropKind);});
+        root.DragOver([weak,dropKind](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&fileDrag(event)){
+            using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
+            bool open=*dropKind==DropKind::Drawings&&flag(find(array(self->data->state,L"commands"),L"id",L"open_document"),L"enabled");
+            event.AcceptedOperation(open?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(open?L"Open drawing":L"Drop drawing files to open them");event.Handled(true);
+        }});
+        root.Drop([weak,dropKind](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&fileDrag(event)&&*dropKind==DropKind::Drawings)
+            receiveDrawingDrop(event,[weak](std::string json){if(auto self=weak.lock())self->data->document(std::move(json));});});
         overlay.HorizontalAlignment(HorizontalAlignment::Left);overlay.VerticalAlignment(VerticalAlignment::Top);overlay.IsHitTestVisible(false);overlay.Visibility(Visibility::Collapsed);
         AutomationProperties::SetAutomationId(overlay,L"drawing-tab-slide");AutomationProperties::SetName(overlay,L"Drawing tab slide");root.Children().Append(overlay);
         AutomationProperties::SetAutomationId(list,L"drawing-list");

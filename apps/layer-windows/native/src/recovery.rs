@@ -434,14 +434,7 @@ impl Service {
             self.error = None;
         }
         match action {
-            Action::Restore => {
-                if session.state().document_file.modified {
-                    return Err(
-                        "Save or close the current drawing before restoring this copy".into(),
-                    );
-                }
-                self.event(session, RecoveryEvent::Restore)
-            }
+            Action::Restore => self.event(session, RecoveryEvent::Restore),
             Action::Later => self.event(session, RecoveryEvent::Dismiss { discard: false }),
             Action::Discard => self.event(session, RecoveryEvent::Dismiss { discard: true }),
             Action::Retry if !self.ready => {

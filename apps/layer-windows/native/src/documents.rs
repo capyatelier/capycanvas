@@ -32,6 +32,7 @@ pub(crate) enum DocumentAction {
     NewPreferences { id: u32, action: layer_ui::NewDocumentAction },
     Recovery { action: crate::recovery::Action },
     WorkflowBegin { id: u32 },
+    OpenPaths { paths: Vec<String> },
     DropImages { epoch: u64, revision: u64, active_layer: u64, paths: Vec<String>,
         screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
     Workflow { id: u32, action: crate::document_workflows::Action },
@@ -450,6 +451,7 @@ pub(crate) struct DocumentService {
     workflow: Option<Box<crate::document_workflows::Task>>,
     workflow_control: Option<(u32, layer_render_wgpu::snapshot::CaptureControl)>,
     workflow_running: bool,
+    open_queue: std::collections::VecDeque<String>,
 }
 impl DocumentService {
     pub(crate) fn open(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
@@ -477,6 +479,7 @@ impl DocumentService {
             workflow: None,
             workflow_control: None,
             workflow_running: false,
+            open_queue: Default::default(),
         })
     }
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
@@ -629,11 +632,55 @@ impl DocumentService {
         host.apply_change(previous, change);
         Ok(())
     }
+    const MAX_QUEUED_OPENS: usize = 64;
+    fn open_idle(&self, host: &NativeHost) -> bool {
+        let state = host.session.state();
+        self.active.is_none() && self.import.is_none() && self.workflow_control.is_none() && self.activating.is_none()
+            && !self.spilling && self.opening.is_none() && self.recovery.as_ref().is_none_or(|r| !r.restoring())
+            && !state.document_file.busy && !state.document_file.close_ready
+            && !state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { .. }))
+            && host.session.engine().backend().0.is_some()
+            && host.session.command(layer_ui::CommandId::OpenDocument).enabled
+    }
+    fn open_queued(&mut self, host: &mut NativeHost) {
+        if self.open_queue.is_empty() || !self.open_idle(host) {
+            return;
+        }
+        if host.session.require_document_snapshot_idle().is_err() {
+            host.dirty = true;
+            return;
+        }
+        let path = self.open_queue.pop_front().unwrap();
+        let result = (|| {
+            host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::OpenDocument })?;
+            let id = host.session.state().requests.iter()
+                .find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Open }))
+                .ok_or("Open the current drawing's pending dialog first")?.id;
+            let epoch = host.session.state().document_file.epoch;
+            let revision = host.session.engine().document().revision;
+            self.dispatch(host, DocumentAction::Open { id, epoch, revision, path })
+        })();
+        if let Err(error) = result {
+            host.error = Some(error);
+            host.invalidate_snapshot();
+        }
+    }
     pub(crate) fn dispatch(
         &mut self,
         host: &mut NativeHost,
         action: DocumentAction,
     ) -> Result<(), String> {
+        if let DocumentAction::OpenPaths { paths } = action {
+            if paths.is_empty() || self.open_queue.len() + paths.len() > Self::MAX_QUEUED_OPENS {
+                return Err("Open up to 64 drawings at once".into());
+            }
+            for path in &paths {
+                location(path)?;
+            }
+            self.open_queue.extend(paths);
+            self.open_queued(host);
+            return Ok(());
+        }
         if let DocumentAction::Tabs { action } = action { return self.tab_action(host, action); }
         if let DocumentAction::Palette { action } = action { return self.palettes.dispatch(host, action); }
         if let DocumentAction::Recovery { action } = action {
@@ -655,6 +702,12 @@ impl DocumentService {
             return Ok(());
         }
         if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
+            let drawings = paths.iter().filter(|path| std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("capy"))).count();
+            if drawings != 0 {
+                if drawings != paths.len() { return Err("Open drawings or place images, not both".into()); }
+                if layer.is_some() { return Err("Drop drawing files on the canvas to open them".into()); }
+                return self.dispatch(host, DocumentAction::OpenPaths { paths });
+            }
             Self::matches(host, epoch, revision)?;
             if self.active.is_some() || self.import.is_some() || self.workflow_control.is_some()
                 || host.session.engine().document().active_layer.0 != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
@@ -928,6 +981,7 @@ impl DocumentService {
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
         self.palettes.poll(host);
+        self.open_queued(host);
         // New/Open/Save/Export/Close supersede a pending import. Native dialogs
         // wait for its bounded worker slot to drain before responding.
         if host.session.state().document_file.busy || host.session.state().document_file.close_ready
@@ -973,6 +1027,9 @@ impl DocumentService {
             };
             if task.control.is_cancelled() || task.stage == "saved" {
                 task.complete(host, task.stage == "saved")?;
+                if let Some(notice) = task.notice() {
+                    host.error = Some(notice.to_owned());
+                }
                 self.workflow_control = None;
                 self.worker.retire_workflow(task);
             } else {
@@ -1611,6 +1668,29 @@ mod tests {
         f.act(DocumentAction::Cancel { id: next });
     }
     #[test]
+    fn dropped_drawings_queue_opens_while_mixed_and_layer_drops_are_refused() {
+        let mut f = Fixture::new();
+        let epoch = f.host.session.state().document_file.epoch;
+        let revision = f.host.session.engine().document().revision;
+        let active_layer = f.host.session.engine().document().active_layer.0;
+        let drop = |paths: Vec<String>, layer: Option<(u64, f32)>| DocumentAction::DropImages {
+            epoch, revision, active_layer, paths, screen: None, layer,
+        };
+        let [a, b, image, upper, c] = ["a.capy", "b.capy", "b.png", "a.CAPY", "c.capy"].map(|name| f.path(name));
+        let mixed = f.service.dispatch(&mut f.host, drop(vec![a.clone(), image], None));
+        assert!(mixed.unwrap_err().contains("not both"));
+        let layered = f.service.dispatch(&mut f.host, drop(vec![upper], Some((active_layer, 0.5))));
+        assert!(layered.unwrap_err().contains("canvas"));
+        assert!(f.service.active.is_none() && f.service.open_queue.is_empty());
+        f.act(drop(vec![a.clone(), b.clone()], None));
+        f.service.poll(&mut f.host).unwrap();
+        assert!(f.service.active.is_none() && f.host.session.state().requests.is_empty());
+        assert_eq!(f.service.open_queue, [a, b]);
+        let many = f.service.dispatch(&mut f.host, DocumentAction::OpenPaths { paths: vec![c; 63] });
+        assert!(many.is_err());
+        assert_eq!(f.service.open_queue.len(), 2);
+    }
+    #[test]
     fn stale_discard_and_open_responses_preserve_intervening_edits() {
         let mut f = Fixture::new();
         f.invoke(CommandId::AddLayer);
@@ -2133,6 +2213,15 @@ mod gpu_tests {
             [expected.width, expected.height, expected.stride]
         );
         assert_eq!(reopened.bytes, expected.bytes);
+        service
+            .dispatch(&mut host, DocumentAction::OpenPaths { paths: vec![path.clone(), path.clone()] })
+            .unwrap();
+        finish(&mut service, &mut host, &done);
+        service.poll(&mut host).unwrap();
+        finish(&mut service, &mut host, &done);
+        assert!(host.session.state().host_error.is_none());
+        assert!(service.open_queue.is_empty());
+        assert_eq!(host.session.state().document_file.epoch, epoch + 3);
         let original = host.session.engine().document().clone();
         let corrupt = directory.join("invalid.capy");
         std::fs::write(&corrupt, b"not a project").unwrap();
@@ -2161,7 +2250,6 @@ mod gpu_tests {
                 DocumentAction::Create { id, epoch, revision, options: layer_ui::NewDocumentOptions { extent: [0, 48], ..Default::default() }, preset: String::new(), defaults: false },
             )
             .unwrap();
-        finish(&mut service, &mut host, &done);
         assert!(host.session.state().host_error.is_some());
         assert_eq!(host.session.engine().document(), &original);
         assert!(!host.session.state().document_file.modified);

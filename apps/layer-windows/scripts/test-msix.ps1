@@ -45,6 +45,7 @@ if($identity.Name -cne $result.identity -or $identity.Publisher -cne $result.pub
 $application=$appx.Package.Applications.Application
 $uap10='http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
 if($application.Executable -ne 'CapyCanvas.exe' -or $application.GetAttribute('RuntimeBehavior',$uap10) -ne 'packagedClassicApp' -or $application.GetAttribute('TrustLevel',$uap10) -ne 'mediumIL'){throw 'Unexpected MSIX activation contract.'}
+if(@($application.Extensions.Extension.FileTypeAssociation.SupportedFileTypes.FileType) -notcontains '.capy'){throw 'MSIX does not associate .capy drawings.'}
 $oid='OID.2.25.311729368913984317654407730594956997722=1'
 if($identity.Publisher.Contains($oid) -ne [bool]$result.unsigned_test_identity){throw 'Unsigned test publisher isolation is incorrect.'}
 $logos=Join-Path $run 'repeat logos'

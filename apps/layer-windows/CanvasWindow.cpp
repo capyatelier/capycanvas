@@ -357,8 +357,13 @@ void CanvasWindow::Start() {
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     panel.AllowDrop(true);
-    panel.DragOver([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
-        event.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);event.DragUIOverride().Caption(L"Place images on canvas");event.Handled(true);
+    auto dropKind=std::make_shared<CapyUi::DropKind>(CapyUi::DropKind::Images);
+    panel.DragEnter([dropKind](auto&&,DragEventArgs const& event){if(CapyUi::fileDrag(event))CapyUi::classifyDrop(event,dropKind);});
+    panel.DragOver([weak=weak_from_this(),dropKind](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
+        auto kind=*dropKind;auto commands=CapyUi::array(CapyUi::object(self->lastModel,L"state"),L"commands");
+        bool enabled=kind!=CapyUi::DropKind::Mixed&&CapyUi::flag(CapyUi::find(commands,L"id",kind==CapyUi::DropKind::Drawings?L"open_document":L"import_image"),L"enabled");
+        using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
+        event.AcceptedOperation(enabled?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(CapyUi::dropCaption(kind));event.Handled(true);
     }});
     panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
         auto action=CapyUi::imageDrop(CapyUi::object(self->lastModel,L"state"));auto point=event.GetPosition(self->panel);auto scale=self->panel.XamlRoot().RasterizationScale();
@@ -1192,6 +1197,7 @@ void CanvasWindow::Fullscreen() {
         AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
     Resize();
 }
+void CanvasWindow::OpenFiles(std::vector<std::wstring> paths) {launchFiles=std::move(paths);}
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"refresh_switcher"})",CanvasCommandKind::Workspace);
 }
@@ -1211,6 +1217,10 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     status.TextAlignment(suspended?TextAlignment::Center:TextAlignment::Left);
     status.TextWrapping(suspended?TextWrapping::Wrap:TextWrapping::NoWrap);
     status.Margin(suspended?Thickness{24,24,24,24}:Thickness{0,0,0,40});
+    if(!launchFiles.empty()&&flag(model,L"canvas_ready")){
+        A paths;for(auto const& path:launchFiles)paths.Append(S(hstring(path)));launchFiles.clear();
+        Send(to_string(O({{L"operation",S(L"open_paths")},{L"paths",paths}}).Stringify()),CanvasCommandKind::Document);
+    }
     auto storage=object(model,L"windows_workspace");
     if(flag(storage,L"ready")){
         auto next=uint64_t(num(storage,L"switcher_revision"));
