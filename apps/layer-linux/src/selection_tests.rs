@@ -224,7 +224,10 @@ fn native_selection_tools_input() {
     assert!(find_named(&d.named("tool-drawer"), "drawer-panel-Brushes").is_none());
     for (i, tool) in SelectionTool::ALL.into_iter().enumerate() {
         let button = d.named(&format!("tool-choice-{:?}", tool.command()));
-        assert!(button.compute_bounds(&tools).unwrap().height() >= 44., "touchable selection tool row, including padding");
+        assert!(
+            button.compute_bounds(&tools).unwrap().height() >= 32.,
+            "compact selection tool row"
+        );
         let p = d.point(&button);
         match i % 3 {
             0 => d.click(&button),

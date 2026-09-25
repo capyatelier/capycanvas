@@ -8,7 +8,9 @@ in the workspace.
 The same hosts also provide [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
 
 Preview-less tool rows match brush categories: at least 44 px on GTK, Web and
-Windows, and 48 dp on Android.
+Windows, and 48 dp on Android. GTK's Select command list uses compact 32 px rows
+so it does not make the adjacent Tool settings panel taller
+([Tonal range](tonal-selection.md)).
 Select, Brush, and Sculpt opener icons follow their category's remembered tool,
 including while another category is active. Rust publishes the icon from shared
 workspace memory; hosts update their retained header and toolbar images.
