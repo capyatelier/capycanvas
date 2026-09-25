@@ -89,8 +89,8 @@ looks unchanged over an empty canvas, and only artwork behind it shows through.
   exactly the panel body, so the active tab and its content read as one surface.
 - Selected tools, layers and workspaces are translucent fills over their parent
   surface.
-- Dark themes use the same levels at about two thirds of the transparency: dark
-  High uses the light Medium alphas.
+- Dark themes use about two thirds of the light theme's transparency at each
+  level.
 - Title-bar chips, the zoom readout and the workspace switcher are filled with
   the base color, so they stay invisible over the canvas surround in every
   level. Their per-level alpha is tuned separately from the panels':
@@ -107,7 +107,7 @@ looks unchanged over an empty canvas, and only artwork behind it shows through.
   and layers) keep at least 60% of their opaque OKLab color difference from
   their parent over white paper and over dark grey. Their alpha rises where
   needed. Some cases cannot reach 60% at any alpha, so they use the best
-  achievable. In dark Low the header selection reaches about 40% over white,
+  achievable. In dark Low the header selection reaches about 46% over white,
   because the chip itself lightens toward the selection color. In light High the
   document tab reaches about 42% over white.
 - Drop shadows are cut away beneath drawer and column connectors, so a
@@ -119,11 +119,11 @@ Measured alphas:
 
 | Level | Panel | Chips | Document tab | Header / workspace selection | Tool / layer selection |
 | --- | --- | --- | --- | --- | --- |
-| Dark Low | 0.91 | 0.83 | 0.81 | 0.81 / 0.81 | 0.81 |
-| Dark Medium | 0.82 | 0.75 | 0.71 | 0.93 / 1.00 | 0.71 |
+| Dark Low | 0.96 | 0.88 | 0.87 | 0.86 / 0.86 | 0.86 |
+| Dark Medium | 0.845 | 0.77 | 0.74 | 1.00 / 1.00 | 0.74 |
 | Dark High | 0.72 | 0.65 | 0.55 | 0.68 / 0.77 | 0.55 |
-| Light Low | 0.86 | 0.64 | 0.71 | 0.70 / 0.70 | 0.70 |
-| Light Medium | 0.72 | 0.48 | 0.75 | 0.55 / 0.55 | 0.77 |
+| Light Low | 0.94 | 0.71 | 0.78 | 0.78 / 0.78 | 0.78 |
+| Light Medium | 0.76 | 0.51 | 0.75 | 0.59 / 0.59 | 0.96 |
 | Light High | 0.56 | 0.43 | 0.75 | 0.41 / 0.40 | 0.40 |
 
 `LAYER_GLASS_PROBE=1` makes the capture test paint white and dark-grey
