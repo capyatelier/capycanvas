@@ -40,7 +40,7 @@ impl SwatchSelector {
         let widget = if inline {
             gtk::Box::new(gtk::Orientation::Horizontal, 8)
         } else {
-            gtk::Box::new(gtk::Orientation::Vertical, 12)
+            gtk::Box::new(gtk::Orientation::Vertical, 0)
         };
         widget.add_css_class("swatch-selector");
         let entry = gtk::Entry::builder()
@@ -50,6 +50,7 @@ impl SwatchSelector {
             .placeholder_text(placeholder)
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)
+            .margin_top(if inline { 0 } else { 12 })
             .build();
         entry.add_css_class("preference-entry");
         entry.set_widget_name(&format!("setting-text-{name}"));
