@@ -235,6 +235,7 @@ pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-toolbar-components.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-selection.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-palettes.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
 
 The document journey checks native import/save/export pickers, Unicode paths,

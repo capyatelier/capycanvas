@@ -70,22 +70,25 @@ HWND CanvasWindow::Handle()const {
     return handle;
 }
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
-    auto name=std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json";
-    auto pending=name+".pending";
-    {std::ofstream stream(pending);stream<<value;if(!stream)return;}
-    // Local tracing is opt-in. A transient file scanner or diagnostic reader
-    // can deny replacement; do not silently leave the previous state forever.
-    auto source=to_hstring(pending),destination=to_hstring(name);
-    for(unsigned attempt=0;;++attempt){
-        if(MoveFileExW(source.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))break;
-        auto error=GetLastError();
-        if(attempt==4||(error!=ERROR_SHARING_VIOLATION&&error!=ERROR_ACCESS_DENIED)){
-            OutputDebugStringW((std::wstring(L"Capy trace replacement failed: ")+std::to_wstring(error)+L"\n").c_str());break;
+    auto write=[&](std::string const& name){
+        auto pending=name+".pending";
+        {std::ofstream stream(pending);stream<<value;if(!stream)return;}
+        // Local tracing is opt-in. A transient file scanner or diagnostic reader
+        // can deny replacement; do not silently leave the previous state forever.
+        auto source=to_hstring(pending),destination=to_hstring(name);
+        for(unsigned attempt=0;;++attempt){
+            if(MoveFileExW(source.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))break;
+            auto error=GetLastError();
+            if(attempt==4||(error!=ERROR_SHARING_VIOLATION&&error!=ERROR_ACCESS_DENIED)){
+                OutputDebugStringW((std::wstring(L"Capy trace replacement failed: ")+std::to_wstring(error)+L"\n").c_str());
+                std::ofstream(name)<<value;DeleteFileW(source.c_str());break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    };
+    write(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json");
     // Preserve the initial window's paths for existing single-window fixtures.
-    if(primaryWindow)std::ofstream(std::string(kind)+".json")<<value;
+    if(primaryWindow)write(std::string(kind)+".json");
 }
 std::string CanvasWindow::SystemTheme(){
     using winrt::Windows::UI::ViewManagement::UIColorType;
@@ -313,6 +316,7 @@ void CanvasWindow::Start() {
         self->canvasFocus.Focus(FocusState::Programmatic);
         self->Send(std::move(json),CanvasCommandKind::Document);
     }},[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
+    workspace->SetWindowId(windowId);
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
@@ -659,13 +663,17 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     // activation/navigation keys, editors and open menus retain keyboard input.
     // Releases still clear shared held state when focus moves during a gesture.
     bool button=focused&&bool(focused.try_as<Primitives::ButtonBase>());
+    bool ownedKeys=false;
+    if(key==VirtualKey::Space||key==VirtualKey::Enter||((key==VirtualKey::Z||key==VirtualKey::Y)&&(GetKeyState(VK_CONTROL)&0x8000)))
+        for(auto node=focused.try_as<DependencyObject>();node&&!ownedKeys;node=VisualTreeHelper::GetParent(node))
+            if(auto element=node.try_as<FrameworkElement>())if(auto tag=element.Tag().try_as<Windows::Data::Json::JsonObject>())ownedKeys=CapyUi::flag(tag,L"native_keys");
     bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
         key==VirtualKey::Escape||key==VirtualKey::Left||key==VirtualKey::Right||
         key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
         key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
         key==VirtualKey::Menu||(GetKeyState(VK_MENU)&0x8000);
     // F11 remains a window action while a toolbar button or native field has focus.
-    bool editing=key!=VirtualKey::F11&&(menuOpen.load()||(!canvas&&(!button||navigation)));
+    bool editing=key!=VirtualKey::F11&&(ownedKeys||menuOpen.load()||(!canvas&&(!button||navigation)));
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;

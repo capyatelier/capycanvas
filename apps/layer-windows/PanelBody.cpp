@@ -4,6 +4,7 @@
 #include "ToolView.h"
 #include "EffectControls.h"
 #include "LayersView.h"
+#include "PalettesView.h"
 #include "StatsView.h"
 #include "ProofPanel.h"
 #include "ColorPair.h"
@@ -60,6 +61,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             root=FilterTypesPanel(data,bindings);
         }else if(str(panel,L"id")==L"layers"){
             auto view=LayersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
+        }else if(str(panel,L"id")==L"palettes"){
+            root=PalettesPanel(data,bindings,&contentHeight,&scrollMetrics);
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             bool vertical=str(geometry,L"axis",L"vertical")==L"vertical";

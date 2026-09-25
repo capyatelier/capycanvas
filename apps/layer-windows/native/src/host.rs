@@ -988,6 +988,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .and_then(|service| service.import_request()),
             windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
+            windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
             windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
             windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),

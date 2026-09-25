@@ -698,6 +698,7 @@ impl Panel {
                 | crate::Platform::Android
                 | crate::Platform::Mac
                 | crate::Platform::Ios
+                | crate::Platform::Windows
         )
     }
 

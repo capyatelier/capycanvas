@@ -46,11 +46,12 @@ pub(crate) enum Action {
     Adjacent {
         forward: bool,
     },
-    Drop {
+    Slide {
         id: u64,
         hits: Vec<layer_ui::DocumentTabHit>,
+        clip: layer_ui::Bounds,
+        press: [f32; 2],
         point: [f32; 2],
-        vertical: bool,
     },
     Step {
         id: u64,
@@ -337,17 +338,23 @@ impl DocumentService {
                     return Err("Finish the current operation before reordering drawings".into());
                 }
                 match other {
-                    Action::Drop {
+                    Action::Slide {
                         id,
                         hits,
+                        clip,
+                        press,
                         point,
-                        vertical,
                     } => {
                         if hits.len() > 1024 {
                             return Err("Too many drawing targets".into());
                         }
-                        if let Some(before) = self.tabs.drop_target(&hits, point, vertical) {
-                            self.tabs.reorder(id, before);
+                        if let Some(slide) = self
+                            .tabs
+                            .drag(id, press, &hits, clip)
+                            .and_then(|drag| drag.preview(point))
+                            .filter(|slide| slide.attached)
+                        {
+                            self.tabs.reorder(id, slide.before);
                         }
                     }
                     Action::Reorder { id, before } => {

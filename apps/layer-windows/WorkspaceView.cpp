@@ -693,6 +693,7 @@ bool WorkspaceView::CancelGesture(){
     bool closed=impl->data->dismissTransients();
     return impl->gestures->Cancel()||closed;
 }
+void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};
     if(value!=impl->titlebar){impl->titlebar=value;impl->lastTitlebar=L"";impl->reportTitlebar();}

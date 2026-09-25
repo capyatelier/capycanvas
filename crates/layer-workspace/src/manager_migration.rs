@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[test]
 fn palettes_upgrade_only_untouched_paint_and_photo_defaults() {
     use layer_ui::{LayoutHistory, Panel, WorkspacePreset};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         for (index, preset, update) in [
             (
                 1,

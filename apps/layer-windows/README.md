@@ -413,8 +413,9 @@ shared import service; a photo gets a separate editable master on Save.
 
 The native SDR renderer preserves integer U8/U16 artwork with Float32 processing.
 Tagged effect/gradient colors and the wheel use shared color projection. Precise
-color and palette editing is available from the color readout's context menu;
-ordinary clicks still switch the readout. Color preferences expose future-document
+color editing opens from Edit Color… in the color readout and swatch context
+menus; ordinary clicks still switch the readout. Saved palettes live in the
+Palettes panel, which the swatch menu's Palettes… action reveals. Color preferences expose future-document
 and photo interpretation policies, and a native ICC library manager.
 
 Assign/Convert/Depth, source repair/rasterization and exact color history use

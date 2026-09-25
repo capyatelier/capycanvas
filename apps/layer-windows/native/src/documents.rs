@@ -28,6 +28,7 @@ use std::{
 pub(crate) enum DocumentAction {
     RequestImport,
     Tabs { action: tabs::Action },
+    Palette { action: crate::palette_files::Action },
     NewPreferences { id: u32, action: layer_ui::NewDocumentAction },
     Recovery { action: crate::recovery::Action },
     WorkflowBegin { id: u32 },
@@ -439,6 +440,7 @@ pub(crate) struct DocumentService {
     close_next: bool,
     pub proof: crate::proof::Service,
     pub tone: crate::tone::Service,
+    pub palettes: crate::palette_files::Service,
     import: Option<ImageImport>,
     next_import: u64,
     worker: Worker,
@@ -456,6 +458,7 @@ impl DocumentService {
         Ok(Self {
             proof: crate::proof::Service::new(wake.clone()),
             tone: crate::tone::Service::new(wake.clone()),
+            palettes: crate::palette_files::Service::new(wake.clone()),
             wake,
             tabs: Default::default(),
             recovery: None,
@@ -632,6 +635,7 @@ impl DocumentService {
         action: DocumentAction,
     ) -> Result<(), String> {
         if let DocumentAction::Tabs { action } = action { return self.tab_action(host, action); }
+        if let DocumentAction::Palette { action } = action { return self.palettes.dispatch(host, action); }
         if let DocumentAction::Recovery { action } = action {
             self.recovery.as_mut().ok_or("Recovery service unavailable")?.dispatch(&mut host.session, action)?;
             host.invalidate_snapshot();
@@ -923,6 +927,7 @@ impl DocumentService {
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
+        self.palettes.poll(host);
         // New/Open/Save/Export/Close supersede a pending import. Native dialogs
         // wait for its bounded worker slot to drain before responding.
         if host.session.state().document_file.busy || host.session.state().document_file.close_ready

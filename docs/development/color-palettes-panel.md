@@ -1,14 +1,15 @@
 # Color palettes
 
-GTK, Web, Android, macOS and iPadOS place the Palettes tab immediately after
-Color in the Paint and Photo defaults, and the same component below the wheel in
-Sketch’s color drawer. Untouched included layouts migrate; customized layouts
-keep their placement and can show Palettes through the Window menu (GTK and
-Android also through the color swatch menu's Palettes action). Windows does not
-expose the panel yet. GTK ([`color_library.rs`](../../apps/layer-linux/src/color_library.rs)),
+GTK, Web, Android, macOS, iPadOS and Windows place the Palettes tab immediately
+after Color in the Paint and Photo defaults, and the same component below the
+wheel in Sketch’s color drawer. Untouched included layouts migrate; customized
+layouts keep their placement and can show Palettes through the Window menu (GTK,
+Android and Windows also through the color swatch menu's Palettes action).
+GTK ([`color_library.rs`](../../apps/layer-linux/src/color_library.rs)),
 Web ([`palettes.js`](../../apps/layer-web/palettes.js)), Android
-([`Palettes.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Palettes.kt))
-and Apple ([`PalettePanel.swift`](../../apps/layer-apple/Shared/Editor/PalettePanel.swift))
+([`Palettes.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Palettes.kt)),
+Apple ([`PalettePanel.swift`](../../apps/layer-apple/Shared/Editor/PalettePanel.swift))
+and Windows ([`PalettesView.cpp`](../../apps/layer-windows/PalettesView.cpp))
 render the shared [`PalettePanelView`](../../crates/layer-ui/src/color/palette_view.rs),
 its menus and reorder previews; the descriptions below apply to every host
 unless one is named.
@@ -91,7 +92,7 @@ group out of content fitting. Floating groups also fit all their pages and retai
 manual heights across tab selection. The palette body takes spare space with its footer
 at the bottom.
 
-The GTK defaults also place Proof after Navigator and Diagnostics after Tool Set.
+The GTK and Windows defaults also place Proof after Navigator and Diagnostics after Tool Set.
 Automatic tab labels use native measurements at the current font and width.
 Every icon is reserved first, then complete names are restored left to right as
 space permits. Selection does not change this priority. Explicit tab styles keep
@@ -146,8 +147,8 @@ are not color-use events. Successful fills, figures, and gradients record the
 source definitions they use. Undo does not remove usage history.
 
 Saved colors and history retain tagged RGB space, alpha, and HDR values. GTK
-renders managed previews through the existing ColorPatch path; Web and Android
-paint the shared view's swatch preview, tone-mapped for HDR documents exactly
+renders managed previews through the existing ColorPatch path; Web, Android and
+Windows paint the shared view's swatch preview, tone-mapped for HDR documents exactly
 as their Color panel swatches are. Hex is an sRGB
 preview, not the storage format; HDR uses the picker’s base color and EV readout.
 The full color name and space remain available in tooltips/accessibility text.
@@ -191,8 +192,9 @@ with expansion bounded to 8 MB and CRC-checked; ZIP64 size records from macOS
 are accepted. Libraries retain the limits of 64 palettes and 4096 total swatches.
 Hosts read and parse files off their UI thread (Web in its worker, Android on
 an I/O dispatcher, GTK through GIO's blocking pool, macOS and iPadOS on the
-project I/O queue through `capy_palette_file`), and failed imports leave the
-library unchanged. Library mutations retain existing tile widgets; brush frames
+project I/O queue through `capy_palette_file`, Windows on a palette file thread
+that writes exports through a replaced partial file), and failed imports leave
+the library unchanged. Library mutations retain existing tile widgets; brush frames
 do not rebuild the palette chooser.
 
 Cross-application validation on 2026-09-24 used 93 files exported by Photoshop
@@ -319,6 +321,32 @@ revealing the tab and codec round trips for every export format. `testPalettes`
 covers placement and fitting, the six-column grid, choosing, adding and naming
 colors with a duplicate error, chooser search and selection, New Palette with
 live validation, a mouse reorder with ⌘Z and the secondary-click swatch menu.
+
+### Windows
+
+Windows renders the shared view in WinUI and asks the workspace for menus,
+reorder previews and dry-run name checks. Tiles capture their pointer and start
+dragging after the system drag slop. Touch and pen holds use a WinUI gesture
+recognizer to open the shared menu as a native `MenuFlyout`. The lifted tile is
+a shadowed popup; neighbors move with 140 ms Composition animations, disabled
+when Windows animations are off. A 16 ms timer scrolls long palettes at the grid
+edges. Pointer-capture loss after the contact lifts commits like a release;
+loss during contact cancels. New, rename and remove prompts use `ContentDialog`.
+Import and export use the Windows App SDK file pickers owned by the editor
+window. A palette file thread reads imports and writes exports through a
+`.partial` file. Chooser focus follows the Web and Android opener rules.
+
+```powershell
+./apps/layer-windows/scripts/build.ps1 -Configuration Release
+./apps/layer-windows/scripts/exercise-palettes.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
+```
+
+`exercise-palettes.ps1` checks Paint and Photo placement, starter palettes, the + tile,
+inline and duplicate names, Escape, and menus from secondary click and touch hold.
+It also checks mouse, touch and pen reordering with one-step Ctrl+Z, cancellation
+on an outside release, chooser search and selection, a GPL export and re-import
+through the native pickers, and the Sketch drawer. The input is injected
+synthetically; physical pen acceptance remains open.
 
 GTK is the reference implementation for subsequent host ports. The earlier
 [research](color-palettes-research.md) and [HTML study](prototypes/color-palettes.html)

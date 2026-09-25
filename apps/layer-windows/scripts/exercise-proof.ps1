@@ -144,7 +144,7 @@ try {
  Command 'soft_proof';Wait-Until {!(Model).state.soft_proof -and !(Model).state.gamut_warning -and !(Model).windows_proof.text} 'Off did not clear proof status'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $withProof){throw 'Viewing toggles modified the drawing'}
  Command 'undo' 'Edit';Idle
- if((Model).state.document_file.modified){throw 'One Undo did not restore the clean drawing'}
+ Wait-Until {!(Model).state.document_file.modified} 'One Undo did not restore the clean drawing'
  Command 'redo' 'Edit';Idle;Command 'soft_proof'
  Wait-Until {(Model).windows_proof.bytes -gt 0 -and (Model).windows_proof.text -eq 'Proof: Display P3'} 'Redo proof view did not recover' 60
  Button 'Test stroke';Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Stroke did not commit'

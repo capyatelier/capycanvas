@@ -16,6 +16,7 @@ public:
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
     void SetTitlebarInsets(float left,float right,float height);
+    void SetWindowId(uint64_t id);
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

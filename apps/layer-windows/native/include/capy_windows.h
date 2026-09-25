@@ -106,7 +106,7 @@ __declspec(dllimport) char* capy_query(CapyHost*, const char* json);
 __declspec(dllimport) char* capy_surface_info(CapyHost*);
 /* Pure numeric policy; does not touch the render owner's host. */
 __declspec(dllimport) bool capy_document_tabs_compact(float width, size_t count);
-__declspec(dllimport) char* capy_document_tab_drop(const char* json);
+__declspec(dllimport) char* capy_document_tab_slide(const char* json);
 __declspec(dllimport) char* capy_proof_dial(const char* json);
 __declspec(dllimport) bool capy_proof_texture(uint32_t edge, uint8_t* output, size_t length);
 __declspec(dllimport) char* capy_number(const char* json);

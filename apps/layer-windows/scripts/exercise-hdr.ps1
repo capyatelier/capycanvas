@@ -180,9 +180,19 @@ try {
    [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
    [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2))
    Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Dragging'} 'Tab movement did not capture'
+   $slide=@{value=$null}
+   Wait-Until {$slide.value=(Control 'drawing-tab-slide').Current.ItemStatus|ConvertFrom-Json;$slide.value.attached -and $slide.value.offsets[1] -lt 0 -and $slide.value.offsets[0] -eq 0} 'Held tab did not slide its neighbor'
    if($device -eq 'mouse'){[CapyRowPointer]::Key([uint32]$review.Id,0x1B);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
-   Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Ready'} 'Tab cancellation retained capture'
+   Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Ready' -and (Control 'drawing-tab-1').Current.BoundingRectangle.Width -gt 0} 'Tab cancellation retained capture'
    if(((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder){throw 'Tab cancellation changed order'}
+   [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
+   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2))
+   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height*3))
+   Wait-Until {$slide.value=(Control 'drawing-tab-slide').Current.ItemStatus|ConvertFrom-Json;!$slide.value.attached -and $slide.value.offsets[1] -eq 0} 'Leaving the strip did not detach the tab'
+   [CapyRowPointer]::Up()
+   Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Ready'} 'Detached release retained capture'
+   Start-Sleep -Milliseconds 300
+   if(((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder){throw 'Releasing outside the strip changed order'}
    [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
    [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2));[CapyRowPointer]::Up()
   }finally{[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
@@ -192,6 +202,7 @@ try {
    (Control 'drawing-tab-1').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D);Invoke ('drawing-order-'+$history)
    $expected=if($history -eq 'redo'){'2,1'}else{'1,2'}
    Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq $expected} 'Tab order history failed'
+   Wait-Until {!(Find ('drawing-order-'+$history))} 'Tab order menu did not close'
   }
  }
  Invoke 'drawing-close-1';Button 'Cancel';Idle
@@ -246,7 +257,7 @@ try {
  Invoke 'panel-tab-color'
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  (Control 'color-readout').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
- Invoke 'edit-color-palettes';Select-Choice 'precise-color-model' 'Linear RGB'
+ Invoke 'edit-color';Select-Choice 'precise-color-model' 'Linear RGB'
  Set-Text 'precise-color-0' '1';Set-Text 'precise-color-1' '0.5';Set-Text 'precise-color-2' '0.25';Set-Text 'precise-color-3' '100'
  Set-Text 'precise-color-intensity' 'not a number';Invoke 'precise-color-apply'
  Wait-Until {!(Control 'precise-color-apply').Current.IsEnabled} 'Invalid HDR intensity was accepted'

@@ -189,6 +189,28 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     settle(&mut service, &mut host);
     assert!(service.tabs.storage_error().is_none());
     assert_eq!(service.tabs.resident_bytes(), 0);
+    let hits = |order: [u64; 2]| {
+        order
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| layer_ui::DocumentTabHit {
+                id,
+                bounds: layer_ui::Bounds { x: 10. + i as f32 * 106., y: 1., width: 100., height: 32. },
+            })
+            .collect::<Vec<_>>()
+    };
+    let clip = layer_ui::Bounds { x: 10., y: 1., width: 206., height: 32. };
+    let slide = |order, point| Action::Slide { id: 1, hits: hits(order), clip, press: [40., 17.], point };
+    service.tab_action(&mut host, slide([1, 2], [500., 50.])).unwrap();
+    assert_eq!(service.tabs.order(), [1, 2]);
+    service.tab_action(&mut host, slide([2, 1], [500., 17.])).unwrap();
+    assert_eq!(service.tabs.order(), [1, 2]);
+    service.tab_action(&mut host, slide([1, 2], [500., 17.])).unwrap();
+    assert_eq!(service.tabs.order(), [2, 1]);
+    service
+        .tab_action(&mut host, Action::History { redo: false })
+        .unwrap();
+    assert_eq!(service.tabs.order(), [1, 2]);
     service
         .tab_action(
             &mut host,

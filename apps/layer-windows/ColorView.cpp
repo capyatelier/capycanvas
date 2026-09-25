@@ -1,7 +1,9 @@
 #include "pch.h"
-#include "ColorLibraryView.h"
+#include "ColorEditor.h"
 #include "ColorView.h"
 #include "NativeMenus.h"
+#include "WorkspaceQuery.h"
+#include "Checker.h"
 #include <d2d1_3.h>
 #include <d3d11.h>
 #include <dwrite_2.h>
@@ -333,11 +335,11 @@ struct View:std::enable_shared_from_this<View>{
         data->colorViews.erase(listener);
         if(drawing.worker){drawing.worker->deliver=nullptr;drawing.worker->cancel();}
     }
-    std::shared_ptr<ColorLibraryView> libraryView;
+    std::shared_ptr<ColorEditor> editor;
     Flyout colorFlyout;
     void editColor(FrameworkElement const& anchor){
-        libraryView=std::make_shared<ColorLibraryView>();libraryView->data=data;libraryView->init();
-        ScrollViewer scroll;scroll.Content(libraryView->root);scroll.MaxHeight(std::max(200.,root.XamlRoot().Size().Height-100.));
+        editor=std::make_shared<ColorEditor>();editor->data=data;editor->init();
+        ScrollViewer scroll;scroll.Content(editor->root);scroll.MaxHeight(std::max(200.,root.XamlRoot().Size().Height-100.));
         colorFlyout.Content(scroll);colorFlyout.ShowAt(anchor);
     }
     bool previewing()const{return WorkspaceData::previewing(data->colorPreview);}
@@ -375,18 +377,6 @@ struct View:std::enable_shared_from_this<View>{
             result.Resources().Insert(box_value(resource),nullptr);
         result.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.VerticalContentAlignment(VerticalAlignment::Stretch);
         return result;
-    }
-    static Imaging::WriteableBitmap checker(double logical,double scale,winrt::Windows::UI::Color light,winrt::Windows::UI::Color dark){
-        int size=int(std::ceil(logical*scale));
-        Imaging::WriteableBitmap result(size,size);uint8_t* bytes=nullptr;
-        check_hresult(result.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
-        for(int y=0;y<size;y++)for(int x=0;x<size;x++){
-            // Match the shared repeating conic gradient, including its quadrant boundaries.
-            double dx=std::fmod((x+.5)/scale,10.)-5,dy=std::fmod((y+.5)/scale,10.)-5;
-            auto value=dx==0||dx*dy<0?dark:light;auto p=bytes+(y*size+x)*4;
-            p[0]=value.B;p[1]=value.G;p[2]=value.R;p[3]=255;
-        }
-        result.Invalidate();return result;
     }
     void init(){
         auto weak=weak_from_this();
@@ -454,9 +444,19 @@ struct View:std::enable_shared_from_this<View>{
             sample.Children().Append(swatchEdges[i]);sample.Children().Append(swatchChecks[i]);sample.Children().Append(swatchPaint[i]);
             pick.Content(sample);swatches[i]=pick;stage.Children().Append(pick);
             if(i<2){
-                MenuFlyout menu;MenuFlyoutItem item;item.Text(L"Swap foreground and background");AutomationProperties::SetAutomationId(item,L"color-swatch-swap");
-                item.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
-                menu.Items().Append(item);TrackPopup(menu,data);pick.ContextFlyout(menu);
+                MenuFlyout menu;
+                auto add=[&](hstring text,hstring id,std::function<void(View&)> run){
+                    MenuFlyoutItem item;item.Text(text);AutomationProperties::SetAutomationId(item,id);
+                    item.Click([weak,run](auto&&,auto&&){if(auto self=weak.lock())run(*self);});menu.Items().Append(item);
+                };
+                add(L"Edit Color…",L"color-swatch-edit",[slot](View& self){self.send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self.editColor(self.edit);});
+                add(L"Palettes…",L"color-swatch-palettes",[slot](View& self){
+                    self.send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));
+                    QueryWorkspace(self.data->query,O({{L"type",S(L"reveal_panel")},{L"panel",S(L"palettes")}}),[](J){});
+                });
+                menu.Items().Append(MenuFlyoutSeparator());
+                add(L"Swap foreground and background",L"color-swatch-swap",[](View& self){self.send(O({{L"op",S(L"swap")}}));});
+                TrackPopup(menu,data);pick.ContextFlyout(menu);
             }
             AutomationProperties::SetAutomationId(pick,L"color-"+slot);
             pick.PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
@@ -506,8 +506,8 @@ struct View:std::enable_shared_from_this<View>{
         intensity.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Home){self->setIntensity(0);e.Handled(true);}});
         stage.Children().Append(arc);stage.Children().Append(intensity);
         readout=control(L"Switch color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
-        MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(L"Edit color and palettes…");
-        AutomationProperties::SetAutomationId(editItem,L"edit-color-palettes");editItem.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor(self->readout);});
+        MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(L"Edit Color…");
+        AutomationProperties::SetAutomationId(editItem,L"edit-color");editItem.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor(self->readout);});
         editMenu.Items().Append(editItem);TrackPopup(editMenu,data);readout.ContextFlyout(editMenu);
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
@@ -624,7 +624,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     void refresh(){
         auto view=model();if(!view.Size()||!root.XamlRoot())return;
-        if(libraryView&&libraryView->root.IsLoaded())libraryView->refresh();
+        if(editor&&editor->root.IsLoaded())editor->refresh();
         auto nextContext=editingContext();if(context!=nextContext){cancel();context=nextContext;}
         double scale=root.XamlRoot().RasterizationScale();
         bool hdr=flag(view,L"hdr");
@@ -685,7 +685,7 @@ struct View:std::enable_shared_from_this<View>{
             for(int i=0;i<3;i++){
                 auto swatchBox=array(layout,slots[i]);placeBox(swatches[i],swatchBox);
                 double pad=i==1?3:1;swatchChecks[i].Margin({pad,pad,pad,pad});swatchPaint[i].Margin({pad,pad,pad,pad});
-                ImageBrush pixels;pixels.ImageSource(checker(swatchBox.GetNumberAt(2)-2*pad,scale,color(str(object(data->state,L"palette"),L"checker_light")),color(str(object(data->state,L"palette"),L"checker_dark"))));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
+                ImageBrush pixels;pixels.ImageSource(checkerBitmap(swatchBox.GetNumberAt(2)-2*pad,scale,color(str(object(data->state,L"palette"),L"checker_light")),color(str(object(data->state,L"palette"),L"checker_dark"))));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
             }
         }
         auto icons=data->theme()+array(view,L"other_shapes").Stringify();

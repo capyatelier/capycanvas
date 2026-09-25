@@ -181,7 +181,7 @@ impl WorkspacePreset {
     pub fn legacy_windows_without_selection_layouts(self) -> [DockLayout; 2] {
         use crate::CommandId::*;
         let platform = crate::Platform::Windows;
-        [self.layout(platform), self.legacy_without_picker_layout(platform)].map(|mut layout| {
+        [self.legacy_without_palettes_layout(platform), self.legacy_without_picker_layout(platform)].map(|mut layout| {
             if self == Self::Painter {
                 replace_tool(&mut layout, Select, Lasso);
             } else if self == Self::Photographer {
@@ -1025,6 +1025,7 @@ mod tests {
                     crate::Platform::Android,
                     crate::Platform::Mac,
                     crate::Platform::Ios,
+                    crate::Platform::Windows,
                 ]
                 .map(|platform| (preset, platform))
             })
@@ -1058,13 +1059,6 @@ mod tests {
             assert_eq!(
                 crate::durable_layout(&restored),
                 crate::durable_layout(&layout)
-            );
-            assert!(!Panel::Palettes.available_on(crate::Platform::Windows));
-            assert!(
-                preset
-                    .layout(crate::Platform::Windows)
-                    .panel_group(Panel::Palettes)
-                    .is_none()
             );
         }
     }

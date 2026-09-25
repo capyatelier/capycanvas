@@ -2,7 +2,10 @@
 #include "UiControls.h"
 #include "NativeMenus.h"
 #include "WorkspaceRowDrag.h"
+#include "WorkspaceGeometry.h"
 #include <winrt/Microsoft.UI.Input.h>
+#include <winrt/Microsoft.UI.Composition.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -13,7 +16,9 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     struct Tab{Grid box;Button select,close;TextBlock text;MenuFlyout menu;};
     struct Row{ListViewItem item;Button grip,more;TextBlock text,location;MenuFlyout menu;};
     std::map<uint64_t,Tab> tabs;std::map<uint64_t,Row> rows;std::unique_ptr<WorkspaceRowDrag> rowDrag;
-    Border hint;std::optional<uint32_t> pointer;uint64_t source=0;Windows::Foundation::Point origin{},position{};
+    struct SlideCopy{uint64_t id=0;Border copy;double target=0;Microsoft::UI::Composition::Vector3KeyFrameAnimation animation{nullptr};};
+    Canvas overlay;std::vector<SlideCopy> copies;A slideOrder,slideHits;J slideClip,slide;bool animateSlide=true;
+    std::optional<uint32_t> pointer;uint64_t source=0;Windows::Foundation::Point origin{},position{};
     Microsoft::UI::Input::GestureRecognizer hold;bool recognizing=false,dragging=false,held=false,updating=false,showing=false;double slopX=4,slopY=4;
     uint64_t selectedModel=0;
     hstring epoch;J model(){return object(data->model,L"windows_tabs");}
@@ -34,20 +39,66 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     A hits(){A result;for(auto value:array(model(),L"tabs")){auto id=uint64_t(num(value.GetObject(),L"id"));auto it=tabs.find(id);if(it==tabs.end())continue;auto box=it->second.box;
         auto b=box.TransformToVisual(root).TransformBounds({0,0,float(box.ActualWidth()),float(box.ActualHeight())});
         if(b.Width>0&&b.Height>0)result.Append(O({{L"id",N(double(id))},{L"bounds",O({{L"x",N(b.X)},{L"y",N(b.Y)},{L"width",N(b.Width)},{L"height",N(b.Height)}})}}));}return result;}
-    J target(){A order,point;for(auto v:array(model(),L"tabs"))order.Append(N(num(v.GetObject(),L"id")));point.Append(N(position.X));point.Append(N(position.Y));
-        auto request=O({{L"order",order},{L"hits",hits()},{L"point",point},{L"vertical",B(false)}});auto json=to_string(request.Stringify());
-        std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_document_tab_drop(json.c_str()),capy_string_free);
+    A point(Windows::Foundation::Point value){A result;result.Append(N(value.X));result.Append(N(value.Y));return result;}
+    J slideRequest(){return O({{L"id",N(double(source))},{L"hits",slideHits},{L"clip",slideClip},{L"press",point(origin)},{L"point",point(position)}});}
+    J slideAt(){
+        auto request=slideRequest();request.Insert(L"order",slideOrder);auto json=to_string(request.Stringify());
+        std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_document_tab_slide(json.c_str()),capy_string_free);
         if(!reply||std::string_view(reply.get())=="null")return J{};return J::Parse(to_hstring(reply.get()));}
-    void cancel(){if(!pointer)return;pointer.reset();dragging=false;held=false;hint.Visibility(Visibility::Collapsed);root.ReleasePointerCaptures();
-        if(recognizing){recognizing=false;hold.CompleteGesture();}if(tabs.contains(source)){tabs.at(source).box.Opacity(1);tabs.at(source).menu.Hide();}AutomationProperties::SetItemStatus(root,L"Ready");}
+    void beginSlide(){
+        slideOrder=A{};for(auto v:array(model(),L"tabs"))slideOrder.Append(N(num(v.GetObject(),L"id")));slideHits=hits();
+        auto bounds=strip.TransformToVisual(root).TransformBounds({0,0,float(strip.ActualWidth()),float(strip.ActualHeight())});
+        slideClip=rectangle(bounds);slide=J{};copies.clear();overlay.Children().Clear();
+        if(slideHits.Size()!=slideOrder.Size()||bounds.Width<=0){slideHits=A{};return;}
+        animateSlide=Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
+        overlay.Width(bounds.Width);overlay.Height(bounds.Height);overlay.Margin({bounds.X,bounds.Y,0,0});
+        RectangleGeometry mask;mask.Rect({0,0,bounds.Width,bounds.Height});overlay.Clip(mask);
+        auto selectedId=uint64_t(num(model(),L"selected"));
+        for(auto value:slideHits){
+            auto hit=value.GetObject();auto id=uint64_t(num(hit,L"id"));auto b=object(hit,L"bounds");auto& tab=tabs.at(id);
+            Grid content;content.ColumnDefinitions().Append(ColumnDefinition());ColumnDefinition tail;tail.Width({28,GridUnitType::Pixel});content.ColumnDefinitions().Append(tail);
+            auto title=label(data,tab.text.Text());title.TextTrimming(TextTrimming::CharacterEllipsis);title.Margin({8,0,2,0});title.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(title);
+            auto mark=label(data,L"×");mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(mark,1);content.Children().Append(mark);
+            SlideCopy copy;copy.id=id;copy.copy.Child(content);copy.copy.CornerRadius({17,17,17,17});
+            copy.copy.Background(id==source?data->brush(id==selectedId?L"panel":L"tabbar"):id==selectedId?data->brush(L"panel"):clear());
+            copy.copy.Width(num(b,L"width"));copy.copy.Height(num(b,L"height"));
+            Canvas::SetLeft(copy.copy,num(b,L"x")-bounds.X);Canvas::SetTop(copy.copy,num(b,L"y")-bounds.Y);Canvas::SetZIndex(copy.copy,id==source?2:0);
+            overlay.Children().Append(copy.copy);copies.push_back(copy);tab.box.Opacity(0);
+        }
+        overlay.Visibility(Visibility::Visible);
+    }
+    void endSlide(){
+        for(auto& copy:copies)if(copy.animation)copy.copy.StopAnimation(copy.animation);
+        copies.clear();overlay.Children().Clear();overlay.Visibility(Visibility::Collapsed);slideHits=A{};slide=J{};
+        for(auto& [id,tab]:tabs)tab.box.Opacity(1);
+    }
+    void updateSlide(){
+        if(!slideHits.Size())return;slide=slideAt();if(!slide.Size())return;
+        auto offsets=array(slide,L"offsets");if(offsets.Size()!=copies.size())return;
+        auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
+        for(uint32_t i=0;i<copies.size();++i){
+            auto& copy=copies[i];bool grabbed=copy.id==source;
+            double target=grabbed?std::round((num(object(slide,L"bounds"),L"x")-num(object(slideHits.GetObjectAt(i),L"bounds"),L"x"))*scale)/scale:offsets.GetNumberAt(i);
+            if(target==copy.target)continue;copy.target=target;
+            if(!grabbed&&animateSlide){
+                auto compositor=CompositionTarget::GetCompositorForCurrentThread();
+                auto shift=compositor.CreateVector3KeyFrameAnimation();shift.Target(L"Translation");
+                shift.InsertExpressionKeyFrame(0,L"this.StartingValue");
+                shift.InsertKeyFrame(1,{float(target),0,0},compositor.CreateCubicBezierEasingFunction({.215f,.61f},{.355f,1.f}));
+                shift.Duration(std::chrono::milliseconds(120));copy.animation=shift;copy.copy.StartAnimation(shift);
+            }else{
+                if(copy.animation){copy.copy.StopAnimation(copy.animation);copy.animation=nullptr;}
+                copy.copy.Translation({float(target),0,0});
+            }
+        }
+        AutomationProperties::SetItemStatus(overlay,slide.Stringify());
+    }
+    void cancel(){if(!pointer)return;pointer.reset();dragging=false;held=false;endSlide();root.ReleasePointerCaptures();
+        if(recognizing){recognizing=false;hold.CompleteGesture();}if(tabs.contains(source))tabs.at(source).menu.Hide();AutomationProperties::SetItemStatus(root,L"Ready");}
     void move(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;position=e.GetCurrentPoint(root).Position();
         if(recognizing)hold.ProcessMoveEvents(e.GetIntermediatePoints(root));
-        if(!dragging&&(std::abs(position.X-origin.X)>slopX||std::abs(position.Y-origin.Y)>slopY)){dragging=true;held=false;if(tabs.contains(source)){tabs.at(source).menu.Hide();tabs.at(source).box.Opacity(.55);}}
-        if(dragging){auto drop=target();hint.Visibility(drop.Size()?Visibility::Visible:Visibility::Collapsed);if(drop.Size()){
-            auto before=drop.GetNamedValue(L"before",JsonValue::CreateNullValue());double x=root.ActualWidth();
-            for(auto v:hits()){auto h=v.GetObject();auto b=object(h,L"bounds");if(before.ValueType()==JsonValueType::Number&&num(h,L"id")==before.GetNumber()){x=num(b,L"x");break;}if(before.ValueType()==JsonValueType::Null)x=num(b,L"x")+num(b,L"width");}
-            hint.Margin({x-1,2,0,2});}
-            AutomationProperties::SetItemStatus(root,L"Dragging");}e.Handled(true);
+        if(!dragging&&(std::abs(position.X-origin.X)>slopX||std::abs(position.Y-origin.Y)>slopY)){dragging=true;held=false;if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
+        if(dragging){updateSlide();AutomationProperties::SetItemStatus(root,L"Dragging");}e.Handled(true);
     }
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Content()){select(id);return;}}
     void show(FrameworkElement anchor=nullptr){refresh();popup.ShowAt(anchor?anchor:selector);}
@@ -66,6 +117,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         if(!compact){double width=std::max(0.,(root.ActualWidth()-6.*(std::max(1u,count)-1))/std::max(1u,count));for(auto& [id,t]:tabs)t.box.Width(width);}}
     void refresh(){
         if(pointer&&(!available()||epoch!=to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")))))cancel();
+        if(pointer&&slideHits.Size()){A current;for(auto v:array(model(),L"tabs"))current.Append(N(num(v.GetObject(),L"id")));if(current.Stringify()!=slideOrder.Stringify())cancel();}
         updating=true;auto weak=weak_from_this();auto m=model();auto selectedId=uint64_t(num(m,L"selected"));bool selectionChanged=selectedId!=selectedModel;selectedModel=selectedId;std::vector<hstring> order;uint32_t index=0;std::set<uint64_t> live;
         for(auto v:array(m,L"tabs")){auto spec=v.GetObject();auto id=uint64_t(num(spec,L"id"));live.insert(id);auto label=str(spec,L"title")+(flag(spec,L"modified")?L" •":L"");auto key=to_hstring(id);order.push_back(key);
             if(!tabs.contains(id)){
@@ -100,7 +152,8 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void init(){
         auto weak=weak_from_this();root.Tag(O({{L"header_source",O({{L"kind",S(L"native")}})}}));root.Background(clear());strip.Orientation(Orientation::Horizontal);root.Children().Append(strip);root.Children().Append(selector);selector.MinWidth(0);selector.HorizontalAlignment(HorizontalAlignment::Stretch);selector.Height(34);AutomationProperties::SetAutomationId(selector,L"drawing-selector");AutomationProperties::SetItemStatus(selector,L"Closed");AutomationProperties::SetName(root,L"Drawings");AutomationProperties::SetAutomationId(root,L"drawing-tabs");
         selector.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->show();});root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->layout();});
-        hint.Width(2);hint.Background(accent(data));strip.Spacing(6);hint.HorizontalAlignment(HorizontalAlignment::Left);hint.IsHitTestVisible(false);hint.Visibility(Visibility::Collapsed);root.Children().Append(hint);
+        strip.Spacing(6);overlay.HorizontalAlignment(HorizontalAlignment::Left);overlay.VerticalAlignment(VerticalAlignment::Top);overlay.IsHitTestVisible(false);overlay.Visibility(Visibility::Collapsed);
+        AutomationProperties::SetAutomationId(overlay,L"drawing-tab-slide");AutomationProperties::SetName(overlay,L"Drawing tab slide");root.Children().Append(overlay);
         AutomationProperties::SetAutomationId(list,L"drawing-list");
         list.IsItemClickEnabled(true);list.SelectionMode(ListViewSelectionMode::Single);list.MaxHeight(420);listSurface.Children().Append(list);listSurface.Width(360);popup.Content(listSurface);TrackPopup(popup,data);
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,[weak]{auto s=weak.lock();return s&&s->available();},[weak](hstring id,std::optional<hstring> before){if(auto s=weak.lock())s->send(O({{L"op",S(L"reorder")},{L"id",N(double(std::stoull(id.c_str())))},{L"before",before?N(double(std::stoull(before->c_str()))):JsonValue::CreateNullValue()}}));},[weak](hstring id){if(auto s=weak.lock())s->select(std::stoull(id.c_str()));},[]{});
@@ -118,8 +171,10 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         root.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto s=weak.lock())s->move(e);})),true);
         root.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto s=weak.lock();s&&s->pointer==e.Pointer().PointerId()){
             if(e.GetCurrentPoint(s->root).Properties().IsCanceled()){s->cancel();e.Handled(true);return;}
-            s->position=e.GetCurrentPoint(s->root).Position();bool dragged=s->dragging,held=s->held;auto id=s->source;auto drop=s->target();auto hits=s->hits();auto position=s->position;MenuFlyout menu=s->tabs.contains(id)?s->tabs.at(id).menu:nullptr;s->cancel();
-            if(dragged&&drop.Size()){A point;point.Append(N(position.X));point.Append(N(position.Y));s->send(O({{L"op",S(L"drop")},{L"id",N(double(id))},{L"hits",hits},{L"point",point},{L"vertical",B(false)}}));}
+            s->position=e.GetCurrentPoint(s->root).Position();bool dragged=s->dragging,held=s->held;auto id=s->source;
+            if(dragged)s->updateSlide();bool attached=dragged&&s->slide.Size()&&flag(s->slide,L"attached");auto request=s->slideRequest();
+            MenuFlyout menu=s->tabs.contains(id)?s->tabs.at(id).menu:nullptr;s->cancel();
+            if(attached){request.Insert(L"op",S(L"slide"));s->send(request);}
             else if(held&&menu)menu.ShowAt(s->tabs.at(id).select);else if(!dragged)s->select(id);e.Handled(true);
         }})),true);
         auto cancel=[weak](auto&&,PointerRoutedEventArgs const& e){if(auto s=weak.lock();s&&s->pointer==e.Pointer().PointerId())s->cancel();};root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler(cancel)),true);root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler(cancel)),true);
