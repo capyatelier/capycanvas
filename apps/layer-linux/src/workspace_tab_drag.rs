@@ -1,34 +1,134 @@
 use super::*;
 
 #[derive(Clone)]
-pub(super) struct NativeTabSlide {
+pub(crate) struct NativeTabSlide {
     pub bounds: Bounds,
     pub clip: Bounds,
     pub tabs: Vec<SlidingTab>,
     source: usize,
     pub hits: Vec<TabHit>,
-    started: i64,
+    started: Rc<Cell<i64>>,
     duration: i64,
     tick: Rc<RefCell<Option<gtk::TickCallbackId>>>,
 }
 
 #[derive(Clone)]
-pub(super) struct SlidingTab {
+pub(crate) struct SlidingTab {
     pub widget: gtk::Widget,
     opacity: f64,
     node: gtk::gsk::RenderNode,
-    bounds: Bounds,
+    pub bounds: Bounds,
     from: f32,
     pub to: f32,
 }
 
+impl SlidingTab {
+    pub fn capture(
+        widget: gtk::Widget,
+        surface: &gtk::Widget,
+        backing: impl FnOnce(&gtk::Snapshot, &gtk::graphene::Rect),
+    ) -> Option<Self> {
+        let parent = widget.parent()?;
+        let position = parent.compute_point(surface, &gtk::graphene::Point::zero())?;
+        let rect = widget.compute_bounds(surface)?;
+        let snapshot = gtk::Snapshot::new();
+        backing(&snapshot, &rect);
+        snapshot.save();
+        snapshot.translate(&position);
+        parent.snapshot_child(&widget, &snapshot);
+        snapshot.restore();
+        Some(Self {
+            opacity: widget.opacity(),
+            widget,
+            bounds: bounds(rect),
+            node: snapshot.to_node()?,
+            from: 0.,
+            to: 0.,
+        })
+    }
+}
+
 impl NativeTabSlide {
+    pub fn new(tabs: Vec<SlidingTab>, source: usize, clip: Bounds, group: u32) -> Option<Self> {
+        let hits = tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| TabHit {
+                group,
+                index,
+                bounds: tab.bounds,
+            })
+            .collect();
+        Some(Self {
+            bounds: tabs.get(source)?.bounds,
+            clip,
+            tabs,
+            source,
+            hits,
+            started: Rc::new(Cell::new(0)),
+            duration: if gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations()) {
+                120_000
+            } else {
+                0
+            },
+            tick: Rc::new(RefCell::new(None)),
+        })
+    }
+
     fn progress(&self, now: i64) -> f32 {
         if self.duration == 0 {
             return 1.;
         }
-        let t = ((now - self.started) as f32 / self.duration as f32).clamp(0., 1.);
+        let t = ((now - self.started.get()) as f32 / self.duration as f32).clamp(0., 1.);
         1. - (1. - t).powi(3)
+    }
+
+    pub fn hide(&self) {
+        for tab in &self.tabs {
+            tab.widget.set_opacity(0.);
+        }
+    }
+
+    pub fn restore(self) {
+        if let Some(tick) = self.tick.borrow_mut().take() {
+            tick.remove();
+        }
+        for tab in self.tabs {
+            tab.widget.set_opacity(tab.opacity);
+        }
+    }
+
+    pub fn retarget(
+        &mut self,
+        surface: &gtk::Widget,
+        bounds: Bounds,
+        offset: impl Fn(usize) -> f32,
+    ) {
+        self.bounds = bounds;
+        if (0..self.tabs.len()).all(|index| self.tabs[index].to == offset(index)) {
+            return;
+        }
+        let now = surface.frame_clock().map_or(0, |clock| clock.frame_time());
+        let progress = self.progress(now);
+        for (index, neighbor) in self.tabs.iter_mut().enumerate() {
+            neighbor.from += (neighbor.to - neighbor.from) * progress;
+            neighbor.to = offset(index);
+        }
+        self.started.set(now);
+        if self.duration > 0 && self.tick.borrow().is_none() {
+            let started = self.started.clone();
+            let duration = self.duration;
+            let tick = self.tick.clone();
+            *self.tick.borrow_mut() = Some(surface.add_tick_callback(move |surface, clock| {
+                surface.queue_draw();
+                if clock.frame_time() >= started.get() + duration {
+                    tick.borrow_mut().take();
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            }));
+        }
     }
 
     pub fn snapshot(&self, snapshot: &gtk::Snapshot, now: i64, scale: f32) {
@@ -102,31 +202,7 @@ impl Workspace {
             let Some(source) = tabs.iter().position(|t| t.widget == widget) else {
                 return;
             };
-            let hits = tabs
-                .iter()
-                .enumerate()
-                .map(|(index, tab)| TabHit {
-                    group,
-                    index,
-                    bounds: tab.bounds,
-                })
-                .collect();
-            let duration = if gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations())
-            {
-                120_000
-            } else {
-                0
-            };
-            drag.tab_grab = Some(NativeTabSlide {
-                bounds: tabs[source].bounds,
-                clip,
-                tabs,
-                source,
-                hits,
-                started: 0,
-                duration,
-                tick: Rc::new(RefCell::new(None)),
-            });
+            drag.tab_grab = NativeTabSlide::new(tabs, source, clip, group);
             break;
         }
     }
@@ -134,9 +210,7 @@ impl Workspace {
     pub(super) fn start_tab_slide(&self, drag: &mut NativeWorkspaceDrag) {
         drag.tab = drag.tab_grab.take();
         if let Some(tab) = &drag.tab {
-            for tab in &tab.tabs {
-                tab.widget.set_opacity(0.);
-            }
+            tab.hide();
             self.queue_tab_joins();
         }
     }
@@ -152,54 +226,18 @@ impl Workspace {
             return;
         };
         let preview = &presentation.preview;
-        tab.bounds = preview.bounds;
-        if preview
-            .offsets
-            .iter()
-            .any(|offset| tab.tabs[offset.index].to != offset.x)
-        {
-            let now = self
-                .surface
-                .frame_clock()
-                .map_or(0, |clock| clock.frame_time());
-            let progress = tab.progress(now);
-            for offset in &preview.offsets {
-                let neighbor = &mut tab.tabs[offset.index];
-                neighbor.from += (neighbor.to - neighbor.from) * progress;
-                neighbor.to = offset.x;
-            }
-            tab.started = now;
-            if tab.duration > 0 && tab.tick.borrow().is_none() {
-                let weak = Rc::downgrade(self);
-                let tick = self.surface.add_tick_callback(move |surface, clock| {
-                    let Some(w) = weak.upgrade() else {
-                        return glib::ControlFlow::Break;
-                    };
-                    let drag = w.workspace_drag.borrow();
-                    let Some(tab) = drag.as_ref().and_then(|d| d.tab.as_ref()) else {
-                        return glib::ControlFlow::Break;
-                    };
-                    surface.queue_draw();
-                    if clock.frame_time() >= tab.started + tab.duration {
-                        tab.tick.borrow_mut().take();
-                        glib::ControlFlow::Break
-                    } else {
-                        glib::ControlFlow::Continue
-                    }
-                });
-                *tab.tick.borrow_mut() = Some(tick);
-            }
-        }
+        tab.retarget(self.surface.upcast_ref(), preview.bounds, |index| {
+            preview
+                .offsets
+                .iter()
+                .find(|offset| offset.index == index)
+                .map_or(0., |offset| offset.x)
+        });
     }
 
     pub(super) fn clear_tab_slide(&self, drag: &mut NativeWorkspaceDrag) {
         if let Some(tab) = drag.tab.take() {
-            if let Some(tick) = tab.tick.borrow_mut().take() {
-                tick.remove();
-            }
-            for tab in tab.tabs {
-                tab.widget.set_opacity(tab.opacity);
-            }
+            tab.restore();
             self.queue_tab_joins();
             self.surface.queue_draw();
         }
@@ -241,9 +279,6 @@ fn snapshot_tab(
     surface: &DockSurface,
     palette: ThemePalette,
 ) -> Option<SlidingTab> {
-    let parent = widget.parent()?;
-    let position = parent.compute_point(surface, &gtk::graphene::Point::zero())?;
-    let rect = widget.compute_bounds(surface)?;
     let selected = widget.has_css_class("selected-tool");
     let [r, g, b] = if selected {
         palette.panel
@@ -252,41 +287,30 @@ fn snapshot_tab(
     }
     .0;
     let color = gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.);
-    let snapshot = gtk::Snapshot::new();
-    let radius = SURFACE_RADIUS * crate::squircle::CORNER_FIT;
-    let top = gtk::graphene::Size::new(radius, radius);
-    let square = gtk::graphene::Size::new(0., 0.);
-    snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(rect, top, top, square, square));
-    snapshot.append_color(&color, &rect);
-    snapshot.pop();
-    snapshot.save();
-    snapshot.translate(&position);
-    parent.snapshot_child(&widget, &snapshot);
-    snapshot.restore();
-    if selected {
-        let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
-            rect.x() - 6.,
-            rect.y(),
-            rect.width() + 12.,
-            rect.height(),
-        ));
-        cr.set_source_rgba(
-            color.red().into(),
-            color.green().into(),
-            color.blue().into(),
-            1.,
-        );
-        let y = (rect.y() + rect.height()) as f64;
-        concave_foot(&cr, rect.x() as f64, y, 6., -1.);
-        concave_foot(&cr, (rect.x() + rect.width()) as f64, y, 6., 1.);
-        let _ = cr.fill();
-    }
-    Some(SlidingTab {
-        opacity: widget.opacity(),
-        widget,
-        bounds: bounds(rect),
-        node: snapshot.to_node()?,
-        from: 0.,
-        to: 0.,
+    SlidingTab::capture(widget, surface.upcast_ref(), |snapshot, rect| {
+        let radius = SURFACE_RADIUS * crate::squircle::CORNER_FIT;
+        let top = gtk::graphene::Size::new(radius, radius);
+        let square = gtk::graphene::Size::new(0., 0.);
+        snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(*rect, top, top, square, square));
+        snapshot.append_color(&color, rect);
+        snapshot.pop();
+        if selected {
+            let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
+                rect.x() - 6.,
+                rect.y(),
+                rect.width() + 12.,
+                rect.height(),
+            ));
+            cr.set_source_rgba(
+                color.red().into(),
+                color.green().into(),
+                color.blue().into(),
+                1.,
+            );
+            let y = (rect.y() + rect.height()) as f64;
+            concave_foot(&cr, rect.x() as f64, y, 6., -1.);
+            concave_foot(&cr, (rect.x() + rect.width()) as f64, y, 6., 1.);
+            let _ = cr.fill();
+        }
     })
 }

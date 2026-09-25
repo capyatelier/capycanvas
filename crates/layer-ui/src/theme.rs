@@ -159,6 +159,7 @@ pub struct ThemePalette {
     pub checker_dark: HexColor,
     /// Prepared once when settings/theme change, not converted per frame.
     pub surround_linear: [f32; 4],
+    pub glass: crate::GlassPalette,
 }
 impl Settings {
     pub fn palette(
@@ -178,10 +179,14 @@ impl Settings {
         let android = platform == Platform::Android;
         let accent = self.accent.or(system_accent).unwrap_or(DEFAULT_ACCENT);
         let header = surface([82; 3], [196; 3]);
+        let panel = surface([65; 3], [237; 3]);
+        let tabbar = surface([46; 3], [210; 3]);
+        let selection = surface([82; 3], [213; 3]).tint(accent, 0.0);
+        let header_selection = header.tint(accent, 0.0);
         ThemePalette {
             bg,
-            panel: surface([65; 3], [237; 3]),
-            tabbar: surface([46; 3], [210; 3]),
+            panel,
+            tabbar,
             input: surface([51; 3], [250; 3]),
             view: surface([43; 3], [228; 3]),
             settings: surface([51; 3], if android { [250; 3] } else { [250, 250, 251] }),
@@ -198,12 +203,13 @@ impl Settings {
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             accent,
             accent_foreground: accent.contrasting(),
-            selection: surface([82; 3], [213; 3]).tint(accent, 0.0),
-            header_selection: header.tint(accent, 0.0),
+            selection,
+            header_selection,
             header_selection_hover: header.tint(accent, if dark { 0.03 } else { -0.03 }),
             checker_light: TRANSPARENCY_CHECKER[0],
             checker_dark: TRANSPARENCY_CHECKER[1],
             surround_linear: bg.linear(),
+            glass: crate::GlassPalette::new(self.transparency, dark, bg, panel, tabbar, selection, header_selection),
         }
     }
 }

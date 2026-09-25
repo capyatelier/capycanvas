@@ -51,9 +51,19 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     }
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Content()){select(id);return;}}
     void show(FrameworkElement anchor=nullptr){refresh();popup.ShowAt(anchor?anchor:selector);}
+    void styleTab(Tab& t){
+        t.box.CornerRadius({17,17,17,17});t.select.CornerRadius({17,0,0,17});t.close.CornerRadius({0,17,17,0});
+        for(auto const& part:{t.select,t.close}){
+            part.Background(clear());
+            part.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),data->tint(L"text",18));
+            part.Resources().Insert(box_value(L"ButtonBackgroundPressed"),data->tint(L"text",41));
+        }
+    }
+    void paintTab(Tab& t,bool chosen){t.box.Background(chosen?data->brush(L"panel"):clear());}
     void layout(){auto count=array(model(),L"tabs").Size();bool compact=capy_document_tabs_compact(float(root.ActualWidth()),count);
         strip.Visibility(compact?Visibility::Collapsed:Visibility::Visible);selector.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
-        if(!compact){double width=root.ActualWidth()/std::max(1u,count);for(auto& [id,t]:tabs)t.box.Width(width);}}
+        root.Background(headerSurface(data));root.CornerRadius({6,6,6,6});root.Margin(compact?Thickness{}:Thickness{0,1,0,1});
+        if(!compact){double width=std::max(0.,(root.ActualWidth()-6.*(std::max(1u,count)-1))/std::max(1u,count));for(auto& [id,t]:tabs)t.box.Width(width);}}
     void refresh(){
         if(pointer&&(!available()||epoch!=to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")))))cancel();
         updating=true;auto weak=weak_from_this();auto m=model();auto selectedId=uint64_t(num(m,L"selected"));bool selectionChanged=selectedId!=selectedModel;selectedModel=selectedId;std::vector<hstring> order;uint32_t index=0;std::set<uint64_t> live;
@@ -69,14 +79,14 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
                     self->tabs.at(id).select.Focus(FocusState::Pointer);self->tabs.at(id).select.CancelDirectManipulations();self->tabs.at(id).select.ReleasePointerCapture(e.Pointer());if(!self->root.CapturePointer(e.Pointer()))return;AutomationProperties::SetItemStatus(self->root,L"Pressed");self->source=id;self->pointer=p.PointerId();self->origin=self->position=p.Position();self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));
                     auto dpi=GetDpiForWindow(GetForegroundWindow());self->slopX=std::max(2.,double(GetSystemMetricsForDpi(SM_CXDRAG,dpi))*96./std::max(96u,dpi));self->slopY=std::max(2.,double(GetSystemMetricsForDpi(SM_CYDRAG,dpi))*96./std::max(96u,dpi));
                     if(p.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse){self->recognizing=true;self->hold.ProcessDownEvent(p);}e.Handled(true);
-                }})),true);t.box.Children().Append(t.select);t.box.Children().Append(t.close);tabs.emplace(id,t);
+                }})),true);t.box.Children().Append(t.select);t.box.Children().Append(t.close);styleTab(t);tabs.emplace(id,t);
                 Row r;r.item.Tag(box_value(key));AutomationProperties::SetAutomationId(r.item,L"drawing-row-"+key);Grid row;row.ColumnDefinitions().Append(ColumnDefinition());ColumnDefinition first;first.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().InsertAt(0,first);ColumnDefinition lastColumn;lastColumn.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().Append(lastColumn);
                 r.grip=button(data,L"Reorder drawing",[]{});r.grip.Content(panelGrip(data->theme()));r.grip.Padding({0});r.grip.MinWidth(0);AutomationProperties::SetAutomationId(r.grip,L"drawing-grip-"+key);
                 r.more=button(data,L"Drawing options",[]{});r.more.Content(box_value(L"⋮"));r.more.Padding({0});r.more.MinWidth(0);Grid::SetColumn(r.more,2);r.menu=menu(id);r.more.Flyout(r.menu);
                 StackPanel labels;r.text=CapyUi::label(data,label);r.location=CapyUi::label(data,L"");r.location.FontSize(11);r.location.TextTrimming(TextTrimming::CharacterEllipsis);labels.Children().Append(r.text);labels.Children().Append(r.location);Grid::SetColumn(labels,1);row.Children().Append(r.grip);row.Children().Append(labels);row.Children().Append(r.more);r.item.Content(row);
                 rowDrag->Attach(r.item,r.grip,r.more,r.menu,key);rows.emplace(id,r);
             }
-            auto& t=tabs.at(id);t.text.Text(label);t.text.Foreground(data->brush(L"text"));t.select.Background(id==uint64_t(num(m,L"selected"))?selected():clear());t.select.IsEnabled(available());t.close.IsEnabled(available());ToolTipService::SetToolTip(t.select,box_value(str(spec,L"location",label)));AutomationProperties::SetName(t.select,label);
+            auto& t=tabs.at(id);t.text.Text(label);t.text.Foreground(data->brush(L"text"));paintTab(t,id==uint64_t(num(m,L"selected")));t.select.IsEnabled(available());t.close.IsEnabled(available());ToolTipService::SetToolTip(t.select,box_value(str(spec,L"location",label)));AutomationProperties::SetName(t.select,label);
             auto& r=rows.at(id);r.text.Text(label);r.location.Text(str(spec,L"location"));r.item.IsEnabled(available());
             auto children=strip.Children();uint32_t at;if(index>=children.Size()||children.GetAt(index)!=t.box){if(children.IndexOf(t.box,at))children.RemoveAt(at);children.InsertAt(index,t.box);}
             auto items=list.Items();if(index>=items.Size()||items.GetAt(index)!=r.item){if(items.IndexOf(r.item,at))items.RemoveAt(at);items.InsertAt(index,r.item);}++index;
@@ -90,7 +100,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void init(){
         auto weak=weak_from_this();root.Tag(O({{L"header_source",O({{L"kind",S(L"native")}})}}));root.Background(clear());strip.Orientation(Orientation::Horizontal);root.Children().Append(strip);root.Children().Append(selector);selector.MinWidth(0);selector.HorizontalAlignment(HorizontalAlignment::Stretch);selector.Height(34);AutomationProperties::SetAutomationId(selector,L"drawing-selector");AutomationProperties::SetItemStatus(selector,L"Closed");AutomationProperties::SetName(root,L"Drawings");AutomationProperties::SetAutomationId(root,L"drawing-tabs");
         selector.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->show();});root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->layout();});
-        hint.Width(2);hint.Background(fill({255,53,132,228}));hint.HorizontalAlignment(HorizontalAlignment::Left);hint.IsHitTestVisible(false);hint.Visibility(Visibility::Collapsed);root.Children().Append(hint);
+        hint.Width(2);hint.Background(accent(data));strip.Spacing(6);hint.HorizontalAlignment(HorizontalAlignment::Left);hint.IsHitTestVisible(false);hint.Visibility(Visibility::Collapsed);root.Children().Append(hint);
         AutomationProperties::SetAutomationId(list,L"drawing-list");
         list.IsItemClickEnabled(true);list.SelectionMode(ListViewSelectionMode::Single);list.MaxHeight(420);listSurface.Children().Append(list);listSurface.Width(360);popup.Content(listSurface);TrackPopup(popup,data);
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,[weak]{auto s=weak.lock();return s&&s->available();},[weak](hstring id,std::optional<hstring> before){if(auto s=weak.lock())s->send(O({{L"op",S(L"reorder")},{L"id",N(double(std::stoull(id.c_str())))},{L"before",before?N(double(std::stoull(before->c_str()))):JsonValue::CreateNullValue()}}));},[weak](hstring id){if(auto s=weak.lock())s->select(std::stoull(id.c_str()));},[]{});

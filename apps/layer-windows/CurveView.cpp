@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "EffectControls.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
+#include <cmath>
 #include <optional>
 using namespace CapyEffects;
 using Windows::Foundation::Point;
@@ -40,6 +41,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto data=property->data;auto weak=weak_from_this();root.Spacing(6);
         graph.Background(data->brush(L"input"));graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
         grid.IsHitTestVisible(false);line.IsHitTestVisible(false);dots.IsHitTestVisible(false);
+        graph.ManipulationMode(ManipulationModes::None);
         line.Stroke(data->brush(L"text"));line.StrokeThickness(1.5);
         focus.Content(graph);focus.IsTabStop(true);focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         focus.VerticalContentAlignment(VerticalAlignment::Stretch);
@@ -113,14 +115,36 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         // A submitted insertion can be ahead of its snapshot; preserve the
         // captured index until the owner acknowledges the new point.
         if(!pointer)selected=std::clamp(selected,0,int(p.Size())-1);
-        auto model=property->model();reset.Visibility(flag(model,L"modified")?Visibility::Visible:Visibility::Collapsed);
+        auto model=property->model();bool modified=flag(model,L"modified");
+        reset.Visibility(modified?Visibility::Visible:Visibility::Collapsed);
         double side=graph.ActualWidth();if(side<=0)return;
-        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(selected)}}).Stringify();
+        auto view=property->view();
+        auto peak=view.GetNamedValue(L"curve_max",JsonValue::CreateNullValue()),white=view.GetNamedValue(L"curve_white",JsonValue::CreateNullValue());
+        bool hdr=peak.ValueType()==JsonValueType::Number&&white.ValueType()==JsonValueType::Number&&peak.GetNumber()>0;
+        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(selected)},
+            {L"peak",peak},{L"white",white},{L"modified",B(modified)},{L"theme",S(data->theme())}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){
             Shapes::Line l;l.X1(axis?0:side*i/4);l.Y1(axis?side*i/4:0);l.X2(axis?side:side*i/4);l.Y2(axis?side*i/4:side);
             l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.2);grid.Children().Append(l);
         }
+        auto caption=[&](hstring const& text,bool top){
+            TextBlock value;value.Text(text);value.FontSize(11);value.FontFamily(FontFamily(L"Segoe UI"));
+            value.Foreground(data->brush(L"text"));value.Opacity(.7);value.Measure({1000,1000});
+            auto size=value.DesiredSize();
+            Canvas::SetLeft(value,top?5.:std::max(5.,side-(modified?33.:5.)-size.Width));
+            Canvas::SetTop(value,top?5.:side-5.-size.Height);grid.Children().Append(value);
+        };
+        if(hdr){
+            double at=white.GetNumber();
+            for(int axis=0;axis<2;axis++){
+                Shapes::Line l;l.X1(axis?0:at*side);l.Y1(axis?(1-at)*side:0);l.X2(axis?side:at*side);l.Y2(axis?(1-at)*side:side);
+                l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.7);
+                DoubleCollection dash;dash.Append(3);dash.Append(3);l.StrokeDashArray(dash);grid.Children().Append(l);
+            }
+            wchar_t range[64];swprintf(range,64,L"%.0f \u00b7 %+.0f EV",peak.GetNumber(),std::log2(peak.GetNumber()));
+            caption(L"SDR white \u00b7 0 EV",true);caption(range,false);
+        }else{caption(L"Output",true);caption(L"Input",false);}
         std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(at.GetNumberAt(0)*side),float((1-at.GetNumberAt(1))*side)});}
         line.Points().ReplaceAll(path);
         for(uint32_t i=0;i<p.Size();i++){auto at=p.GetArrayAt(i);double radius=int(i)==selected?5:3.5;

@@ -74,15 +74,17 @@ void LayersView::init(){
         pick.Width(24);pick.Height(24);pick.Content(icon(spec.icon,data->theme()));
         AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));ToolTipService::SetToolTip(pick,box_value(spec.label));
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
-            pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected():clear());
+            pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
         });
     }
     auto reference=button<Primitives::ToggleButton>(data,L"Use selected layers as references",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
+    for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
+        reference.Resources().Insert(box_value(role),data->tint(L"text",31));
     AutomationProperties::SetAutomationId(reference,L"layer-reference");tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
-        reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?selected():clear());
+        reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?self->data->tint(L"text",31):clear());
         auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);ToolTipService::SetToolTip(reference,box_value(text));
     }});
     header.Children().Append(tools);root.Children().Append(header);

@@ -6,6 +6,7 @@ struct HistogramPresentation: View {
     let palette: EditorPalette
     @State private var channel = 0
     @State private var logarithmic = false
+    @State private var details = false
     private var indices: [Int] { channel == 0 ? [0, 1, 2] : [channel - 1] }
     private var histogram: JSON { model.result["histogram"] }
     var body: some View {
@@ -30,7 +31,14 @@ struct HistogramPresentation: View {
                         HistogramChart(channels: histogram["channels"].array, indices: indices, logarithmic: logarithmic, axis: model.result["axis"])
                             .frame(height: 140).background(palette["bg"])
                         HistogramAxis(axis: model.result["axis"]).frame(height: 18)
-                        DisclosureGroup("Details") {
+                        Button { details.toggle() } label: {
+                            HStack(spacing: 4) {
+                                SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(details ? 0 : -90))
+                                Text("Details")
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityIdentifier("histogram-details")
+                            .accessibilityValue(details ? "Expanded" : "Collapsed")
+                        if details {
                         if !histogram.isNull {
                             let color = histogram["color"]
                             Text("\(color["space"].string) · \(color["depth"].string == "F32" ? "32-bit float HDR" : color["depth"].string == "F16" ? "16-bit float HDR" : color["depth"].string == "U16" ? "16-bit" : "8-bit") · \(histogram["pixels"].uint) nontransparent pixels")

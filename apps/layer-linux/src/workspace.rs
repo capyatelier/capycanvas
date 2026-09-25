@@ -32,7 +32,7 @@ mod tab_drag;
 mod tool_catalog;
 #[path = "workspace_update.rs"]
 mod workspace_update;
-use tab_drag::NativeTabSlide;
+pub(crate) use tab_drag::{NativeTabSlide, SlidingTab};
 
 mod allocation {
     use super::*;
@@ -366,6 +366,32 @@ mod allocation {
                 }
                 nodes.push((*slot, node));
             }
+            let mut connectors = Vec::new();
+            if let Some(owner) = &owner {
+                let mut regions = Vec::new();
+                if let Some(glass) = owner.palette.get().map(|p| p.glass).filter(|g| g.transparency.enabled()) {
+                    let surfaces = glass.surfaces();
+                    for (slot, node) in &nodes {
+                        if let (false, Some(node)) = (matches!(slot, Slot::Canvas), node) {
+                            crate::glass::collect(node, &surfaces, &mut regions);
+                        }
+                    }
+                    owner.glass_connectors(&mut connectors);
+                    regions.extend_from_slice(&connectors);
+                }
+                if *owner.glass.borrow() != regions {
+                    *owner.glass.borrow_mut() = regions;
+                    if !owner.glass_wake_pending.replace(true) {
+                        let owner = Rc::downgrade(owner);
+                        glib::idle_add_local_once(move || {
+                            if let Some(owner) = owner.upgrade() {
+                                owner.glass_wake_pending.set(false);
+                                owner.wake();
+                            }
+                        });
+                    }
+                }
+            }
             for (order, (slot, node)) in nodes.iter().enumerate() {
                 let Some(node) = node else {
                     continue;
@@ -375,13 +401,18 @@ mod allocation {
                 if matches!(slot, Slot::Canvas) {
                     snapshot.append_node(node);
                 } else {
+                    let bridge = matches!(slot, Slot::DrawerConnection(_) | Slot::ColumnConnection(_, _));
                     crate::navigator::Overviews::append_clipped(
                         snapshot,
                         node,
                         holes
                             .iter()
                             .filter(|(above, _)| *above >= order)
-                            .map(|(_, r)| *r),
+                            .map(|(_, r)| *r)
+                            .chain(connectors.iter().filter(|_| !bridge).map(|c| {
+                                let [x, y, w, h] = c.bounds;
+                                gtk::graphene::Rect::new(x, y, w, h)
+                            })),
                     );
                 }
             }
@@ -417,13 +448,13 @@ mod allocation {
                 );
             }
             if let Some(owner) = &owner {
-                owner.header.snapshot_drag(
-                    snapshot,
-                    self.obj()
-                        .frame_clock()
-                        .map_or(0, |clock| clock.frame_time()),
-                    self.obj().scale_factor() as f32,
-                );
+                let now = self
+                    .obj()
+                    .frame_clock()
+                    .map_or(0, |clock| clock.frame_time());
+                let scale = self.obj().scale_factor() as f32;
+                owner.documents.snapshot_drag(snapshot, now, scale);
+                owner.header.snapshot_drag(snapshot, now, scale);
             }
             if let Some((node, point)) = self.drag_overlay.borrow().as_ref() {
                 snapshot.push_clip(&gtk::graphene::Rect::new(
@@ -843,7 +874,7 @@ pub struct Workspace {
     pub(crate) documents: crate::documents::Documents,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
-    surface: DockSurface,
+    pub(crate) surface: DockSurface,
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
     header: header::Header,
@@ -877,6 +908,8 @@ pub struct Workspace {
     palette_panel: Rc<crate::color_library::PalettePanel>,
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
+    glass: RefCell<Vec<layer_render_wgpu::BackdropRegion>>,
+    glass_wake_pending: Cell<bool>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
     view_info: gtk::Label,
@@ -1135,6 +1168,8 @@ impl Workspace {
             proof_panel,
             navigator,
             navigator_overviews,
+            glass: RefCell::new(Vec::new()),
+            glass_wake_pending: Cell::new(false),
             layer_panel,
             effects,
             view_info,
@@ -2140,6 +2175,19 @@ impl Workspace {
                             .navigator_overviews
                             .placements(g.session.state(), area.scale_factor() as f32);
                         g.session.renderer_mut().overviews = overviews;
+                        let scale = area.scale_factor() as f32;
+                        let blur = g.session.state().palette.glass.blur;
+                        g.session.renderer_mut().backdrop_style = layer_render_wgpu::BackdropBlurStyle {
+                            levels: blur.levels,
+                            offset: blur.offset,
+                        };
+                        g.session.renderer_mut().backdrops = this.glass.borrow().iter()
+                            .map(|r| layer_render_wgpu::BackdropRegion {
+                                bounds: r.bounds.map(|v| v * scale),
+                                radii: r.radii.map(|v| v * scale),
+                                shape: r.shape,
+                            })
+                            .collect();
                         g.render(area, now, !expedited)
                     });
                     match result {
@@ -2568,8 +2616,30 @@ impl Workspace {
             use std::fmt::Write;
             write!(css, "--capy-{name}: {color};").unwrap();
         }
+        let glass = palette.glass;
+        for (name, color) in [
+            ("panel", glass.panel),
+            ("strip", glass.strip),
+            ("tab", glass.tab),
+            ("source", glass.source),
+            ("open-tile", glass.open_tile),
+            ("chip", glass.chip),
+            ("switcher", glass.switcher),
+            ("selection", glass.selection),
+            ("header-selection", glass.header_selection),
+            ("switcher-selection", glass.switcher_selection),
+            ("document-tab", glass.document_tab),
+        ] {
+            use std::fmt::Write;
+            write!(css, "--glass-{name}: {color};").unwrap();
+        }
         css.push('}');
         self.palette_css.load_from_string(&css);
+        if glass.transparency.enabled() {
+            self.window.add_css_class("glass");
+        } else {
+            self.window.remove_css_class("glass");
+        }
         self.update_backdrop();
     }
 
@@ -2724,6 +2794,9 @@ impl Workspace {
                 if !group.tabs_visible && group.active.kind() == PanelKind::Tiles {
                     root.add_css_class("tool-strip");
                 }
+                if group.tabs_visible {
+                    root.add_css_class("tabbed");
+                }
                 root.set_overflow(gtk::Overflow::Hidden);
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 header.add_css_class("dock-tabs");
@@ -2775,6 +2848,7 @@ impl Workspace {
                     column.append(&header);
                 }
                 let stack = gtk::Stack::new();
+                stack.add_css_class("panel-body");
                 stack.set_hexpand(true);
                 stack.set_vexpand(true);
                 stack.set_hhomogeneous(false);
@@ -2954,6 +3028,18 @@ impl Workspace {
         }
         self.columns.reconcile(self, layout, &resolved);
         self.surface.queue_allocate();
+    }
+    fn glass_connectors(&self, out: &mut Vec<layer_render_wgpu::BackdropRegion>) {
+        for drawer in self.drawers() {
+            if let Some(connection) = drawer.geometry(self).and_then(|p| p.connection()) {
+                crate::glass::connector(&connection, out);
+            }
+        }
+        for column in &self.resolved().collapsed {
+            for (_, connection) in column.open.iter().flat_map(|o| &o.connections) {
+                crate::glass::connector(connection, out);
+            }
+        }
     }
     pub(crate) fn drawers(&self) -> Vec<Rc<drawers::Drawer>> {
         std::iter::once(self.drawer.clone())

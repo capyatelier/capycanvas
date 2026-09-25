@@ -106,6 +106,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testNativeRegionRefinement() throws { try checkNativeRegionRefinement(in: editorCaptureApplication()) }
 
     @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
+    @MainActor func testColorPicker() { checkColorPicker(in: editorCaptureApplication()) }
 
     @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
 
@@ -190,7 +191,7 @@ final class EditorLaunchTests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(editorDocumentTitle(in: app).exists)
-        XCTAssertFalse(app.buttons["zen-button"].exists)
+        XCTAssertTrue(app.buttons["zen-button"].exists, "Zen keeps the standalone Capy by default")
         app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
         XCTAssertTrue(editorDocumentTitle(in: app).exists)

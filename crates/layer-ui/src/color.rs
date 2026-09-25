@@ -20,6 +20,12 @@ mod form;
 pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui};
 mod library;
 mod palette_file;
+pub use palette_file::{PaletteExport, PaletteFileRequest, PaletteFormat, palette_file};
+mod palette_view;
+pub use palette_view::{
+    PaletteChoiceView, PaletteCommand, PaletteMenuItem, PaletteMenuTarget, PalettePanelView, PaletteTileView,
+    selected_swatch,
+};
 pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

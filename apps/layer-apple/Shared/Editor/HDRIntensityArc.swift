@@ -3,12 +3,13 @@ import SwiftUI
 struct HDRIntensityArc: View {
     @ObservedObject var store: EditorStore
     let geometry: JSON
+    let caption: JSON
     let size: CGFloat
     @State private var original: Double?
     @State private var range: [Double]?
     @State private var editing = false
     @State private var input = "0"
-    private var model: JSON { store.snapshot["color_panel"] }
+    private var model: JSON { store.colorPanel }
     var body: some View {
         let viewing = store.colorViewing
         let arc = ColorUI.resolve(["type": "intensity_arc", "size": size, "stops": model["intensity"].number,
@@ -44,9 +45,12 @@ struct HDRIntensityArc: View {
                 if !value.isNull { set(value.number) }
                 if phase == "up" { original = nil; self.range = nil }
             }.accessibilityHidden(true)
+            let font = caption[2].number, label = String(format: "%+.2f EV", model["intensity"].number)
             Button { input = String(format: "%.2f", model["intensity"].number); editing = true } label: {
-                Text(String(format: "%+.1f EV", model["intensity"].number)).font(.system(size: 11)).monospacedDigit()
-            }.buttonStyle(.plain).position(x: size / 2, y: size + 7)
+                Text(label).font(.system(size: font)).monospacedDigit().fixedSize()
+            }.buttonStyle(.plain)
+                .offset(x: caption[0].number - EditorTextMetrics.width(label, size: font, weight: .regular, monospacedDigits: true) / 2,
+                    y: caption[1].number - EditorTextMetrics.ascent(size: font))
                 .accessibilityLabel("HDR intensity").accessibilityIdentifier("color-intensity")
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
                 .popover(isPresented: $editing) {

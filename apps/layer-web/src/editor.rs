@@ -52,6 +52,16 @@ impl WebApp {
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition()))
     }
+    pub fn palette_panel(&self) -> Result<JsValue, JsValue> {
+        let state = self.session.state();
+        let colors = state.display_colors();
+        let rendition = self.session.effective_sdr_rendition();
+        serialize(&layer_ui::PalettePanelView::new(
+            colors,
+            &state.colors.library,
+            |color| colors.mapped_swatch(color, rendition),
+        ))
+    }
     /// Static for each shape; fetch when switching models, not on every drag.
     pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().display_colors().wheel_hue_stops())

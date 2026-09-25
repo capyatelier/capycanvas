@@ -132,5 +132,6 @@ native UI implementation.
 The [shared UI reference](shared-ui.md) describes the detailed boundary. See
 [settings](settings.md), [numeric controls](numeric-controls.md) and
 [theme colors](theme-colors.md) for the existing shared policies before adding a
-platform-specific version. Host coverage is listed in the
+platform-specific version. [Panel transparency](panel-transparency.md) explains
+how GTK blurs the canvas behind translucent panels. Host coverage is listed in the
 [platform guide](../platforms/README.md).

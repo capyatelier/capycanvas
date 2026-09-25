@@ -2858,7 +2858,7 @@ class AndroidRasterTest {
             instrumentation.runOnMainSync{found=android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(::roots).filter{within==null||it.view===within}.firstNotNullOfOrNull{root->find(root.semanticsOwner.unmergedRootSemanticsNode,tag)?.let{root.view to it.boundsInRoot}}}
             return checkNotNull(found){"Missing $tag"}
         }
-        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0) {
+        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0,outside:Boolean=false) {
             val (view,anchor)=locate(if(vertical)"drawing-handle-${order.first()}"else"drawing-tab-${order.first()}")
             val start=if(vertical&&!handle)locate("drawing-tab-${order.first()}",view).second else anchor
             val end=locate("drawing-tab-${order.last()}",view).second
@@ -2875,12 +2875,23 @@ class AndroidRasterTest {
             event(android.view.MotionEvent.ACTION_DOWN,from)
             if(hold>0){SystemClock.sleep(hold);compose.mainClock.advanceTimeBy(hold);instrumentation.runOnMainSync {}}
             event(android.view.MotionEvent.ACTION_MOVE,to)
-            event(if(cancel)android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP,to)
+            val away=androidx.compose.ui.geometry.Offset(to.x,to.y+start.height*3)
+            if(!vertical) {
+                fun slid(swapped:Boolean)=compose.waitUntil(5_000){
+                    val a=locate("drawing-tab-${order.first()}",view).second.left;val b=locate("drawing-tab-${order.last()}",view).second.left
+                    kotlin.math.abs(a-(if(swapped)end else start).left)<1.5f&&kotlin.math.abs(b-(if(swapped)start else end).left)<1.5f
+                }
+                slid(true)
+                event(android.view.MotionEvent.ACTION_MOVE,away);slid(false)
+                if(!outside){event(android.view.MotionEvent.ACTION_MOVE,to);slid(true)}
+            }
+            event(if(cancel)android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP,if(outside)away else to)
         }
         for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
             drag(tool);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
             native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order,ids())
             drag(tool,cancel=true);settled();assertEquals(order,ids())
+            drag(tool,outside=true);settled();assertEquals("Release outside the strip cancels",order,ids())
         }
         compose.runOnUiThread{host.drawingTabs.selector=true};compose.onNodeWithTag("drawing-selector").assertIsDisplayed()
         for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {

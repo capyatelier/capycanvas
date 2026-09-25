@@ -42,7 +42,7 @@ void LayerRow::init(){
     swipeFrame.Children().Append(swipeDelete);swipeFrame.Children().Append(body);body.RenderTransform(swipeTransform);swipe(0);
     swipeFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->swipeFrame.Clip(clip);}});
     root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->swipe(0);});root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
-    root.BorderBrush(fill({255,53,132,228}));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
+    root.BorderBrush(accent(data));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     AutomationProperties::SetName(root,L"Layer row");
     root.AllowDrop(true);
@@ -135,7 +135,7 @@ void LayerRow::init(){
         e.Handled(true);
     });
     mask.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contextAllowed())self->context(true,self->mask);e.Handled(true);});
-    dropMark.IsHitTestVisible(false);dropMark.BorderBrush(fill({255,53,132,228}));dropMark.Margin({-6,-2,-6,-2});
+    dropMark.IsHitTestVisible(false);dropMark.BorderBrush(accent(data));dropMark.Margin({-6,-2,-6,-2});
     Grid::SetColumnSpan(dropMark,10);body.Children().Append(dropMark);
 }
 void LayerRow::swipe(double offset){
@@ -155,7 +155,7 @@ void LayerRow::highlight(int position){
 }
 void LayerRow::refresh(){
     if(!current())return;auto layer=model();
-    root.Background(flag(layer,L"selected")?selected():clear());
+    root.Background(flag(layer,L"selected")?selected(data):clear());
     swipeDelete.IsEnabled(flag(layer,L"can_delete"));if(!flag(layer,L"can_delete")||renaming)swipe(0);
     title.Text(str(layer,L"label"));AutomationProperties::SetName(name,str(layer,L"label"));
     AutomationProperties::SetName(root,str(layer,L"label")+L" layer row");

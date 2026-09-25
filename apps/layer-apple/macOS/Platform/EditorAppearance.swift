@@ -15,11 +15,12 @@ final class EditorAppearanceView: NSView {
     weak var store: EditorStore?
     var preferred = ""
     private var observation: NSKeyValueObservation?
-    private var reported: Bool?
+    private var accentObserver: NSObjectProtocol?
+    private var reported: String?
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); update() }
     func update() {
-        guard let window else { observation = nil; reported = nil; return }
+        guard let window else { observation = nil; accentObserver = nil; reported = nil; return }
         let name: NSAppearance.Name? = preferred == "dark" ? .darkAqua : preferred == "light" ? .aqua : nil
         if window.appearance?.name != name { window.appearance = name.flatMap(NSAppearance.init(named:)) }
         if observation == nil {
@@ -27,12 +28,23 @@ final class EditorAppearanceView: NSView {
                 DispatchQueue.main.async { self?.report() }
             }
         }
+        if accentObserver == nil {
+            accentObserver = NotificationCenter.default.addObserver(forName: NSColor.systemColorsDidChangeNotification,
+                object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.report() } }
+        }
         report()
     }
     private func report() {
         guard window != nil, let store else { return }
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        guard dark != reported else { return }; reported = dark
-        store.dispatch(["type": "system_theme_changed", "theme": dark ? "dark" : "light"])
+        let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB).map { color in
+            String(format: "#%02x%02x%02x", Int((color.redComponent * 255).rounded()),
+                Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
+        }
+        let key = "\(dark):\(accent ?? "")"
+        guard key != reported else { return }; reported = key
+        var action: [String: Any] = ["type": "system_theme_changed", "theme": dark ? "dark" : "light"]
+        if let accent { action["accent"] = accent }
+        store.dispatch(action)
     }
 }

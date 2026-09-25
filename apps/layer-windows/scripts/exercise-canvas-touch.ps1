@@ -37,6 +37,7 @@ function Same-Camera($a,$b,[double]$Pixels=.1){
 function Matches-Gesture($actual,$expected){
  if(!$actual -or !$expected){return $false}
  $extent=(Model).document_options.extent
+ if(!$extent){return $false}
  foreach($x in @(0,$extent[0])){foreach($y in @(0,$extent[1])){
   $ax=$actual.translation[0]+$actual.zoom*([Math]::Cos($actual.rotation)*$x-[Math]::Sin($actual.rotation)*$y)
   $ay=$actual.translation[1]+$actual.zoom*([Math]::Sin($actual.rotation)*$x+[Math]::Cos($actual.rotation)*$y)
@@ -46,7 +47,7 @@ function Matches-Gesture($actual,$expected){
  }}
  $true
 }
-function Signature {$m=Model;@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 30 -Compress}
+function Signature {$m=$null;for($i=0;$i -lt 40 -and !$m;$i++){$m=Model;if(!$m){Start-Sleep -Milliseconds 25}};@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 30 -Compress}
 function Capture([string]$Name){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $app.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'-capture.json'))}
 $checks=[Collections.Generic.List[object]]::new()
 function Check([string]$Name,[scriptblock]$Condition){Wait-Until $Condition $Name;if((Signature) -ne $drawing){throw "Touch changed the drawing: $Name"};$checks.Add(@{name=$Name;camera=Camera});Write-Output "$Name passed"}
@@ -118,6 +119,18 @@ try{
  Stable 'Hand release preserves the drawing and camera' (Camera)
  Select-Tool 'pen';Invoke 'canvas-fit';Start-Sleep -Milliseconds 200
  Check 'returning to Pen and Fit preserves the drawing' {$true}
+ [CapyCanvasTouch]::Initialize([uint32]$app.Id)
+ $resting=Camera;[CapyCanvasTouch]::Down(1,($cx-100),$cy);Start-Sleep -Milliseconds 120
+ Invoke 'settings-button'
+ Wait-Until {$null -ne (Find 'Preferences' -Name)} 'Preferences did not open over a resting finger'
+ [CapyCanvasTouch]::Up(1);Start-Sleep -Milliseconds 150
+ Invoke 'CloseButton'
+ Wait-Until {$null -eq (Find 'Preferences' -Name)} 'Preferences did not close'
+ [CapyCanvasTouch]::SetForegroundWindow($handle)|Out-Null;Start-Sleep -Milliseconds 150
+ [CapyCanvasTouch]::Down(1,($cx+40),$cy)
+ for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Move(1,($cx+40+$i*6),($cy+$i*4));Start-Sleep -Milliseconds 12}
+ Stable 'a finger lifted under a modal dialog does not pair with the next finger' $resting
+ [CapyCanvasTouch]::Up(1);[CapyCanvasTouch]::Dispose()
  [CapyRowPointer]::Initialize([uint32]$app.Id)
  $revision=(Model).state.document_file.revision
  [CapyRowPointer]::Down('pen',($cx-70),($cy+60))
@@ -135,5 +148,5 @@ try{
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Touch runtime stderr requires inspection'}
  @{checks=$checks;drawing='preserved throughout navigation';pen_after_touch='new stroke and independent Undo';close='zero exit within five seconds';scope='OS-injected multi-touch and pen; physical digitizers, pressure/tilt and 120 Hz acceptance remain separate'}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas touch acceptance passed: $run"
-}catch{@{camera=Camera;last_expected=$expected;checks=$checks}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'failure-state.json');if($app -and !$app.HasExited -and $root){try{Capture 'failure'}catch{}};throw}
+}catch{@{camera=Camera;last_expected=$expected;checks=$checks;drawing=$drawing;signature=(Signature)}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'failure-state.json');if($app -and !$app.HasExited -and $root){try{Capture 'failure'}catch{}};throw}
 finally{[CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose();foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}}

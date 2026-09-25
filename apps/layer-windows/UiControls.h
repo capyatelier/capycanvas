@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 #include <type_traits>
 
@@ -63,7 +64,7 @@ inline Windows::UI::Color color(hstring const& hex){
 }
 inline SolidColorBrush fill(Windows::UI::Color value){return SolidColorBrush(value);}
 inline SolidColorBrush clear(){return fill({0,0,0,0});}
-inline SolidColorBrush selected(){return fill({56,53,132,228});}
+
 inline void place(FrameworkElement const& element,J const& rect){
     Canvas::SetLeft(element,num(rect,L"x"));Canvas::SetTop(element,num(rect,L"y"));
     element.Width(num(rect,L"width"));element.Height(num(rect,L"height"));
@@ -119,10 +120,18 @@ struct WorkspaceData {
         for(auto& [id,close]:current)closed=close()||closed;
         return closed;
     }
+    J colorPreview;
+    std::map<uint64_t,std::function<void()>> colorViews;uint64_t nextColorView=0,colorFields=0;bool colorQueued=false;
+    uint64_t colorView(std::function<void()> refresh){colorViews.emplace(++nextColorView,std::move(refresh));return nextColorView;}
+    static bool previewing(J const& preview){
+        return object(preview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null;
+    }
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
+    mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
     void refreshPalette(){
         auto palette=object(state,L"palette");
         for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
+        for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
     }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
     void dispatchDocument(J const& action,hstring const& epoch) const {
@@ -133,18 +142,18 @@ struct WorkspaceData {
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
         return paletteBrushes.emplace(role,fill(color(str(object(state,L"palette"),role,L"#414141")))).first->second;
     }
+    SolidColorBrush tint(wchar_t const* role,uint8_t alpha)const{
+        auto key=std::make_pair(std::wstring(role),alpha);
+        if(auto found=tintBrushes.find(key);found!=tintBrushes.end())return found->second;
+        auto value=color(str(object(state,L"palette"),role,L"#414141"));value.A=alpha;
+        return tintBrushes.emplace(key,fill(value)).first->second;
+    }
     double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
 };
-// Shared button color is a tint; native Android/Web apply 13/255 opacity.
-inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){
-    auto tint=color(str(object(data->state,L"palette"),L"button"));tint.A=13;return fill(tint);
-}
-// Light headers use the shared half-opacity surround surface over the canvas.
-inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){
-    auto tint=color(str(object(data->state,L"palette"),L"bg"));
-    if(data->theme()==L"light")tint.A=128;
-    return fill(tint);
-}
+inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
+inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"bg",191);}
+inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"selection");}
+inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
@@ -154,16 +163,14 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const&
 }
 template<typename T>
 inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result){
-    auto ink=color(str(object(data->state,L"palette"),L"text"));
-    auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
     hstring prefix=std::is_same_v<T,Primitives::ToggleButton>?L"ToggleButton":L"Button";
-    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),fill(hover));
-    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),fill(pressed));
+    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),data->tint(L"text",20));
+    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),data->tint(L"text",41));
     result.Resources().Insert(box_value(prefix+L"BackgroundDisabled"),clear());
-    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),fill(disabled));
+    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),data->tint(L"text",92));
     if constexpr(std::is_same_v<T,Primitives::ToggleButton>)
         for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-            result.Resources().Insert(box_value(role),selected());
+            result.Resources().Insert(box_value(role),selected(data));
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
@@ -177,6 +184,26 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }
+inline bool pickerControl(J const& control){
+    auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");
+}
+inline hstring pickerTooltip(hstring const& tooltip){return tooltip+L" · Double-press for options";}
+struct DoublePress : std::enable_shared_from_this<DoublePress> {
+    using Press=std::pair<uint64_t,Microsoft::UI::Input::PointerDeviceType>;
+    std::optional<Press> pressed,last;
+    void listen(UIElement const& target){
+        target.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+            if(auto self=weak.lock())self->pressed=Press{e.GetCurrentPoint(nullptr).Timestamp(),e.Pointer().PointerDeviceType()};
+        })),true);
+    }
+    bool second(){
+        auto now=std::exchange(pressed,std::nullopt);auto previous=std::exchange(last,now);
+        bool twice=now&&previous&&now->second==previous->second&&now->first-previous->first<=uint64_t(GetDoubleClickTime())*1000;
+        if(twice)last.reset();
+        return twice;
+    }
+    void reset(){pressed.reset();last.reset();}
+};
 struct NumberPresentation {
     bool preference=false;hstring description;std::function<hstring()> identity;
     std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;

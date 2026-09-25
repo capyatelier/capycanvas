@@ -128,11 +128,11 @@ struct LayerPanel: View {
     @ViewBuilder private func dropMark(_ layer: JSON) -> some View {
         if let drag = interaction.drag, drag.target == layer["id"].uint {
             if layer["group"].bool && (0.25..<0.75).contains(drag.fraction) {
-                Rectangle().stroke(EditorPalette.sharedAccent, lineWidth: 2).allowsHitTesting(false)
+                Rectangle().stroke(palette.accent, lineWidth: 2).allowsHitTesting(false)
             } else {
                 VStack(spacing: 0) {
                     if drag.fraction >= 0.5 { Spacer(minLength: 0) }
-                    Rectangle().fill(EditorPalette.sharedAccent).frame(height: 2)
+                    Rectangle().fill(palette.accent).frame(height: 2)
                     if drag.fraction < 0.5 { Spacer(minLength: 0) }
                 }.allowsHitTesting(false)
             }

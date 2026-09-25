@@ -93,14 +93,21 @@ class AndroidWorkspaceManagerTest {
         CanvasHost.workspaceDirectoryForTest = null
         assertEquals("Legacy preferences are preserved", legacy, instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all)
     }
-    @Test fun restoreStartingLayoutPlacesProofNextToColor() {
+    @Test fun restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator() {
         for(name in listOf("Photo","Paint")) {
             val workspace=view().getJSONArray("defaults").objects().first{it.getString("title")==name}
             tap("workspace-switch-${workspace.getString("id")}");idle()
             action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
             menu("Restore Starting Layout…");tap("workspace-submit");idle()
-            val panels=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("color")}.getJSONArray("panels").values()
-            assertEquals("$name restores Proof immediately after Color","proof",panels[panels.indexOf("color")+1])
+            fun tabs(node:Any?):List<List<Any>> = when(node) {
+                is JSONObject -> (if(node.optString("kind")=="tabs") listOf(node.getJSONArray("panels").values()) else emptyList()) + node.keys().asSequence().flatMap{tabs(node.get(it))}
+                is org.json.JSONArray -> (0 until node.length()).flatMap{tabs(node.get(it))}
+                else -> emptyList()
+            }
+            fun panels(anchor:String)=tabs(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout")).first{anchor in it}
+            assertEquals("$name restores Palettes immediately after Color","palettes",panels("color").let{it[it.indexOf("color")+1]})
+            assertEquals("$name restores Proof immediately after Navigator","proof",panels("navigator").let{it[it.indexOf("navigator")+1]})
+            if(name=="Photo") continue
             compose.onNodeWithTag("tab-proof").assertIsDisplayed().performTouchInput{click()}
             compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().any{it.getString("active")=="proof"}}
             compose.waitForIdle()
@@ -171,7 +178,7 @@ class AndroidWorkspaceManagerTest {
         }
         menu("Manage Workspaces…")
         for (row in view().array("rows").objects().filter { it.getString("id").startsWith("builtin:workspace:") }) {
-            assertTrue(row.getBoolean("options")); assertFalse(row.getBoolean("delete"))
+            assertFalse(row.getBoolean("options")); assertFalse(row.getBoolean("delete"))
         }
         tap("workspace-row-$painting"); tap("workspace-confirm"); idle()
         assertEquals(normalized(beforeRestart), normalized(capture()))

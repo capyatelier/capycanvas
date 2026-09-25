@@ -327,7 +327,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.platform_prediction_available = None;
         }
         self.state.platform = platform;
-        if platform == Platform::Gtk {
+        if Panel::palettes_presented_on(platform) {
             self.state.colors.library.ensure_starters();
         }
         self.refresh_feedback_config();
@@ -4536,20 +4536,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
-        if matches!(self.state.platform, Platform::Mac | Platform::Ios | Platform::Windows)
-            && self.layer_interaction.tool.picks_color() {
-            self.state.tool_set.subtools.extend(
-                [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
-                    .into_iter()
-                    .map(|(label, width)| ToolSetItem {
-                        label,
-                        icon: "eyedropper",
-                        action: UiAction::SetColorSampleSize { width },
-                        selected: self.eyedropper.area.width() == width,
-                        preview: None,
-                    }),
-            );
-        }
         if self.state.platform.color_picker() && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.groups.clear();
             self.state.tool_set.subtools = [
@@ -15628,7 +15614,7 @@ mod tests {
                         "Press retains the drawer until activation"
                     );
                     let change = activate(&mut s, tile);
-                    if platform == Platform::Gtk && next.columns == [vec![Panel::Color]] {
+                    if Panel::palettes_presented_on(platform) && next.columns == [vec![Panel::Color]] {
                         next.columns[0].push(Panel::Palettes);
                     }
                     assert_eq!(s.state.customization.drawer.as_ref().unwrap(), &next);
@@ -15683,7 +15669,7 @@ mod tests {
 
     #[test]
     fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let mut s = session(); s.set_platform(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
             for control in [ToolbarControl::Color, ToolbarControl::Panel { panel: Panel::Layers }] {

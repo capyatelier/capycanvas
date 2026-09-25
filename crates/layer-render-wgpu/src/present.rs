@@ -75,7 +75,10 @@ pub struct ViewportPresenter {
     uploads: Uploads,
     camera_data: Option<[f32; 32]>,
     quarter_turns: u32,
-    retained: Option<crate::present_damage::Retained>,
+    retained: bool,
+    history: crate::present_damage::Retained,
+    content_damage: Option<Vec<[u32; 4]>>,
+    defer_overviews: bool,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -661,7 +664,10 @@ impl ViewportPresenter {
             uploads: Uploads::new(device, 16 * 1024),
             camera_data: None,
             quarter_turns: 0,
-            retained: None,
+            retained: false,
+            history: Default::default(),
+            content_damage: None,
+            defer_overviews: false,
             presented_area: 0,
             shader,
             pipeline_layout,
@@ -758,14 +764,49 @@ impl ViewportPresenter {
         self.corner_radius = physical_pixels.max(0.0);
     }
 
-    pub fn retains_target(&self) -> bool { self.retained.is_some() }
+    pub fn retains_target(&self) -> bool { self.retained }
+
+    pub fn content_damage(&self) -> Option<&[[u32; 4]]> { self.content_damage.as_deref() }
+
+    pub fn set_deferred_overviews(&mut self, deferred: bool) {
+        self.defer_overviews = deferred;
+    }
+
+    pub fn encode_overviews(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        let (Some(pipeline), Some(buffer), Some(group)) =
+            (&self.overview_pipeline, &self.overview_buffer, &self.bind_group)
+        else {
+            return;
+        };
+        if self.overviews.is_empty() {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("deferred overviews"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, group, &[]);
+        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.draw(0..6, 0..self.overviews.len() as u32);
+    }
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
 
     /// Reset destination history on every swapchain reconfiguration. Retention
     /// requires the same image to survive presentations; buffered images redraw fully.
     pub fn set_target_retention(&mut self, retained: bool) {
-        self.retained = retained.then(Default::default);
+        self.retained = retained;
+        self.history = Default::default();
     }
 
     pub fn set_color_picker(&mut self, renderer: &WgpuRasterizer, overlay: Option<layer_render::ColorPickerOverlay>) {
@@ -1061,9 +1102,9 @@ impl ViewportPresenter {
         // A retained target may be scanned out while this pass runs. Even a
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
-        let preserve_target = !overview_only && self.retained.as_ref().is_some_and(|r| r.valid);
-        let (regions, full) = if !overview_only && self.retained.is_some() {
-            let previous = self.retained.as_ref().unwrap();
+        let preserve_target = !overview_only && self.retained && self.history.valid;
+        let (regions, full) = if !overview_only {
+            let previous = &self.history;
             let full = !previous.valid
                 || bindings_changed
                 || camera_changed
@@ -1093,6 +1134,21 @@ impl ViewportPresenter {
             }
             crate::present_damage::add_region(&mut regions, previous.cursor);
             crate::present_damage::add_region(&mut regions, cursor);
+            let mut cursor_rects = Vec::with_capacity(self.cursor_vertices.len());
+            crate::present_damage::cursor_rects(&self.cursor_vertices, view, self.quarter_turns, &mut cursor_rects);
+            self.content_damage = (!full).then(|| {
+                let selection = (previous.selection_revision != renderer.selection_paint_revision)
+                    .then(|| crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
+                previous.picker.into_iter().chain(self.picker.bounds())
+                    .map(|bounds| crate::present_damage::surface_bounds(bounds, view, self.quarter_turns))
+                    .chain([repaint])
+                    .chain(selection)
+                    .chain(previous.cursor_rects.iter().copied())
+                    .chain(cursor_rects.iter().copied())
+                    .filter(|r| !r.is_empty())
+                    .map(|r| [r.min_x(), r.min_y(), r.max_x(), r.max_y()])
+                    .collect()
+            });
             // A distant Navigator must not turn a short stroke into a nearly
             // full-screen render area. Only merge intersecting damage regions.
             if previous.overviews != self.overviews {
@@ -1136,7 +1192,8 @@ impl ViewportPresenter {
                     crate::present_damage::add_region(&mut regions, area);
                 }
             }
-            let previous = self.retained.as_mut().unwrap();
+            let previous = &mut self.history;
+            previous.cursor_rects = cursor_rects;
             previous.valid = true;
             previous.revision = renderer.composite_revision;
             previous.selection_revision = renderer.selection_paint_revision;
@@ -1145,6 +1202,11 @@ impl ViewportPresenter {
             previous.cursor = cursor;
             previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);
+            (regions, full)
+        } else {
+            (vec![crate::pixel_rect::PixelRect::full(extent)], true)
+        };
+        let (regions, full) = if self.retained || overview_only {
             (regions, full)
         } else {
             (vec![crate::pixel_rect::PixelRect::full(extent)], true)
@@ -1224,7 +1286,7 @@ impl ViewportPresenter {
                 pass.set_pipeline(&self.pipeline);
                 pass.draw(0..3, 0..1);
             }
-            if !self.overviews.is_empty() {
+            if !self.overviews.is_empty() && (overview_only || !self.defer_overviews) {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);

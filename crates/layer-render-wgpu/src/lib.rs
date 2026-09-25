@@ -68,6 +68,8 @@ mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 mod present;
+mod backdrop_blur;
+pub use backdrop_blur::{BackdropBlur, BackdropBlurStyle, BackdropRegion};
 mod present_picker;
 mod artwork;
 mod display_mips;

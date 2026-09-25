@@ -148,6 +148,21 @@ impl WebApp {
                 .map(|before| serde_json::json!({ "before": before })),
         )
     }
+    pub fn document_slide(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let SlideRequest {
+            id,
+            hits,
+            clip,
+            press,
+            point,
+        } = serde_wasm_bindgen::from_value(request).map_err(js)?;
+        serialize(
+            &self
+                .documents
+                .drag(id, press, &hits, clip)
+                .and_then(|drag| drag.preview(point)),
+        )
+    }
     pub fn step_document(&mut self, id: u64, forward: bool) -> Result<JsValue, JsValue> {
         let before = self
             .documents
@@ -263,4 +278,13 @@ impl WebApp {
             canvas_wake: true,
         })
     }
+}
+
+#[derive(serde::Deserialize)]
+struct SlideRequest {
+    id: u64,
+    hits: Vec<layer_ui::DocumentTabHit>,
+    clip: layer_ui::Bounds,
+    press: [f32; 2],
+    point: [f32; 2],
 }

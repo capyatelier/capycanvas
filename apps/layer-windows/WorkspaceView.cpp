@@ -8,6 +8,7 @@
 #include "OverviewOcclusion.h"
 #include "WorkspaceShadow.h"
 #include "WorkspaceDrawers.h"
+#include <set>
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
 #include "ColorView.h"
@@ -49,6 +50,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceExpansion> expansion;
     struct Measurement {double tab=36,content=320;J scroll;};
     std::map<std::wstring,Measurement> measurements;
+    struct Offscreen {std::wstring key;std::unique_ptr<PanelBody> body;};
+    std::map<std::wstring,Offscreen> offscreen;
+    Canvas measureHost;
     hstring lastMeasurements;
     bool measurementQueued=false;
     std::array<float,3> titlebar{};
@@ -112,12 +116,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
         ToolTipService::SetToolTip(fitCamera,box_value(L"Fit canvas"));
-        Border surface;surface.Child(fitCamera);surface.Background(data->brush(L"bg"));surface.CornerRadius({20,20,20,20});
+        Border surface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
+        measureHost.IsHitTestVisible(false);measureHost.Opacity(0);Canvas::SetLeft(measureHost,-100000);root.Children().Append(measureHost);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
@@ -228,6 +233,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             popup.ShowAt(anchor);
         }else for(auto const& bind:popupBindings)bind();
     }
+    void previewColors(){
+        if(std::exchange(data->colorQueued,true))return;
+        root.DispatcherQueue().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
+            self->data->colorQueued=false;auto views=self->data->colorViews;
+            for(auto const& [id,refresh]:views)refresh();
+            self->tracePresentation();
+        }});
+    }
     static uint64_t revision(J const& update,wchar_t const* field){
         double value=num(update,field,-1);
         if(!std::isfinite(value)||value<0||value>9007199254740991.||std::floor(value)!=value)
@@ -244,6 +257,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             workspaceUpdate=update;
         }
         if(!full){
+            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");previewColors();}
+            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};previewColors();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
@@ -259,7 +274,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             data->thumbnails=CreateLayerThumbnailCache(data->query);
             data->previews=CreateFilterPreviewCache(data->query);
         }
-        data->model=snapshot;data->state=object(snapshot,L"state");
+        data->model=snapshot;data->state=object(snapshot,L"state");data->colorPreview=object(snapshot,L"color_preview");
         // Adoption and layout restoration discard transient host measurements.
         // Reconcile the new model even when retained controls have identical sizes.
         lastMeasurements=L"";
@@ -267,6 +282,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
+            measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -422,6 +438,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
+            {L"color_fields",N(double(data->colorFields))},
+            {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
@@ -483,6 +501,36 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             measurements[std::wstring(str(group.geometry,L"active"))].scroll=group.body->ScrollMetrics();
             double height=group.body->ContentHeight();
             if(std::isfinite(height)&&height>=0)measurements[std::wstring(str(group.geometry,L"active"))].content=stable(height);
+        }
+        std::set<std::wstring> keep;
+        auto fitted=array(object(object(data->state,L"workspace"),L"layout"),L"fit_height_groups");
+        for(auto const& [id,group]:groups){
+            bool fit=false;for(auto value:fitted)fit=fit||uint32_t(value.GetNumber())==id;
+            if(!fit||group.hidden)continue;
+            double width=num(object(group.geometry,L"bounds"),L"width");auto active=str(group.geometry,L"active");
+            for(auto value:array(group.geometry,L"panels")){
+                auto panelId=value.GetString();if(panelId==active)continue;
+                auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size())continue;
+                std::wstring name(panelId);keep.insert(name);auto& copy=offscreen[name];
+                auto key=std::wstring(panelStructure(panel).Stringify())+L"@"+std::to_wstring(width);
+                if(copy.key!=key){
+                    if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
+                    auto inert=std::make_shared<WorkspaceData>(*data);
+                    inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
+                    inert->popupChanged=nullptr;inert->transients.clear();inert->colorViews.clear();
+                    copy.key=key;copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
+                    copy.body->Root().Width(width);measureHost.Children().Append(copy.body->Root());copy.body->Apply(true);
+                }
+                double height=copy.body->ContentHeight();
+                if(std::isfinite(height)&&height>=0&&measurements.contains(name)){
+                    measurements[name].content=stable(height);measurements[name].scroll=copy.body->ScrollMetrics();
+                }
+            }
+        }
+        for(auto it=offscreen.begin();it!=offscreen.end();){
+            if(keep.contains(it->first)){++it;continue;}
+            uint32_t at=0;if(it->second.body&&measureHost.Children().IndexOf(it->second.body->Root(),at))measureHost.Children().RemoveAt(at);
+            it=offscreen.erase(it);
         }
         if(drawers)for(auto value:drawers->PanelMeasurements()){
             auto item=value.GetObject();auto panel=std::wstring(str(item,L"panel"));

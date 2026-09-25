@@ -22,12 +22,21 @@ Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amou
     return {uint8_t(std::lround(alpha)),channel(bg.R,ink.R),channel(bg.G,ink.G),channel(bg.B,ink.B)};
 }
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data,bool surface=true){
-    auto bg=surface?headerSurface(data).Color():Windows::UI::Color{};
-    auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
-    item.Background(fill(bg));item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
-    item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,ink,data->theme()==L"light"?.10f:.08f)));
-    item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,ink,.16f)));
-    item.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),fill(bg));
+    item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
+    if(surface){
+        auto bg=headerSurface(data).Color();auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
+        item.Background(headerSurface(data));
+        item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,ink,.10f)));
+        item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,ink,.16f)));
+        item.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),headerSurface(data));
+    }else{
+        item.Background(clear());item.BorderBrush(clear());item.BackgroundSizing(BackgroundSizing::InnerBorderEdge);
+        for(auto role:{L"ButtonBorderBrush",L"ButtonBorderBrushPointerOver",L"ButtonBorderBrushPressed",L"ButtonBorderBrushDisabled"})
+            item.Resources().Insert(box_value(role),clear());
+        item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),data->tint(L"text",26));
+        item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),data->tint(L"text",41));
+        item.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),clear());
+    }
 }
 }
 struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
@@ -43,14 +52,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         Border frame,outline;Grid content;Button editor{nullptr};FrameworkElement view{nullptr};
         Image grip{nullptr};J entry;hstring key,iconKey;std::shared_ptr<CapyUi::ColorPair> colors;
     };
-    std::map<uint32_t,Item> items;
+    std::map<uint32_t,Item> items;std::vector<Border> bars;
     std::vector<FrameworkElement> bankParts;
     StackPanel editorControls,sizeChoices,menuLabels,switches;
     std::vector<Button> menus;
     std::vector<std::pair<Button,hstring>> sizes;
     CheckBox footer;
     Button primary,menuOverflow,workspaceOverflow,zen,settings,recovery;
-    Grid menuGroup,workspaceGroup;
+    Grid menuGroup,workspaceGroup;Border menuCapsule;
     ScrollViewer switcher;
     Border document;
     std::shared_ptr<DrawingTabs> drawings;
@@ -121,8 +130,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto values=array(storage,L"switcher_display");auto active=str(storage,L"id");
         auto previousFirst=workspaces.empty()?hstring{}:workspaces.front().second;
         std::vector<std::pair<Primitives::ToggleButton,hstring>> next;
-        auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
-        auto chosen=fill(blend(bg,{255,53,132,228},.28f)),hover=fill(blend(bg,{255,53,132,228},.36f));
+        auto chosen=data->brush(L"header_selection"),hover=data->brush(L"header_selection_hover");
         for(auto value:values){
             auto choice=value.GetObject();auto id=str(choice,L"id");
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
@@ -132,6 +140,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
                 item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                 item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
+                item.Resources().Insert(box_value(L"ToggleButtonBackgroundPointerOver"),data->tint(L"text",20));
+                item.Resources().Insert(box_value(L"ToggleButtonBackgroundPressed"),data->tint(L"text",41));
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundChecked"),chosen);
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPointerOver"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
@@ -176,8 +186,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switchActive=active;
         switcher.Visibility(values.Size()?Visibility::Visible:Visibility::Collapsed);
     }
-    double textWidth(hstring const& text,bool bold=false)const{
-        auto value=label(data,text,bold);value.UseLayoutRounding(false);
+    double textWidth(hstring const& text,bool bold=false,bool semibold=false)const{
+        auto value=label(data,text,bold);value.UseLayoutRounding(false);if(semibold)value.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         value.Measure({std::numeric_limits<float>::infinity(),60});return value.DesiredSize().Width;
     }
     void schedule(){
@@ -216,17 +226,18 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         NativeMenuItems(target,array(model,L"sections"),data,[data=data](J action){data->dispatch(action);});
     }
     Button command(hstring const& id){
-        auto item=button(data,id,[data=data,id]{data->dispatch(invoke(id));});style(item,data);item.Padding({0});return item;
+        auto item=button(data,id,[data=data,id]{data->dispatch(invoke(id));});style(item,data,false);item.Padding({0});return item;
     }
     void build(){
-        input->Cancel();canvas.Children().Clear();items.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
+        input->Cancel();canvas.Children().Clear();items.clear();bars.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
         bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();
         background=Border();background.Background(clear());canvas.Children().Append(background);
-        menuLabels=StackPanel();menuLabels.Orientation(Orientation::Horizontal);
-        menuLabels.UseLayoutRounding(false);menuWidth=0;
+        menuLabels=StackPanel();menuLabels.Orientation(Orientation::Horizontal);menuLabels.Spacing(2);
+        menuLabels.UseLayoutRounding(false);menuWidth=8;
         for(auto value:array(data->model,L"application_menus")){
-            auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,str(spec,L"label"),[]{});style(item,data,data->theme()!=L"light");item.Padding({8,0,8,0});
-            item.Width(textWidth(str(spec,L"label"),true)+16);menuWidth+=item.Width();
+            auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,str(spec,L"label"),[]{});style(item,data,false);item.Padding({8,0,8,0});
+            item.Height(26);item.CornerRadius({13,13,13,13});item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+            item.Width(textWidth(str(spec,L"label"),false,true)+16);menuWidth+=item.Width()+(menus.empty()?0:2);
             AutomationProperties::SetAutomationId(item,L"application-menu-"+id);
             item.Flyout(menu([weak=weak_from_this(),id](auto target){if(auto self=weak.lock())
                 self->fillMenu(target,object(find(array(self->data->model,L"application_menus"),L"id",id),L"model"));
@@ -234,9 +245,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             menuLabels.Children().Append(item);menus.push_back(item);
         }
         auto primaryMenu=[weak=weak_from_this()](auto target){if(auto self=weak.lock())self->fillMenu(target,object(self->view,L"primary_menu"));};
-        primary=button(data,L"Main Menu",[]{});style(primary,data);primary.Padding({0});primary.Flyout(menu(primaryMenu));
+        primary=button(data,L"Main Menu",[]{});style(primary,data,false);primary.Padding({0});primary.Flyout(menu(primaryMenu));
         AutomationProperties::SetAutomationId(primary,L"application-primary-menu");
-        menuOverflow=button(data,L"Menus",[]{});style(menuOverflow,data);menuOverflow.Padding({0});
+        menuOverflow=button(data,L"Menus",[]{});style(menuOverflow,data,false);menuOverflow.Padding({0});
         AutomationProperties::SetAutomationId(menuOverflow,L"application-menus");
         menuOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
             for(auto value:array(self->data->model,L"application_menus")){
@@ -244,7 +255,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));self->fillMenu(item.Items(),object(spec,L"model"));target.Append(item);
             }
         }}));
-        menuGroup=Grid();menuGroup.CornerRadius({6,6,6,6});menuGroup.VerticalAlignment(VerticalAlignment::Center);menuGroup.Children().Append(menuLabels);menuGroup.Children().Append(menuOverflow);
+        menuCapsule=Border();menuCapsule.Height(34);menuCapsule.Padding({4,4,4,4});menuCapsule.CornerRadius({17,17,17,17});menuCapsule.Background(headerSurface(data));
+        menuCapsule.VerticalAlignment(VerticalAlignment::Center);menuCapsule.Child(menuLabels);
+        menuGroup=Grid();menuGroup.VerticalAlignment(VerticalAlignment::Center);menuGroup.Children().Append(menuCapsule);menuGroup.Children().Append(menuOverflow);
         zen=command(L"zen_mode");settings=command(L"settings");
         AutomationProperties::SetAutomationId(zen,L"zen-button");AutomationProperties::SetAutomationId(settings,L"settings-button");
         switches=StackPanel();switches.Orientation(Orientation::Horizontal);switches.Spacing(2);switches.UseLayoutRounding(false);
@@ -252,9 +265,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
         switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});switcher.BorderThickness({0});
-        switcher.Background(data->brush(L"tabbar"));
+        switcher.Background(data->tint(L"tabbar",191));
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,L"Task workspaces");
-        workspaceOverflow=button(data,L"Workspaces",[]{});style(workspaceOverflow,data);workspaceOverflow.Padding({0});
+        workspaceOverflow=button(data,L"Workspaces",[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
         AutomationProperties::SetAutomationId(workspaceOverflow,L"header-workspace-menu");
         workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
             auto storage=object(self->data->model,L"windows_workspace");
@@ -267,7 +280,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }}));
         workspaceGroup=Grid();workspaceGroup.VerticalAlignment(VerticalAlignment::Center);workspaceGroup.Children().Append(switcher);workspaceGroup.Children().Append(workspaceOverflow);
         drawings=std::make_shared<DrawingTabs>();drawings->data=data;drawings->init();
-        document=Border();document.Child(drawings->root);document.Background(headerSurface(data));document.CornerRadius({6,6,6,6});
+        document=Border();document.Child(drawings->root);document.Background(clear());
         AutomationProperties::SetAutomationId(document,L"document-title");AutomationProperties::SetName(document,L"Drawings");
         systemStatus=std::make_unique<HeaderStatus>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->schedule();});
         bank=Border();bank.Background(data->brush(L"panel"));bank.CornerRadius({8,8,8,8});bank.Padding({6,6,6,6});bankContent=Canvas();bankScroll=ScrollViewer();
@@ -303,7 +316,17 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"menu_labels")return menuGroup;if(kind==L"workspaces")return workspaceGroup;if(kind==L"document_title")return document;
         if(kind==L"clock")return systemStatus->Clock();if(kind==L"battery")return systemStatus->Battery();
         if(kind==L"space"){Border space;space.Background(clear());return space;}
-        auto pick=button(data,L"",[weak=weak_from_this(),id]{if(auto self=weak.lock())self->activate(id);});style(pick,data);pick.Padding({0});
+        auto presses=kind==L"tool"&&pickerControl(object(item,L"control"))?std::make_shared<DoublePress>():nullptr;
+        auto pick=button(data,L"",[weak=weak_from_this(),id,presses]{if(auto self=weak.lock()){
+            if(presses&&!self->editing&&presses->second()){
+                self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
+                    {L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}})}}));
+                return;
+            }
+            if(presses&&self->editing)presses->reset();
+            self->activate(id);
+        }});style(pick,data,false);pick.Padding({0});
+        if(presses)presses->listen(pick);
         return pick;
     }
     void activate(uint32_t id,FrameworkElement anchor=nullptr){
@@ -351,7 +374,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             }
             native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label");
             input->Source(native.frame,O({{L"kind",S(L"item")},{L"value",N(id)}}),label);
-            AutomationProperties::SetName(native.editor,label);ToolTipService::SetToolTip(native.frame,box_value(label));
+            AutomationProperties::SetName(native.editor,label);
+            ToolTipService::SetToolTip(native.frame,box_value(kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label));
             native.content.ColumnDefinitions().GetAt(0).Width({editing?20.:0.,GridUnitType::Pixel});
             native.grip.Visibility(editing?Visibility::Visible:Visibility::Collapsed);native.editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);
             native.view.IsHitTestVisible(!editing);native.editor.IsTabStop(editing);
@@ -375,10 +399,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
                 auto anchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
                 bool open=str(anchor,L"kind")==L"header"&&num(anchor,L"id")==id;
-                auto surface=headerSurface(data);
-                if(flag(spec,L"selected"))surface=data->theme()==L"light"?fill(blend(surface.Color(),{255,53,132,228},.22f)):selected();
-                else if(open)surface=data->theme()==L"light"?fill(blend(surface.Color(),color(str(object(data->state,L"palette"),L"text")),.10f)):buttonBackground(data);
-                pick.Background(surface);
+                pick.Background(flag(spec,L"selected")?data->brush(L"header_selection"):open?data->brush(L"panel"):clear());
                 pick.CornerRadius(open?CornerRadius{6,6,0,0}:CornerRadius{6,6,6,6});
                 AutomationProperties::SetItemStatus(pick,open?L"Open":flag(spec,L"selected")?L"On":L"Off");
                 AutomationProperties::SetName(pick,label);
@@ -423,7 +444,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto done:{false,true}){
             auto item=button(data,done?L"Done":L"Cancel",[data=data,done]{
                 data->dispatch(edit(done?O({{L"type",S(L"edit")},{L"editing",B(false)}}):O({{L"type",S(L"cancel")}})));
-            });item.Padding({10,0,10,0});item.Height(36);item.Background(done?selected():clear());
+            });item.Padding({10,0,10,0});item.Height(36);item.Background(done?accent(data):clear());if(done)item.Foreground(data->brush(L"accent_foreground"));
             AutomationProperties::SetAutomationId(item,done?L"header-edit-done":L"header-edit-cancel");editorControls.Children().Append(item);
         }
         bankContent.Children().Append(editorControls);
@@ -443,7 +464,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         double shown=std::min(y+48,std::max(48.,std::min(230.,windowHeight-height-24)));
         place(bank,O({{L"x",N(6)},{L"y",N(height+6)},{L"width",N(std::max(1.,width-12))},{L"height",N(shown)}}));
         totalHeight=height+shown+12;
-        for(auto const& [item,id]:sizes)item.Background(id==str(object(view,L"model"),L"size")?selected():clear());
+        for(auto const& [item,id]:sizes)item.Background(id==str(object(view,L"model"),L"size")?selected(data):clear());
         footer.IsChecked(flag(object(object(object(data->state,L"workspace"),L"layout"),L"canvas_info"),L"visible",true));
     }
     void reflow(){
@@ -502,6 +523,17 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto preview=input->Preview();auto resolved=object(preview,L"geometry");if(!resolved.Size())resolved=geometry;
         auto source=input->Source();uint32_t held=str(source,L"kind")==L"item"?uint32_t(num(source,L"value")):0;
         auto placed=array(resolved,L"items");auto metrics=array(configuration,L"metrics");
+        auto barList=array(resolved,L"bars");std::set<uint32_t> joined;std::array<bool,3> overflowJoined{};
+        for(auto value:barList){
+            auto bar=value.GetObject();for(auto member:array(bar,L"items"))joined.insert(uint32_t(member.GetNumber()));
+            auto zone=bar.GetNamedValue(L"overflow",JsonValue::CreateNullValue());
+            if(zone.ValueType()==JsonValueType::Number&&zone.GetNumber()>=0&&zone.GetNumber()<3)overflowJoined[size_t(zone.GetNumber())]=true;
+        }
+        while(bars.size()<barList.Size()){Border bar;bar.IsHitTestVisible(false);bar.Background(headerSurface(data));bar.CornerRadius({6,6,6,6});canvas.Children().Append(bar);Canvas::SetZIndex(bar,4);bars.push_back(bar);}
+        for(size_t i=0;i<bars.size();++i){
+            bool shown=i<barList.Size()&&!hidden;bars[i].Visibility(shown?Visibility::Visible:Visibility::Collapsed);
+            if(shown)place(bars[i],object(barList.GetObjectAt(uint32_t(i)),L"bounds"));
+        }
         for(auto& [id,native]:items){
             auto bounds=id==held&&preview.Size()?object(preview,L"held"):object(findId(placed,id),L"bounds");
             bool visible=bounds.Size()&&!hidden;native.frame.Visibility(visible?Visibility::Visible:Visibility::Collapsed);
@@ -513,10 +545,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             place(native.frame,bounds);Canvas::SetZIndex(native.frame,id==held?30:5);
             bool compact=num(bounds,L"width")<num(findId(metrics,id),L"width")-.5;
             auto kind=str(object(native.entry,L"item"),L"kind");
-            if(kind==L"menu_labels"){menuGroup.Background(!compact&&data->theme()==L"light"?headerSurface(data):clear());menuLabels.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
+            if(kind==L"menu_labels"){menuCapsule.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
+            bool inBar=joined.contains(id);
+            bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
+            native.frame.Background(inBar||ownSurface?clear():headerSurface(data));
+            if(auto pick=native.view.try_as<Button>())pick.BorderThickness(inBar?Thickness{0,1,0,1}:Thickness{});
             if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             native.outline.BorderThickness(editing?Thickness{1,1,1,1}:Thickness{});
-            native.outline.BorderBrush(held==id&&flag(preview,L"detached")?fill(color(L"#dc3545")):input->Selected()==id?selected():data->brush(L"tabbar"));
+            native.outline.BorderBrush(held==id&&flag(preview,L"detached")?fill(color(L"#dc3545")):input->Selected()==id?accent(data):data->brush(L"tabbar"));
             AutomationProperties::SetItemStatus(native.frame,editing&&input->Selected()==id?L"Selected":L"");
         }
         auto zoneBounds=array(resolved,L"zones"),more=array(resolved,L"overflow");
@@ -525,10 +561,11 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(i<zoneBounds.Size())place(zones[i],zoneBounds.GetObjectAt(i));zones[i].BorderBrush(data->brush(L"tabbar"));
             bool show=!hidden&&i<more.Size()&&more.GetAt(i).ValueType()==JsonValueType::Object;
             overflow[i].Visibility(show?Visibility::Visible:Visibility::Collapsed);if(show)place(overflow[i],more.GetObjectAt(i));
+            overflow[i].Background(overflowJoined[i]?clear():headerSurface(data));
         }
         ghost.Visibility(preview.Size()&&!held?Visibility::Visible:Visibility::Collapsed);
         if(preview.Size()&&!held){
-            place(ghost,object(preview,L"held"));ghost.BorderBrush(flag(preview,L"detached")?fill(color(L"#dc3545")):selected());
+            place(ghost,object(preview,L"held"));ghost.BorderBrush(flag(preview,L"detached")?fill(color(L"#dc3545")):accent(data));
             hstring text=L"Add Tools…";
             if(str(source,L"kind")==L"component")for(auto v:array(view,L"components"))if(object(v.GetObject(),L"item").Stringify()==object(source,L"value").Stringify())text=str(v.GetObject(),L"label");
             ghost.Child(label(data,text));ghost.Padding({6,6,6,6});

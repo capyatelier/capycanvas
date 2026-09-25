@@ -174,17 +174,20 @@ struct DrawingTabsHeader: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var tabs: DrawingTabsController
     let width: CGFloat
+    var tile: CGFloat = 36
+    @Environment(\.editorPalette) private var palette
     var body: some View {
         Group {
             if tabs.rows.count > 1 && width / CGFloat(tabs.rows.count) >= 140 {
                 DrawingTabList(store: store, tabs: tabs, vertical: false)
+                    .padding(.vertical, 1).background(palette.chromeSurface, in: SquircleShape(tile / 2))
             } else {
                 Button { tabs.presented = true } label: {
                     HStack(spacing: 5) {
                         Text(tabs.rows.first { $0["id"].uint == tabs.selected }?["title"].string ?? "Untitled").lineLimit(1)
                         if tabs.rows.count > 1 { Image(systemName: "chevron.down").font(.caption) }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("document-title")
+                    }.padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                }.buttonStyle(HeaderButtonStyle(radius: tile / 2)).accessibilityIdentifier("document-title")
                     .accessibilityValue(tabs.selectedDescription).help(tabs.selectedDescription)
             }
         }.modifier(DrawingOpenDrop(store: store))
@@ -196,8 +199,9 @@ private struct DrawingTabList: View {
     @ObservedObject var tabs: DrawingTabsController
     let vertical: Bool
     @StateObject private var interaction = DrawingTabInteraction()
+    @Environment(\.editorPalette) private var palette
     var body: some View {
-        let layout = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 2))
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 6))
         layout {
             ForEach(tabs.rows, id: \.drawingID) { row in
                 let id = row["id"].uint
@@ -220,8 +224,8 @@ private struct DrawingTabList: View {
                     Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(width: 24, height: vertical ? 44 : 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("Close " + row["title"].string).accessibilityIdentifier("drawing-close-\(id)")
                         .modifier(DrawingMeasure(id: id, part: \.close))
-                }.padding(.horizontal, 7).frame(height: vertical ? 48 : 30)
-                    .background(id == tabs.selected ? Color.primary.opacity(0.12) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
+                }.padding(.horizontal, 7).frame(height: vertical ? 48 : nil).frame(maxHeight: vertical ? nil : .infinity)
+                    .modifier(DrawingTabBackground(selected: id == tabs.selected, vertical: vertical))
                     .opacity(interaction.dragged == id ? 0.4 : 1)
                     .modifier(DrawingMeasure(id: id))
                     .editorPopover(isPresented: Binding(get: { interaction.menu == id }, set: { if !$0 { interaction.menu = nil } })) {
@@ -238,7 +242,7 @@ private struct DrawingTabList: View {
             .onAppear { update() }.onChange(of: tabs.view.stableKey) { _, _ in update() }
             .onChange(of: tabs.busy) { _, _ in update() }.onDisappear { interaction.cancel() }
             .overlay(alignment: .topLeading) {
-                if let marker = interaction.marker { Rectangle().fill(Color.accentColor).frame(width: marker.width, height: marker.height).offset(x: marker.minX, y: marker.minY).allowsHitTesting(false) }
+                if let marker = interaction.marker { Rectangle().fill(palette.accent).frame(width: marker.width, height: marker.height).offset(x: marker.minX, y: marker.minY).allowsHitTesting(false) }
             }
             .onScrollPhaseChange { _, phase in if phase != .idle && !interaction.contact.held && !interaction.contact.dragging { interaction.cancel() } }
     }
@@ -249,6 +253,25 @@ private struct DrawingTabList: View {
     }
 }
 private extension JSON { var drawingID: UInt64 { self["id"].uint } }
+
+private struct DrawingTabBackground: ViewModifier {
+    let selected: Bool
+    let vertical: Bool
+    @State private var hovering = false
+    @Environment(\.editorPalette) private var palette
+    func body(content: Content) -> some View {
+        content.background {
+            if vertical {
+                RoundedRectangle(cornerRadius: 6).fill(selected ? palette.active : Color.primary.opacity(0.035))
+            } else {
+                ZStack {
+                    if selected { SquircleShape.tile.fill(palette["panel"]) }
+                    if hovering { SquircleShape.tile.fill(palette["text"].opacity(selected ? 0.03 : 0.07)) }
+                }
+            }
+        }.onHover { hovering = $0 }
+    }
+}
 
 struct DrawingTabsPresentation: ViewModifier {
     @ObservedObject var store: EditorStore

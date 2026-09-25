@@ -253,7 +253,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
 /** Hover only: touch holds remain available for editing and context menus. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun HoverTip(label: String, modifier: Modifier = Modifier,
-    resolve: (((String) -> Unit) -> Unit)? = null, content: @Composable () -> Unit) {
+    resolve: (((String) -> Unit) -> Unit)? = null, enabled: Boolean = true, content: @Composable () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val state = rememberTooltipState()
@@ -261,8 +261,8 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
     val position = remember(gap) { TileTooltipPositionProvider(gap) }
     var text by remember(label) { mutableStateOf(label) }
     val currentResolve by rememberUpdatedState(resolve)
-    LaunchedEffect(hovered, label) {
-        if (hovered) {
+    LaunchedEffect(hovered && enabled, label) {
+        if (hovered && enabled) {
             currentResolve?.invoke { text = it }
             delay(500)
             state.show()
@@ -274,7 +274,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
             // hovered item needs popup infrastructure. Its outer Box owns the
             // match-parent constraint; TooltipBox applies modifiers internally.
             content()
-            if (hovered || state.isVisible) Box(Modifier.matchParentSize()) {
+            if ((hovered && enabled) || state.isVisible) Box(Modifier.matchParentSize()) {
                 TooltipBox(modifier = Modifier.fillMaxSize(),
                     positionProvider = position,
                     tooltip = {

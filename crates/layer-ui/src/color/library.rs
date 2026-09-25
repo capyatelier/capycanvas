@@ -564,9 +564,10 @@ mod tests {
             library.active_palette().swatches[1].name,
             library.active_palette().swatches[2].name
         );
-        let file = library.export_palette(1).unwrap();
+        let file = library.export_palette(1, PaletteFormat::Capycolor).unwrap();
+        assert!(file.notice.is_none());
         library
-            .apply(ColorLibrary::import_file(&file, "Unused").unwrap())
+            .apply(ColorLibrary::import_file(&file.bytes, "Unused").unwrap())
             .unwrap();
         assert_eq!(library.active_palette().name, "My colors 2");
         assert!(
@@ -599,7 +600,7 @@ mod tests {
     #[test]
     fn gpl_import_validates_channels_and_supplies_unique_missing_names() {
         let mut library = ColorLibrary::default();
-        library.apply(ColorLibrary::import_file(b"GIMP Palette\nName: Study\nColumns: 6\n# Colors\n255 0 0\n255 0 0\n0 0 0 Ink\n255 255 255 ink\n", "Fallback").unwrap()).unwrap();
+        library.apply(ColorLibrary::import_file(b"GIMP Palette\nName: Study\nColumns: 6\n# Colors\n255 0 0\n255 0 0 Untitled\n0 0 0 Ink\n255 255 255 ink\n", "Fallback").unwrap()).unwrap();
         assert_eq!(
             library
                 .active_palette()

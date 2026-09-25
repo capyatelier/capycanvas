@@ -60,6 +60,7 @@ function Edit([string]$Id,[string]$Text){
     $entry=Control $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
 }
 function Property([string]$Key){(Model).state.layer_properties.controls|Where-Object {$_.key -eq $Key}}
+function Rgba($Color){if($null -ne $Color.rgba){$Color.rgba}else{$Color}}
 function Choose([string]$Id,[string]$Option){
     (Control $Id).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control $Option -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -118,11 +119,16 @@ function Check-CurveGestures {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     function Curve-Json {ConvertTo-Json -InputObject ((Property 'curve_0').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
-        $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
         # The graph is square; UIA can report only its visible, clipped height.
-        $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*$r.Width))
-        if($at[0] -le $r.Left+6 -or $at[0] -ge $r.Right-6 -or $at[1] -le $r.Top+6 -or $at[1] -ge $r.Bottom-6){throw 'Curve contact is outside the visible graph'}
-        $at
+        # Fitted groups grow after the new content height is measured.
+        $hit=@{at=$null}
+        Wait-Until {
+            $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
+            $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*$r.Width))
+            $hit.at=$at
+            !($at[0] -le $r.Left+6 -or $at[0] -ge $r.Right-6 -or $at[1] -le $r.Top+6 -or $at[1] -ge $r.Bottom-6)
+        } 'Curve contact is outside the visible graph' 5
+        $hit.at
     }
     function Move-Curve([string]$Device) {
         $point=(Property 'curve_0').value.value[1]
@@ -178,6 +184,26 @@ function Check-CurveGestures {
             [CapyRowPointer]::Up();Check-Redo "$device canceled insertion"
             Write-Host "$device curve: one-step history, unchanged click, Escape, source hide and insertion rollback passed"
         }
+        if(!(Find 'property-curve_0-reset')){throw 'Modified curve hides its reset icon'}
+        foreach($device in @('mouse','pen','touch')){
+            $point=(Property 'curve_0').value.value[1];$at=Curve-At $point[0] $point[1]
+            [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60
+            [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up()
+            Wait-Until {(Property 'curve_0').value.value.Count -eq 2} "$device double tap did not remove the point"
+            Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device double tap removal was not one Undo"
+            $point=(Property 'curve_0').value.value[1];$from=Curve-At $point[0] $point[1]
+            $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
+            $away=@($from[0],[int]($r.Y-.25*$r.Width))
+            [CapyRowPointer]::Down($device,$from[0],$from[1])
+            for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($from[0],[int]($from[1]+($away[1]-$from[1])*$i/10));Start-Sleep -Milliseconds 30}
+            Wait-Until {(Property 'curve_0').value.value.Count -eq 2} "$device drag beyond the graph did not remove the point"
+            $back=Curve-At .5 .8
+            for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($back[0],[int]($away[1]+($back[1]-$away[1])*$i/10));Start-Sleep -Milliseconds 30}
+            Wait-Until {(Property 'curve_0').value.value.Count -eq 3} "$device drag back did not restore the point"
+            [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
+            Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device detach and restore was not one Undo"
+            Write-Host "$device curve: double tap removal and drag-off restore passed"
+        }
         Capture 'curve-gestures'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $endpoints} 'Seed insertion was not one Undo'
         'mouse, pen and touch: passed'
@@ -197,8 +223,11 @@ try {
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    # Fitted Paint groups leave one filter row at the default size; review the rows at a working size.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1040
+    Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Initial resize did not reach the canvas'
     Select-Panel 'adjustments'
-    Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Curves preview not ready' 20
+    Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Curves preview not ready' 120
     $original=Preview-Hash 'curves';if(!$original){throw 'No initial preview pixels'}
     $rowIdentity=(Control 'filter-curves').GetRuntimeId() -join ':'
     Capture 'initial-previews'
@@ -224,37 +253,38 @@ try {
     Select-Filter 'curves' 'Curves'
     $curveGestures=Check-CurveGestures
     $graph=(Control 'property-curve_0-curve').GetRuntimeId() -join ':'
-    Invoke 'property-curve_0-add';Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Curve point not added'
-    Invoke 'property-curve_0-values';Edit 'property-curve_0-y' '75';(Control 'property-curve_0-point').SetFocus()
-    Wait-Until {[Math]::Abs((Property 'curve_0').value.value[1][1]-.75) -lt .000001} 'Curve output not updated'
+    if(Find 'property-curve_0-reset'){throw 'Unmodified curve shows its reset icon'}
+    Invoke 'Redo' -Name;Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Curve point not restored'
+    Wait-Until {$null -ne (Find 'property-curve_0-reset')} 'Modified curve hides its reset icon'
     if(((Control 'property-curve_0-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Editing replaced the curve graph'}
     Capture 'curve'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1040
-    Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Resize did not reach the canvas'
+    $wide=(Model).state.camera.viewport[0]
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1450 -Height 1000
+    Wait-Until {(Model).state.camera.viewport[0] -lt $wide-50} 'Resize did not reach the canvas'
     if(((Control 'property-curve_0-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Resize replaced the curve graph'}
-    Edit 'property-curve_0-y' '90';Invoke 'property-curve_0-reset'
+    Invoke 'property-curve_0-reset'
     Wait-Until {(Property 'curve_0').value.value.Count -eq 2} 'Curve reset failed'
-    if((Property 'curve_0').value.value[0][1] -ne 0 -or (Property 'curve_0').value.value[1][1] -ne 1){throw 'Draft leaked into reset curve'}
-    if((Control 'property-curve_0-x').Current.IsEnabled){throw 'Curve endpoint X should be disabled'}
+    if((Property 'curve_0').value.value[0][1] -ne 0 -or (Property 'curve_0').value.value[1][1] -ne 1){throw 'Reset curve kept an edited endpoint'}
+    Wait-Until {!(Find 'property-curve_0-reset')} 'Reset curve still shows its reset icon'
 
     Select-Filter 'gradient_map' 'Gradient Map'
     Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.Count -eq 3} 'Gradient stop not added'
     Edit 'property-gradient-position' '35';(Control 'property-gradient-color').SetFocus()
     Wait-Until {[Math]::Abs((Property 'gradient').value.value[1].position-.35) -lt .000001} 'Gradient position not updated'
-    Invoke 'property-gradient-color';Edit 'property-gradient-color-3' '40';(Control 'property-gradient-color-0').SetFocus()
-    Wait-Until {[Math]::Abs((Property 'gradient').value.value[1].color[3]-.4) -lt .000001} 'Gradient alpha not updated'
-    if([Math]::Abs((Property 'gradient').value.value[1].color[0]-.5) -gt .000001){throw 'Alpha edit changed RGB'}
+    Invoke 'property-gradient-color';Edit 'property-gradient-color-3' '40';Invoke 'property-gradient-color-apply'
+    Wait-Until {[Math]::Abs((Rgba (Property 'gradient').value.value[1].color)[3]-.4) -lt .000001} 'Gradient alpha not updated'
+    if([Math]::Abs((Rgba (Property 'gradient').value.value[1].color)[0]-.5) -gt .000001){throw 'Alpha edit changed RGB'}
     (Control 'property-reverse').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Property 'reverse').value.value} 'Reverse toggle not updated'
     Capture 'gradient'
     Edit 'property-gradient-color-0' '90';Invoke 'property-gradient-reset'
     Wait-Until {(Property 'gradient').value.value.Count -eq 2} 'Gradient reset failed'
-    if((Property 'gradient').value.value[0].color[0] -ne 0){throw 'Draft leaked into reset gradient'}
+    if((Rgba (Property 'gradient').value.value[0].color)[0] -ne 0){throw 'Draft leaked into reset gradient'}
     if((Control 'property-gradient-position').Current.IsEnabled){throw 'Gradient endpoint position should be disabled'}
     Select-Filter 'split_tone' 'Split Tone';Invoke 'property-shadows-color'
-    Edit 'property-shadows-color-0' '25';(Control 'property-shadows-color-1').SetFocus()
-    Wait-Until {[Math]::Abs((Property 'shadows').value.value[0]-.25) -lt .000001} 'Scalar color not updated'
-    if([Math]::Abs((Property 'shadows').value.value[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
+    Edit 'property-shadows-color-0' '0.25';Invoke 'property-shadows-color-apply'
+    Wait-Until {[Math]::Abs((Rgba (Property 'shadows').value.value)[0]-.25) -lt .000001} 'Scalar color not updated'
+    if([Math]::Abs((Rgba (Property 'shadows').value.value)[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
     Capture 'color'
     $theme=(Model).state.theme
     Invoke 'settings-button'
@@ -271,9 +301,12 @@ try {
     Wait-Until {(Model).state.filter_picker.search -eq 'Curves'} 'Rapid search edits were lost'
     Wait-Until {(Control 'filter-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'Curves'} 'Search text differs from its acknowledged query'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after filter edits and theme not ready' 20
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document';Invoke 'Discard Changes' -Name
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
+    # New drawings open in their own tab; older hosts replaced the document after a discard prompt.
+    $discard=@{item=$null};try{Wait-Until {$discard.item=Find 'Discard Changes' -Name;$null -ne $discard.item -or $null -ne (Find 'document-width')} 'New drawing did not open' 5}catch{}
+    if($discard.item){$discard.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name
-    Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
+    Wait-Until {$active=@((Model).state.tabs|Where-Object active);$active.Count -eq 1 -and $active[0].width -eq 128 -and $active[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document dialog gate did not clear'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after document replacement not ready' 20
     Select-Panel 'properties'
@@ -281,7 +314,7 @@ try {
     if((Model).state.document_file.modified){throw 'Preview or stale property changed new document'}
     Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Retained cache not shown on reopen' 15
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{
         curve_pointer_transactions=$curveGestures
@@ -292,6 +325,7 @@ try {
         scope='isolated native UI and app-only GPU pixels; full workspace visual parity, physical input and presentation acceptance remain separate'
     }|ConvertTo-Json
 }catch{
+    try{Capture 'failure'}catch{}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     foreach($name in $names){

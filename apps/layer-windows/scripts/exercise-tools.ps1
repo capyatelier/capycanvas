@@ -25,7 +25,7 @@ function Model {
 }
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
+    do{try{if(& $Condition){return}}catch{};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
 Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review startup did not complete' 45
@@ -53,7 +53,7 @@ function Draft([string]$Id,[string]$Text){
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
     Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} 'Draft was not retained'
 }
-function Select-Tool([string]$Id){
+function Select-Tool([string]$Id,[switch]$Cancel){
     $target=@{id=$null}
     Wait-Until {
         foreach($panel in (Model).panels){
@@ -63,6 +63,7 @@ function Select-Tool([string]$Id){
         $false
     } "Command has no native toolbar tile: $Id"
     Invoke-Id $target.id
+    if($Cancel){return}
     Wait-Until {
         if($Id -eq 'scale_rotate'){return (Model).state.layer_tools.tool -eq 'transform'}
         @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1
@@ -166,7 +167,15 @@ Wait-Until {[Math]::Abs((Value 'flow')-$acknowledged) -lt .0001} 'Detached tool 
 Invoke-Control 'Undo'
 # All catalog tools must be reachable and project the actual shared schema.
 $tools=@('pen','pencil','brush','eraser','airbrush','decoration','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill')
-foreach($tool in $tools){Select-Tool $tool;Check-Projection}
+foreach($tool in $tools){
+    Select-Tool $tool;Check-Projection
+    if($tool -eq 'eyedropper'){
+        # The shared Eyedropper is temporary picking; a second press cancels it.
+        if((Model).state.layer_tools.tool -notlike 'pick_*'){throw 'Eyedropper did not start temporary picking'}
+        Select-Tool 'eyedropper' -Cancel
+        Wait-Until {(Model).state.layer_tools.tool -notlike 'pick_*'} 'Eyedropper did not cancel temporary picking'
+    }
+}
 # Exercise real keyboard routing through the native spin field and Rust policy.
 Select-Tool 'auto_select'
 Draft 'gap_closing' '6 * 2'

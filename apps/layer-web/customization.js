@@ -15,7 +15,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     }
   });
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
-  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, paintKey;
+  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, paintKey, menuCommand = null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
   // A context menu opens during a press/hold, before release. Automatic
@@ -58,7 +58,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         const submenu = item.sections?.some(section => section.length);
         const row = button("", () => {
           if (submenu) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model]);
-          else { close(); if (item.action) dispatch(item.action); }
+          else { close(); if (item.action) dispatch(item.action); else if (item.command) menuCommand?.(item.command, item); }
         });
         row.disabled = !item.enabled;
         row.setAttribute("role", item.selected == null ? "menuitem" : "menuitemcheckbox");
@@ -86,7 +86,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   function showContext(node, point) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
     if (!node.dispatchEvent(claimed)) return;
-    const model = node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
+    const model = node.menuModel ? node.menuModel() : node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
+    menuCommand = node.menuCommand ?? null;
     anchor = point;
     renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);

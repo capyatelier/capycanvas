@@ -17,7 +17,7 @@ import SwiftUI
                 let row = fixture["rows"][index], panel = row["panel"]
                 HStack(spacing: 2) {
                     ForEach(panel["tiles"].array.indices, id: \.self) { tile in
-                        ToolbarTileButton(panel: panel, tile: panel["tiles"][tile], palette: palette, color: fixture["color"]) {}
+                        ToolbarTileButton(panel: panel, tile: panel["tiles"][tile], palette: palette, colors: JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]])) {}
                             .frame(width: row["size"][0].number, height: row["size"][1].number)
                     }
                 }.frame(width: width - 12, alignment: .leading)
@@ -25,6 +25,7 @@ import SwiftUI
         }.padding(6).frame(width: width, height: height, alignment: .topLeading)
             .font(.system(size: fixture["text_size"].number)).foregroundStyle(palette["text"])
             .background(palette["panel"])
+            .environment(\.editorPalette, palette)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2; renderer.proposedSize = ProposedViewSize(width: width, height: height)
         guard let image = renderer.cgImage else { fatalError("No rendered toolbar image") }

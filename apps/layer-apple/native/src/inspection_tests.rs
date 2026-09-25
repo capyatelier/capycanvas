@@ -76,42 +76,66 @@ fn apple_histogram_keeps_full_resolution_precision_snapshot_identity_and_cancell
 }
 
 #[test]
-fn apple_point_and_area_sampling_use_document_linear_coverage_without_changing_artwork_or_opacity() {
+fn apple_picker_samples_use_document_linear_coverage_without_changing_artwork_or_opacity() {
     for platform in [0,1] {
         let app = initialized(platform, RgbSpace::DisplayP3, SampleDepth::U16);
         app.action(json!({"type":"set_brush_opacity","value":0.37}));
-        let original = unsafe { &*app.0 }.host.session.engine().document().clone();
-        let pixels = app.pixels();
-        app.invoke("eyedropper");
-        for source in ["pick_visible", "pick_layer"] {
-            app.layer_action(json!({"op":"tool","tool":source}));
-            for (width, red) in [(1,0.),(3,8.),(5,19.)] {
-                app.action(json!({"type":"set_color_sample_size","width":width}));
-                app.action(json!({"type":"set_color","rgba":[0.,1.,0.,1.]}));
-                app.draw_until_idle();
-                let [a,b,c,d,e,f] = unsafe { &*app.0 }.host.session.state().camera.document_to_surface();
-                let [x,y] = [a*2.5+c*2.5+e,b*2.5+d*2.5+f];
-                let records = [f64::from(x),f64::from(y),1.,0.,0.,0.,0.,3_000_000_000.,1.,
-                    f64::from(x),f64::from(y),1.,0.,0.,0.,0.,3_010_000_000.,3.];
-                let camera = unsafe { capy_apple_camera_revision(app.0) };
-                assert_eq!(unsafe { capy_apple_pointer(app.0,1,1,0,records.as_ptr(),records.len(),0,camera) },0);
-                let alpha = 32768. / 65535.;
-                let expected = [red/(red+alpha),0.,alpha/(red+alpha)];
-                let deadline = std::time::Instant::now()+std::time::Duration::from_secs(5);
-                loop {
-                    app.draw_frame();
-                    let color = unsafe { &*app.0 }.host.session.state().colors.definition();
-                    let actual = color.linear_in(RgbSpace::DisplayP3).unwrap();
-                    if actual[..3].iter().zip(expected).all(|(a,b)| (*a as f64-b).abs()<0.0005) {
-                        assert_eq!(color.space,RgbSpace::DisplayP3); assert_eq!(color.rgba[3],1.); break;
-                    }
-                    assert!(std::time::Instant::now()<deadline,"{source} {width}: {actual:?} != {expected:?}");
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+        let tool = app.state()["layer_tools"]["tool"].clone();
+        let sample = |layer: bool, width: u32| {
+            app.action(json!({"type":"set_color","rgba":[0.,1.,0.,1.]}));
+            app.invoke("eyedropper");
+            app.action(json!({"type":"color_picker","action":{"kind":"source","layer":layer}}));
+            app.action(json!({"type":"set_color_sample_size","width":width}));
+            assert_eq!(app.state()["color_picker"]["layer"], layer);
+            app.draw_until_idle();
+            let [a,b,c,d,e,f] = unsafe { &*app.0 }.host.session.state().camera.document_to_surface();
+            let [x,y] = [a*2.5+c*2.5+e,b*2.5+d*2.5+f];
+            let records = [f64::from(x),f64::from(y),1.,0.,0.,0.,0.,3_000_000_000.,1.,
+                f64::from(x),f64::from(y),1.,0.,0.,0.,0.,3_010_000_000.,3.];
+            let camera = unsafe { capy_apple_camera_revision(app.0) };
+            assert_eq!(unsafe { capy_apple_pointer(app.0,1,1,0,records.as_ptr(),records.len(),0,camera) },0);
+            let deadline = std::time::Instant::now()+std::time::Duration::from_secs(5);
+            loop {
+                app.draw_frame();
+                let color = unsafe { &*app.0 }.host.session.state().colors.definition();
+                let actual = color.linear_in(RgbSpace::DisplayP3).unwrap();
+                if app.state()["layer_tools"]["tool"] == tool && actual[1] < 0.5 {
+                    assert_eq!(color.space,RgbSpace::DisplayP3); assert_eq!(color.rgba[3],1.); break actual;
                 }
-                assert_eq!(app.state()["brush"]["opacity"],json!(0.37f32));
-                assert_project_document(unsafe { &*app.0 }.host.session.engine().document(),&original);
-                assert_eq!(app.pixels(),pixels);
+                assert!(std::time::Instant::now()<deadline,"layer {layer} width {width}: {actual:?}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
-        }
+        };
+        let unchanged = |run: &dyn Fn()| {
+            let original = unsafe { &*app.0 }.host.session.engine().document().clone();
+            let pixels = app.pixels();
+            run();
+            assert_eq!(app.state()["brush"]["opacity"],json!(0.37f32));
+            assert_project_document(unsafe { &*app.0 }.host.session.engine().document(),&original);
+            assert_eq!(app.pixels(),pixels);
+        };
+        assert_eq!(app.state()["color_picker"]["can_sample_layer"], false);
+        unchanged(&|| {
+            let point = sample(false, 1);
+            for (got, expected) in point[..3].iter().zip([0.,0.,1.]) { assert!((got-expected).abs()<0.0005, "{point:?}"); }
+            let circle = sample(false, 5);
+            assert!(circle[0] > 0.5 && circle[1].abs() < 0.05 && circle[2] > 0.001 && circle[2] < circle[0],
+                "Transparent paint has no weight: {circle:?}");
+        });
+        let ink = unsafe { &*app.0 }.host.session.engine().document().layers.iter()
+            .find(|l| l.kind == layer_core::LayerKind::Paint && l.source.is_none()).unwrap().id;
+        app.layer_action(json!({"op":"select","id":ink.0,"mask":false}));
+        app.action(json!({"type":"set_color","rgba":[0.,0.,1.,1.]}));
+        for command in ["select_all", "fill_selection", "deselect"] { app.invoke(command); }
+        app.layer_action(json!({"op":"visibility","id":ink.0,"value":false}));
+        app.draw_until_idle();
+        assert_eq!(app.state()["color_picker"]["can_sample_layer"], true);
+        unchanged(&|| {
+            for width in [1, 5] {
+                let layer = sample(true, width);
+                for (got, expected) in layer[..3].iter().zip([0.,0.,1.]) { assert!((got-expected).abs()<0.0005, "{width}: {layer:?}"); }
+            }
+            assert!(sample(false, 5)[0] > 0.5, "Visible color ignores the hidden layer");
+        });
     }
 }

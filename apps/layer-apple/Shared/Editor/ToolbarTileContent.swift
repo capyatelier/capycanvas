@@ -4,12 +4,12 @@ struct ToolbarTileButton: View {
     let panel: JSON
     let tile: JSON
     let palette: EditorPalette
-    let color: JSON
+    let colors: JSON
     var drawerOpen = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            ToolbarTileContent(panel: panel, tile: tile, palette: palette, color: color)
+            ToolbarTileContent(panel: panel, tile: tile, palette: palette, colors: colors)
                 .contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool, drawerBackground: drawerOpen ? palette["panel"] : nil))
             .foregroundStyle(palette["text"])
@@ -24,7 +24,7 @@ struct ToolbarTileContent: View {
     let panel: JSON
     let tile: JSON
     let palette: EditorPalette
-    let color: JSON
+    let colors: JSON
     private var iconSize: CGFloat { CGFloat(panel["tile_icon_size"].number) }
     private var labelLines: Int { Int(panel["tile_label_lines"].number) }
     var body: some View {
@@ -40,14 +40,29 @@ struct ToolbarTileContent: View {
     }
     @ViewBuilder private var glyph: some View {
         if tile["control"]["kind"].string == "color" {
-            // Dynamic fill within the canonical color icon's 16-unit viewbox.
-            let scale = iconSize / 16
-            ColorSwatch(rgba: color)
-                .frame(width: 11 * scale, height: 11 * scale).clipShape(Circle())
-                .overlay(Circle().stroke(palette["text"], lineWidth: 1.5 * scale))
-                .frame(width: iconSize, height: iconSize)
+            PaintPairIcon(rgba: colors, size: iconSize)
         } else {
             SharedIcon(name: tile["icon"].string, size: iconSize)
         }
+    }
+}
+
+/// The shared 16-unit Color icon with live paints: the background circle
+/// under the foreground circle, each with a one-unit text-colored outline.
+struct PaintPairIcon: View {
+    let rgba: JSON
+    let size: CGFloat
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            swatch("background", center: 11, radius: 4.25)
+            swatch("foreground", center: 6.75, radius: 6)
+        }.frame(width: size, height: size, alignment: .topLeading).accessibilityHidden(true)
+    }
+    private func swatch(_ slot: String, center: CGFloat, radius: CGFloat) -> some View {
+        let unit = size / 16
+        return ColorSwatch(rgba: rgba[slot])
+            .frame(width: radius * 2 * unit, height: radius * 2 * unit).clipShape(Circle())
+            .overlay(Circle().stroke(.foreground, lineWidth: unit))
+            .offset(x: (center - radius) * unit, y: (center - radius) * unit)
     }
 }

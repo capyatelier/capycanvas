@@ -8,6 +8,7 @@ struct WorkspaceSwitcher: View {
     let palette: EditorPalette
     var textSize: Double = 44.0 / 3
     var maximumWidth: CGFloat = 420
+    var tile: CGFloat = 36
     private var choices: [JSON] { library.status["switcher_display"].array }
     private var naturalWidth: CGFloat {
         Self.naturalWidth(choices, textSize: textSize)
@@ -28,12 +29,12 @@ struct WorkspaceSwitcher: View {
                         Text(choices.first(where: { $0["id"].string == library.status["active_id"].string })?["name"].string ?? "Workspaces")
                             .lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 11))
-                    }.padding(.horizontal, 12).frame(width: maximumWidth, height: 34)
-                }.buttonStyle(.plain)
-            } else { segments }
+                    }.padding(.horizontal, 12).frame(width: maximumWidth, height: tile)
+                }.buttonStyle(HeaderButtonStyle(radius: tile / 2))
+            } else {
+                segments.clipShape(Capsule()).background(palette["tabbar"].opacity(0.75), in: Capsule())
+            }
         }
-        .clipShape(Capsule())
-        .background(palette["tabbar"], in: Capsule())
         .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
         .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
@@ -69,12 +70,7 @@ struct WorkspaceSwitcher: View {
                 Text(workspace["name"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
             }.padding(.horizontal, 10).frame(height: 26)
                 .foregroundStyle(palette["text"])
-                .background {
-                    if selected {
-                        ZStack { Capsule().fill(palette["bg"]); Capsule().fill(palette.accent.opacity(0.28)) }
-                    }
-                }
-        }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
+        }.buttonStyle(SwitcherChoiceStyle(selected: selected, palette: palette)).fixedSize(horizontal: true, vertical: false)
             .help("Switch to \(workspace["name"].string) workspace")
             .accessibilityIdentifier("workspace-switch-" + workspace["id"].string)
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -96,6 +92,26 @@ private struct WorkspaceNameWidth: Layout {
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+private struct SwitcherChoiceStyle: ButtonStyle {
+    let selected: Bool
+    let palette: EditorPalette
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration, style: self) }
+    private struct Face: View {
+        let configuration: Configuration
+        let style: SwitcherChoiceStyle
+        @State private var hovering = false
+        var body: some View {
+            configuration.label.background {
+                if style.selected {
+                    Capsule().fill(hovering ? style.palette.headerSelectionHover : style.palette.headerSelection)
+                } else if hovering || configuration.isPressed {
+                    Capsule().fill(style.palette["text"].opacity(configuration.isPressed ? 0.16 : 0.08))
+                }
+            }.onHover { hovering = $0 }
+        }
     }
 }
 

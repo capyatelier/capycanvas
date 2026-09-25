@@ -19,6 +19,7 @@ enum Field {
     Text(adw::ActionRow, gtk::Entry, gtk::EventControllerFocus),
     Choice(adw::ComboRow),
     ImageChoice(gtk::ListBoxRow, crate::image_selector::ImageSelector),
+    Circles(adw::ActionRow, crate::transparency_choice::TransparencyChoice),
     Swatches(gtk::ListBoxRow, Rc<crate::swatch_selector::SwatchSelector>),
     Spin(adw::SpinRow),
     Number(gtk::ListBoxRow, crate::number_control::NumberControl),
@@ -31,6 +32,7 @@ impl Field {
             Self::Text(w, _, _) => w.upcast_ref(),
             Self::Choice(w) => w.upcast_ref(),
             Self::ImageChoice(w, _) => w.upcast_ref(),
+            Self::Circles(w, _) => w.upcast_ref(),
             Self::Swatches(w, _) => w.upcast_ref(),
             Self::Number(w, _) => w.upcast_ref(),
             Self::Spin(w) => w.upcast_ref(),
@@ -51,6 +53,7 @@ impl Field {
             (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, .. }) => {
                 w.set_selected(*selected)
             }
+            (Self::Circles(_, w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
             (
                 Self::Swatches(_, w),
                 PreferenceKind::Swatches {
@@ -756,6 +759,30 @@ impl Preferences {
                             // Center the choices; no import control in this version.
                             body.append(&selector.widget);
                             Field::ImageChoice(native_row, selector)
+                        }
+                        PreferenceKind::Choice {
+                            options,
+                            presentation: ChoicePresentation::Circles,
+                            ..
+                        } => {
+                            let native_row = text_row(&row.title, &row.description);
+                            let choice = crate::transparency_choice::TransparencyChoice::new(
+                                id.key(),
+                                options,
+                                glib::clone!(
+                                    #[weak]
+                                    w,
+                                    move |selected| send(
+                                        &w,
+                                        PreferenceAction::Edit {
+                                            id,
+                                            value: PreferenceValue::Choice(selected)
+                                        }
+                                    )
+                                ),
+                            );
+                            native_row.add_suffix(&choice.widget);
+                            Field::Circles(native_row, choice)
                         }
                         PreferenceKind::Swatches {
                             swatches,

@@ -179,12 +179,13 @@ private struct WorkspaceManagerButtonStyle: ButtonStyle {
         guard let source = store?.state["palette"], !source["text"].isNull else { return .primary }
         return EditorPalette(source: source)["text"]
     }
+    private var palette: EditorPalette { EditorPalette(source: store?.state["palette"] ?? JSON()) }
     func makeBody(configuration: Configuration) -> some View {
         let prominent = primary && enabled
         configuration.label.fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
             .padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 40)
-            .foregroundStyle(prominent ? .white : foreground)
-            .background(prominent ? EditorPalette.sharedAccent : foreground.opacity(0.10))
+            .foregroundStyle(prominent ? palette.accentForeground : foreground)
+            .background(prominent ? palette.accent : foreground.opacity(0.10))
             .overlay { if configuration.isPressed { Color.black.opacity(0.12) } }
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(foreground.opacity(prominent ? 0 : 0.10)) }

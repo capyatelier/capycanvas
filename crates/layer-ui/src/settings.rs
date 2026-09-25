@@ -25,7 +25,7 @@ pub enum Platform {
 }
 impl Platform {
     pub fn color_picker(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios | Self::Windows)
     }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
@@ -35,10 +35,13 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn system_accent(self) -> bool {
-        matches!(self, Self::Gtk | Self::Android)
+        matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)
     }
     pub fn swatch_preferences(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
+    }
+    pub fn transparency_preference(self) -> bool {
+        matches!(self, Self::Gtk)
     }
 }
 
@@ -98,6 +101,7 @@ pub struct Settings {
     pub new_document: NewDocumentSettings,
     pub photo_open: PhotoOpenPolicy,
     pub theme: Option<Theme>,
+    pub transparency: crate::Transparency,
     // Keep the persisted key compatible with the original clock-only setting.
     pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
@@ -136,6 +140,7 @@ impl Default for Settings {
             new_document: NewDocumentSettings::default(),
             photo_open: PhotoOpenPolicy::default(),
             theme: None,
+            transparency: crate::Transparency::default(),
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
@@ -308,6 +313,7 @@ pub enum PreferenceId {
     PhotoDepth,
     MissingProfile,
     Theme,
+    Transparency,
     ShowClock,
     /// Retired preference ID, retained to decode saved custom actions.
     TotalZen,
@@ -343,6 +349,7 @@ impl PreferenceId {
             Self::PhotoDepth => "photo-depth",
             Self::MissingProfile => "missing-profile",
             Self::Theme => "theme",
+            Self::Transparency => "transparency",
             Self::ShowClock => "show-clock",
             Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
@@ -402,6 +409,7 @@ impl PreferenceValue {
 pub enum ChoicePresentation {
     Dropdown,
     ImageTiles { columns: u32 },
+    Circles,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -872,6 +880,23 @@ impl Settings {
                         },
                     ),
                     row(
+                        Transparency,
+                        "Panel transparency",
+                        "",
+                        PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Circles,
+                            options: crate::Transparency::CHOICES
+                                .iter()
+                                .map(|c| c.1.into())
+                                .collect(),
+                            icons: Vec::new(),
+                            selected: crate::Transparency::CHOICES
+                                .iter()
+                                .position(|c| c.0 == self.transparency)
+                                .unwrap() as u32,
+                        },
+                    ),
+                    row(
                         ShowClock,
                         "Show battery and clock",
                         "",
@@ -1052,6 +1077,11 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
+        if !platform.transparency_preference() {
+            for group in &mut groups[0] {
+                group.rows.retain(|row| row.id != Transparency);
+            }
+        }
         if platform.swatch_preferences() {
             let rows = &mut groups[0][0].rows;
             let light = rows.iter().position(|r| r.id == LightBase).unwrap();
@@ -1189,6 +1219,9 @@ impl Settings {
                     2 => Some(crate::Theme::Dark),
                     _ => None,
                 }
+            }
+            Transparency => {
+                self.transparency = crate::Transparency::CHOICES[value.choice().unwrap() as usize].0
             }
             ShowClock => {
                 self.show_clock = ClockVisibility::CHOICES[value.choice().unwrap() as usize].0
@@ -1665,7 +1698,13 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Windows).is_err());
+        assert!(settings.field(PreferenceId::Accent, Platform::Generic).is_err());
+        for (platform, system) in [(Platform::Mac, true), (Platform::Ios, false)] {
+            let PreferenceKind::Swatches { swatches, .. } = settings.field(PreferenceId::Accent, platform).unwrap().kind else {
+                unreachable!()
+            };
+            assert_eq!(swatches[0].label == "System", system, "{platform:?}");
+        }
         let PreferenceKind::Swatches { swatches, selected, .. } =
             settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
         else {
@@ -1684,7 +1723,7 @@ mod copy_tests {
         let rows = |settings: &Settings, platform| -> Vec<PreferenceRow> {
             settings.pages(platform)[0].groups[0].rows.clone()
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let ids: Vec<_> = rows(&Settings::default(), platform).iter().map(|r| r.id).collect();
             assert_eq!(&ids[ids.len() - 3..], [PreferenceId::DarkBase, PreferenceId::LightBase, PreferenceId::Accent]);
         }
@@ -1717,7 +1756,7 @@ mod copy_tests {
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
             assert!(matches!(
-                rows(&settings, Platform::Windows).into_iter().find(|r| r.id == id).unwrap().kind,
+                rows(&settings, Platform::Generic).into_iter().find(|r| r.id == id).unwrap().kind,
                 PreferenceKind::Text { .. }
             ));
         }

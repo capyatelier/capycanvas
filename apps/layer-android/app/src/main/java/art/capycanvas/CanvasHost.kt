@@ -36,6 +36,7 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val layerSwipe=LayerSwipe()
+    internal val palettes=PaletteController(this)
     internal val proof=ProofController(this)
     internal val hdr=HdrController(this)
     companion object {
@@ -326,6 +327,15 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             main.post { reply(if (value == JSONObject.NULL) null else value) }
         } finally { if (tracing) android.os.Trace.endSection() }
     }
+    internal fun revealPanel(panel: String) = post {
+        Native.query(handle, obj("type" to "reveal_panel", "panel" to panel).toString())
+        refreshChrome(); publish(true); wake()
+    }
+    internal fun paletteAction(action: JSONObject, dryRun: Boolean = false, reply: (String?) -> Unit = {}) = post {
+        val result = JSONObject(Native.query(handle, obj("type" to "palette_action", "action" to action, "dry_run" to dryRun).toString()))
+        if (!dryRun) { refreshChrome(); publish(true); wake() }
+        main.post { reply(result.optString("error").takeUnless { result.isNull("error") }) }
+    }
     /** Validate and apply on the same native owner turn. A delayed main-thread
      * reply must never apply an old drop after Done, cancellation or a switch. */
     internal fun headerAction(request: JSONObject) = post {
@@ -613,7 +623,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             // Settings navigation is consumed by PreferencesOverlay. Applied
             // settings still invalidate panels normally (theme, size, etc.).
             "state" -> path.optString(1) !in listOf("workspace", "revision", "settings_open", "preferences")
-            "panels", "color_panel" -> true
+            "panels", "color_panel", "palette_panel" -> true
             else -> false
         }
         val removed = packet.optJSONArray("removed") ?: JSONArray()
@@ -719,7 +729,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val contentState = JSONObject().apply {
             state.keys().forEach { key -> if (key !in listOf("workspace", "revision", "settings_open", "preferences")) put(key, state.get(key)) }
         }
-        val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"))
+        val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"),
+            "palette_panel" to next.objectOrNull("palette_panel"))
         // A geometry packet resets the transport's patch baseline; its next
         // full model can still contain exactly the same panel content. Retain
         // that content across the full publication too.

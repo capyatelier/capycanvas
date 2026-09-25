@@ -25,13 +25,36 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   }
   function cancelDrag(){
     const held=contact;contact=null;
-    if(held){clearTimeout(held.timer);cancelAnimationFrame(held.scrollFrame);if(held.node.hasPointerCapture(held.pointer))held.node.releasePointerCapture(held.pointer);}
+    if(held){clearTimeout(held.timer);cancelAnimationFrame(held.scrollFrame);if(held.node.hasPointerCapture(held.pointer))held.node.releasePointerCapture(held.pointer);
+      if(held.slide){held.slide.overlay.remove();for(const n of held.slide.nodes)n.classList.remove('dragged-tab-source');}}
     for(const n of document.querySelectorAll('[data-drawing-drop]'))n.removeAttribute('data-drawing-drop');
     document.body.classList.remove('drawing-dragging');
   }
   function hits(container){const area=container.getBoundingClientRect();return [...container.children].filter(n=>n.dataset.drawingId).flatMap(n=>{const r=n.getBoundingClientRect(),x=Math.max(area.left,r.left),y=Math.max(area.top,r.top),width=Math.min(area.right,r.right)-x,height=Math.min(area.bottom,r.bottom)-y;return width>0&&height>0?[{id:id(n.dataset.drawingId),bounds:{x,y,width,height}}]:[];});}
-  function target(e){return app.document_drop(hits(contact.container),e.clientX,e.clientY,contact.vertical);}
+  function startSlide(held){
+    const rect=n=>{const b=n.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height};};
+    const nodes=[...strip.children].filter(n=>n.dataset.drawingId),clip=rect(strip),base=root.getBoundingClientRect(),overlay=element('div','drawing-slide');
+    overlay.setAttribute('aria-hidden','true');overlay.inert=true;
+    Object.assign(overlay.style,{left:`${clip.x-base.x}px`,top:`${clip.y-base.y}px`,width:`${clip.width}px`,height:`${clip.height}px`});
+    const tabs=nodes.map(n=>({id:id(n.dataset.drawingId),bounds:rect(n)}));
+    const copies=nodes.map((n,i)=>{const copy=n.cloneNode(true),b=tabs[i].bounds;copy.removeAttribute('data-drawing-id');
+      copy.classList.add(same(n.dataset.drawingId,held.id)?'dragged-tab-preview':'neighbor-tab-preview');
+      Object.assign(copy.style,{left:`${b.x-clip.x}px`,top:`${b.y-clip.y}px`,width:`${b.width}px`,height:`${b.height}px`,transform:'translateX(0px)'});
+      n.classList.add('dragged-tab-source');overlay.append(copy);return copy;});
+    root.append(overlay);overlay.getBoundingClientRect();
+    held.slide={hits:tabs,clip,nodes,copies,overlay,source:nodes.findIndex(n=>same(n.dataset.drawingId,held.id))};
+  }
+  function slideAt(e){const s=contact.slide;return s&&app.document_slide({id:id(contact.id),hits:s.hits,clip:s.clip,press:[contact.x,contact.y],point:[e.clientX,e.clientY]});}
+  function target(e){
+    if(!contact.vertical){const slide=slideAt(e);return slide?.attached?{before:slide.before}:null;}
+    return app.document_drop(hits(contact.container),e.clientX,e.clientY,true);
+  }
   function preview(e){
+    if(!contact.vertical){
+      const s=contact.slide,slide=slideAt(e);if(!slide){cancelDrag();return;}
+      s.copies.forEach((copy,i)=>{const x=i===s.source?slide.bounds.x-s.hits[i].bounds.x:slide.offsets[i];copy.style.transform=`translateX(${Math.round(x*devicePixelRatio)/devicePixelRatio}px)`;});
+      return;
+    }
     const drop=target(e);
     for(const node of contact.container.children)node.removeAttribute('data-drawing-drop');
     if(drop){const row=[...contact.container.children].find(n=>same(n.dataset.drawingId,drop.before))??contact.container.lastElementChild;row?.setAttribute('data-drawing-drop',drop.before==null?'after':'before');}
@@ -49,7 +72,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
     if(!held.node.isConnected||editing()||busy()||held.width!==root.getBoundingClientRect().width){cancelDrag();return;}
     const moved=Math.hypot(e.clientX-held.x,e.clientY-held.y)>6;
     if(!held.armed&&moved){suppress=true;cancelDrag();return;} // preserve touch/pen list scrolling
-    if(!held.dragging&&moved){held.dragging=true;suppress=true;clearTimeout(held.timer);dismissRowMenu();held.node.setPointerCapture(e.pointerId);document.body.classList.add('drawing-dragging');if(held.vertical)held.scrollFrame=requestAnimationFrame(()=>scrollDrag(held));}
+    if(!held.dragging&&moved){held.dragging=true;suppress=true;clearTimeout(held.timer);dismissRowMenu();held.node.setPointerCapture(e.pointerId);document.body.classList.add('drawing-dragging');if(held.vertical)held.scrollFrame=requestAnimationFrame(()=>scrollDrag(held));else startSlide(held);}
     if(!held.dragging)return;
     e.preventDefault();e.stopPropagation();
     held.position={clientX:e.clientX,clientY:e.clientY};preview(e);

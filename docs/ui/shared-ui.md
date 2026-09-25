@@ -177,7 +177,9 @@ On Wayland, an app-owned Vulkan subsurface presents the full viewport below
 transparent GTK chrome. The viewport shader rounds the outer corners; no crop
 or theme-colored strips hide any canvas area. DOM elements do the equivalent
 in the browser, without fake operating-system window buttons. No custom chrome
-compositor, full-window drag gesture, or backdrop blur is required.
+compositor or full-window drag gesture is required. The optional
+[panel transparency](panel-transparency.md) blurs behind panels inside the
+canvas renderer rather than in a compositor.
 
 An icon-only Zen toggle (a shared, centered capybara SVG, Looking up by default)
 occupies the top-left, followed by caret-free Edit and View menus. Its active

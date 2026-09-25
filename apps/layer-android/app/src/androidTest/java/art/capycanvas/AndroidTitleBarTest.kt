@@ -569,7 +569,7 @@ class AndroidTitleBarTest {
         checkColumns()
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            tap("tab-stats"); waitFor("Diagnostics tab") { node("panel-body-stats") != null }
+            tap("tab-palettes"); waitFor("Palettes tab") { node("panel-body-palettes") != null }
             tap("tab-color")
             tap("tab-adjustments"); waitFor("Filters tab") { node("panel-body-adjustments") != null }
             tap("tab-properties")
@@ -611,21 +611,26 @@ class AndroidTitleBarTest {
         send(obj("type" to "form", "kind" to "reset"))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
-        assertEquals("[10,14]", state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("fit_height_groups").toString())
+        waitFor("restored fitted groups") { state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("fit_height_groups").toString() == "[10,14]" }
         fun measured(panel: String) = snapshot().array("panel_measurements").objects().first { it.getString("panel") == panel }.number("content_height")
+        fun reserved(group: String) = snapshot().getJSONObject("layout").array("groups").objects().first { it.getInt("id") == group.removePrefix("group-").toInt() }
+            .array("panels").values().mapNotNull { panel -> snapshot().array("panel_measurements").objects().firstOrNull { it.getString("panel") == panel } }
+            .maxOfOrNull { m -> m.optJSONObject("scroll")?.let { s -> minOf(s.number("fixed_height") + 4 * s.number("unit_height").takeIf { it > 0f }.let { it ?: 36f }, m.number("content_height")) } ?: m.number("content_height") }
         fun height(tag: String) = node(tag)!!.second.boundsInRoot.height / density
         fun fitted(label: String): Float {
             var settled = 0L
             var previous = ""
             waitFor("fitted Paint columns $label", 30_000) {
                 if (listOf("group-6", "group-7", "group-10", "group-14", "navigator-overview").any { node(it) == null }) return@waitFor false
+                val colors = reserved("group-10") ?: return@waitFor false
+                val navigation = reserved("group-14") ?: return@waitFor false
                 val tab = state().getJSONArray("tabs").getJSONObject(0)
                 val aspect = (tab.getInt("height").toFloat() / tab.getInt("width")).coerceIn(.25f, 1f)
                 val overview = node("navigator-overview")!!.second.boundsInRoot
-                val sample = listOf(height("group-6"), height("group-7"), height("group-10"), height("group-14"), overview.height / density, measured("color"), measured("navigator")).joinToString()
+                val sample = listOf(height("group-6"), height("group-7"), height("group-10"), height("group-14"), overview.height / density, colors, navigation).joinToString()
                 val fits = kotlin.math.abs(height("group-6") - height("group-7")) <= 1f &&
-                    kotlin.math.abs(height("group-10") - measured("color") - 36f) <= 1f &&
-                    kotlin.math.abs(height("group-14") - measured("navigator") - 36f) <= 1f &&
+                    kotlin.math.abs(height("group-10") - colors - 36f) <= 1f &&
+                    kotlin.math.abs(height("group-14") - navigation - 36f) <= 1f &&
                     kotlin.math.abs(overview.height - overview.width * aspect) <= 2f * density
                 if (!fits || sample != previous) { previous = sample; settled = SystemClock.uptimeMillis() }
                 fits && SystemClock.uptimeMillis() - settled > 1000

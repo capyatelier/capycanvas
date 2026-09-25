@@ -604,11 +604,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 row.Children().Append(pick);buttons.push_back(pick);
             }
             result.row=row;result.segmented=int(items.Size());
-            result.update=[buttons](J const& option){
+            result.update=[buttons,data=data](J const& option){
                 auto current=array(object(option,L"Choice"),L"items");
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
                     bool chosen=flag(current.GetObjectAt(i),L"selected");
-                    buttons[i].Background(chosen?selected():clear());AutomationProperties::SetItemStatus(buttons[i],chosen?L"Selected":L"");
+                    buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetItemStatus(buttons[i],chosen?L"Selected":L"");
                 }
             };
             result.orient=[weak,row,buttons,glyphs]{
@@ -684,11 +684,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         ToolTipService::SetToolTip(pick,box_value(str(state,L"tooltip")));
         AutomationProperties::SetAutomationId(pick,L"toolbar-action-"+command);
         Field result;result.row=pick;result.action=true;
-        result.update=[pick,checkable](J const& option){
+        result.update=[pick,checkable,data=data](J const& option){
             auto current=object(object(option,L"Action"),L"state");bool enabled=flag(current,L"enabled");
             pick.IsEnabled(enabled);pick.Opacity(enabled?1:.36);
             bool chosen=checkable&&flag(current,L"selected");
-            pick.Background(chosen?selected():clear());AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
+            pick.Background(chosen?selected(data):clear());AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
         };
         return result;
     }

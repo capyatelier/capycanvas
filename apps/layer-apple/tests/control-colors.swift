@@ -26,7 +26,7 @@ import SwiftUI
                                     selected: selected, enabled: enabled) {}
                             } else {
                                 let tile = original.replacing("selected", with: JSON(selected)).replacing("enabled", with: JSON(enabled))
-                                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: fixture["color"]) {}
+                                ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]])) {}
                             }
                         }.frame(width: 36, height: 36)
                     }
@@ -36,6 +36,7 @@ import SwiftUI
             .environment(\.colorScheme, fixture["theme"].string == "dark" ? .dark : .light)
             .font(.system(size: fixture["text_size"].number)).foregroundStyle(palette["text"])
             .background(palette["panel"])
+            .environment(\.editorPalette, palette)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2; renderer.proposedSize = ProposedViewSize(width: width, height: height)
         guard let image = renderer.cgImage else { throw HostFailure(message: "No control image") }

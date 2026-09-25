@@ -1,6 +1,8 @@
 package art.capycanvas
 
 import android.view.KeyEvent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -31,25 +34,53 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
+private class DrawingSlide(val id:Long,val order:List<Long>,val hits:JSONArray,val clip:Rect,val press:Offset)
+private class DrawingSlideView(val held:Float,val offsets:List<Float>)
 private class DrawingDrag(val vertical:Boolean) {
     val rows=mutableMapOf<Long,Rect>();val handles=mutableMapOf<Long,Rect>();val closes=mutableMapOf<Long,Rect>()
     var area=Rect.Zero;var order=emptyList<Long>();var enabled=false;var generation=0
     var active by mutableStateOf<Long?>(null);var menu by mutableStateOf<Long?>(null)
     var before by mutableStateOf<Long?>(null);var valid by mutableStateOf(false)
+    var slide by mutableStateOf<DrawingSlide?>(null);var view by mutableStateOf<DrawingSlideView?>(null)
     var point=Offset.Zero
-    fun cancel(){generation++;active=null;menu=null;valid=false}
+    fun cancel(){generation++;active=null;menu=null;valid=false;endSlide()}
+    fun endSlide(){slide=null;view=null}
+    fun begin(id:Long,press:Offset){if(!vertical)slide=DrawingSlide(id,order,hitMap(),area,press)}
     fun hitMap()=JSONArray(order.mapNotNull {id->rows[id]?.intersect(area)?.takeIf{it.width>0&&it.height>0}?.let {
         obj("id" to id,"bounds" to obj("x" to it.left,"y" to it.top,"width" to it.width,"height" to it.height))
     }})
     fun drop()=obj("op" to "drop","hits" to hitMap(),"point" to JSONArray(listOf(point.x,point.y)),"vertical" to vertical)
+    fun slideQuery()=slide?.let{s->obj("op" to "slide","id" to s.id,"hits" to s.hits,"press" to JSONArray(listOf(s.press.x,s.press.y)),"point" to JSONArray(listOf(point.x,point.y)),
+        "clip" to obj("x" to s.clip.left,"y" to s.clip.top,"width" to s.clip.width,"height" to s.clip.height))}
+    fun show(s:DrawingSlide,result:String) {
+        if(slide!==s)return
+        val preview=result.takeUnless{it=="null"}?.let(::JSONObject)?:return endSlide()
+        val source=s.hits.getJSONObject(s.order.indexOf(s.id)).getJSONObject("bounds").number("x")
+        val offsets=preview.getJSONArray("offsets")
+        view=DrawingSlideView(preview.getJSONObject("bounds").number("x")-source,List(offsets.length()){offsets.getDouble(it).toFloat()})
+    }
+}
+@Composable private fun Modifier.drawingSlide(drag:DrawingDrag,order:List<Long>,id:Long):Modifier {
+    val index=order.indexOf(id);val neighbor=remember(drag,id){Animatable(0f)}
+    LaunchedEffect(drag,order,id) {
+        snapshotFlow{drag.view?.takeIf{drag.slide?.order==order&&drag.slide?.id!=id}?.offsets?.getOrNull(index)}
+            .collectLatest{offset->if(offset==null)neighbor.snapTo(0f)else neighbor.animateTo(offset,tween(120,easing=TabSlideEasing))}
+    }
+    val held=drag.slide?.id==id&&drag.slide?.order==order
+    return zIndex(if(held)1f else 0f).graphicsLayer {
+        val view=drag.view?.takeIf{drag.slide?.order==order}
+        translationX=if(view==null)0f else if(drag.slide?.id==id)view.held.roundToInt().toFloat()else neighbor.value.roundToInt().toFloat()
+    }
 }
 private fun Modifier.drawingBounds(map:MutableMap<Long,Rect>,id:Long)=onGloballyPositioned{map[id]=Rect(it.positionInRoot(),it.size.toSize())}
-private fun Modifier.drawingInput(drag:DrawingDrag,focused:Boolean,preview:()->Unit,finish:(Long,JSONObject)->Unit,menu:(Long)->Unit)=pointerInput(drag,focused) {
+private fun Modifier.drawingInput(drag:DrawingDrag,focused:Boolean,preview:()->Unit,finish:(Long)->Unit,menu:(Long)->Unit)=pointerInput(drag,focused) {
     if(!focused)return@pointerInput
     awaitEachGesture {
         val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
@@ -58,7 +89,7 @@ private fun Modifier.drawingInput(drag:DrawingDrag,focused:Boolean,preview:()->U
         if(!drag.enabled||id==null||drag.closes[id]?.contains(start)==true)return@awaitEachGesture
         val direct=!drag.vertical||down.type==PointerType.Mouse||drag.handles[id]?.contains(start)==true
         val secondary=currentEvent.buttons.isSecondaryPressed
-        val generation=drag.generation;var held=false;var retired=false;var released=false
+        val generation=drag.generation;var held=false;var retired=false;var released=false;var committed=false
         var remaining=viewConfiguration.longPressTimeoutMillis;var eventTime=down.uptimeMillis
         if(secondary){down.consume();menu(id)}
         try {
@@ -71,12 +102,12 @@ private fun Modifier.drawingInput(drag:DrawingDrag,focused:Boolean,preview:()->U
                 if(!drag.enabled||id !in drag.order||generation!=drag.generation)retired=true
                 val moved=(change.position-down.position).getDistance()>viewConfiguration.touchSlop
                 if(!direct&&!held&&moved)retired=true
-                if(!retired&&!secondary&&moved&&change.pressed&&(direct||held)){drag.active=id;drag.menu=null}
+                if(!retired&&!secondary&&moved&&change.pressed&&(direct||held)&&drag.active!=id){drag.active=id;drag.menu=null;drag.begin(id,start)}
                 if(drag.active==id&&!retired){drag.point=change.position+drag.area.topLeft;preview();change.consume()}
                 if((held&&down.type!=PointerType.Mouse)||secondary||(retired&&!change.pressed))change.consume()
-                if(!change.pressed){released=true;if(!retired&&drag.active==id)finish(id,drag.drop());break}
+                if(!change.pressed){released=true;if(!retired&&drag.active==id){committed=true;finish(id)};break}
             }
-        }finally{if(!released)drag.menu=null;drag.active=null;drag.valid=false}
+        }finally{if(!released)drag.menu=null;if(!committed)drag.endSlide();drag.active=null;drag.valid=false}
     }
 }
 private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:()->Unit)=onPreviewKeyEvent {
@@ -130,20 +161,28 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
     SideEffect{drag.order=order;drag.enabled=!controller.blocked}
     LaunchedEffect(order,focused,controller.switching){drag.cancel()}
     DisposableEffect(drag){onDispose{drag.cancel()}}
-    fun preview(){val generation=drag.generation;val point=drag.point;scope.launch {
+    fun preview(){val generation=drag.generation;val point=drag.point;val slide=drag.slide;scope.launch {
+        if(!vertical){val result=controller.query(drag.slideQuery()?:return@launch);if(generation==drag.generation&&point==drag.point&&slide!=null)drag.show(slide,result);return@launch}
         val result=controller.query(drag.drop());if(generation==drag.generation&&point==drag.point&&drag.active!=null){drag.valid=result!="null";drag.before=if(drag.valid)JSONObject(result).let{if(it.isNull("before"))null else it.getLong("before")}else null}
+    }}
+    fun finish(id:Long){val generation=drag.generation;scope.launch {
+        val target=controller.query((if(vertical)drag.drop()else drag.slideQuery())?:return@launch).takeUnless{it=="null"}?.let(::JSONObject)?.takeIf{vertical||it.getBoolean("attached")}
+        if(target!=null)controller.reorder(obj("op" to "reorder","id" to id,"before" to target.opt("before")))
+        if(generation==drag.generation)drag.endSlide()
     }}
     LaunchedEffect(drag.active){while(drag.active!=null){withFrameNanos{};if(vertical&&drag.area.contains(drag.point)){val dy=when{drag.point.y<drag.area.top+28*density->-8*density;drag.point.y>drag.area.bottom-28*density->8*density;else->0f};if(dy!=0f){scroll.scrollBy(dy);preview()}}}}
     val input=modifier.onGloballyPositioned{val area=Rect(it.positionInRoot(),it.size.toSize());if(drag.area!=area)drag.cancel();drag.area=area}
         .onPreviewKeyEvent{if(it.nativeKeyEvent.keyCode==KeyEvent.KEYCODE_ESCAPE&&(drag.active!=null||drag.menu!=null)){drag.cancel();true}else false}
-        .drawingInput(drag,focused,::preview,{id,query->scope.launch{val target=controller.query(query);if(target!="null")controller.order(obj("op" to "reorder","id" to id,"before" to JSONObject(target).opt("before"))) }},{id->if(vertical)drag.menu=id else controller.selector=true})
+        .drawingInput(drag,focused,::preview,::finish,{id->if(vertical)drag.menu=id else controller.selector=true})
     Box(input) {
         @Composable fun row(item:JSONObject,entry:Modifier) {
             val id=item.getLong("id");val selected=controller.selected==id
-            Row(entry.drawingBounds(drag.rows,id).testTag("drawing-tab-$id")
+            val held=!vertical&&drag.slide?.id==id
+            Row(entry.drawingBounds(drag.rows,id)
+                .then(if(vertical)Modifier else Modifier.drawingSlide(drag,order,id)).testTag("drawing-tab-$id")
                 .clip(if(vertical)ControlShape else TileShape)
-                .background(if(!selected)Color.Transparent else if(vertical)colors.active else colors.panel)
-                .then(if(drag.active==id)Modifier.border(2.dp,colors.accent,if(vertical)ControlShape else TileShape)else Modifier)
+                .background(if(selected)(if(vertical)colors.active else colors.panel)else if(held)colors.tabs else Color.Transparent)
+                .then(if(vertical&&drag.active==id)Modifier.border(2.dp,colors.accent,ControlShape)else Modifier)
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
                 .semantics{contentDescription="${item.getString("title")}${if(item.getBoolean("modified"))", modified"else ""}, ${item.getString("location")}"},verticalAlignment=Alignment.CenterVertically) {

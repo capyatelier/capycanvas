@@ -10696,6 +10696,261 @@ fn native_workspace_restore() {
     pump(100);
 }
 
+pub(crate) fn set_transparency(w: &Rc<Workspace>, variable: &str) {
+    let Ok(level) = std::env::var(variable) else { return };
+    let level = layer_ui::Transparency::CHOICES
+        .iter()
+        .find(|(_, label)| label.eq_ignore_ascii_case(&level))
+        .expect("off, low, medium or high")
+        .0;
+    use_transparency(w, level);
+}
+
+pub(crate) fn use_transparency(w: &Rc<Workspace>, level: layer_ui::Transparency) {
+    let index = layer_ui::Transparency::CHOICES.iter().position(|(l, _)| *l == level).unwrap();
+    w.dispatch(UiAction::Preferences {
+        action: layer_ui::PreferenceAction::Edit {
+            id: layer_ui::PreferenceId::Transparency,
+            value: layer_ui::PreferenceValue::Choice(index as u32),
+        },
+    });
+    pump(200);
+    assert_eq!(state(w).settings.transparency, level);
+}
+
+#[test]
+#[ignore = "isolated native-input.js with LAYER_NATIVE_CAPTURE_DIR"]
+fn native_backdrop_blur_capture() {
+    use layer_core::DefaultBrushPreset;
+    use layer_ui::{PreferenceAction, PreferenceId, PreferenceValue, WorkspacePreset};
+    let until = |check: &dyn Fn() -> bool, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !check() {
+            assert!(Instant::now() < deadline, "{what} timed out");
+            pump(10);
+        }
+    };
+    let (app, windows) = crate::application("art.capycanvas.BackdropBlur");
+    let app = NativeTestApp(app);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    crate::open_workspace(&app, &windows, None, None);
+    let w = windows.borrow()[0].clone();
+    w.window.maximize();
+    w.window.present();
+    pump(1500);
+    until(
+        &|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.complete),
+        "startup",
+    );
+    if std::env::var("LAYER_GLASS_THEME").as_deref() == Ok("light") {
+        w.dispatch(UiAction::SetTheme { theme: Some(layer_ui::Theme::Light) });
+    }
+    let level = match std::env::var("LAYER_GLASS_LEVEL").as_deref() {
+        Ok("off") => 0,
+        Ok("low") => 1,
+        Ok("high") => 3,
+        _ => 2,
+    };
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit { id: PreferenceId::Transparency, value: PreferenceValue::Choice(level) },
+    });
+    assert_eq!(state(&w).settings.transparency, layer_ui::Transparency::CHOICES[level as usize].0);
+    if std::env::var("LAYER_GLASS_DOCUMENTS").as_deref() != Ok("0") {
+        new_photo::invoke(&w, CommandId::NewDocument);
+        new_photo::response(&w, "create");
+        until(&|| w.documents.len() == 2 && !w.documents.changing.get(), "second document");
+        new_photo::ready(&w);
+        pump(300);
+    }
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    for _ in 0..std::env::var("LAYER_GLASS_ZOOM").map_or(3, |v| v.parse().unwrap()) {
+        w.dispatch(UiAction::Invoke { command: CommandId::ZoomIn });
+    }
+    pump(300);
+    w.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::GPen as u32 });
+    w.dispatch(UiAction::SetBrushSize { value: 90. });
+    let camera = state(&w).camera;
+    let [a, b, c, d, e, f] = camera.document_to_surface();
+    let det = a * d - b * c;
+    let document = |x: f32, y: f32| {
+        let (x, y) = (x - e, y - f);
+        [(d * x - c * y) / det, (a * y - b * x) / det]
+    };
+    let [width, height] = [w.surface.width() as f32, w.surface.height() as f32];
+    let colors = [
+        [0.9, 0.1, 0.1, 1.], [0.95, 0.75, 0.05, 1.], [0.1, 0.6, 0.2, 1.],
+        [0.05, 0.3, 0.9, 1.], [0.6, 0.1, 0.8, 1.], [0.95, 0.95, 0.95, 1.],
+    ];
+    let probe = std::env::var("LAYER_GLASS_PROBE").as_deref() == Ok("1");
+    for (i, color) in colors.iter().enumerate().filter(|_| !probe) {
+        w.dispatch(UiAction::SetColor { rgba: *color });
+        let y = height * (i as f32 + 0.5) / colors.len() as f32;
+        let points: Vec<_> = (0..=24)
+            .map(|k| document(width * k as f32 / 24., y + 40. * (k as f32 * 0.7 + i as f32).sin()))
+            .collect();
+        native_pen_path(&w, &points);
+    }
+    for (i, color) in colors.iter().rev().enumerate().take(if probe { 0 } else { 3 }) {
+        w.dispatch(UiAction::SetColor { rgba: *color });
+        let x = width * (i as f32 + 0.5) / 3.;
+        let points: Vec<_> = (0..=16).map(|k| document(x + 200. * (k as f32 / 16. - 0.5), height * k as f32 / 16.)).collect();
+        native_pen_path(&w, &points);
+    }
+    pump(500);
+    let directory = std::env::var("LAYER_NATIVE_INPUT_DIR").ok().map(std::path::PathBuf::from)
+        .filter(|_| std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some());
+    if let Some(directory) = &directory {
+        std::fs::write(directory.join("ready"), "ready").unwrap();
+    }
+    let step = Cell::new(0);
+    let capture = |name: &str| {
+        pump(300);
+        if std::env::var("LAYER_GLASS_REDRAW").as_deref() == Ok("1") {
+            w.window.queue_draw();
+            pump(300);
+        }
+        eprintln!("{name}: {} glass regions", w.glass.borrow().len());
+        let Some(directory) = &directory else { return };
+        let path = directory.join(format!("step-{}.json", step.get()));
+        std::fs::write(path.with_extension("tmp"), format!(r#"[{{"wait_ms":400}},{{"capture":"{name}"}}]"#)).unwrap();
+        std::fs::rename(path.with_extension("tmp"), path).unwrap();
+        until(&|| directory.join(format!("done-{}", step.get())).exists(), "compositor capture");
+        step.set(step.get() + 1);
+    };
+    if probe {
+        fn find(root: &gtk::Widget, test: &dyn Fn(&gtk::Widget) -> bool) -> Option<gtk::Widget> {
+            if test(root) && root.is_mapped() {
+                return Some(root.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(c) = child {
+                if let Some(found) = find(&c, test) {
+                    return Some(found);
+                }
+                child = c.next_sibling();
+            }
+            None
+        }
+        let elements = |scene: &str| {
+            let root: gtk::Widget = w.window.clone().upcast();
+            let selected_doc = format!("document-tab-{}", w.documents.selected());
+            let probes: [(&str, &dyn Fn(&gtk::Widget) -> bool); 14] = [
+                ("chip", &|x| x.has_css_class("header-menu-labels")),
+                ("status", &|x| x.has_css_class("status-bubble")),
+                ("doc-selected", &|x| x.widget_name() == selected_doc.as_str()),
+                ("doc-other", &|x| x.widget_name().starts_with("document-tab-") && x.widget_name() != selected_doc.as_str() && !x.widget_name().contains('s')),
+                ("switcher", &|x| x.widget_name() == "workspace-switcher"),
+                ("switcher-selected", &|x| x.downcast_ref::<gtk::ToggleButton>().is_some_and(|b| b.is_active()) && x.ancestor(gtk::Widget::static_type()).is_some() && x.parent().is_some_and(|p| p.parent().is_some_and(|q| q.widget_name() == "workspace-switcher" || q.parent().is_some_and(|r| r.widget_name() == "workspace-switcher")))),
+                ("panel", &|x| x.has_css_class("layers-panel")),
+                ("strip", &|x| x.has_css_class("dock-tabs")),
+                ("layer-selected", &|x| x.has_css_class("layer-row") && x.has_css_class("selected")),
+                ("connector", &|x| x.widget_name().starts_with("column-connection-") || x.widget_name() == "drawer-connection"),
+                ("header-bar", &|x| x.has_css_class("header-bar")),
+                ("header-selected", &|x| x.has_css_class("header-tool") && x.has_css_class("selected-tool")),
+                ("drawer", &|x| x.widget_name().starts_with("column-drawer-")),
+                ("column", &|x| x.has_css_class("collapsed-column")),
+            ];
+            for (name, test) in probes {
+                if let Some(widget) = find(&root, test)
+                    && let Some(b) = widget.compute_bounds(&w.surface)
+                {
+                    eprintln!("ELEM {scene} {name} {} {} {} {}", b.x(), b.y(), b.width(), b.height());
+                }
+            }
+        };
+        let layouts = |backdrop: &str| {
+            for (name, preset) in [("paint", None), ("sketch", Some(WorkspacePreset::Painter)), ("photo", Some(WorkspacePreset::Photographer))] {
+                w.dispatch(UiAction::RestoreWorkspace {
+                    workspace: Box::new(layer_ui::WorkspaceState {
+                        layout: preset.unwrap_or(WorkspacePreset::Illustrator).layout(Platform::Gtk),
+                        ..layer_ui::WorkspaceState::default()
+                    }),
+                });
+                pump(400);
+                if preset == Some(WorkspacePreset::Photographer)
+                    && let Some((group, panel)) = w.resolved().collapsed.first().and_then(|c| c.groups.first()).map(|g| (g.group, g.active))
+                {
+                    w.dispatch(UiAction::Customize { action: CustomizationAction::ToggleColumnDrawer { group, panel } });
+                    pump(300);
+                }
+                let scene = format!("{name}-{backdrop}");
+                elements(&scene);
+                capture(&scene);
+            }
+        };
+        layouts("white");
+        w.dispatch(UiAction::SetColor { rgba: [0.2, 0.2, 0.2, 1.] });
+        w.dispatch(UiAction::SetBrushSize { value: 1000. });
+        let rows = 8;
+        let points: Vec<_> = (0..=rows)
+            .flat_map(|r| {
+                let y = height * r as f32 / rows as f32;
+                (0..=12).map(move |k| {
+                    let t = k as f32 / 12.;
+                    [if r % 2 == 0 { t } else { 1. - t } * width, y]
+                })
+            })
+            .map(|[x, y]| document(x, y))
+            .collect();
+        native_pen_path(&w, &points);
+        pump(300);
+        layouts("grey");
+        w.window.destroy();
+        pump(100);
+        return;
+    }
+    capture("paint");
+    for (name, preset) in [("sketch", WorkspacePreset::Painter), ("photo", WorkspacePreset::Photographer)] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(layer_ui::WorkspaceState {
+                layout: preset.layout(Platform::Gtk),
+                ..layer_ui::WorkspaceState::default()
+            }),
+        });
+        pump(400);
+        let layout = state(&w).workspace.layout;
+        if preset == WorkspacePreset::Painter {
+            let ids: Vec<u32> = layout.header.zones.iter().flatten().map(|entry| entry.id).collect();
+            for id in ids {
+                w.dispatch(UiAction::Customize { action: CustomizationAction::ToggleHeaderDrawer { id } });
+                pump(100);
+                if state(&w).customization.drawer.is_some() {
+                    break;
+                }
+            }
+        } else if let Some(group) = w.resolved().collapsed.first().and_then(|c| c.groups.first()).map(|g| (g.group, g.active)) {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer { group: group.0, panel: group.1 },
+            });
+        }
+        capture(name);
+    }
+    w.dispatch(UiAction::Preferences { action: PreferenceAction::Reveal { id: PreferenceId::Transparency } });
+    pump(600);
+    capture("preferences");
+    let mut nodes = Vec::new();
+    let mut child = w.surface.first_child();
+    while let Some(c) = child {
+        let snapshot = gtk::Snapshot::new();
+        w.surface.snapshot_child(&c, &snapshot);
+        nodes.extend(snapshot.to_node());
+        child = c.next_sibling();
+    }
+    let surfaces = state(&w).palette.glass.surfaces();
+    let start = Instant::now();
+    let mut found = 0;
+    for _ in 0..200 {
+        let mut regions = Vec::new();
+        for node in &nodes {
+            crate::glass::collect(node, &surfaces, &mut regions);
+        }
+        found = regions.len();
+    }
+    eprintln!("glass walk: {found} regions, {:.1} us per snapshot", start.elapsed().as_secs_f64() * 1e6 / 200.);
+    w.window.destroy();
+    pump(100);
+}
+
 #[test]
 #[ignore = "hardware Wayland benchmark: run separately in release with --ignored --test-threads=1"]
 fn native_frame_pacing() {
@@ -10708,6 +10963,7 @@ fn native_frame_pacing() {
     };
     w.window.present();
     pump(1500);
+    set_transparency(&w, "LAYER_PACING_TRANSPARENCY");
     let rulers = std::env::var("LAYER_PACING_RULER").unwrap_or_default();
     if rulers == "visible" || rulers == "snap" {
         w.dispatch(UiAction::Layer {
@@ -11225,6 +11481,8 @@ fn native_frame_pacing() {
             "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
             "worker_thread_cpu": stats.thread_cpu,
             "worker_gpu": stats.gpu, "canvas_presentation": stats.presented,
+            "transparency": format!("{:?}", state(&w).settings.transparency),
+            "backdrop_frames": stats.backdrop_frames,
         });
         eprintln!(
             "{name}: {} canvas frames, {} GPU timings, {} presentation feedbacks",

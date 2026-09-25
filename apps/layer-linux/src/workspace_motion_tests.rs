@@ -9,6 +9,8 @@ fn native_workspace_motion_input() {
     let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
+    pump(600);
+    super::set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     pump(1600);
     // Explicitly restore the fixed tab fixture below. A fresh workspace store
     // can finish loading the shipped preset after the realize callback.
@@ -201,9 +203,28 @@ fn native_workspace_motion_input() {
                     )
                 })
                 .collect();
+            let worker_stats = w.gpu.borrow().as_ref().unwrap().session.engine().backend().stats.clone();
+            *worker_stats.lock().unwrap() = Default::default();
+            let mut events = events;
+            if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+                events.insert(events.len() / 2, serde_json::json!({"capture": format!("{touch}-{scenario}")}));
+            }
             perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after);
+            let canvas = {
+                let stats = worker_stats.lock().unwrap();
+                let mut gpu: Vec<f64> = stats.gpu.iter().map(|v| v[1]).collect();
+                gpu.sort_by(f64::total_cmp);
+                let mut cpu: Vec<f64> = stats.cpu.iter().map(|v| v[3]).collect();
+                cpu.sort_by(f64::total_cmp);
+                serde_json::json!({
+                    "backdrop_frames": stats.backdrop_frames,
+                    "frames": stats.cpu.len(),
+                    "gpu_ms": gpu.get(gpu.len() / 2), "gpu_p95_ms": gpu.get(gpu.len() * 95 / 100),
+                    "worker_cpu_ms": cpu.get(cpu.len() / 2),
+                })
+            };
             if let Some(cache) = color_cache {
                 assert_eq!(color_panel::hue_guide(&w), cache, "overlapping motion reuses the texture");
                 assert_eq!(state(&w).colors, colors, "overlapping motion does not pick colors");
@@ -282,7 +303,7 @@ fn native_workspace_motion_input() {
                     hz(&presented)
                 );
             }
-            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":0,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"placement_ms":{"p50":placement_cpu[placement_cpu.len()/2],"p95":placement_cpu[placement_cpu.len()*95/100]},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>()});
+            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":0,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"placement_ms":{"p50":placement_cpu[placement_cpu.len()/2],"p95":placement_cpu[placement_cpu.len()*95/100]},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>(),"canvas":canvas});
             eprintln!("{report}");
             reports.push(report);
             if scenario == "tab" {
@@ -315,9 +336,12 @@ fn native_workspace_motion_input() {
             assert!(w.workspace_drag.borrow().is_none());
         }
     }
-    std::fs::create_dir_all("../../artifacts/workspace-motion").unwrap();
+    let report_path = std::env::var("LAYER_MOTION_REPORT").unwrap_or_else(|_| "../../artifacts/workspace-motion/gtk.json".into());
+    if let Some(parent) = std::path::Path::new(&report_path).parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
     std::fs::write(
-        "../../artifacts/workspace-motion/gtk.json",
+        &report_path,
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();

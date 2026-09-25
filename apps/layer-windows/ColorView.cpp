@@ -14,6 +14,8 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <optional>
 #include <fstream>
+#include <mutex>
+#include <thread>
 #include <iterator>
 
 using namespace CapyUi;
@@ -145,6 +147,36 @@ struct Device {
         return device;
     }
 };
+struct FieldRequest {hstring key;uint32_t pixels=0;float hue=0;uint32_t projection=0,rgbSpace=0;bool hdr=false;std::string mapped;uint64_t epoch=0;};
+struct FieldResult {hstring key;uint32_t pixels=0;uint64_t epoch=0;std::vector<uint8_t> bytes;};
+bool rasterField(FieldRequest const& request,std::vector<uint8_t>& bytes){
+    bytes.resize(size_t(request.pixels)*request.pixels*4);
+    return request.hdr?capy_color_mapped_field(request.pixels,request.mapped.c_str(),bytes.data(),bytes.size())
+        :capy_color_raster(request.pixels,request.hue,request.projection,request.rgbSpace,false,bytes.data(),bytes.size());
+}
+// One field raster in flight and one replaceable latest request.
+struct FieldWorker : std::enable_shared_from_this<FieldWorker> {
+    Microsoft::UI::Dispatching::DispatcherQueue queue{Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread()};
+    std::function<void(FieldResult)> deliver;
+    std::mutex mutex;std::optional<FieldRequest> pending;bool running=false;hstring active;uint64_t activeEpoch=0;
+    void submit(FieldRequest request){
+        std::lock_guard lock(mutex);
+        if(running&&active==request.key&&activeEpoch==request.epoch){pending.reset();return;}
+        pending=std::move(request);
+        if(!running){running=true;std::thread([self=shared_from_this()]{self->run();}).detach();}
+    }
+    void cancel(){std::lock_guard lock(mutex);pending.reset();}
+    void run(){
+        for(;;){
+            FieldRequest request;
+            {std::lock_guard lock(mutex);if(!pending){running=false;active=L"";return;}
+                request=std::move(*pending);pending.reset();active=request.key;activeEpoch=request.epoch;}
+            auto result=std::make_shared<FieldResult>(FieldResult{request.key,request.pixels,request.epoch,{}});
+            if(!rasterField(request,result->bytes))continue;
+            queue.TryEnqueue([weak=weak_from_this(),result]{if(auto self=weak.lock();self&&self->deliver)self->deliver(std::move(*result));});
+        }
+    }
+};
 // Retain the static hue brush and shared field bitmap independently.
 // Marker motion redraws their image without rerasterizing the color field.
 struct WheelImage {
@@ -153,8 +185,16 @@ struct WheelImage {
     int pixels=0;
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
-    hstring ringShape,fieldKey;
-    void draw(Image const& image,J const& model,J const& state,double size,double scale,bool reset=false){
+    hstring ringShape,fieldKey,fieldLayout;
+    std::shared_ptr<FieldWorker> worker;
+    std::optional<FieldResult> ready;
+    uint64_t epoch=0,synchronous=0;bool previewed=false;
+    void install(ID2D1DeviceContext2* context,std::vector<uint8_t> const& bytes,uint32_t side,hstring const& key){
+        field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(side,side),bytes.data(),side*4,
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
+        fieldKey=key;
+    }
+    void draw(Image const& image,J const& model,J const& state,double size,double scale,bool previewing,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
         if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
@@ -192,14 +232,24 @@ struct WheelImage {
             }
             Paint white{1,1,1,1};
             uint32_t fieldPixels=uint32_t(pixels);float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
-            auto wanted=ringKey+L"/"+to_hstring(hueValue);if(flag(model,L"hdr"))wanted=wanted+state.Stringify()+object(model,L"rendition").Stringify();
+            bool hdr=flag(model,L"hdr");auto rendition=object(model,L"rendition").Stringify();
+            auto layoutKey=ringKey+(hdr?L"/hdr"+rendition:hstring{});
+            if(layoutKey!=fieldLayout||previewed!=previewing){
+                if(layoutKey!=fieldLayout)field=nullptr;
+                fieldLayout=layoutKey;previewed=previewing;++epoch;ready.reset();if(worker)worker->cancel();
+            }
+            if(ready&&ready->epoch==epoch&&ready->pixels==fieldPixels)install(context.get(),ready->bytes,fieldPixels,ready->key);
+            ready.reset();
+            auto wanted=ringKey+L"/"+to_hstring(hueValue);if(hdr)wanted=wanted+state.Stringify()+rendition;
             if(!field||fieldKey!=wanted){
-                std::vector<uint8_t> bytes(size_t(fieldPixels)*fieldPixels*4);
-                auto mapped=to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify());
-                if(!(flag(model,L"hdr")?capy_color_mapped_field(fieldPixels,mapped.c_str(),bytes.data(),bytes.size()):capy_color_raster(fieldPixels,hueValue,projection,rgbSpace,false,bytes.data(),bytes.size())))throw hresult_invalid_argument(L"Invalid shared color field");
-                field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
-                    D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
-                fieldKey=wanted;
+                FieldRequest request{wanted,fieldPixels,hueValue,projection,rgbSpace,hdr,
+                    hdr?to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify()):std::string{},epoch};
+                if(previewing&&field&&worker)worker->submit(std::move(request));
+                else{
+                    std::vector<uint8_t> bytes;
+                    if(!rasterField(request,bytes))throw hresult_invalid_argument(L"Invalid shared color field");
+                    install(context.get(),bytes,fieldPixels,wanted);++synchronous;
+                }
             }
             com_ptr<ID2D1Factory> factory;context->GetFactory(factory.put());com_ptr<ID2D1Geometry> clip;
             if(projection==0){auto square=array(geometry,L"square");float x=float(square.GetNumberAt(0)),y=float(square.GetNumberAt(1)),w=float(square.GetNumberAt(2));
@@ -246,6 +296,15 @@ struct View:std::enable_shared_from_this<View>{
     std::array<Button,3> swatches;
     std::array<Shapes::Ellipse,3> swatchEdges,swatchChecks,swatchPaint;
     std::array<bool,3> hovered{};
+    std::array<Button,2> quick;
+    std::array<Shapes::Ellipse,2> quickEdges,quickPaint;
+    std::array<bool,2> quickHovered{};
+    Button edit;Shapes::Ellipse editFill;bool editHovered=false;
+    Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
+    Slider intensity;bool syncingIntensity=false;
+    std::optional<uint32_t> arcPointer;double arcOriginal=0;hstring arcKey;
+    bool layoutHdr=false;double frameWidth=0,frameHeight=0;
+    uint64_t listener=0;
     std::array<Button,2> shapes;
     std::array<Canvas,2> shapeGlyphs{nullptr,nullptr};
     std::array<bool,2> shapeHovered{};
@@ -271,14 +330,34 @@ struct View:std::enable_shared_from_this<View>{
     XamlRoot::Changed_revoker scaleChanged;
     CompositionTarget::SurfaceContentsLost_revoker contentsLost;
     explicit View(std::shared_ptr<WorkspaceData> source,bool fit):data(std::move(source)),fitHeight(fit){}
+    ~View(){
+        data->colorViews.erase(listener);
+        if(drawing.worker){drawing.worker->deliver=nullptr;drawing.worker->cancel();}
+    }
     std::shared_ptr<ColorLibraryView> libraryView;
     Flyout colorFlyout;
-    void editColor(){
+    void editColor(FrameworkElement const& anchor){
         libraryView=std::make_shared<ColorLibraryView>();libraryView->data=data;libraryView->init();
         ScrollViewer scroll;scroll.Content(libraryView->root);scroll.MaxHeight(std::max(200.,root.XamlRoot().Size().Height-100.));
-        colorFlyout.Content(scroll);colorFlyout.ShowAt(readout);
+        colorFlyout.Content(scroll);colorFlyout.ShowAt(anchor);
     }
-    J model()const{return object(data->model,L"color_panel");}
+    bool previewing()const{return WorkspaceData::previewing(data->colorPreview);}
+    J model()const{return previewing()?object(data->colorPreview,L"view"):object(data->model,L"color_panel");}
+    J paintColors()const{return previewing()?object(data->colorPreview,L"colors"):object(data->state,L"colors");}
+    static J geometry(double size,bool hdr){return colorUi(O({{L"type",S(L"layout")},{L"size",N(size)},{L"hdr",B(hdr)}})).GetObject();}
+    J arcAt(double fraction)const{return colorUi(O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"fraction",N(fraction)}})).GetObject();}
+    void pickIntensity(Point position){
+        A point;point.Append(N(position.X));point.Append(N(position.Y));
+        auto hit=colorUi(O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"point",point}})).GetObject();
+        auto fraction=hit.GetNamedValue(L"fraction",JsonValue::CreateNullValue());
+        if(fraction.ValueType()==JsonValueType::Number)setIntensity(-2+8*fraction.GetNumber());
+    }
+    void setIntensity(double stops){send(O({{L"op",S(L"hdr_intensity")},{L"stops",N(std::clamp(stops,-2.,6.))}}));}
+    bool transparentSlot()const{return str(object(data->state,L"colors"),L"slot")==L"transparent";}
+    void endArc(bool restore){
+        if(!arcPointer)return;arcPointer.reset();arcTrack.ReleasePointerCaptures();
+        if(restore)setIntensity(arcOriginal);
+    }
     hstring editingContext()const{return str(model(),L"shape")+L"/"+str(object(data->state,L"colors"),L"paint_slot");}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
     void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,L"Ready");}
@@ -298,15 +377,15 @@ struct View:std::enable_shared_from_this<View>{
         result.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.VerticalContentAlignment(VerticalAlignment::Stretch);
         return result;
     }
-    static Imaging::WriteableBitmap checker(double logical,double scale){
+    static Imaging::WriteableBitmap checker(double logical,double scale,winrt::Windows::UI::Color light,winrt::Windows::UI::Color dark){
         int size=int(std::ceil(logical*scale));
         Imaging::WriteableBitmap result(size,size);uint8_t* bytes=nullptr;
         check_hresult(result.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
         for(int y=0;y<size;y++)for(int x=0;x<size;x++){
             // Match the shared repeating conic gradient, including its quadrant boundaries.
             double dx=std::fmod((x+.5)/scale,10.)-5,dy=std::fmod((y+.5)/scale,10.)-5;
-            auto value=uint8_t(dx==0||dx*dy<0?204:140);auto p=bytes+(y*size+x)*4;
-            p[0]=p[1]=p[2]=value;p[3]=255;
+            auto value=dx==0||dx*dy<0?dark:light;auto p=bytes+(y*size+x)*4;
+            p[0]=value.B;p[1]=value.G;p[2]=value.R;p[3]=255;
         }
         result.Invalidate();return result;
     }
@@ -344,10 +423,35 @@ struct View:std::enable_shared_from_this<View>{
         }});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->scaleChanged.revoke();}});
         contentsLost=CompositionTarget::SurfaceContentsLost(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock()){self->key=L"";self->drawing.surface=nullptr;self->refresh();}});
+        listener=data->colorView([weak]{if(auto self=weak.lock())self->refresh();});
+        drawing.worker=std::make_shared<FieldWorker>();
+        drawing.worker->deliver=[weak](FieldResult result){if(auto self=weak.lock()){self->drawing.ready=std::move(result);self->key=L"";self->refresh();}};
+        edit=control(L"Edit Color",[weak]{if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor(self->edit);});
+        Grid editContent;auto pencil=icon(L"pencil",data->theme());pencil.HorizontalAlignment(HorizontalAlignment::Center);pencil.VerticalAlignment(VerticalAlignment::Center);
+        editContent.Children().Append(editFill);editContent.Children().Append(pencil);edit.Content(editContent);
+        ToolTipService::SetToolTip(edit,box_value(L"Edit Color\u2026"));AutomationProperties::SetAutomationId(edit,L"color-edit");
+        edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
+        edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
+        stage.Children().Append(edit);
+        // Paint order also controls hit testing in the intentional swatch overlap.
+        for(int i=0;i<2;i++){
+            bool white=i==0;
+            quick[i]=control(white?L"Paint with white":L"Paint with black",[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});
+            Grid sample;sample.Background(nullptr);sample.Children().Append(quickEdges[i]);sample.Children().Append(quickPaint[i]);
+            quickPaint[i].Margin({1,1,1,1});quick[i].Content(sample);stage.Children().Append(quick[i]);
+            AutomationProperties::SetAutomationId(quick[i],white?L"color-white":L"color-black");
+            quick[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
+                self->quickHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();
+            }});
+            quick[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->quickHovered[i]=false;self->refresh();}});
+        }
         // Background is inserted first so the larger foreground owns their overlap.
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
             auto slot=slots[i];auto pick=control(slot,[weak,slot]{if(auto self=weak.lock())self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));});
+            if(i<2)pick.DoubleTapped([weak,slot](auto&&,auto&&){if(auto self=weak.lock()){
+                self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self->editColor(self->edit);
+            }});
             Grid sample;sample.Background(nullptr);
             sample.Children().Append(swatchEdges[i]);sample.Children().Append(swatchChecks[i]);sample.Children().Append(swatchPaint[i]);
             pick.Content(sample);swatches[i]=pick;stage.Children().Append(pick);
@@ -376,10 +480,37 @@ struct View:std::enable_shared_from_this<View>{
         swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
         swap.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->swapHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         swap.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swapHovered=false;self->refresh();}});
+        arc.Background(nullptr);arc.Visibility(Visibility::Collapsed);
+        arcTrack.Stroke(clear());arcTrack.StrokeStartLineCap(PenLineCap::Round);arcTrack.StrokeEndLineCap(PenLineCap::Round);
+        arc.Children().Append(arcTrack);
+        markerShadow.IsHitTestVisible(false);marker.IsHitTestVisible(false);
+        markerShadow.Stroke(fill({128,0,0,0}));markerShadow.StrokeThickness(4);marker.Stroke(fill({255,255,255,255}));marker.StrokeThickness(2);
+        caption.IsHitTestVisible(false);caption.FontFamily(FontFamily(L"Segoe UI"));
+        arcTrack.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
+            auto p=e.GetCurrentPoint(self->stage);
+            if(self->arcPointer||self->transparentSlot()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
+            if(!self->arcTrack.CapturePointer(e.Pointer()))return;
+            self->arcPointer=p.PointerId();self->arcOriginal=num(self->model(),L"intensity");self->pickIntensity(p.Position());e.Handled(true);
+        }});
+        arcTrack.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcPointer==e.Pointer().PointerId()){
+            self->pickIntensity(e.GetCurrentPoint(self->stage).Position());e.Handled(true);
+        }});
+        arcTrack.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcPointer==e.Pointer().PointerId()){
+            self->pickIntensity(e.GetCurrentPoint(self->stage).Position());self->endArc(false);e.Handled(true);
+        }});
+        arcTrack.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcPointer==e.Pointer().PointerId())self->endArc(true);});
+        arcTrack.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcPointer==e.Pointer().PointerId())self->endArc(true);});
+        arcTrack.DoubleTapped([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->transparentSlot())self->setIntensity(0);});
+        intensity.Minimum(-2);intensity.Maximum(6);intensity.StepFrequency(.01);intensity.SmallChange(.1);intensity.LargeChange(1);
+        intensity.Width(1);intensity.Height(1);intensity.Opacity(0);intensity.IsHitTestVisible(false);intensity.Visibility(Visibility::Collapsed);
+        AutomationProperties::SetName(intensity,L"Color intensity");AutomationProperties::SetAutomationId(intensity,L"color-intensity");
+        intensity.ValueChanged([weak](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){if(auto self=weak.lock();self&&!self->syncingIntensity&&!self->transparentSlot())self->setIntensity(e.NewValue());});
+        intensity.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Home){self->setIntensity(0);e.Handled(true);}});
+        stage.Children().Append(arc);stage.Children().Append(intensity);
         readout=control(L"Switch color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
-        MenuFlyout editMenu;MenuFlyoutItem edit;edit.Text(L"Edit color and palettes…");
-        AutomationProperties::SetAutomationId(edit,L"edit-color-palettes");edit.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor();});
-        editMenu.Items().Append(edit);TrackPopup(editMenu,data);readout.ContextFlyout(editMenu);
+        MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(L"Edit color and palettes…");
+        AutomationProperties::SetAutomationId(editItem,L"edit-color-palettes");editItem.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor(self->readout);});
+        editMenu.Items().Append(editItem);TrackPopup(editMenu,data);readout.ContextFlyout(editMenu);
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
         labelMetrics.UseLayoutRounding(false);labelMetrics.FontFamily(FontFamily(L"Segoe UI"));labelMetrics.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());labelMetrics.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(labelMetrics,Automation::Peers::AccessibilityView::Raw);
@@ -414,10 +545,10 @@ struct View:std::enable_shared_from_this<View>{
         PathFigure figure;figure.StartPoint({0,0});figure.IsClosed(true);figure.IsFilled(true);
         auto line=[&](float x,float y){LineSegment segment;segment.Point({x,y});figure.Segments().Append(segment);};
         line(float(half),0);line(float(half),float(half-clipRadius));
-        ArcSegment arc;arc.Point({float(half-clipRadius),float(half)});arc.Size({float(clipRadius),float(clipRadius)});
-        arc.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(arc);line(0,float(half));
+        ArcSegment bend;bend.Point({float(half-clipRadius),float(half)});bend.Size({float(clipRadius),float(clipRadius)});
+        bend.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(bend);line(0,float(half));
         PathGeometry geometry;geometry.Figures().Append(figure);readoutHit.Data(geometry);
-        auto ink=focused?fill(color(L"#3584e4")):data->brush(L"text");
+        auto ink=focused?accent(data):data->brush(L"text");
         double labelFont=std::clamp(panelSize*.044,9.,12.);
         labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(GlyphRasterizer::fontSize(labelFont));
         labelMetrics.Measure({1000,1000});
@@ -473,32 +604,90 @@ struct View:std::enable_shared_from_this<View>{
         for(;index<glyphs.size();index++)glyphs[index].image.Visibility(Visibility::Collapsed);
         AutomationProperties::SetName(readout,str(view,L"readout_description"));
     }
+    void updateArc(J const& view){
+        bool hdr=flag(view,L"hdr")&&layoutHdr;
+        arc.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);intensity.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);
+        if(!hdr)return;
+        double stops=num(view,L"intensity");
+        auto ramps=array(view,L"intensity_ramp");auto markerColor=array(view,L"marker_color");
+        auto next=to_hstring(stops)+ramps.Stringify()+markerColor.Stringify()+to_hstring(panelSize)+data->theme();
+        if(next==arcKey)return;arcKey=next;
+        for(size_t i=0;i<ramp.size()&&i<ramps.Size();i++)ramp[i].Stroke(fill(rgba(ramps.GetArrayAt(uint32_t(i)))));
+        auto point=array(arcAt((stops+2)/8),L"point");double x=point.GetNumberAt(0),y=point.GetNumberAt(1);
+        for(auto const& dot:{markerShadow,marker}){Canvas::SetLeft(dot,x-dot.Width()/2);Canvas::SetTop(dot,y-dot.Height()/2);}
+        marker.Fill(fill(rgba(markerColor)));
+        wchar_t text[32];swprintf(text,32,L"%s%.2f EV",stops>=0?L"+":L"",stops);
+        caption.Text(text);caption.Foreground(data->brush(L"text"));caption.Measure({1000,1000});
+        auto placement=array(layout,L"intensity_caption");
+        Canvas::SetLeft(caption,placement.GetNumberAt(0)-caption.DesiredSize().Width/2);
+        Canvas::SetTop(caption,placement.GetNumberAt(1)-caption.BaselineOffset());
+        syncingIntensity=true;intensity.Value(stops);syncingIntensity=false;
+        wchar_t value[32];swprintf(value,32,L"%.1f EV",stops);AutomationProperties::SetItemStatus(intensity,value);
+    }
     void refresh(){
         auto view=model();if(!view.Size()||!root.XamlRoot())return;
         if(libraryView&&libraryView->root.IsLoaded())libraryView->refresh();
         auto nextContext=editingContext();if(context!=nextContext){cancel();context=nextContext;}
         double scale=root.XamlRoot().RasterizationScale();
-        double extent=fitHeight?std::min(root.ActualWidth(),root.ActualHeight()):root.ActualWidth();
-        double nextSize=std::floor(extent*scale)/scale;
-        if(nextSize<128)return;
-        if(std::abs(panelSize-nextSize)>.01||layoutScale!=scale){
-            layoutScale=scale;
-            cancel();panelSize=nextSize;if(!fitHeight)root.Height(panelSize);stage.Width(panelSize);stage.Height(panelSize);
-            std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_color_layout(float(panelSize)),capy_string_free);
-            if(!raw)return;layout=J::Parse(to_hstring(raw.get()));
+        bool hdr=flag(view,L"hdr");
+        double available=std::floor(root.ActualWidth()*scale)/scale,height=fitHeight?root.ActualHeight():0;
+        if(available<128)return;
+        if(std::abs(frameWidth-available)>.01||std::abs(frameHeight-height)>.01||layoutScale!=scale||layoutHdr!=hdr){
+            frameWidth=available;frameHeight=height;layoutScale=scale;layoutHdr=hdr;
+            root.MinHeight(std::ceil(num(geometry(128,hdr),L"height")));
+            double size=available;auto next=geometry(size,hdr);
+            if(fitHeight&&num(next,L"height")>height){
+                if(!hdr)size=std::floor(std::min(available,height)*scale)/scale;
+                else{
+                    int low=128,high=int(available);
+                    while(low<high){int middle=(low+high+1)/2;if(num(geometry(middle,true),L"height")<=height)low=middle;else high=middle-1;}
+                    size=low;
+                }
+                if(size<128)return;
+                next=geometry(size,hdr);
+            }
+            cancel();endArc(true);panelSize=size;layout=next;arcKey=L"";
+            double stageHeight=num(layout,L"height",size);
+            if(!fitHeight)root.Height(stageHeight);stage.Width(panelSize);stage.Height(stageHeight);
+            arc.Width(panelSize);arc.Height(stageHeight);
             auto box=array(layout,L"wheel");side=box.GetNumberAt(2);placeBox(wheel,box);
             // Browser canvas paint snaps the two layout edges to logical pixels.
             // Keep shared hit geometry while matching its final image placement.
             double inset=box.GetNumberAt(0),paintInset=std::round(inset),paintSide=std::round(inset+side)-paintInset;
             image.Width(paintSide);image.Height(paintSide);Canvas::SetLeft(image,paintInset-inset);Canvas::SetTop(image,paintInset-inset);
             drawError.Width(side);Canvas::SetTop(drawError,side*.4);
-            placeBox(readout,array(layout,L"readout"));placeBox(swap,array(layout,L"swap"));
+            placeBox(readout,array(layout,L"readout"));placeBox(swap,array(layout,L"swap"));placeBox(edit,array(layout,L"edit"));
+            for(int i=0;i<2;i++)placeBox(quick[i],array(layout,i==0?L"white":L"black"));
+            if(hdr){
+                auto start=arcAt(0),end=arcAt(1);auto shape=object(start,L"geometry");
+                double radius=num(shape,L"radius"),width=num(shape,L"width");
+                PathFigure figure;auto from=array(start,L"point"),to=array(end,L"point");
+                figure.StartPoint({float(from.GetNumberAt(0)),float(from.GetNumberAt(1))});figure.IsClosed(false);figure.IsFilled(false);
+                ArcSegment segment;segment.Point({float(to.GetNumberAt(0)),float(to.GetNumberAt(1))});segment.Size({float(radius),float(radius)});
+                segment.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(segment);
+                PathGeometry track;track.Figures().Append(figure);arcTrack.Data(track);arcTrack.StrokeThickness(width);
+                auto path=array(start,L"path");
+                for(auto const& line:ramp){uint32_t at;if(arc.Children().IndexOf(line,at))arc.Children().RemoveAt(at);}
+                ramp.clear();
+                for(uint32_t i=1;i<path.Size();i++){
+                    Shapes::Line line;auto a=path.GetArrayAt(i-1),b=path.GetArrayAt(i);
+                    line.X1(a.GetNumberAt(0));line.Y1(a.GetNumberAt(1));line.X2(b.GetNumberAt(0));line.Y2(b.GetNumberAt(1));
+                    line.StrokeThickness(width);line.StrokeStartLineCap(PenLineCap::Round);line.StrokeEndLineCap(PenLineCap::Round);
+                    line.IsHitTestVisible(false);arc.Children().InsertAt(uint32_t(ramp.size()),line);ramp.push_back(line);
+                }
+                double markerRadius=num(shape,L"marker_radius");
+                markerShadow.Width(markerRadius*2+4);markerShadow.Height(markerRadius*2+4);
+                marker.Width(markerRadius*2+2);marker.Height(markerRadius*2+2);
+                for(auto const& dot:{markerShadow,marker}){uint32_t at;if(!arc.Children().IndexOf(dot,at))arc.Children().Append(dot);}
+                uint32_t at;if(!arc.Children().IndexOf(caption,at))arc.Children().Append(caption);
+                caption.FontSize(array(layout,L"intensity_caption").GetNumberAt(2));
+            }
             for(int i=0;i<2;i++)placeBox(shapes[i],array(layout,L"shapes").GetArrayAt(i));
             const std::array<wchar_t const*,3> slots{L"background",L"foreground",L"transparent"};
             for(int i=0;i<3;i++){
                 auto swatchBox=array(layout,slots[i]);placeBox(swatches[i],swatchBox);
                 double pad=i==1?3:1;swatchChecks[i].Margin({pad,pad,pad,pad});swatchPaint[i].Margin({pad,pad,pad,pad});
-                ImageBrush pixels;pixels.ImageSource(checker(swatchBox.GetNumberAt(2)-2*pad,scale));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
+                ImageBrush pixels;pixels.ImageSource(checker(swatchBox.GetNumberAt(2)-2*pad,scale,color(str(object(data->state,L"palette"),L"checker_light")),color(str(object(data->state,L"palette"),L"checker_dark"))));pixels.Stretch(Stretch::Fill);swatchChecks[i].Fill(pixels);
             }
         }
         auto icons=data->theme()+array(view,L"other_shapes").Stringify();
@@ -506,7 +695,7 @@ struct View:std::enable_shared_from_this<View>{
             iconKey=icons;swapGlyph.Source(icon(L"color-swap",data->theme()).Source());
             for(int i=0;i<2;i++){
                 auto shape=array(view,L"other_shapes").GetStringAt(i);Grid content;Shapes::Ellipse hit;hit.Fill(clear());content.Children().Append(hit);
-                auto glyph=colorIcon(shape,shapeHovered[i]?fill(color(L"#3584e4")):data->brush(L"text"));
+                auto glyph=colorIcon(shape,shapeHovered[i]?accent(data):data->brush(L"text"));
                 RotateTransform rotation;rotation.CenterX(8);rotation.CenterY(8);rotation.Angle(array(layout,L"shape_rotations").GetNumberAt(i));
                 for(auto child:glyph.Children())child.as<Shapes::Path>().Data().Transform(rotation);
                 content.Children().Append(glyph);shapes[i].Content(content);shapeGlyphs[i]=glyph;
@@ -514,8 +703,21 @@ struct View:std::enable_shared_from_this<View>{
                 AutomationProperties::SetName(shapes[i],title);ToolTipService::SetToolTip(shapes[i],box_value(title));
             }
         }
-        for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?fill(color(L"#3584e4")):data->brush(L"text"));
+        for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?accent(data):data->brush(L"text"));
         auto swapInk=color(str(object(data->state,L"palette"),L"text"));swapInk.A=swapHovered?31:0;swapFill.Fill(fill(swapInk));
+        bool editable=!transparentSlot();edit.IsEnabled(editable);edit.Opacity(editable?1.:.36);
+        auto editInk=color(str(object(data->state,L"palette"),L"text"));editInk.A=editHovered&&editable?31:0;editFill.Fill(fill(editInk));
+        auto quickColors=array(view,L"quick_colors");
+        for(int i=0;i<2;i++){
+            J preset;for(auto value:quickColors)if(flag(value.GetObject(),L"white")==(i==0))preset=value.GetObject();
+            bool chosen=flag(preset,L"selected");auto ring=color(str(object(data->state,L"palette"),L"text"));
+            if(!(chosen||quickHovered[i]))ring.A=64;
+            quickEdges[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
+            quickPaint[i].Fill(fill(rgba(array(preset,L"rgba"))));
+            auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);ToolTipService::SetToolTip(quick[i],box_value(name));
+            AutomationProperties::SetItemStatus(quick[i],chosen?L"Selected":L"");
+        }
+        updateArc(view);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
             auto swatch=find(array(view,L"swatches"),L"slot",slots[i]);
@@ -526,14 +728,18 @@ struct View:std::enable_shared_from_this<View>{
             swatchPaint[i].Fill(fill(rgba(array(swatch,L"rgba"))));
             AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?L"Selected":L"");
         }
-        auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale);
+        bool preview=previewing();
+        auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale)+(preview?L"/preview":L"");
         if(nextKey!=key){
             try{
-                try{drawing.draw(image,view,object(data->state,L"colors"),side,scale);}
+                auto colors=paintColors();auto rasters=drawing.synchronous;
+                struct Count{WheelImage const& drawing;uint64_t before;std::shared_ptr<WorkspaceData> const& data;
+                    ~Count(){data->colorFields+=drawing.synchronous-before;}} count{drawing,rasters,data};
+                try{drawing.draw(image,view,colors,side,scale,preview);}
                 catch(hresult_error const& exception){
                     auto code=exception.code();
                     if(code!=DXGI_ERROR_DEVICE_REMOVED&&code!=DXGI_ERROR_DEVICE_RESET&&code!=D2DERR_RECREATE_TARGET&&code!=E_SURFACE_CONTENTS_LOST)throw;
-                    drawing.draw(image,view,object(data->state,L"colors"),side,scale,true);
+                    drawing.draw(image,view,colors,side,scale,preview,true);
                 }
                 key=nextKey;drawError.Visibility(Visibility::Collapsed);AutomationProperties::SetItemStatus(image,L"Ready");
             }catch(hresult_error const&){drawError.Visibility(Visibility::Visible);AutomationProperties::SetItemStatus(image,L"Color wheel could not be drawn");}
@@ -542,6 +748,10 @@ struct View:std::enable_shared_from_this<View>{
     }
 };
 
+}
+double ColorPanelNaturalHeight(std::shared_ptr<WorkspaceData> const& data,double width,double scale){
+    auto size=std::max(128.,std::floor(width*scale)/scale);
+    return num(View::geometry(size,flag(object(data->model,L"color_panel"),L"hdr")),L"height",size);
 }
 FrameworkElement ColorPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,bool fitHeight){
     auto view=std::make_shared<View>(data,fitHeight);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
