@@ -39,7 +39,22 @@ fn request(json: &str) -> Result<Value, String> {
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum StampQuery {
+    ToolbarStamp { context: layer_ui::ToolbarContext },
+}
+
 pub fn query(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
+    if let Ok(StampQuery::ToolbarStamp { context }) = serde_json::from_str(json) {
+        return match host.session.toolbar_stamp(context) {
+            Ok(stamp) => CapyPreview::packet(
+                json!({"result":{"size":stamp.size,"extent":stamp.extent},"error":null}),
+                stamp.alpha,
+            ),
+            Err(error) => CapyPreview::packet(json!({"result":null,"error":error}), Vec::new()),
+        };
+    }
     // A delayed query can reference a group removed by intervening input.
     // Return that rejection to the view instead of failing the render loop.
     let (result, error) = match request(json).and_then(|value| host.query(value)) {
@@ -106,6 +121,37 @@ mod tests {
                 .layer(layer_core::LayerId(group))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn toolbar_stamp_returns_alpha_bytes_and_rejects_stale_context() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let context = host.session.state().toolbar_context();
+        let packet = query(
+            &mut host,
+            &json!({"type":"toolbar_stamp","context":context}).to_string(),
+        )
+        .unwrap();
+        let owned = Box::into_raw(Box::new(packet));
+        unsafe {
+            let json = std::ffi::CStr::from_ptr(crate::previews::capy_preview_metadata(owned));
+            let reply: Value = serde_json::from_slice(json.to_bytes()).unwrap();
+            assert!(reply["error"].is_null(), "{reply}");
+            let size = reply["result"]["size"].as_u64().unwrap() as usize;
+            assert!(reply["result"]["extent"].as_f64().unwrap() > 0.);
+            let mut count = 0;
+            let bytes = crate::previews::capy_preview_bytes(owned, &mut count);
+            assert_eq!(count, size * size);
+            assert!(std::slice::from_raw_parts(bytes, count).iter().any(|&a| a > 0));
+            crate::previews::capy_preview_free(owned);
+        }
+        let mut stale = context;
+        stale.generation += 1;
+        let reply = metadata(
+            query(&mut host, &json!({"type":"toolbar_stamp","context":stale}).to_string()).unwrap(),
+        );
+        assert!(reply["result"].is_null());
+        assert!(reply["error"].is_string());
     }
 
     #[test]

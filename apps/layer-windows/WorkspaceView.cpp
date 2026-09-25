@@ -3,7 +3,6 @@
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
-#include "ZenToolbars.h"
 #include "WorkspaceGeometry.h"
 #include "WorkspacePublication.h"
 #include "OverviewOcclusion.h"
@@ -48,7 +47,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceDrawers> drawers;
     std::unique_ptr<CollapsedColumns> collapsed;
     std::unique_ptr<WorkspaceExpansion> expansion;
-    std::unique_ptr<ZenToolbars> zen;
     struct Measurement {double tab=36,content=320;J scroll;};
     std::map<std::wstring,Measurement> measurements;
     hstring lastMeasurements;
@@ -117,7 +115,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Border surface;surface.Child(fitCamera);surface.Background(data->brush(L"bg"));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
-        zen=std::make_unique<ZenToolbars>(data,root,gestures);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
@@ -211,7 +208,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto found=group.body->anchors.find(next);
                 if(found!=group.body->anchors.end()){anchor=found->second;break;}
             }
-            if(!anchor&&zen)anchor=zen->Anchor(next);
             if(!anchor&&drawers)anchor=drawers->Anchor(next);
             if(!anchor)return;
             StackPanel content;content.Width(280);content.Spacing(12);
@@ -270,7 +266,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();zen->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -333,7 +329,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         updateConfiguration();
         expansion->Apply(configurationHeight());present();
-        zen->Apply();collapsed->Apply();drawers->Apply();gestures->Refresh();
+        collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
         camera.Foreground(data->brush(L"text"));
@@ -645,7 +641,10 @@ WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
-bool WorkspaceView::CancelGesture(){return impl->gestures->Cancel();}
+bool WorkspaceView::CancelGesture(){
+    bool closed=impl->data->dismissTransients();
+    return impl->gestures->Cancel()||closed;
+}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};
     if(value!=impl->titlebar){impl->titlebar=value;impl->lastTitlebar=L"";impl->reportTitlebar();}

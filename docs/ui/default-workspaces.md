@@ -98,8 +98,8 @@ the canvas on all six hosts. The strip starts closed, with Auto-hide and Open
 individual panels off. Paint retains its original expanded left panels and
 initially open right stack.
 
-On GTK, Web, Android, macOS and iPadOS, Paint's Color and Navigator groups take
-their content height. Color follows its SDR or HDR wheel and footer; Navigator follows the
+On every host, Paint's Color and Navigator groups take their content
+height. Color follows its SDR or HDR wheel and footer; Navigator follows the
 document shape, from a 4:1 strip up to a square. Tool Set and Tool share the
 rest of the left column evenly, and Properties and Layers keep their 30:45 split.
 Untouched Paint workspaces upgrade; customized ones keep their arrangement until
