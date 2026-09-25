@@ -146,7 +146,18 @@ function Set-Text([string]$Id,[string]$Text){
  $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
 }
 function Delivery([string]$Name,[string]$Format){
- Command 'export_document' 'File';Select-Choice 'export-format' $Format
+ Command 'export_document' 'File'
+ Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 30
+ $serial=(Model).windows_document.serial
+ $reset=@{item=$null};Wait-Until {
+  $reset.item=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Remove / reset'),
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+  $null -ne $reset.item
+ } 'Export destination reset is missing'
+ $reset.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {$document=(Model).windows_document;$document.serial -gt $serial -and $document.stage -eq 'options'} 'Export destination did not reset' 30
+ Select-Choice 'export-format' $Format
  if($Format.StartsWith('HDR JPEG')){Select-Choice 'export-background' 'White'}
  Button 'Preview export'
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'HDR export preparation failed' 60
