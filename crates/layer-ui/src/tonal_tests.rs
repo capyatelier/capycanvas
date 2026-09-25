@@ -174,11 +174,11 @@ mod tonal_checks {
         assert!(s.state.tool_settings.iter().all(|f| f.group.is_empty()));
         assert_eq!(s.state.tool_actions.len(), 4);
         assert!(
-            matches!(s.state.tool_extra.as_slice(),[ToolOption::Choice {id:"tonal-tones",segmented:true,items,..}] if items.len()==8 && items.iter().all(|i|!i.selected && i.label.contains("stop")))
+            matches!(s.state.tool_extra.as_slice(),[ToolOption::Choice {id:"tonal-tones",segmented:true,items,..}] if items.len()==6 && items.iter().all(|i|!i.selected && i.label.contains("stop")))
         );
         let ToolOption::Choice {items,..}=&s.state.tool_extra[0] else {unreachable!()};
         let icons:std::collections::BTreeSet<_>=items.iter().map(|i|i.icon).collect();
-        assert_eq!(icons.len(),8,"each tonal range has its own icon");
+        assert_eq!(icons.len(),6,"each tonal range has its own icon");
         assert!(icons.iter().all(|icon| ui_catalog().icons.contains(icon)));
         let context = s.state.toolbar_context();
         s.dispatch(UiAction::ToolbarEdit {
@@ -190,6 +190,10 @@ mod tonal_checks {
         .unwrap();
         reply(&mut s, None, 0xff804020);
         assert_eq!(s.state.tool_settings.len(), 4);
+        for field in &s.state.tool_settings[..2] {
+            assert!(field.numeric.unit.is_empty());
+            assert!(field.tooltip().contains("stops relative to reference white"));
+        }
         setting(&mut s, "tonal_lower", -4.);
         reply(&mut s, None, 0xff804020);
         assert!(
@@ -276,12 +280,43 @@ mod tonal_checks {
         assert_eq!(s.engine.document().selection, all);
     }
     #[test]
+    fn tonal_choices_follow_document_depth_and_keep_custom_last() {
+        use layer_core::color::{RgbSpace, SampleDepth};
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
+                let mut document = Document::new("tones", 64, 64);
+                document.color.depth = depth;
+                document.color.space = space;
+                let mut s = UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [64; 2]).unwrap();
+                s.set_platform(Platform::Gtk);
+                invoke(&mut s, CommandId::TonalSelect);
+                let ToolOption::Choice { items, .. } = &s.state.tool_extra[0] else { panic!("tones") };
+                let ids: Vec<_> = items.iter().map(|item| match item.action {
+                    UiAction::Tonal { action: TonalAction::Preset { index } } => index,
+                    _ => panic!("preset"),
+                }).collect();
+                assert_eq!(ids, if depth.is_float() { vec![0,1,2,3,4,6,7] } else { vec![0,1,2,3,4,7] });
+                assert_eq!(items[2].icon, "tonal-midtones");
+                assert_eq!(items.last().unwrap().icon, "tonal-custom");
+                assert_eq!(s.dispatch(UiAction::Tonal {action:TonalAction::Preset {index:6}}).is_ok(), depth.is_float());
+            }
+        }
+        let mut hdr = TonalOptions { tone: 6, ..Default::default() };
+        hdr.adapt_to_document(false);
+        assert_eq!(hdr.tone, 7);
+        assert_eq!(hdr.custom, [1., layer_core::tonal::MAX_STOP]);
+    }
+    #[test]
     fn tonal_legacy_workspace_and_invalid_controls() {
         let old = serde_json::json!({"bands":layer_core::tonal::TonalBand::defaults(),"active":4,"enabled":[false,false,false,false,true,false,false],"invert":true,"linked":false,"softness":0.4});
         let options: TonalOptions = serde_json::from_value(old).unwrap();
         options.validate().unwrap();
         assert_eq!(options.tone, 4);
         assert_eq!(options.softness, 0.4);
+        let deep: TonalOptions = serde_json::from_value(serde_json::json!({"tone":5})).unwrap();
+        deep.validate().unwrap();
+        assert_eq!(deep.tone, 7);
+        assert_eq!(deep.custom, [layer_core::tonal::MIN_STOP, -7.]);
         let mut options = TonalOptions::default();
         assert!(options.edit("tonal_lower", 0.).is_err());
         for value in [f32::NAN, -1., 3.] {

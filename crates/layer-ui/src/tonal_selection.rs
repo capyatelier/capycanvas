@@ -64,22 +64,36 @@ impl From<StoredTonalOptions> for TonalOptions {
                 }
             }
         }
+        // Preserve the retired Deep shadows interval as an editable Custom range.
+        if options.tone == 5 {
+            options.tone = 7;
+            options.custom = [MIN_STOP, -7.];
+        }
         options
     }
 }
 impl TonalOptions {
-    pub const CHOICES: [(&'static str, &'static str); 8] = [
-        ("Shadows · below −5 stops", "tonal-shadows"),
-        ("Mid-shadows · −5 to −3.5 stops", "tonal-mid-shadows"),
-        ("Midtones · −3.5 to −1.5 stops", "tonal-midtones"),
-        ("Mid-highlights · −1.5 to −0.5 stops", "tonal-mid-highlights"),
-        ("Highlights · above −0.5 stops", "tonal-highlights"),
-        ("Deep shadows · below −7 stops", "tonal-deep-shadows"),
-        ("Bright HDR · above +1 stop", "tonal-bright-hdr"),
-        ("Custom · set or sample a range in stops", "tonal-custom"),
+    // Keep stored preset identities stable when changing the visible choices.
+    pub const CHOICES: [(usize, &'static str, &'static str); 7] = [
+        (0, "Shadows · below −5 stops", "tonal-shadows"),
+        (1, "Mid-shadows · −5 to −3.5 stops", "tonal-mid-shadows"),
+        (2, "Midtones · −3.5 to −1.5 stops", "tonal-midtones"),
+        (3, "Mid-highlights · −1.5 to −0.5 stops", "tonal-mid-highlights"),
+        (4, "Highlights · above −0.5 stops", "tonal-highlights"),
+        (6, "Bright HDR · above +1 stop", "tonal-bright-hdr"),
+        (7, "Custom · set or sample a range in stops", "tonal-custom"),
     ];
+    fn choices(hdr: bool) -> impl Iterator<Item = (usize, &'static str, &'static str)> {
+        Self::CHOICES.into_iter().filter(move |(index, ..)| *index != 6 || hdr)
+    }
+    pub(super) fn adapt_to_document(&mut self, hdr: bool) {
+        if self.tone == 6 && !hdr {
+            self.tone = 7;
+            self.custom = [1., MAX_STOP];
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
-        if self.tone >= Self::CHOICES.len() {
+        if !Self::CHOICES.iter().any(|(index, ..)| self.tone == *index) {
             return Err("Unknown tone".into());
         }
         self.softness_control()
@@ -130,7 +144,7 @@ impl TonalOptions {
             let numeric = NumericControl {
                 soft_min: -12.,
                 soft_max: 6.,
-                ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 2).unit("stops")
+                ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 2)
             };
             for (id, label, value) in [
                 ("tonal_lower", "From", self.custom[0]),
@@ -325,7 +339,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Choose Tonal range first".into());
         }
         let TonalAction::Preset { index } = action;
-        if index >= TonalOptions::CHOICES.len() {
+        if !TonalOptions::choices(self.engine.document().color.depth.is_float())
+            .any(|(id, ..)| id == index) {
             return Err("Unknown tone".into());
         }
         self.cancel_tonal();
@@ -394,11 +409,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             id: "tonal-tones",
             label: "Tones · stops relative to reference white",
             segmented: true,
-            items: [5, 0, 1, 2, 3, 4, 6, 7]
-                .into_iter()
-                .map(|index| ToolSetItem {
-                    label: TonalOptions::CHOICES[index].0,
-                    icon: TonalOptions::CHOICES[index].1,
+            items: TonalOptions::choices(self.engine.document().color.depth.is_float())
+                .map(|(index, label, icon)| ToolSetItem {
+                    label,
+                    icon,
                     action: UiAction::Tonal {
                         action: TonalAction::Preset { index },
                     },

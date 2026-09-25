@@ -1726,7 +1726,7 @@ fn native_tonal_toolbar_input() {
     let mut d=Driver::new("art.capycanvas.TonalToolbar");
     restore(&d,WorkspacePreset::Photographer);
     let options=component_id(&d,ToolbarControl::TOOL_OPTIONS);
-    // A horizontal lane fits both mode and tone bars. The eight-tone group
+    // A horizontal lane fits both mode and tone bars. The six-tone group
     // exceeds the narrow vertical component's budget and uses its overflow.
     let mut workspace=state(&d.w).workspace;
     let removed:Vec<_>=workspace.layout.panel(Panel::Commands).unwrap().tiles().iter()
@@ -1748,7 +1748,7 @@ fn native_tonal_toolbar_input() {
         let choice=d.named("toolbar-segments-tonal-tones");
         if edge==Edge::Top {
             assert!(choice.is_mapped());
-            d.click_name("toolbar-segment-tonal-tones-5");ready(&d);
+            d.click_name("toolbar-segment-tonal-tones-4");ready(&d);
             assert_shared_icons(&choice);
         } else {
             assert!(!choice.is_mapped(),"complete tone group uses the narrow bar's overflow");
@@ -1756,10 +1756,10 @@ fn native_tonal_toolbar_input() {
             let bar=d.named("tool-choice-bar-tonal-tones");
             assert!(bar.is_mapped() && bar.height()<=36);
             assert_shared_icons(&bar);
-            d.click_name("tool-choice-tonal-tones-1");ready(&d);
-            d.click_name("tool-choice-tonal-tones-5");ready(&d);
+            d.click_name("tool-choice-tonal-tones-0");ready(&d);
+            d.click_name("tool-choice-tonal-tones-4");ready(&d);
         }
-        assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[5].selected)));
+        assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
         assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
         let _=crate::snapshot(&d.w);pump(120);
         crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
@@ -1767,7 +1767,7 @@ fn native_tonal_toolbar_input() {
     }
     d.click_name(&format!("tile-{options}"));pump(150);
     let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());
-    let custom=find_named(&drawer,"tool-choice-tonal-tones-7").unwrap();d.click(&custom);ready(&d);
+    let custom=find_named(&drawer,"tool-choice-tonal-tones-5").unwrap();d.click(&custom);ready(&d);
     let lower=find_named(&drawer,"tool-setting-tonal_lower").unwrap();d.number(&lower,"1");ready(&d);
     assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_upper").unwrap().value,1.,"crossing bounds moves the other endpoint");
     let upper=find_named(&drawer,"tool-setting-tonal_upper").unwrap();d.number(&upper,"3");ready(&d);
@@ -1776,6 +1776,26 @@ fn native_tonal_toolbar_input() {
     assert!(state(&d.w).tool_actions.iter().all(|a|a.group().is_some()));
     let _=crate::snapshot(&d.w);pump(120);
     crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-overflow.png")).unwrap();
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    // A floating-point document adds Bright HDR, with Custom still last.
+    let mut project=new_drawing(2048,1536).unwrap();
+    project.document.color.depth=layer_core::color::SampleDepth::F16;
+    let hdr=Workspace::with_project(&d._app,Some((project,None)));
+    hdr.window.maximize();hdr.window.present();pump(1800);
+    d.w.window.destroy();d.w=hdr;
+    restore(&d,WorkspacePreset::Painter);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});pump(150);
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    assert!(matches!(state(&d.w).tool_extra.as_slice(),[layer_ui::ToolOption::Choice {items,..}] if items.len()==7 && items[5].icon=="tonal-bright-hdr" && items[6].icon=="tonal-custom"));
+    let bar=d.named("tool-choice-bar-tonal-tones");
+    assert!(bar.height()<=36);
+    d.click_name("tool-choice-tonal-tones-5");ready(&d);
+    assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
+    let _=crate::snapshot(&d.w);pump(120);
+    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-hdr-presets.png")).unwrap();
+    d.click_name("tool-choice-tonal-tones-6");ready(&d);
+    assert!(d.named("tool-setting-tonal_lower").is_mapped());
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     d.finish();
 }

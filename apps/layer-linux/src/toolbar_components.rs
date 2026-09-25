@@ -1049,7 +1049,7 @@ impl Component {
             ToolOption::Numeric(f) => {
                 let label = gtk::Label::new(Some(f.label));
                 label.add_css_class("option-label");
-                row.set_tooltip_text(Some(f.label));
+                row.set_tooltip_text(Some(f.tooltip()));
                 row.append(&label);
                 let icon =
                     crate::icons::image(&format!("layer-{}-symbolic", tool_setting_icon(f.id)));
@@ -1062,7 +1062,7 @@ impl Component {
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));
                 let id = f.id;
                 for target in [label.upcast_ref::<gtk::Widget>(), icon.upcast_ref()] {
-                    target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.label)));
+                    target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.tooltip())));
                     let reset = gtk::GestureClick::new();
                     reset.set_button(1);
                     reset.connect_pressed(glib::clone!(

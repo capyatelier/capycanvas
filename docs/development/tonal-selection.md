@@ -3,7 +3,9 @@
 GTK exposes **Tonal range** in the Select family. It writes ordinary byte-coverage
 selections and saved selection masks. The shared Rust model supplies the same
 choice, numeric and selection-mode controls to the GTK panel and Tool Options bar.
-The panel presents all eight tones in one horizontal segmented radio-button bar.
+The panel presents five SDR tones (Shadows through Highlights, with Midtones in
+the middle) and Custom in one horizontal segmented radio-button bar. Floating-point
+HDR documents add Bright HDR before Custom; SDR wide-gamut documents do not.
 Each segment has a distinct band-profile icon, ordered from dark to bright, with
 a range-handle icon for Custom. Tooltips and accessibility labels give the preset
 name and exact full-strength range in stops relative to reference white. Tool
@@ -11,14 +13,17 @@ Options uses the same segmented choice and icons, including in its overflow pane
 If the complete group cannot fit in a narrow toolbar, that existing overflow
 exposes the horizontal bar without splitting or hiding individual presets.
 GTK uses a reusable numeric row with the label, slider and editable value on one
-line. The Select command list also uses compact rows so it does not force the
-adjacent panel to be taller.
+line. The Tool settings panel has a minimum width of six small tiles and their
+gaps inside the content insets (242 logical pixels total). The Select command
+list also uses compact rows so it does not force the adjacent panel to be taller.
 The shared `tonal-select` icon shows tonal bands inside a dashed selection border.
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
 a custom interval. The result applies immediately. **Softness** and **Feather**
-refine it; **Custom** adds only **From** and **To** bounds. Moving one bound beyond
-the other moves that endpoint too. There is no Apply/Cancel workflow, source
+refine it; **Custom** adds only **From** and **To** bounds. These numeric fields
+omit unit suffixes; their label tooltips specify stops relative to reference
+white (0). Moving one bound beyond the other moves that endpoint too.
+There is no Apply/Cancel workflow, source
 selector, range manager, destination label, or selection-actions menu in this
 panel. Invert remains an independent selection/mask action in existing menus.
 
@@ -54,13 +59,12 @@ only by the next tone choice, numeric adjustment or canvas sample.
 
 | Preset | Full-strength interval, stops relative to white |
 | --- | --- |
-| Deep shadows | below −7 |
 | Shadows | below −5 |
 | Mid-shadows | −5 to −3.5 |
 | Midtones | −3.5 to −1.5 |
 | Mid-highlights | −1.5 to −0.5 |
 | Highlights | above −0.5 |
-| Bright HDR | above +1 |
+| Bright HDR (HDR documents only) | above +1 |
 
 These are luminance intervals, not camera exposure metadata. The GPU computes
 `log2(Y)` from unassociated linear RGB using the document primaries' XYZ Y row.
@@ -80,8 +84,10 @@ returns packed coverage and small sample summaries, never a full color image for
 CPU classification. Hover performs no tonal sampling.
 
 Workspace decoding accepts the original band-editor format, migrating the active
-included band to a preset or Custom. Retired command IDs remain decodable but
-unavailable, so old shortcuts/layouts cannot activate the removed editor.
+included band to a preset or Custom. Retired Deep shadows settings become Custom
+with the same interval. Bright HDR becomes Custom if restored into an SDR document.
+Retired command IDs remain decodable but unavailable, so old shortcuts/layouts
+cannot activate the removed editor.
 
 ## Checks
 

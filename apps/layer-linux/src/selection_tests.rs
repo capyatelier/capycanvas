@@ -638,13 +638,15 @@ fn native_tonal_selection_input() {
     for absent in ["tool-action-ApplyTonalSelection","tool-action-CancelTonalSelection","tool-action-TonalInvert","tool-action-TonalDetails","tool-list-tonal-source","tool-info-tonal-status","selection-actions-menu"] {
         assert!(find_named(&panel,absent).is_none(),"obsolete control: {absent}");
     }
+    assert!(panel.width() >= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    assert!(panel.measure(gtk::Orientation::Horizontal, -1).0 <= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
     let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
-    let tones=d.named("tool-choice-tonal-tones-1").compute_bounds(&panel).unwrap();
+    let tones=d.named("tool-choice-tonal-tones-0").compute_bounds(&panel).unwrap();
     assert!(modes.y()<tones.y(),"selection mode comes first");
     let bar=d.named("tool-choice-bar-tonal-tones");
     assert!(bar.height()<=36,"all tones occupy one compact bar");
     let mut right=0.;
-    for index in 0..8 {
+    for index in 0..6 {
         let button=d.named(&format!("tool-choice-tonal-tones-{index}"));
         assert!(button.is::<gtk::ToggleButton>());
         let bounds=button.compute_bounds(&bar).unwrap();
@@ -653,7 +655,7 @@ fn native_tonal_selection_input() {
         right=bounds.x()+bounds.width();
         assert!(button.tooltip_text().unwrap().contains("stop"));
     }
-    let p=d.point(&d.named("tool-choice-tonal-tones-1"));
+    let p=d.point(&d.named("tool-choice-tonal-tones-0"));
     d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));wait_tonal(&d);
     let first=wait_selection(&d);
     assert!(byte_pixel(&first,700,700)>240 && byte_pixel(&first,1250,700)>240);
@@ -685,7 +687,14 @@ fn native_tonal_selection_input() {
     d.click_name(&opener);
     assert_eq!(state(&d.w).tool_settings.len(),4,"Custom adds just two bounds");
     assert!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value < -5.);
-    assert!(d.named("tool-choice-tonal-tones-7").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
+    assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
+    for id in ["tonal_lower", "tonal_upper"] {
+        let number=d.named(&format!("tool-setting-{id}"));
+        let label=number.first_child().unwrap().first_child().unwrap().downcast::<gtk::Label>().unwrap();
+        assert!(label.tooltip_text().unwrap().contains("stops relative to reference white"));
+        let readout=find_css(&number,"number-readout").unwrap().downcast::<gtk::Label>().unwrap();
+        assert!(!readout.text().contains("stop"),"units stay in label tooltips");
+    }
     let custom_height=settings_height(&d);
     assert!(custom_height<=210.,"custom controls use {custom_height}px");
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
@@ -711,7 +720,7 @@ fn native_tonal_selection_input() {
     let id=state(&d.w).layer_tools.mask_editing.unwrap().layer.unwrap();
     let saved=|d:&Driver| d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
     let before=saved(&d);assert_eq!(before,layer_core::Selection::empty());
-    d.click_name(&opener);d.click_name("tool-choice-tonal-tones-1");wait_tonal(&d);
+    d.click_name(&opener);d.click_name("tool-choice-tonal-tones-0");wait_tonal(&d);
     let mask=saved(&d);assert!(byte_pixel(&mask,700,700)>240 && byte_pixel(&mask,1250,700)>240);
     assert_eq!(byte_pixel(&mask,1000,700),0);assert_eq!(selection(&d),Some(sampled.clone()));
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-selection-layer.png")).unwrap();

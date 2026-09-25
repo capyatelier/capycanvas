@@ -4439,6 +4439,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
+        self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
         self.state.tool_actions = if self.operation.active() {
             [
                 CommandId::TransformAspect,

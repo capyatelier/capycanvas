@@ -329,7 +329,7 @@ impl ToolSettings {
                     }
                 }
                 let input = if compact {
-                    NumberControl::labeled_inline(control.numeric.clone(), control.label, &inline_labels, &inline_values)
+                    NumberControl::labeled_inline(control.numeric.clone(), control.label, control.tooltip(), &inline_labels, &inline_values)
                 } else { NumberControl::new(control.numeric.clone(), control.label, "") };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;

@@ -80,15 +80,18 @@ impl NumberControl {
     pub fn labeled_inline(
         spec: NumericControl,
         title: &str,
+        tooltip: &str,
         labels: &gtk::SizeGroup,
         values: &gtk::SizeGroup,
     ) -> Self {
         let control = Self::inline(spec, title);
+        control.set_tooltip_text(Some(tooltip));
         let label = gtk::Label::new(Some(title));
         label.set_xalign(0.);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         label.set_max_width_chars(14);
-        label.set_tooltip_text(Some(title));
+        label.set_tooltip_text(Some(tooltip));
+        label.update_property(&[gtk::accessible::Property::Description(tooltip)]);
         let row=control.first_child().and_downcast::<gtk::Box>().unwrap();
         labels.add_widget(&label);
         values.add_widget(&row.last_child().unwrap());

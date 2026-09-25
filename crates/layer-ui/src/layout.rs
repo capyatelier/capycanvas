@@ -20,8 +20,10 @@ pub const SURFACE_RADIUS: f32 = TILE_SIZE / 2.0;
 /// Six standard toolbar tiles, including their five two-pixel gaps.
 pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
 pub const PANEL_CONTENT_INSET: f32 = 8.0;
-/// Three standard tiles, two gaps, and the panel's two content insets.
+/// Three standard tiles, two gaps, and the tool list's two content insets.
 pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * 2.0 + 2.0 * PANEL_CONTENT_INSET;
+/// Six standard tiles, five gaps, and the settings panel's two content insets.
+pub const TOOL_SETTINGS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0 + 2.0 * PANEL_CONTENT_INSET;
 /// A single icon/name row; labels may ellipsize at the minimum width.
 pub const BRUSH_SETS_MIN_WIDTH: f32 = 104.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
@@ -2478,7 +2480,8 @@ impl DockLayout {
                 .map(|p| match p {
                     Panel::Layers => LAYERS_MIN_WIDTH,
                     Panel::BrushSets | Panel::SculptSets | Panel::FilterTypes => BRUSH_SETS_MIN_WIDTH,
-                    Panel::Tools | Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
+                    Panel::Tools | Panel::Brushes => TOOL_PANEL_MIN_WIDTH,
+                    Panel::ToolSettings => TOOL_SETTINGS_MIN_WIDTH,
                     Panel::Navigator => 192.0,
                     Panel::Color => 4.0 * TILE_SIZE,
                     _ => 0.0,
@@ -5023,12 +5026,12 @@ mod tests {
     }
 
     #[test]
-    fn tool_panels_fit_three_tiles_and_cannot_shrink_below_them() {
+    fn tool_panels_respect_their_tile_minimums_when_floating_or_docked() {
         assert_eq!(
-            TOOL_PANEL_MIN_WIDTH - 2.0 * PANEL_CONTENT_INSET,
-            3.0 * TILE_SIZE + 4.0
+            TOOL_SETTINGS_MIN_WIDTH - 2.0 * PANEL_CONTENT_INSET,
+            6.0 * TILE_SIZE + 10.0
         );
-        for panel in [Panel::Brushes, Panel::ToolSettings] {
+        for (panel, minimum) in [(Panel::Brushes, TOOL_PANEL_MIN_WIDTH), (Panel::ToolSettings, TOOL_SETTINGS_MIN_WIDTH)] {
             let mut layout = DockLayout::default();
             layout.set_panel_visible(panel, true).unwrap();
             layout
@@ -5061,7 +5064,7 @@ mod tests {
                 .into_iter()
                 .find(|g| g.active == panel)
                 .unwrap();
-            assert_eq!(row.bounds.width, TOOL_PANEL_MIN_WIDTH);
+            assert_eq!(row.bounds.width, minimum);
             layout
                 .move_panel(
                     [1200., 900.],
@@ -5086,7 +5089,7 @@ mod tests {
                     .unwrap()
                     .bounds
                     .width
-                    >= TOOL_PANEL_MIN_WIDTH
+                    >= minimum
             );
         }
     }
