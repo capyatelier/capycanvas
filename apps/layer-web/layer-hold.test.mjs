@@ -71,7 +71,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
     assert.equal(await menu(),false,"editing a name keeps native text input");
     await input("cancel");await send({type:"layer",action:{op:"cancel_rename"}});
     await evaluate("for(let i=0;i<30;i++)layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});document.querySelector('#layer-rows').scrollTop=0;");await wait();
-    const scrollingOrder=await order(),r=await rect("#layer-rows .layer-row:nth-child(4) .layer-name");
+    const scrollingOrder=await order(),r=await rect("#layer-rows .layer-swipe:nth-child(4) .layer-name");
     await input("down",{x:r.x+r.width/2,y:r.y+r.height/2});
     await input("move",{x:point.x,y:point.y-85});await input("up");await wait(650);
     assert.ok(await evaluate("document.querySelector('#layer-rows').scrollTop")>20,"movement before hold scrolls normally");
