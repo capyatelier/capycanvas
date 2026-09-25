@@ -15,7 +15,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     }
   });
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
-  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null;
+  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, paintKey;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
   // A context menu opens during a press/hold, before release. Automatic
@@ -514,7 +514,13 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         popup.append(content); popup.showPopover(); positionPopup(popup);
       } else if (popup.matches(":popover-open")) popup.hidePopover();
     }
-    workspace.style.setProperty("--paint-color", hexColor(state().brush.color));
+    const paints = JSON.stringify([displayColors().foreground, displayColors().background]);
+    if (paints !== paintKey) {
+      paintKey = paints;
+      const [foreground, background] = app.color_ui({ type: "preview", colors: JSON.parse(paints) }).map(p => cssColor(p.rgba));
+      workspace.style.setProperty("--paint-foreground", foreground);
+      workspace.style.setProperty("--paint-background", background);
+    }
   }
   function renderToolbarOptions(container, sections) {
     const key = JSON.stringify(sections);
@@ -539,6 +545,6 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     placement: () => expanded?.placement ?? null };
 }
 
-function hexColor(rgba) {
-  return `#${rgba.slice(0, 3).map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`;
+function cssColor(rgba) {
+  return `rgb(${rgba.slice(0, 3).map((v) => Math.round(v * 255)).join(" ")} / ${rgba[3]})`;
 }

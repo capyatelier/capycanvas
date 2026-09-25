@@ -290,9 +290,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                             else -> activate()
                         }
                     }) {
-                    val fill = if (item.objectOrNull("control")?.optString("kind") == "color") snapshot.getJSONObject("state").getJSONObject("brush").array("color").let { Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat()) } else null
                     val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
-                    SharedIcon(icon, label, Modifier.size(iconSize.dp), fill = fill)
+                    if (item.objectOrNull("control")?.optString("kind") == "color") PaintPairIcon(snapshot.getJSONObject("state"), label, Modifier.size(iconSize.dp))
+                    else SharedIcon(icon, label, Modifier.size(iconSize.dp))
                 }
             }
             if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }

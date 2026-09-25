@@ -139,7 +139,7 @@ fn artwork(app: &adw::Application, output: &Path) {
                 };
                 let (x, y) = point("layer-clear-symbolic", 8, 8);
                 assert!(!differs(x, y), "clear retains its empty center");
-                for (x, y, value) in [(4, 4, 0.), (13, 13, 255.)] {
+                for (x, y, value) in [(4, 4, 0.), (12, 12, 255.)] {
                     let (x, y) = point("layer-colors-symbolic", x, y);
                     for c in 0..3 {
                         let expected = (value * opacity + f64::from(background[c]) * (1. - opacity))
@@ -527,8 +527,8 @@ fn controls(app: &adw::Application, output: &Path) {
             for (x, y, expected) in [
                 (4, 4, state(&w).colors.preview(state(&w).colors.foreground)),
                 (
-                    13,
-                    13,
+                    12,
+                    12,
                     state(&w).colors.preview(state(&w).colors.background),
                 ),
             ] {

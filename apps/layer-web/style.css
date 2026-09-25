@@ -354,7 +354,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel .layer-reference[aria-pressed="true"] { background: color-mix(in srgb,var(--text) 12%,transparent); }
 .layer-footer { margin-top: auto; }
 .layer-more { margin-left: auto; }
-.toolbar-controls .success { fill: var(--paint-color); }
+:is(.toolbar-controls, .header-tool.brush-color) .success { fill: var(--paint-foreground); }
+:is(.toolbar-controls, .header-tool.brush-color) .warning { fill: var(--paint-background); }
 .layer-rows { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1; }
 .layer-row { display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 2px 6px; flex: none; border-radius: 0; }
 .layer-row.selected { background: var(--selection); }
@@ -795,8 +796,6 @@ body[data-theme="light"] #header { text-shadow:none; }
 #header .header-measuring .header-item-content { flex:none; width:max-content; }
 .workspace-recovery { position:absolute; right:6px; top:80px; z-index:2000; background:var(--panel); }
 @media(prefers-reduced-motion:reduce) { .header-dragging .header-item { transition:none; } }
-.header-tool.brush-color .success { fill:var(--header-foreground); }
-.header-tool.brush-color .warning { fill:var(--header-background); }
 
 /* Tagged color forms use the same shared numeric editor as native hosts. */
 .color-dialog { width:400px; height:fit-content; padding:24px; border-radius:20px; max-width:calc(100vw - 24px); box-sizing:border-box; }

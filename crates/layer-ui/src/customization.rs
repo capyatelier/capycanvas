@@ -1073,7 +1073,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Color => (
             "Brush color".into(),
             "Choose the current paint color".into(),
-            "color",
+            "colors",
         ),
         ToolbarControl::ColorPicker => (
             "Color Picker".into(),

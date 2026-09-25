@@ -29,31 +29,24 @@ mod imp {
                 return;
             };
             let size = self.size.get() as f32;
-            snapshot.save();
-            snapshot.translate(&gtk::graphene::Point::new(
+            let round = gtk::Snapshot::new();
+            round.translate(&gtk::graphene::Point::new(
                 (obj.width() as f32 - size) * 0.5,
                 (obj.height() as f32 - size) * 0.5,
             ));
-            snapshot.scale(size / 16., size / 16.);
-            // Exact viewBox coordinates from layer-colors-symbolic.svg. Theme
-            // frame rounding must not turn the small square swatches into discs.
-            for (i, x, width) in [(1, 6.5, 8.75), (0, 0.75, 9.5)] {
-                append_checker(
-                    snapshot,
-                    gtk::graphene::Rect::new(x, x, width, width),
-                    1.,
-                    &textures[i],
-                );
-                snapshot.append_border(
-                    &gtk::gsk::RoundedRect::from_rect(
-                        gtk::graphene::Rect::new(x - 0.5, x - 0.5, width + 1., width + 1.),
-                        1.5,
-                    ),
+            round.scale(size / 16., size / 16.);
+            // Exact viewBox coordinates from layer-colors-symbolic.svg.
+            for (i, center, radius) in [(1, 11., 4.25), (0, 6., 5.)] {
+                let square =
+                    |r: f32| gtk::graphene::Rect::new(center - r, center - r, 2. * r, 2. * r);
+                append_checker(&round, square(radius), radius, &textures[i]);
+                round.append_border(
+                    &gtk::gsk::RoundedRect::from_rect(square(radius + 0.5), radius + 0.5),
                     &[1.; 4],
                     &[obj.color(); 4],
                 );
             }
-            snapshot.restore();
+            crate::squircle::append_round(snapshot, round);
         }
     }
 }

@@ -104,7 +104,7 @@ class AndroidIconTest {
                 val swatches = icons.indexOf("layer-colors-symbolic.svg")
                 fun composite(value: Float, channel: Float) = value * opacity + channel * (1-opacity)
                 val black = pixel(swatches, 4f, 4f)
-                val white = pixel(swatches, 13f, 13f)
+                val white = pixel(swatches, 12f, 12f)
                 assertEquals("Fixed black is not foreground tinted", composite(0f, background.red), black.red, .025f)
                 assertEquals("Fixed white is not foreground tinted", composite(1f, background.red), white.red, .025f)
                 val name = "$mode-$size-$state"

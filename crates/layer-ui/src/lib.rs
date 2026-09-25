@@ -418,6 +418,7 @@ pub fn ui_catalog() -> UiCatalog {
             "up",
             "down",
             "color",
+            "colors",
             "swap",
             "color-swap",
             "color-circle",
