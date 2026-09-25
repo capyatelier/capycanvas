@@ -12697,7 +12697,7 @@ fn native_divider_cursor_input() {
     w.window.present();
     pump(1200);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let original = state(&w).workspace;
+    let original = layer_ui::WorkspaceState::default();
     let native = w.window.surface().unwrap();
     let pointer = native.display().default_seat().unwrap().pointer().unwrap();
     let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());
