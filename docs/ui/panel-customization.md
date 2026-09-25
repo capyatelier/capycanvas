@@ -166,11 +166,14 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   distances and line both start below the app header, not at the window's top.
   Tear-off, snap reach and Zen proximity share one
   80px Rust constant; the smaller snap zone is half that distance.
-  Floating groups retain their width and default to the smaller of 75% of viewport height or
-  natural active content plus tabs. Standalone floating toolbars default to
+  Floating groups retain their width. Without a stored height they default to
+  the smaller of 75% of viewport height or the group's fitted content height
+  (see content fitting below: scrollers show their controls and four rows)
+  plus tabs; drag releases store the height described in the drag convention.
+  Standalone floating toolbars default to
   three Small or Large columns, or two Labeled columns, with enough rows for
-  every tool. Manual resizing overrides this; changing tabs restores natural
-  height. Floating groups accept tab merges anywhere inside, never split drops.
+  every tool. Manual resizing overrides this and survives tab changes.
+  Floating groups accept tab merges anywhere inside, never split drops.
   When removal leaves a floating group with only a toolbar, clear the group's
   manual size and tab-fit constraint and restore that toolbar's default grid,
   without moving its anchor. This applies to hiding and moving panels alike.
