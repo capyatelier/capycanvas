@@ -1323,19 +1323,29 @@ class AndroidHostTest {
         val id = group("brushes").getInt("id")
         for (panel in listOf("sizes", "layers")) action(obj("type" to "move_panel", "panel" to panel,
             "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
+        fun automaticNames(panels: List<String>): List<Boolean> {
+            for (panel in panels) compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true).assertExists()
+            val names = panels.map { compose.onAllNodesWithTag("tab-name-$it", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+            assertEquals("Automatic names fill tabs from the left: $names", names.sortedDescending(), names)
+            return names
+        }
         for (theme in listOf("dark", "light")) {
             action(obj("type" to "set_theme", "theme" to theme))
             for ((style, label) in listOf("automatic" to "Automatic", "active_name" to "Icons and active tab name", "icon_name" to "Icons and names", "name" to "Names only", "icon" to "Icons only")) {
                 contextGrip("group-grip-$id")
                 compose.onNodeWithText(label).performClick()
+                var fitted: List<Boolean>? = null
                 for (active in listOf("brushes", "sizes", "layers")) {
                     compose.onNodeWithTag("tab-$active").performClick()
                     compose.waitUntil(10_000) { group(active).getString("active") == active }
-                    for (panel in listOf("brushes", "sizes", "layers")) {
+                    if (style == "automatic") {
+                        val names = automaticNames(listOf("brushes", "sizes", "layers"))
+                        assertEquals("Selection does not change automatic names", fitted ?: names, names); fitted = names
+                    } else for (panel in listOf("brushes", "sizes", "layers")) {
                         val icon = compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true)
                         val name = compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true)
                         if (style != "name") icon.assertExists() else icon.assertDoesNotExist()
-                        if (style == "icon_name" || style == "name" || (style in listOf("automatic", "active_name") && panel == active)) name.assertExists() else name.assertDoesNotExist()
+                        if (style == "icon_name" || style == "name" || (style == "active_name" && panel == active)) name.assertExists() else name.assertDoesNotExist()
                     }
                 }
                 capture("group-tabs-$style-$theme")
@@ -1348,8 +1358,7 @@ class AndroidHostTest {
             }
             capture("group-tabs-automatic-two-tabs-$theme")
             action(obj("type" to "move_panel", "panel" to "layers", "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
-            for (panel in listOf("brushes", "sizes")) compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true).assertDoesNotExist()
-            compose.onNodeWithTag("tab-name-layers", useUnmergedTree = true).assertExists()
+            automaticNames(listOf("brushes", "sizes", "layers"))
         }
         compose.onNodeWithTag("tab-layers").performTouchInput { longClick() }
         compose.onNodeWithText("Icons only").assertDoesNotExist()
