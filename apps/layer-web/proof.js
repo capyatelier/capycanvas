@@ -156,7 +156,7 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     canvas.onpointerup=e=>{if(e.pointerId===padContact){padContact=null;update(e,'up');if(e.pointerType==='touch')lastTouch=pointerMoved?null:{time:e.timeStamp,x:e.clientX,y:e.clientY,part:activePart};}};
     for(const name of ['pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===padContact)cancelDial();});
     function keyDown(e){
-      if(e.key==='Escape'){e.preventDefault();cancelDial();return;}
+      if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancelDial();return;}
       if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;
       e.preventDefault();if(padContact!==null)return;
       if(!keyContact){keyContact=true;change('down');}
