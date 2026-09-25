@@ -404,6 +404,7 @@ impl MetalHost {
             Vec::new()
         };
         let glass = host.session.state().palette.glass;
+        let stroke = host.session.engine().has_active_stroke();
         let backdrop = if glass.transparency.enabled() && self.blank_presented && host.startup.canvas_ready {
             self.glass_regions(host)
         } else {
@@ -464,7 +465,7 @@ impl MetalHost {
         surface.presenter.set_color_picker(gpu, picker);
         surface.presenter.set_overviews(gpu, &overviews);
         surface.presenter.set_backdrop(gpu, &backdrop,
-            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset });
+            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset }, stroke);
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.present(
             gpu,
