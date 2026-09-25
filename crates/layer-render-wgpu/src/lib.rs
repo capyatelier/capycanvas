@@ -4455,8 +4455,10 @@ impl CanvasRenderer for WgpuRasterizer {
                     && b.style.execution == BrushExecution::Dry
                     && !b.style.rendering.edge_after_stroke
             });
+        let canonical_pages = native_commit.as_ref().map_or(&[][..], |frame| &frame.canonical_pages[..]);
         let mut composite_tiles = (!reset && !packet.composite_all
-            && (local_contacts || (dirty.is_empty() && !self.transform_damage.is_empty()
+            && (local_contacts || (dirty.is_empty()
+                && (!self.transform_damage.is_empty() || !canonical_pages.is_empty())
                 && original_batches.is_empty() && packet.dabs.is_empty()))
             && packet.layers.iter().all(|l| {
                 l.effect.as_ref().is_none_or(|e| !e.animated() && !e.program.image_boundary())
@@ -4489,6 +4491,13 @@ impl CanvasRenderer for WgpuRasterizer {
                 }),
                 packet.document_extent,
             );
+            if let Some(tiles) = &mut composite_tiles {
+                tiles.extend(page_coordinates(bounds));
+            }
+            dirty = dirty.union(bounds);
+        }
+        for &(id, coordinate) in canonical_pages {
+            let bounds = brush_tiles::document_damage(packet.layers, id, page_rect(coordinate), packet.document_extent);
             if let Some(tiles) = &mut composite_tiles {
                 tiles.extend(page_coordinates(bounds));
             }

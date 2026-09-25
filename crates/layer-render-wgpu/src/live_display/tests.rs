@@ -1081,6 +1081,49 @@ fn coalesced_contact_composition_matches_a_full_rebuild_without_repainting_its_e
 }
 
 #[test]
+fn committed_contact_strokes_present_their_canonical_native_pixels() {
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
+        SampleFlags, ToolKind, ViewTransform, input_queue};
+    for preset in [layer_core::DefaultBrushPreset::AntiquePen, layer_core::DefaultBrushPreset::BrushedInk] {
+        let doc = layer_core::Document::new("canonical contact", 1024, 512);
+        let v = view([0.5, 0., 0., 0.5, 0., 0.]);
+        let (mut input, consumer) = input_queue(64);
+        let mut engine = CanvasEngine::new(bounded_renderer(doc.color).unwrap(), doc, consumer, v,
+            ViewTransform { revision: 0, surface_to_document: [2., 0., 0., 2., 0., 0.] }).unwrap();
+        engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..Default::default() }).unwrap();
+        let mut brush = layer_core::default_brush(preset);
+        brush.diameter = 70.;
+        brush.color_rgba_linear = [0.08, 0.015, 0.25, 1.];
+        engine.set_brush(brush).unwrap();
+        for i in 0..=32 {
+            let t = i as f32 / 32.;
+            input.push(PenEvent {
+                device_id: 1, sequence: i + 1, timestamp_ns: (i + 1) * 8_333_333,
+                view_revision: 0,
+                surface_position: layer_core::Point { x: 40. + 240. * t, y: 120. + 50. * (t * std::f32::consts::TAU).sin() },
+                pressure: if i < 32 { 0.2 + 0.7 * (t * std::f32::consts::PI).sin() } else { 0. },
+                tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
+                phase: if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move },
+                tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+            }).unwrap();
+            loop {
+                engine.render_frame().unwrap();
+                engine.backend_mut().wait_idle().unwrap();
+                if !engine.has_pending_input() { break; }
+            }
+        }
+        assert_eq!(engine.metrics().committed_strokes, 1);
+        let mut presenter = ViewportPresenter::for_surface(engine.backend(),
+            wgpu::TextureFormat::Rgba32Float, SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        let live = present(engine.backend(), &mut presenter, v);
+        let doc = engine.document().clone();
+        submit(engine.backend_mut(), &doc, v, true);
+        assert!(live == present(engine.backend(), &mut presenter, v),
+            "{preset:?}: the committed stroke must present the pixels Undo/Redo and reopening restore");
+    }
+}
+
+#[test]
 fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_backing() {
     use layer_engine::{
         CanvasEngine, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform, input_queue,

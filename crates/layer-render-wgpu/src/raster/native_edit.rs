@@ -122,6 +122,7 @@ struct Publication {
 pub(crate) struct NativeFrame {
     capture: Option<NativeCapture>,
     publications: Vec<Publication>,
+    pub(crate) canonical_pages: Vec<(LayerId, [u32; 2])>,
 }
 impl Drop for NativeFrame {
     fn drop(&mut self) {
@@ -289,6 +290,7 @@ impl WgpuRasterizer {
         let mut frame = NativeFrame {
             capture: None,
             publications: Vec::new(),
+            canonical_pages: Vec::new(),
         };
         // Reserve the ordinary backing worker before borrowing live textures.
         let runtime = self.raster.get_or_insert_with(Default::default);
@@ -335,6 +337,7 @@ impl WgpuRasterizer {
                     } else {
                         let tile = RasterTile::pending(key.plane.descriptor(self.document_color()));
                         inputs.push((texture, tile.clone()));
+                        frame.canonical_pages.push((id, key.coordinate));
                         tile
                     };
                     data.tiles.insert(key, tile);
