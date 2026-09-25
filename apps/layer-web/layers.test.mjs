@@ -60,7 +60,7 @@ export async function checkLayers({ call, evaluate, settle }) {
   await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').click()`);
   assert.equal(await evaluate("layerApp.state().layers.length"),initialCount);
   await send({op:"select",id:2,mask:false});
-  assert.ok(await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').disabled`));
+  assert.equal(await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').disabled`),false,"Paper is deletable");
   await send({op:"select",id:1,mask:false});
   // Menus and hover tips resolve typed actions, including remapped/custom keys.
   await evaluate(`(() => {
@@ -76,7 +76,7 @@ export async function checkLayers({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.querySelector('#zen-button').title"), "Zen mode (Ctrl+Alt+J)");
   await evaluate(`document.querySelector('.layer-footer [aria-label="New layer"]').dispatchEvent(new PointerEvent('pointerenter'))`);
   assert.equal(await evaluate(`document.querySelector('.layer-footer [aria-label="New layer"]').title`), "New layer (Ctrl+Alt+N)");
-  assert.deepEqual(await evaluate(`(() => { const item=layerApp.app.layer_menu(1n,false).sections.flat().find(i=>i.label==='Alpha lock'); return [item.hint,item.selected]; })()`), ["Alt+L", false]);
+  assert.deepEqual(await evaluate(`(() => { const items=section=>section.flat().flatMap(i=>[i,...items(i.sections)]),item=items(layerApp.app.layer_menu(1n,false).sections).find(i=>i.label==='Alpha lock'); return [item.hint,item.selected]; })()`), ["Alt+L", false]);
   await evaluate("layerApp.dispatch({type:'restore_settings',settings:originalLayerTestSettings}); delete window.originalLayerTestSettings");
   await evaluate(`layerApp.dispatch({type:'set_theme',theme:'dark'})`);
   const thumb = await evaluate(`new Promise((resolve,reject)=>{ const start=performance.now(); function check(){
