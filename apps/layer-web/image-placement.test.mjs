@@ -15,7 +15,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     }
   };
   const invoke=async command=>{
-    await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);
+    await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);
     const reply=await call('Runtime.evaluate',{expression:`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`,userGesture:true});
     assert.equal(reply.exceptionDetails,undefined);await settle();
   };
