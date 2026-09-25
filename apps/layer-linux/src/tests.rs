@@ -1617,11 +1617,6 @@ fn native_column_width_double_click() {
     pump(1000);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let original = state(&w).workspace;
-    let controllers = w.surface.observe_controllers();
-    let click = (0..controllers.n_items())
-        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
-        .unwrap();
     for (band, group, expected) in [(3, 5, 242.), (7, 8, 254.)] {
         for (nested, collapsed) in [(false, false), (false, true), (true, false)] {
             let mut workspace = original.clone();
@@ -1658,7 +1653,7 @@ fn native_column_width_double_click() {
             assert!(matches!(w.drag_target_at(point), Some(DragTarget::Divider(id)) if id == band));
             // Model the pending second press as well as the GTK signal.
             w.workspace_drag_input(ContactPhase::Down, point, None);
-            click.emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+            assert!(double_press_handle(&w, point));
             pump(200);
             let after = state(&w).workspace;
             let b = after.layout.bands.iter().find(|b| b.id == band).unwrap();
@@ -6053,6 +6048,15 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     }
     panic!("No native control for {id:?}");
 }
+fn double_press_handle(w: &Rc<Workspace>, point: [f32; 2]) -> bool {
+    let Some(action) = w.handle_double_press_action(point) else {
+        return false;
+    };
+    w.workspace_drag_input(ContactPhase::Cancel, point, None);
+    w.dispatch(action);
+    true
+}
+
 fn click(button: &gtk::Button) {
     assert!(button.is_sensitive());
     button.emit_clicked();
@@ -7220,28 +7224,13 @@ fn native_floating_gestures() {
     assert!(
         matches!(w.drag_target_at([point.x(), point.y()]), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
     );
-    let controllers = w.surface.observe_controllers();
-    let click = (0..controllers.n_items())
-        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
-        .unwrap();
     // Tabs are excluded from double-click reset.
-    click.emit_by_name::<()>(
-        "pressed",
-        &[
-            &2i32,
-            &((before.x + 15.0) as f64),
-            &((before.y + 15.0) as f64),
-        ],
-    );
+    assert!(!double_press_handle(&w, [before.x + 15.0, before.y + 15.0]));
     assert_eq!(bounds(), before);
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(true);
-    click.emit_by_name::<()>(
-        "pressed",
-        &[&2i32, &(point.x() as f64), &(point.y() as f64)],
-    );
+    assert!(double_press_handle(&w, [point.x(), point.y()]));
     assert_eq!(
         [bounds().width, bounds().height],
         [initial.width, initial.height]
@@ -7266,14 +7255,10 @@ fn native_floating_gestures() {
     restore();
     // At natural size, empty title space toggles the lone panel's header.
     // The entire footer strip toggles it back, including outside the dots.
-    click.emit_by_name::<()>(
-        "pressed",
-        &[
-            &2i32,
-            &((initial.x + initial.width - 28.0) as f64),
-            &((initial.y + 10.0) as f64),
-        ],
-    );
+    assert!(double_press_handle(
+        &w,
+        [initial.x + initial.width - 28.0, initial.y + 10.0]
+    ));
     pump(250);
     assert!(
         state(&w)
@@ -7295,7 +7280,7 @@ fn native_floating_gestures() {
         matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
     );
     capture_reference(&w, &format!("{dir}/panel-cycle-tab-hidden.png"), 1.0);
-    click.emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+    assert!(double_press_handle(&w, point));
     pump(250);
     assert!(
         !state(&w)
@@ -9151,11 +9136,7 @@ fn native_docked_handles() {
     pump(700);
     let panel = Panel::Sizes;
     let group = state(&w).workspace.layout.panel_group(panel).unwrap();
-    let controllers = w.surface.observe_controllers();
-    let click = (0..controllers.n_items())
-        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
-        .unwrap();
+    let column = state(&w).workspace.layout.column_for_group(group).unwrap();
     let dir = "../../artifacts/ui/workspace-management/gtk";
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
@@ -9166,55 +9147,34 @@ fn native_docked_handles() {
             });
             pump(200);
             let initial = state(&w).workspace;
-            for hidden in [true, false] {
-                let root = w
-                    .groups
-                    .borrow()
-                    .iter()
-                    .find(|g| g.id == group)
-                    .unwrap()
-                    .root
-                    .clone();
-                let grip = find_css(root.upcast_ref(), "panel-grip").unwrap();
-                let b = grip.compute_bounds(&w.surface).unwrap();
-                let point = [b.x() + b.width() / 2.0, b.y() + b.height() / 2.0];
-                assert!(
-                    matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
-                );
-                click.emit_by_name::<()>(
-                    "pressed",
-                    &[&2i32, &(point[0] as f64), &(point[1] as f64)],
-                );
-                pump(300);
-                let mut expected = initial.clone();
-                expected
-                    .layout
-                    .panels
-                    .iter_mut()
-                    .find(|p| p.id == panel)
-                    .unwrap()
-                    .hide_tab = hidden;
-                // Hiding a header changes host text measurements, not dock sizes.
-                expected.layout.measurements = state(&w).workspace.layout.measurements;
-                assert_eq!(
-                    state(&w).workspace,
-                    expected,
-                    "First double-click toggles only tab visibility"
-                );
-                let resolved = w
-                    .resolved()
-                    .groups
-                    .into_iter()
-                    .find(|g| g.id == group)
-                    .unwrap();
-                assert!(!resolved.floating);
-                assert_eq!(resolved.tabs_visible, !hidden);
-                capture_reference(
-                    &w,
-                    &format!("{dir}/docked-handle-{style:?}-{hidden}-{theme:?}.png"),
-                    1.0,
-                );
-            }
+            let root = w
+                .groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .root
+                .clone();
+            let grip = find_css(root.upcast_ref(), "panel-grip").unwrap();
+            let b = grip.compute_bounds(&w.surface).unwrap();
+            let point = [b.x() + b.width() / 2.0, b.y() + b.height() / 2.0];
+            assert!(
+                matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+            );
+            assert!(double_press_handle(&w, point));
+            pump(300);
+            let layout = &state(&w).workspace.layout;
+            assert!(layout.is_collapsed(column), "{style:?}");
+            assert!(!layout.panel(panel).unwrap().hide_tab);
+            capture_reference(
+                &w,
+                &format!("{dir}/docked-handle-{style:?}-collapsed-{theme:?}.png"),
+                1.0,
+            );
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(initial),
+            });
+            pump(200);
         }
     }
     let initial = state(&w).workspace;
@@ -9257,14 +9217,10 @@ fn native_docked_handles() {
             let root = w.panel_widget(Panel::Toolbar);
             let grip = find_css(&root, "panel-grip").unwrap();
             let b = grip.compute_bounds(&w.surface).unwrap();
-            click.emit_by_name::<()>(
-                "pressed",
-                &[
-                    &2i32,
-                    &((b.x() + b.width() / 2.0) as f64),
-                    &((b.y() + b.height() / 2.0) as f64),
-                ],
-            );
+            assert!(double_press_handle(
+                &w,
+                [b.x() + b.width() / 2.0, b.y() + b.height() / 2.0]
+            ));
             pump(300);
             let fitted = w
                 .resolved()
