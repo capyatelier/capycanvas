@@ -88,10 +88,9 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val accent = Color(0xff3584e4)
     val sliderFill = lerp(panel, text, .5f)
     private val accentHsl = FloatArray(3).also { ColorUtils.colorToHSL(accent.toArgb(), it) }
-    private fun accentTint(lightness: Float) =
-        Color.hsl((accentHsl[0] + 358f) % 360f, accentHsl[1] * .81f, lightness.coerceIn(0f, 1f))
+    private fun accentTint(lightness: Float) = Color.hsl((accentHsl[0] + 358f) % 360f, accentHsl[1] * .81f, lightness)
     val active = if (dark) accent.copy(alpha = .28f) else accentTint(.85f)
-    val headerActive = if (dark) active.compositeOver(panel) else accentTint(accentHsl[2] + .08f)
+    val headerActive = if (dark) active.compositeOver(panel) else accentTint(.79f)
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")
     val divider = text.copy(alpha = .12f)

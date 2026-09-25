@@ -26,7 +26,7 @@ in the table is transformed per channel using the same rule as a grey.
 | Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
 | Workspace switcher well | Inactive tab bar at 75% opacity | Same | Translucent over artwork |
 | Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy, footer zoom/HDR/proof status | B at 75% opacity | B at 75% opacity | Translucent over artwork |
-| Selected workspace and title-bar tool | Accent at 28% over the panel body, opaque | Accent in HSL with hue −2°, saturation ×0.81, lightness +8 (`#679fdb` from `#3584e4`) | Stays visible on the light title-bar well |
+| Selected workspace and title-bar tool | Accent at 28% over the panel body, opaque | Accent in HSL with hue −2°, saturation ×0.81, lightness 79% (`#a8c8eb` from `#3584e4`) | Stays visible on the light title-bar well |
 | Selected drawing tab | Panel body, opaque | Same | Matches selected panel tabs |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
 | Native GTK view background | `#2b2b2b` = mix(B,K,8/51) | `#e4e4e4` = mix(B,W,44/71) | Regenerate |

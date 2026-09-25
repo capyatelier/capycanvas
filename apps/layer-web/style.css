@@ -89,7 +89,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 /* Override the general 36px header button height inside the shared 34px pill. */
 #header .workspace-switcher button { flex:none; max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-body[data-theme="light"] { color-scheme: light; --selected: hsl(from var(--accent) calc(h - 2) calc(s * .81) 85); --header-active: hsl(from var(--accent) calc(h - 2) calc(s * .81) calc(l + 8)); --header-active-hover: color-mix(in srgb, var(--header-active), black 8%); --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
+body[data-theme="light"] { color-scheme: light; --selected: hsl(from var(--accent) calc(h - 2) calc(s * .81) 85); --header-active: hsl(from var(--accent) calc(h - 2) calc(s * .81) 79); --header-active-hover: color-mix(in srgb, var(--header-active), black 8%); --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 .panel-context-menu { font-size: var(--ui-text-size); }
