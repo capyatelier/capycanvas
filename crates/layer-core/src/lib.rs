@@ -197,6 +197,13 @@ pub struct Layer {
 }
 
 impl Layer {
+    fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
+        out.extend(self.selection.iter());
+        for mask in self.mask.iter().chain(self.pending_operations.iter().map(|op| &op.coverage)) {
+            out.extend(mask.initial.iter());
+            for op in mask.pending_operations.iter() { out.extend(op.coverage.initial.iter()); }
+        }
+    }
     /// Composition metadata without copying immutable paint history.
     pub fn composite_snapshot(&self) -> Self {
         Self {
@@ -1722,9 +1729,9 @@ impl Edit {
         match self {
             Self::SetSelection(selection) => out.extend(selection.iter()),
             Self::SetSavedSelection { selection, .. } => out.push(selection),
-            Self::ReplaceLayer(layer) => out.extend(layer.selection.iter()),
-            Self::InsertLayer { layer, .. } => out.extend(layer.selection.iter()),
-            Self::SetColor { layers, .. } => out.extend(layers.iter().filter_map(|l| l.selection.as_ref())),
+            Self::ReplaceLayer(layer) => layer.selection_roots(out),
+            Self::InsertLayer { layer, .. } => layer.selection_roots(out),
+            Self::SetColor { layers, .. } => layers.iter().for_each(|l| l.selection_roots(out)),
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.selection_roots(out)),
             _ => (),
         }
@@ -1809,6 +1816,7 @@ impl HistoryEntry {
         fn layer_metadata(layer: &Layer) -> usize {
             let mut metadata = layer.clone();
             metadata.selection = None; // Shared coverage is charged by identity.
+            if let Some(mask) = &mut metadata.mask { mask.initial = None; }
             serialized(&metadata)
         }
         fn size(edit: &Edit) -> usize {

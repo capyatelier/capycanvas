@@ -16,7 +16,9 @@ pub(super) struct Accounting {
 impl Accounting {
     pub fn new(document: &Document) -> Self {
         let mut result = Self::default();
-        for selection in document.selection.iter().chain(document.layers.iter().filter_map(|l| l.selection.as_ref())) {
+        let mut selections: Vec<_> = document.selection.iter().collect();
+        for layer in &document.layers { layer.selection_roots(&mut selections); }
+        for selection in selections {
             result.charge_selection(selection);
         }
         for layer in &document.layers {
@@ -74,7 +76,7 @@ impl Accounting {
         bytes
     }
 
-    fn charge_selection(&mut self, selection: &Selection) -> usize {
+    pub(super) fn charge_selection(&mut self, selection: &Selection) -> usize {
         match &selection.shape {
             SelectionShape::Pixels(pixels) => {
                 if self.selections.insert(pixels.words().as_ptr() as usize) {
