@@ -54,7 +54,7 @@ struct ToolSetControls: View {
                         }
                     }
                 }.padding(.horizontal, group ? 0 : 6).padding(.vertical, group ? 4 : 3)
-                    .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? 44
+                    .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? (store.tonalActive ? 36 : 44)
                         : store.catalog["text_size_pt"].number * 4 / 3 * 1.66 + 8)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
@@ -108,6 +108,7 @@ struct ToolSettingsControls: View {
         let selected = ["groups", "subtools"].flatMap { store.state["tool_set"][$0].array }
             .filter { $0["selected"].bool }.map { $0["action"].stableKey }.joined(separator: ":")
         return String(store.state["document_file"]["epoch"].uint)
+            + ":" + String(store.state["toolbar_context_generation"].uint)
             + ":" + selected + ":" + String(store.state["brush"]["preset"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["id"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["mask_selected"].bool)
@@ -115,6 +116,8 @@ struct ToolSettingsControls: View {
     var body: some View {
         if ["pick_visible", "pick_layer"].contains(store.state["layer_tools"]["tool"].string) {
             PickerSettingsRows(store: store)
+        } else if store.tonalActive {
+            TonalSettingsControls(store: store, context: context).id(context)
         } else {
             settingsBody
         }
@@ -153,6 +156,47 @@ struct ToolSettingsControls: View {
 
 private extension JSON {
     var settingID: String { self["id"].string }
+}
+
+extension EditorStore {
+    var tonalActive: Bool { state["tool_extra"].array.contains { $0["Choice"]["id"].string == "tonal-tones" } }
+}
+
+private struct TonalSettingsControls: View {
+    @ObservedObject var store: EditorStore
+    let context: String
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    var body: some View {
+        let settings = store.state["tool_settings"].array
+        let modes = store.state["tool_actions"].array.filter { SelectionModes.commands.contains($0["command"].string) }
+        let bounds = settings.filter { ["tonal_lower", "tonal_upper"].contains($0["id"].string) }
+        VStack(alignment: .leading, spacing: 2) {
+            if !modes.isEmpty { SelectionModeGroup(store: store, actions: modes, height: 36) }
+            ForEach(store.state["tool_extra"].array.indices, id: \.self) { index in
+                let choice = store.state["tool_extra"][index]["Choice"]
+                if !choice.isNull {
+                    SegmentedChoiceBar(choice: choice, prefix: "tool", height: 36, iconSize: 20, palette: palette) { item in
+                        store.dispatch(item["action"])
+                    }
+                }
+            }
+            if bounds.count == 2 {
+                RangeControl(store: store, bounds: bounds, label: "Range in stops relative to reference white (0)",
+                    prefix: "tool") { index, value, completion in
+                    store.edit(["type": "set_tool_setting", "id": bounds[index]["id"].raw, "value": value], completion: completion)
+                }
+            }
+            ForEach(settings.filter { !["tonal_lower", "tonal_upper"].contains($0["id"].string) }, id: \.settingID) { item in
+                HStack(spacing: 6) {
+                    Text(item["label"].string).lineLimit(1).frame(width: 62, alignment: .leading)
+                    NumberControl(store: store, label: item["label"].string, value: item["value"].number,
+                        control: item["numeric"], identifier: "tool-" + item.settingID, inline: true) { value, completion in
+                        store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
+                    }
+                }.frame(height: 28).accessibilityElement(children: .contain).accessibilityIdentifier("tool-setting-" + item.settingID)
+            }
+        }
+    }
 }
 
 private struct PickerSettingsRows: View {

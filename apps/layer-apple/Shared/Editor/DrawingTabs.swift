@@ -50,6 +50,11 @@ import UniformTypeIdentifiers
     func drop(id: UInt64, hits: [[String: Any]], point: CGPoint, vertical: Bool, completion: @escaping (JSON) -> Void) {
         store?.query(["type": "document_tabs", "op": "drop", "hits": hits, "point": [point.x, point.y], "vertical": vertical], completion: completion)
     }
+    func slide(id: UInt64, hits: [[String: Any]], clip: CGRect, press: CGPoint, point: CGPoint, completion: @escaping (JSON) -> Void) {
+        store?.query(["type": "document_tabs", "op": "slide", "id": id, "hits": hits,
+            "clip": ["x": clip.minX, "y": clip.minY, "width": clip.width, "height": clip.height],
+            "press": [press.x, press.y], "point": [point.x, point.y]], completion: completion)
+    }
     func close(_ id: UInt64) {
         presented = false
         select(id) { [weak self] selected in
@@ -127,12 +132,24 @@ private struct DrawingMeasure: ViewModifier {
     weak var controller: DrawingTabsController?
     @Published var dragged: UInt64?
     @Published var before: JSON?
+    @Published var slide: JSON?
     @Published var menu: UInt64?
     private var motion: UInt64 = 0
+    private var press = CGPoint.zero
     private var hits: [[String: Any]] {
         frames.map { id, f in ["id": id, "bounds": ["x": f.body.minX, "y": f.body.minY, "width": f.body.width, "height": f.body.height]] }
     }
-    func cancel() { contact.cancel(); dragged = nil; before = nil; menu = nil; motion &+= 1 }
+    private var orderedHits: [[String: Any]] {
+        (controller?.rows ?? []).compactMap { row in
+            frames[row["id"].uint].map { f in ["id": row["id"].uint, "bounds": ["x": f.body.minX, "y": f.body.minY, "width": f.body.width, "height": f.body.height]] }
+        }
+    }
+    private var strip: CGRect { frames.values.map(\.body).reduce(CGRect.null) { $0.union($1) } }
+    func cancel() { contact.cancel(); dragged = nil; before = nil; slide = nil; menu = nil; motion &+= 1 }
+    func settle() {
+        guard slide != nil, !contact.dragging else { return }
+        withTransaction(Transaction(animation: nil)) { dragged = nil; slide = nil }
+    }
     func acceptsContext(at point: CGPoint) -> Bool { enabled && viewport.contains(point) && frames.values.contains { $0.body.contains(point) } }
     func context(at point: CGPoint) { if acceptsContext(at: point) { menu = frames.first { $0.value.body.contains(point) }?.key } }
     func source(at point: CGPoint) -> ReorderTarget? {
@@ -141,18 +158,36 @@ private struct DrawingMeasure: ViewModifier {
         return ReorderTarget(id: String(id), surface: !vertical || frame.grip.contains(point) ? .handle : .row,
             valid: { [weak self] _ in self?.enabled == true && self?.controller?.rows.contains { $0["id"].uint == id } == true },
             openContext: { [weak self] in self?.menu = id }, closeContext: { [weak self] in self?.menu = nil },
-            begin: { [weak self] _ in self?.dragged = id }, move: { [weak self] p in self?.move(id, p) },
+            begin: { [weak self] p in self?.dragged = id; self?.press = p }, move: { [weak self] p in self?.move(id, p) },
             finish: { [weak self] p in
                 guard let self else { return }
-                motion &+= 1; dragged = nil; before = nil
+                motion &+= 1
+                if !vertical {
+                    controller?.slide(id: id, hits: orderedHits, clip: strip, press: press, point: p) { [weak self] preview in
+                        guard let self else { return }
+                        guard preview["attached"].bool else { dragged = nil; slide = nil; return }
+                        slide = preview
+                        controller?.edit(["op": "reorder", "id": id, "before": preview["before"].raw])
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.settle() }
+                    }
+                    return
+                }
+                dragged = nil; before = nil
                 guard viewport.contains(p) else { return }
                 controller?.drop(id: id, hits: hits, point: p, vertical: vertical) { [weak self] target in
                     if !target.isNull { self?.controller?.edit(["op": "reorder", "id": id, "before": target["before"].raw]) }
                 }
-            }, cancel: { [weak self] in self?.dragged = nil; self?.before = nil; self?.motion &+= 1 })
+            }, cancel: { [weak self] in self?.dragged = nil; self?.before = nil; self?.slide = nil; self?.motion &+= 1 })
     }
     private func move(_ id: UInt64, _ point: CGPoint) {
         motion &+= 1; let token = motion
+        if !vertical {
+            controller?.slide(id: id, hits: orderedHits, clip: strip, press: press, point: point) { [weak self] preview in
+                guard let self, motion == token, dragged == id else { return }
+                slide = preview.isNull ? nil : preview
+            }
+            return
+        }
         guard viewport.contains(point) else { before = nil; return }
         controller?.drop(id: id, hits: hits, point: point, vertical: vertical) { [weak self] target in
             guard let self, motion == token, dragged == id else { return }
@@ -200,10 +235,16 @@ private struct DrawingTabList: View {
     let vertical: Bool
     @StateObject private var interaction = DrawingTabInteraction()
     @Environment(\.editorPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private func offset(_ id: UInt64, _ index: Int) -> CGFloat {
+        guard !vertical, let slide = interaction.slide else { return 0 }
+        if interaction.dragged == id { return slide["bounds"]["x"].number - (interaction.frames[id]?.body.minX ?? 0) }
+        return slide["offsets"][index].number
+    }
     var body: some View {
         let layout = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 6))
         layout {
-            ForEach(tabs.rows, id: \.drawingID) { row in
+            ForEach(Array(tabs.rows.enumerated()), id: \.element.drawingID) { index, row in
                 let id = row["id"].uint
                 HStack(spacing: 5) {
                     if vertical {
@@ -226,8 +267,11 @@ private struct DrawingTabList: View {
                         .modifier(DrawingMeasure(id: id, part: \.close))
                 }.padding(.horizontal, 7).frame(height: vertical ? 48 : nil).frame(maxHeight: vertical ? nil : .infinity)
                     .modifier(DrawingTabBackground(selected: id == tabs.selected, vertical: vertical))
-                    .opacity(interaction.dragged == id ? 0.4 : 1)
+                    .opacity(vertical && interaction.dragged == id ? 0.4 : 1)
                     .modifier(DrawingMeasure(id: id))
+                    .offset(x: offset(id, index))
+                    .animation(interaction.dragged == id || reduceMotion ? nil : .timingCurve(0, 0, 0.58, 1, duration: 0.12), value: offset(id, index))
+                    .zIndex(interaction.dragged == id ? 1 : 0)
                     .editorPopover(isPresented: Binding(get: { interaction.menu == id }, set: { if !$0 { interaction.menu = nil } })) {
                         VStack(alignment: .leading) {
                             Button("Move Earlier") { tabs.edit(["op":"step", "id":id,"forward":false]); interaction.menu = nil }
@@ -239,7 +283,7 @@ private struct DrawingTabList: View {
         }.coordinateSpace(name: "drawing-tabs")
             .background(NativeReorderInput(model: interaction))
             .onPreferenceChange(DrawingFrames.self) { interaction.frames = $0 }
-            .onAppear { update() }.onChange(of: tabs.view.stableKey) { _, _ in update() }
+            .onAppear { update() }.onChange(of: tabs.view.stableKey) { _, _ in update(); interaction.settle() }
             .onChange(of: tabs.busy) { _, _ in update() }.onDisappear { interaction.cancel() }
             .overlay(alignment: .topLeading) {
                 if let marker = interaction.marker { Rectangle().fill(palette.accent).frame(width: marker.width, height: marker.height).offset(x: marker.minX, y: marker.minY).allowsHitTesting(false) }

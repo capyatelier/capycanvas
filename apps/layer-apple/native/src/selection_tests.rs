@@ -65,7 +65,7 @@ fn apple_selection_tools_latch_modifiers_and_keep_one_step_history() {
     for platform in [0, 1] {
         let app = selection_app(platform);
         let state = app.state();
-        for id in ["select", "rectangle_select", "ellipse_select", "polygon_select", "color_select", "quick_mask"] {
+        for id in ["select", "rectangle_select", "ellipse_select", "polygon_select", "color_select", "tonal_select", "quick_mask"] {
             let command = state["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
             assert_eq!(command["enabled"], true, "{id} is available on Apple");
         }

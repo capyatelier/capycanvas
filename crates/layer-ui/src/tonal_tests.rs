@@ -34,8 +34,8 @@ mod tonal_checks {
         .unwrap();
     }
     #[test]
-    fn tonal_controls_and_masks_are_available_on_gtk_web_and_android() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    fn tonal_controls_and_masks_are_available_outside_windows() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             let mut s = session(); s.set_platform(platform);
             invoke(&mut s, CommandId::TonalSelect);
             assert!(s.state.tool_set.subtools.iter().any(|item| item.icon == "tonal-select"));
