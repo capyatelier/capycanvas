@@ -87,6 +87,9 @@ function Export-Png([string]$Name) {
  $before=(Model).state.document_file|ConvertTo-Json -Compress
  Wait-Until {((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Export stayed disabled'
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'export_document'
+ Invoke 'Preview export' -Name
+ Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not prepare' 60
+ Invoke 'Export…' -Name
  $picker=Control 'Save As' -Name
  if($picker.Current.ClassName -ne '#32770' -or $picker.Current.ProcessId -ne $app.Id){throw 'Export picker is not owned'}
  $entry=@{value=$null};Wait-Until {
