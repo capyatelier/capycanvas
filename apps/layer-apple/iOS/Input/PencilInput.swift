@@ -3,7 +3,7 @@ import UIKit
 extension CanvasView: UIPointerInteractionDelegate {
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
         // Rust renders the selected cursor, including the None hover fallback.
-        .hidden()
+        store.handCursor ? .system() : .hidden()
     }
 }
 
@@ -148,13 +148,11 @@ extension CanvasView {
         let point = touch.preciseLocation(in: self)
         let pencil = touch.type == .pencil
         let pressure = pencil && touch.maximumPossibleForce > 0 ? touch.force / touch.maximumPossibleForce : 1
-        let altitude = pencil ? touch.altitudeAngle : .pi / 2
-        let azimuth = pencil ? touch.azimuthAngle(in: self) : 0
-        let tiltX = atan2(cos(altitude) * cos(azimuth), sin(altitude))
-        let tiltY = atan2(cos(altitude) * sin(azimuth), sin(altitude))
+        let tilt = StylusTilt.towardBarrel(altitude: pencil ? touch.altitudeAngle : .pi / 2,
+            azimuth: pencil ? touch.azimuthAngle(in: self) : 0)
         let scale = scale ?? contentScaleFactor
         return [Double(point.x * scale), Double(point.y * scale),
-            Double(pressure), Double(tiltX), Double(tiltY), pencil ? Double(touch.rollAngle) : 0, 0,
+            Double(pressure), tilt.x, tilt.y, pencil ? Double(touch.rollAngle) : 0, 0,
             touch.timestamp * 1_000_000_000, phase]
     }
     func updateEstimates(_ touches: Set<UITouch>) {
@@ -203,11 +201,8 @@ extension CanvasView {
         updateModifiers(recognizer.modifierFlags)
         if recognizer.state == .ended || recognizer.state == .cancelled { leave(); return }
         let point = recognizer.location(in: self)
-        let altitude = recognizer.altitudeAngle
-        let azimuth = recognizer.azimuthAngle(in: self)
-        let record: [Double] = [point.x * contentScaleFactor, point.y * contentScaleFactor, 0,
-            atan2(cos(altitude) * cos(azimuth), sin(altitude)),
-            atan2(cos(altitude) * sin(azimuth), sin(altitude)),
+        let tilt = StylusTilt.towardBarrel(altitude: recognizer.altitudeAngle, azimuth: recognizer.azimuthAngle(in: self))
+        let record: [Double] = [point.x * contentScaleFactor, point.y * contentScaleFactor, 0, tilt.x, tilt.y,
             recognizer.rollAngle, recognizer.zOffset,
             CACurrentMediaTime() * 1_000_000_000, 0]
         store.native?.pointer(id: 0, tool: 0, button: 0, records: record, predicted: false, revision: store.cameraRevision)

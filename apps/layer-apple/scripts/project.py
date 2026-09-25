@@ -54,7 +54,11 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
             builds.append(obj(scheme + name, "PBXBuildFile", fileRef=ref))
         elif name.startswith("Generated/"):
             resources.append(obj(scheme + name, "PBXBuildFile", fileRef=ref))
-    phases = [obj(scheme + "rust", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
+    phases = [obj(scheme + "prepare", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
+        files=[], inputPaths=[], outputPaths=[], runOnlyForDeploymentPostprocessing=0,
+        alwaysOutOfDate=1, name="Generate shared resources", shellPath="/bin/bash",
+        shellScript='/usr/bin/python3 "$SRCROOT/scripts/prepare.py"\n'),
+        obj(scheme + "rust", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
         files=[], inputPaths=[], outputPaths=[], runOnlyForDeploymentPostprocessing=0,
         alwaysOutOfDate=1, name="Build shared Rust engine", shellPath="/bin/bash",
         shellScript='/bin/bash "$SRCROOT/scripts/rust.sh"\n'),

@@ -299,7 +299,7 @@ impl CapyWorkspaceLibrary {
                     };
                     if candidate.is_some() {
                         self.manager.initialize_catalog(now).await?;
-                        self.manager.prepare_startup(&id, now).await?
+                        self.manager.resume_startup(&id, now).await?
                     } else {
                         self.manager.initialize(now).await?
                     }

@@ -23,7 +23,7 @@ struct RecoveryPicker: View {
                         .disabled(!recovery.canOpen)
                         .accessibilityIdentifier("open-recovery-\(record.id)")
                     Button("Discard", role: .destructive) { discarding = record }.buttonStyle(.borderless)
-                }.padding(.vertical, 4)
+                }.padding(.vertical, 4).background(NativePenScroll().frame(width: 0, height: 0))
             }.frame(minHeight: 160)
             if let error = recovery.error { Text(error).foregroundStyle(.red) }
         }.padding(24).frame(minWidth: 320, idealWidth: 600, minHeight: 300, idealHeight: 420)

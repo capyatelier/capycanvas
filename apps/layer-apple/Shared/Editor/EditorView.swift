@@ -44,7 +44,7 @@ struct EditorView<Canvas: View>: View {
                             store.workspace.zenButton = $0
                         }
                         .onDisappear { store.workspace.zenButton = nil }
-                        .offset(x: 6, y: 6).accessibilityIdentifier("zen-button")
+                        .offset(x: store.headerLeadingInset + 6, y: 6).accessibilityIdentifier("zen-button")
                 }
                 if store.command("placement_original_size")["enabled"].bool {
                     PhotoPlacementControls(store: store)

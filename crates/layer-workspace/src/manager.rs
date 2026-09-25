@@ -393,7 +393,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     /// Restoring this window's existing selection still acquires a fenced claim,
     /// but does not make that workspace a new selection in other windows.
-    pub(crate) async fn resume_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
+    pub async fn resume_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
         self.prepare_startup_inner(preferred, now, true).await
     }
     async fn prepare_startup_inner(&self, preferred: &str, now: u64, resume: bool) -> Result<StoredEntity> {

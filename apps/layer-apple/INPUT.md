@@ -34,6 +34,16 @@ contacts paint, right/middle contacts pan, and other buttons follow the shared
 ignore policy. Normal and cancelled keyboard releases both end held shortcuts,
 including Space-to-pan.
 
+The shared GPU cursor replaces the system pointer over the canvas hit target,
+as on the other hosts. AppKit shows a blank cursor there and the open hand while
+Space panning or the Hand tool is active; leaving the canvas for chrome restores
+the arrow unless a contact is still captured. iPadOS hides the pointer the same
+way and shows the system pointer while panning. `tests/canvas-native-input.swift`
+checks the AppKit cursor through real hover callbacks. UIKit tilt comes from the
+Pencil's altitude and azimuth and points toward the barrel; the same fixture pins
+that conversion. AppKit forwards `NSEvent.tilt` unchanged; its vertical sign has
+not been checked with a physical tablet.
+
 Pencil hover ends on both normal recognizer exit and cancellation. Both send the
 existing shared cancel phase to clear the cursor; an active Pencil contact still
 suppresses hover updates. `tests/canvas-hover.swift` runs the actual UIKit callback

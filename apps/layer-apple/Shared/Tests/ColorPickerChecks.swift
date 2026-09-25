@@ -9,7 +9,6 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)), evaluatedWith: element)
             waitForExpectations(timeout: 10)
         }
-        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
         let eyedropper = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-toolbar-", "Eyedropper")).firstMatch
         func color() -> [Double] {
             let wheel = app.descendants(matching: .any)["color-wheel"].firstMatch

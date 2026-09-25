@@ -56,9 +56,10 @@ reproducible payload fixtures and a CPU benchmark.
 ## Build
 
 See the [Apple development guide](../../docs/development/apple.md) for prerequisites,
-macOS/iPadOS build commands, signing and running in Xcode. Rerun
-`scripts/prepare.py` when shared assets change and `scripts/project.py` when adding
-or removing Swift files. Edit the generators rather than generated project entries.
+macOS/iPadOS build commands, signing and running in Xcode. Every app build runs
+`scripts/prepare.py` first, so shared icons and filter assets stay current; rerun
+`scripts/project.py` when adding or removing Swift files. Edit the generators rather
+than generated project entries.
 
 For isolated device installs and UI tests, set `CAPY_APPLE_BUNDLE_ID` on the
 `xcodebuild` command. The app uses that identity and its test target uses the
