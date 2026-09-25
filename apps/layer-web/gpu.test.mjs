@@ -256,6 +256,13 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       await capture(mode + "-light");
       if (mode === "no-adapter") {
         await action({ type: "set_theme", theme: "dark" });
+        const horizontal = "(()=>{const n=document.querySelector('#gpu-notice');return n.scrollWidth-n.clientWidth})()";
+        const switchTo = async id => { await action({ type: "workspace_manager", command: { type: "switch", id } }); await waitFor(`(v=>v?.id===${JSON.stringify(id)}&&v.ready&&!v.busy)(JSON.parse(layerApp.app.workspace_view()))`); await settle(); };
+        const startWorkspace = await evaluate("JSON.parse(layerApp.app.workspace_view()).id");
+        await call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+        await switchTo("builtin:workspace:illustrator");
+        assert.equal(await evaluate(horizontal), 0, "Paint's narrow help column never needs horizontal scrolling");
+        await switchTo("builtin:workspace:painter");
         for (const [width, height] of [[1280, 720], [900, 760], [900, 700]]) {
           await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
           await settle();
@@ -270,7 +277,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           await capture(`${mode}-${width}x${height}`);
         }
         await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-        await settle();
+        await switchTo(startWorkspace);
       }
       assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : noAdapter ? 2 : 1);
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
