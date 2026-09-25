@@ -78,7 +78,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   await settle();
   try {
     await checkButton(false);
-    assert.ok(await evaluate("(()=>{const a=document.querySelector('#fullscreen').getBoundingClientRect(),b=document.querySelector('#header [data-command=settings]').getBoundingClientRect();return a.width===36&&a.height===36&&b.width===36&&b.height===36&&Math.abs(b.left-a.right)<1&&a.top===b.top})()"), "Fullscreen sits immediately left of Settings with matching size");
+    assert.ok(await evaluate("(()=>{const a=document.querySelector('#fullscreen').getBoundingClientRect(),b=document.querySelector('#header [data-command=settings]').getBoundingClientRect(),s=getComputedStyle(document.querySelector('#header')),tile=parseFloat(s.getPropertyValue('--header-tile')),gap=parseFloat(s.getPropertyValue('--header-gap'));return a.width===tile&&a.height===tile&&b.width===tile&&b.height===tile&&Math.abs(b.left-a.right-gap)<1&&a.top===b.top})()"), "Fullscreen sits one title-bar gap left of Settings with matching size");
     await evaluate("window.originalFullscreenRequest=document.documentElement.requestFullscreen;document.documentElement.requestFullscreen=()=>Promise.reject(Error('test denied'))");
     await toggle();
     await waitFor("document.querySelector('#status').textContent === 'Error: test denied'");
