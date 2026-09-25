@@ -10,6 +10,14 @@ mod accent_preferences_tests;
 #[path = "palette_tests.rs"]
 mod palette_tests;
 
+fn wait_for_drawer_close(w: &Workspace) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !w.drawer.is_closed() {
+        assert!(Instant::now() < deadline, "drawer close animation");
+        pump(10);
+    }
+}
+
 fn assert_shared_icons(widget: &gtk::Widget) {
     if let Some(image) = widget.downcast_ref::<gtk::Image>()
         && let Some(name) = crate::icons::name(image).filter(|name| name.starts_with("layer-"))
@@ -1147,7 +1155,7 @@ fn native_header_spacing_visual() {
                     .unwrap(),
             );
             d.click(&tool);
-            pump(PANEL_EXPANSION_MS.into());
+            wait_for_drawer_close(&d.w);
             assert!(!button.has_css_class("drawer-origin-bottom"));
             d.edit();
             assert_shared_icons(d.w.header.root.upcast_ref());
@@ -1276,7 +1284,7 @@ fn native_drawer_dismissal_input() {
                     state(&d.w).customization.drawer.is_none(),
                     "{theme:?}/{touch}/{outside}"
                 );
-                pump(PANEL_EXPANSION_MS.into());
+                wait_for_drawer_close(&d.w);
                 assert!(!color_button.has_css_class("drawer-open"));
                 if outside == "menu" {
                     assert!(
