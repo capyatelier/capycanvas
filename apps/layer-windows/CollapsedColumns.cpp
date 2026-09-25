@@ -100,11 +100,11 @@ struct Column:std::enable_shared_from_this<Column>{
                     auto target=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",target}}),target,false,{},WorkspaceGestures::Pickup::Hold);
                     AutomationProperties::SetAutomationId(pick,L"column-icon-"+panelId);
-                    ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
+                    tooltip(pick,str(panel,L"title"));
                     icons.Children().Append(pick);found=buttons.emplace(key,pick).first;
                 }
                 auto pick=found->second;place(pick,local(object(tile,L"bounds"),content,offset));
-                AutomationProperties::SetName(pick,str(panel,L"title"));ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
+                AutomationProperties::SetName(pick,str(panel,L"title"));tooltip(pick,str(panel,L"title"));
                 bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId||(!facing.empty()&&joined==panelId);
                 pick.Background(active?selected(data):clear());
                 pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,!facing.empty()&&joined==panelId?facing:hstring{}));

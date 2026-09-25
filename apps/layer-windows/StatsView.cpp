@@ -67,7 +67,7 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
                 auto text=label(data,str(row,L"label"));line.Children().Append(text);
                 auto value=label(data,L"");Grid::SetColumn(value,1);line.Children().Append(value);values.push_back(value);
                 AutomationProperties::SetAutomationId(value,L"renderer-stat-"+to_hstring(i));
-                ToolTipService::SetToolTip(line,box_value(str(row,L"description")));
+                tooltip(line,str(row,L"description"));
                 AutomationProperties::SetHelpText(value,str(row,L"description"));
                 root.Children().Append(line);
                 if(i+1==uint32_t(num(model,L"chart_after_rows"))){

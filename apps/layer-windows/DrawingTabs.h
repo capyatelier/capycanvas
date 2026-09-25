@@ -168,16 +168,16 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
                 StackPanel labels;r.text=CapyUi::label(data,label);r.location=CapyUi::label(data,L"");r.location.FontSize(11);r.location.TextTrimming(TextTrimming::CharacterEllipsis);labels.Children().Append(r.text);labels.Children().Append(r.location);Grid::SetColumn(labels,1);row.Children().Append(r.grip);row.Children().Append(labels);row.Children().Append(r.remove);r.item.Content(row);
                 rowDrag->Attach(r.item,r.grip,r.remove,r.menu,key);rows.emplace(id,r);
             }
-            auto& t=tabs.at(id);t.text.Text(label);t.text.Foreground(data->brush(L"text"));paintTab(t,id==uint64_t(num(m,L"selected")));t.select.IsEnabled(available());t.close.IsEnabled(available());ToolTipService::SetToolTip(t.select,box_value(str(spec,L"location",label)));AutomationProperties::SetName(t.select,label);
+            auto& t=tabs.at(id);t.text.Text(label);t.text.Foreground(data->brush(L"text"));paintTab(t,id==uint64_t(num(m,L"selected")));t.select.IsEnabled(available());t.close.IsEnabled(available());tooltip(t.select,str(spec,L"location",label));AutomationProperties::SetName(t.select,label);
             auto& r=rows.at(id);r.text.Text(label);r.location.Text(str(spec,L"location"));r.item.IsEnabled(available());r.remove.IsEnabled(available());
-            AutomationProperties::SetName(r.remove,L"Close "+str(spec,L"title"));ToolTipService::SetToolTip(r.remove,box_value(L"Close "+str(spec,L"title")));
+            AutomationProperties::SetName(r.remove,L"Close "+str(spec,L"title"));tooltip(r.remove,L"Close "+str(spec,L"title"));
             auto children=strip.Children();uint32_t at;if(index>=children.Size()||children.GetAt(index)!=t.box){if(children.IndexOf(t.box,at))children.RemoveAt(at);children.InsertAt(index,t.box);}
             auto items=list.Items();if(index>=items.Size()||items.GetAt(index)!=r.item){if(items.IndexOf(r.item,at))items.RemoveAt(at);items.InsertAt(index,r.item);}++index;
             if(id==uint64_t(num(m,L"selected"))){selector.Content(box_value(label+L" ▾"));if(!showing||selectionChanged)list.SelectedItem(r.item);}
         }
         while(strip.Children().Size()>index)strip.Children().RemoveAtEnd();while(list.Items().Size()>index)list.Items().RemoveAtEnd();
         std::erase_if(tabs,[&](auto const& p){return !live.contains(p.first);});std::erase_if(rows,[&](auto const& p){return !live.contains(p.first);});rowDrag->Refresh(order);selector.IsEnabled(available());
-        auto error=str(m,L"storage_error");if(!error.empty())ToolTipService::SetToolTip(selector,box_value(error+L". Use Drawing options → Retry drawing storage."));else ToolTipService::SetToolTip(selector,box_value(L"Choose a drawing"));
+        auto error=str(m,L"storage_error");if(!error.empty())tooltip(selector,error+L". Use Drawing options → Retry drawing storage.");else tooltip(selector,L"Choose a drawing");
         AutomationProperties::SetHelpText(root,error);if(plain.Text()!=plainTitle())plain.Text(plainTitle());plain.Foreground(data->brush(L"text"));layout();updating=false;
     }
     void init(){

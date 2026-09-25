@@ -117,13 +117,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         fitCamera=button(data,L"Fit canvas",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"fit_canvas")}}));});
         fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
-        ToolTipService::SetToolTip(fitCamera,box_value(L"Fit canvas"));
+        tooltip(fitCamera,L"Fit canvas");
         auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         zenCapy=button(data,L"Exit Zen mode",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"zen_mode")}}));});
         zenCapy.Padding({0,0,0,0});zenCapy.Visibility(Visibility::Collapsed);Canvas::SetZIndex(zenCapy,1001);
-        AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");ToolTipService::SetToolTip(zenCapy,box_value(L"Exit Zen mode"));
+        AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");tooltip(zenCapy,L"Exit Zen mode");
         root.Children().Append(zenCapy);
         StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);
         for(auto [id,text]:{std::pair{L"placement_original_size",L"Original Size (100%)"},std::pair{L"cancel_transform",L"Cancel"},std::pair{L"apply_transform",L"Apply"}}){

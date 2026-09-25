@@ -154,7 +154,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
                 auto id=value.GetString();auto command=find(array(data->state,L"commands"),L"id",id);
                 auto pick=button(data,str(command,L"label"),[data=data,id]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));});
                 pick.Width(34);pick.Height(34);pick.Content(icon(str(command,L"icon"),data->theme()));row.Children().Append(pick);
-                ToolTipService::SetToolTip(pick,box_value(str(command,L"label")));
+                tooltip(pick,str(command,L"label"));
                 bindings.emplace_back([data=data,id,pick]{pick.IsEnabled(flag(find(array(data->state,L"commands"),L"id",id),L"enabled"));});
             }
             return row;

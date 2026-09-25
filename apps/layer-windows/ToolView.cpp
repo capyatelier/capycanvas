@@ -76,7 +76,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             auto item=items.GetObjectAt(i);auto action=object(item,L"action");
             auto pick=button(data,str(item,L"label"),[weak,action]{if(auto self=weak.lock())self->data->dispatch(action);});
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            pick.Padding({17,5,17,5});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
+            pick.Padding({17,5,17,5});tooltip(pick,str(item,L"label"));
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
             if(group&&media())AutomationProperties::SetAutomationId(pick,(panel==L"sculpt_sets"?L"sculpt-set-":L"brush-set-")+str(item,L"icon"));
             auto title=label(data,str(item,L"label"),true);
@@ -213,7 +213,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         pick.CornerRadius({0,0,0,0});pick.Content(icon(iconName,data->theme(),20));
         pick.Background(compact?data->brush(L"input"):clear());
         if(!compact&&index>0){pick.BorderThickness({1,0,0,0});pick.BorderBrush(data->tint(L"text",51));}
-        ToolTipService::SetToolTip(pick,box_value(tooltip));AutomationProperties::SetAutomationId(pick,id);
+        CapyUi::tooltip(pick,tooltip);AutomationProperties::SetAutomationId(pick,id);
         return pick;
     }
     void selectionActions(){
@@ -324,7 +324,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                         pick.IsEnabled(flag(command,L"enabled"));pick.Opacity(pick.IsEnabled()?1.:.36);
                         pick.Background(chosen?selected(self->data):compact?self->data->brush(L"input"):clear());
                         AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
-                        ToolTipService::SetToolTip(pick,box_value(str(command,L"tooltip")));
+                        tooltip(pick,str(command,L"tooltip"));
                     }});
                 }else if(source(id)){
                     RadioButton radio;radio.GroupName(L"selection-source");auto text=toolLabel(data,command,false);text.Margin({6,0,0,0});radio.Content(text);
@@ -337,7 +337,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     fields.emplace_back([weak,id,radio,syncing]{if(auto self=weak.lock()){
                         auto command=find(array(self->data->state,L"commands"),L"id",id);
                         *syncing=true;radio.IsEnabled(flag(command,L"enabled"));radio.IsChecked(flag(command,L"selected"));*syncing=false;
-                        ToolTipService::SetToolTip(radio,box_value(str(command,L"tooltip")));
+                        tooltip(radio,str(command,L"tooltip"));
                     }});
                 }else if(flag(item,L"checkable")){
                     CheckBox check;auto text=toolLabel(data,command,false);text.Margin({6,0,0,0});check.Content(text);
@@ -348,14 +348,14 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     fields.emplace_back([weak,id,check]{if(auto self=weak.lock()){
                         auto command=find(array(self->data->state,L"commands"),L"id",id);
                         check.IsEnabled(flag(command,L"enabled"));check.IsChecked(flag(command,L"selected"));
-                        ToolTipService::SetToolTip(check,box_value(str(command,L"tooltip")));
+                        tooltip(check,str(command,L"tooltip"));
                     }});
                 }else{
                     auto pick=button(data,str(command,L"label"),invoke);pick.Height(selectionTool?44:36);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
                     pick.Content(toolLabel(data,command));AutomationProperties::SetAutomationId(pick,L"tool-action-"+id);root.Children().Append(pick);
                     fields.emplace_back([weak,id,pick]{if(auto self=weak.lock()){
                         auto command=find(array(self->data->state,L"commands"),L"id",id);pick.IsEnabled(flag(command,L"enabled"));
-                        ToolTipService::SetToolTip(pick,box_value(str(command,L"tooltip")));
+                        tooltip(pick,str(command,L"tooltip"));
                     }});
                 }
             }

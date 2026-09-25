@@ -63,7 +63,7 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         auto reset=button(data,L"Reset gradient",[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->property->reset();self->refresh();}});
         int i=0;for(auto pick:{add,remove,reset}){
             pick.Height(28);pick.Width(28);pick.Content(icon(std::array<hstring,3>{L"plus",L"minus",L"undo"}[i],data->theme()));
-            ToolTipService::SetToolTip(pick,box_value(AutomationProperties::GetName(pick)));
+            CapyUi::tooltip(pick,AutomationProperties::GetName(pick));
             AutomationProperties::SetAutomationId(pick,property->id()+L"-"+std::array<hstring,3>{L"add",L"remove",L"reset"}[i++]);actions.Children().Append(pick);
         }
         fields.emplace_back([weak,add]{if(auto self=weak.lock())add.IsEnabled(self->stops().Size()<32);});

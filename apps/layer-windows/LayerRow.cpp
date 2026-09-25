@@ -186,12 +186,12 @@ void LayerRow::refresh(){
     }
     bool selectionLayer=flag(layer,L"selection_layer");
     hstring eyeName=selectionLayer?(flag(layer,L"visible")?L"Hide selection overlay":L"Show selection overlay"):(flag(layer,L"visible")?L"Hide layer":L"Show layer");
-    AutomationProperties::SetName(eye,eyeName);ToolTipService::SetToolTip(eye,box_value(eyeName));
+    AutomationProperties::SetName(eye,eyeName);CapyUi::tooltip(eye,eyeName);
     hstring contentName=selectionLayer?L"Edit selection layer":flag(layer,L"group")?(flag(layer,L"collapsed")?L"Expand group":L"Collapse group"):L"Edit layer content";
-    AutomationProperties::SetName(content,contentName);ToolTipService::SetToolTip(content,box_value(contentName));
+    AutomationProperties::SetName(content,contentName);CapyUi::tooltip(content,contentName);
     load.Visibility(selectionLayer?Visibility::Visible:Visibility::Collapsed);
     body.ColumnDefinitions().GetAt(5).Width({selectionLayer?32.:0.,GridUnitType::Pixel});
-    if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);ToolTipService::SetToolTip(load,box_value(tip));}
+    if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);CapyUi::tooltip(load,tip);}
     AutomationProperties::SetItemStatus(check,flag(layer,L"selected")?L"Selected":L"Unselected");
     bool hasMask=flag(layer,L"has_mask"),group=flag(layer,L"group");
     content.Background(group?clear():data->brush(L"input"));mask.Background(data->brush(L"input"));
@@ -202,7 +202,7 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(7).Width({hasMask?32.:0.,GridUnitType::Pixel});
     link.Opacity(flag(layer,L"mask_linked")?1:.35);link.IsEnabled(!flag(layer,L"locked"));
     hstring linkName=flag(layer,L"mask_linked")?L"Unlink mask from layer":L"Link mask to layer";
-    AutomationProperties::SetName(link,linkName);ToolTipService::SetToolTip(link,box_value(linkName));
+    AutomationProperties::SetName(link,linkName);CapyUi::tooltip(link,linkName);
     maskImage.Opacity(flag(layer,L"mask_enabled")?1:.4);
     body.ColumnDefinitions().GetAt(2).Width({std::min(24.,num(layer,L"depth")*8),GridUnitType::Pixel});
     clip.Opacity(flag(layer,L"clipped")?1:0);lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);

@@ -120,7 +120,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
                 auto tileIcon=icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16));
                 auto tileIconName=std::make_shared<hstring>(str(tile,L"icon",L"brush"));pick.Content(tileIcon);
-                ToolTipService::SetToolTip(pick,box_value(str(tile,L"tooltip")));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
+                tooltip(pick,str(tile,L"tooltip"));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
                 if(kind==L"color"){
@@ -149,8 +149,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     auto facing=drawerFacing(data,O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                     pick.Background(flag(current,L"selected")?selected(data):!facing.empty()?data->glass(L"open_tile"):clear());
                     pick.CornerRadius(facingCorners(num(currentPanel,L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
-                    auto tooltip=str(current,L"tooltip");
-                    ToolTipService::SetToolTip(pick,box_value(picker?pickerTooltip(tooltip):tooltip));
+                    auto hint=str(current,L"tooltip");
+                    tooltip(pick,picker?pickerTooltip(hint):hint);
                 });
             }
             for(uint32_t i=0;i<tileOrder.size()&&i<rects.Size();++i){

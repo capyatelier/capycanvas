@@ -50,7 +50,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         reset=button(data,L"Reset curve",[weak]{if(auto self=weak.lock()){self->selected=0;self->lastTap.reset();self->cancel();self->property->reset();self->refresh();}});
         reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"undo",data->theme()));
         reset.HorizontalAlignment(HorizontalAlignment::Right);reset.VerticalAlignment(VerticalAlignment::Bottom);reset.Visibility(Visibility::Collapsed);
-        ToolTipService::SetToolTip(reset,box_value(AutomationProperties::GetName(reset)));
+        CapyUi::tooltip(reset,AutomationProperties::GetName(reset));
         AutomationProperties::SetAutomationId(reset,property->id()+L"-reset");
         chart.Children().Append(focus);chart.Children().Append(reset);root.Children().Append(chart);
         graph.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){

@@ -136,6 +136,11 @@ void CanvasWindow::Open() {
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
         if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,false)))self->Key(e,false);
     });
+    PointerEventHandler contact([](winrt::Windows::Foundation::IInspectable const&,PointerRoutedEventArgs const& e){
+        CapyUi::touchContact()=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch;
+    });
+    root.AddHandler(UIElement::PointerPressedEvent(),box_value(contact),true);
+    root.AddHandler(UIElement::PointerMovedEvent(),box_value(contact),true);
     root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e);
     });

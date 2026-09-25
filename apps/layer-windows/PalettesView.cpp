@@ -96,7 +96,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto entries=array(view(),L"history");
         for(auto value:entries){
             auto entry=value.GetObject();auto node=tileButton(str(entry,L"detail"));auto patch=paint();fillPatch(patch,array(entry,L"rgba"));node.Content(patch);
-            ToolTipService::SetToolTip(node,box_value(str(entry,L"detail")));auto color=object(entry,L"color");
+            tooltip(node,str(entry,L"detail"));auto color=object(entry,L"color");
             node.Click([weak,color](auto&&,auto&&){if(auto self=weak.lock()){
                 if(self->editing){self->commitName();if(self->editing)return;}
                 self->selected.reset();self->data->dispatch(O({{L"type",S(L"color")},{L"action",O({{L"op",S(L"definition")},{L"color",color}})}}));self->report(L"");
@@ -105,11 +105,11 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             target.Children().Append(node);cells.push_back(node);
         }
         if(!entries.Size())for(int i=0;i<5;i++){Border blank,fill;blank.Padding({3,3,3,3});fill.CornerRadius({6,6,6,6});fill.Background(data->tint(L"text",13));blank.Child(fill);
-            ToolTipService::SetToolTip(blank,box_value(L"Colors appear here after painting"));target.Children().Append(blank);cells.push_back(blank);}
+            tooltip(blank,L"Colors appear here after painting");target.Children().Append(blank);cells.push_back(blank);}
         auto toggle=button(data,open?L"Collapse color history":L"Expand color history",[weak,open]{if(auto self=weak.lock())self->expand(!open);});
         toggle.Height(Cell);toggle.Padding({0,0,0,0});auto chevron=icon(L"chevron-down",data->theme());chevron.RenderTransformOrigin({.5f,.5f});
         if(open){RotateTransform turn;turn.Angle(180);chevron.RenderTransform(turn);}
-        toggle.Content(chevron);ToolTipService::SetToolTip(toggle,box_value(open?L"Collapse color history":L"Expand color history"));
+        toggle.Content(chevron);tooltip(toggle,open?L"Collapse color history":L"Expand color history");
         AutomationProperties::SetAutomationId(toggle,open?L"palette-history-collapse":L"palette-history-expand");
         target.Children().Append(toggle);cells.push_back(toggle);
     }
@@ -395,7 +395,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             AutomationProperties::SetItemStatus(t.node,on?L"Selected":L"");}
         auto label=s?str(*s,L"name"):str(view(),L"color_name");
         if(nameLabel.Text()!=label)nameLabel.Text(label);
-        ToolTipService::SetToolTip(name,box_value(label+L" · Click to rename"));AutomationProperties::SetName(name,label);
+        tooltip(name,label+L" · Click to rename");AutomationProperties::SetName(name,label);
     }
     void choices(){
         list.Children().Clear();auto weak=weak_from_this();
@@ -415,7 +415,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             Grid::SetColumn(cells,1);content.Children().Append(cells);row.Content(content);
             bool active=flag(palette,L"active");row.Background(active?selectionBrush():clear());
             AutomationProperties::SetName(row,title);AutomationProperties::SetItemStatus(row,active?L"Selected":L"");AutomationProperties::SetAutomationId(row,L"palette-choice-"+to_hstring(id));
-            ToolTipService::SetToolTip(row,box_value(title));
+            tooltip(row,title);
             row.ContextRequested([weak,id,title](winrt::Windows::Foundation::IInspectable const& sender,ContextRequestedEventArgs const& e){e.Handled(true);
                 if(auto self=weak.lock())self->menu(O({{L"kind",S(L"palette")},{L"id",N(double(id))}}),sender.as<FrameworkElement>(),title);});
             list.Children().Append(row);
@@ -439,7 +439,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             auto s=value.GetObject();auto id=uint64_t(num(s,L"id"));live.insert(id);order.push_back(id);
             if(!tiles.contains(id)){tiles.emplace(id,makeTile(id));grid.Children().Append(tiles.at(id).node);}
             auto& t=tiles.at(id);
-            if(t.swatch.Stringify()!=s.Stringify()){fillPatch(t.patch,array(s,L"rgba"));ToolTipService::SetToolTip(t.node,box_value(str(s,L"detail")));AutomationProperties::SetName(t.node,str(s,L"detail"));}
+            if(t.swatch.Stringify()!=s.Stringify()){fillPatch(t.patch,array(s,L"rgba"));tooltip(t.node,str(s,L"detail"));AutomationProperties::SetName(t.node,str(s,L"detail"));}
             t.swatch=s;
         }
         for(auto it=tiles.begin();it!=tiles.end();){if(live.contains(it->first)){++it;continue;}uint32_t at;if(grid.Children().IndexOf(it->second.node,at))grid.Children().RemoveAt(at);it=tiles.erase(it);}
@@ -448,7 +448,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(nextHistory!=historyKey){historyKey=nextHistory;historyTiles(history,historyCells,false);historyTiles(expanded,expandedCells,true);}
         if(nextChoices!=choicesKey){choicesKey=nextChoices;choices();}
         if(selectorLabel.Text()!=str(v,L"name"))selectorLabel.Text(str(v,L"name"));
-        ToolTipService::SetToolTip(selector,box_value(L"Choose a palette · "+str(v,L"name")));AutomationProperties::SetName(selector,L"Choose a palette");
+        tooltip(selector,L"Choose a palette · "+str(v,L"name"));AutomationProperties::SetName(selector,L"Choose a palette");
         if(detail.Text()!=str(v,L"color_detail"))detail.Text(str(v,L"color_detail"));
         sync();arrange();
         auto status=files();auto generation=uint64_t(num(status,L"generation"));
@@ -480,7 +480,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         for(auto star:{true,false,false,false}){RowDefinition row;row.Height(star?GridLength{1,GridUnitType::Star}:GridLength{1,GridUnitType::Auto});root.RowDefinitions().Append(row);}
         auto divider=[&]{Border line;line.Height(1);line.Background(data->tint(L"text",38));return line;};
         normal.Spacing(6);history.Height(Cell);AutomationProperties::SetAutomationId(history,L"palette-history");AutomationProperties::SetName(history,L"Recent colors");
-        ToolTipService::SetToolTip(history,box_value(L"Recent colors — added only when used in artwork"));
+        tooltip(history,L"Recent colors — added only when used in artwork");
         normal.Children().Append(history);normal.Children().Append(divider());
         scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
         scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);scroll.Content(grid);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,L"Saved colors");
@@ -494,7 +494,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         search.FontSize(data->textSize());AutomationProperties::SetName(search,L"Find a palette");AutomationProperties::SetAutomationId(search,L"palette-search");
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->filter();});searchRow.Children().Append(search);
         more=button(data,L"New or import palette",[]{});more.Width(24);more.Height(24);more.Padding({0,0,0,0});more.Content(icon(L"plus",data->theme()));
-        ToolTipService::SetToolTip(more,box_value(L"New or import palette"));AutomationProperties::SetAutomationId(more,L"palette-library-add");
+        tooltip(more,L"New or import palette");AutomationProperties::SetAutomationId(more,L"palette-library-add");
         more.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->menu(O({{L"kind",S(L"library")}}),self->more,L"Palettes");});
         Grid::SetColumn(more,1);searchRow.Children().Append(more);chooser.Children().Append(searchRow);
         Grid resultsHost;list.Spacing(0);results.Content(list);results.HorizontalScrollMode(ScrollMode::Disabled);results.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);
@@ -523,13 +523,13 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         editor.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->editing&&self->editor.Visibility()==Visibility::Visible)self->commitName();});
         info.Children().Append(editor);
         detail=label(data,L"");detail.FontSize(data->textSize()*.9);detail.Opacity(.55);detail.HorizontalAlignment(HorizontalAlignment::Right);detail.Margin({0,0,2,0});
-        ToolTipService::SetToolTip(detail,box_value(L"sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity"));
+        tooltip(detail,L"sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity");
         AutomationProperties::SetAutomationId(detail,L"palette-detail");info.Children().Append(detail);
         Grid::SetColumn(info,1);footer.Children().Append(info);Grid::SetRow(footer,2);root.Children().Append(footer);
         note.TextWrapping(TextWrapping::Wrap);note.FontSize(data->textSize());note.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(note,L"palette-message");
         AutomationProperties::SetLiveSetting(note,Microsoft::UI::Xaml::Automation::Peers::AutomationLiveSetting::Polite);Grid::SetRow(note,3);root.Children().Append(note);
         add=tileButton(L"Add current color to this palette");add.Background(data->brush(L"input"));add.Padding({0,0,0,0});add.Content(icon(L"plus",data->theme()));
-        ToolTipService::SetToolTip(add,box_value(L"Add current color to this palette"));AutomationProperties::SetAutomationId(add,L"palette-add");
+        tooltip(add,L"Add current color to this palette");AutomationProperties::SetAutomationId(add,L"palette-add");
         add.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->addColor();});grid.Children().Append(add);
         scroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
         body.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){

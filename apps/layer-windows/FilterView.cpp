@@ -124,7 +124,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
             Grid::SetColumn(text,1);caption.Children().Append(text);content.Children().Append(caption);pick.Content(content);
             previews.push_back({str(choice,L"id"),pick,preview});
             AutomationProperties::SetAutomationId(pick,L"filter-"+str(choice,L"id"));
-            ToolTipService::SetToolTip(pick,box_value(str(choice,L"tooltip")));rows.Children().Append(pick);
+            CapyUi::tooltip(pick,str(choice,L"tooltip"));rows.Children().Append(pick);
         }
         markSelected();
         if(!choices.Size()){auto empty=label(data,str(picker,L"empty_label"));empty.Margin({8,8,8,8});empty.Opacity(.55);rows.Children().Append(empty);}

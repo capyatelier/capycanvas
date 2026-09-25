@@ -120,7 +120,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto source=gestures.lock())source->Source(blank,J{},item);
             more=button(data,L"More tool options",[weak]{if(auto self=weak.lock())self->activate();});
             more.Content(icon(L"more",data->theme(),iconSize));
-            ToolTipService::SetToolTip(more,box_value(L"More tool options"));
+            tooltip(more,L"More tool options");
             AutomationProperties::SetAutomationId(more,L"toolbar-more-"+to_hstring(uint32_t(tileId)));
             root.Children().Append(more);
             if(auto source=gestures.lock())source->Source(more,drag(),item,false,{},WorkspaceGestures::Pickup::Hold);
@@ -263,7 +263,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto source=self->gestures.lock();source&&source->SuppressClick())return;
             self->show();
         });
-        cap.Background(clear());cap.Content(nullptr);ToolTipService::SetToolTip(cap,box_value(str(field,L"label")));
+        cap.Background(clear());cap.Content(nullptr);tooltip(cap,str(field,L"label"));
         AutomationProperties::SetAutomationId(cap,L"slider-cap-"+to_hstring(uint32_t(tileId)));
         if(auto source=gestures.lock())source->Source(cap,drag(),item,false,{},WorkspaceGestures::Pickup::Hold);
         track=Canvas();track.Background(clear());track.ManipulationMode(ManipulationModes::None);
@@ -460,7 +460,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         if(chosen!=bookmarkSelected||glyph!=bookmarkIcon){
             bookmarkSelected=chosen;bookmarkIcon=glyph;bookmark.Content(icon(chosen?L"minus":L"plus",data->theme(),glyph));
             auto tip=chosen?L"Remove bookmark":L"Bookmark this value";
-            ToolTipService::SetToolTip(bookmark,box_value(tip));AutomationProperties::SetName(bookmark,tip);
+            tooltip(bookmark,tip);AutomationProperties::SetName(bookmark,tip);
         }
         auto anchor=root.TransformToVisual(nullptr).TransformBounds({0,0,float(root.ActualWidth()),float(root.ActualHeight())});
         auto window=root.XamlRoot().Size();
@@ -493,7 +493,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         ColumnDefinition rest;rest.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(rest);
         auto name=label(data,title);name.VerticalAlignment(VerticalAlignment::Center);
         Border glyph;glyph.Background(clear());glyph.Child(icon(str(info,L"icon"),data->theme()));glyph.VerticalAlignment(VerticalAlignment::Center);
-        ToolTipService::SetToolTip(glyph,box_value(title));
+        tooltip(glyph,title);
         for(FrameworkElement node:{FrameworkElement(name),FrameworkElement(glyph)})node.DoubleTapped([reset](auto&&,auto&&){reset();});
         row.Children().Append(name);row.Children().Append(glyph);Grid::SetColumn(numberView,1);row.Children().Append(numberView);
         numberView.VerticalAlignment(VerticalAlignment::Center);
@@ -629,7 +629,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 auto entry=items.GetObjectAt(i);auto action=object(entry,L"action");
                 auto pick=button(data,str(entry,L"label"),[weak,action]{if(auto self=weak.lock())self->send(action);});
                 pick.CornerRadius({0,0,0,0});pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
-                glyphs.push_back(str(entry,L"icon"));ToolTipService::SetToolTip(pick,box_value(str(entry,L"label")));
+                glyphs.push_back(str(entry,L"icon"));tooltip(pick,str(entry,L"label"));
                 AutomationProperties::SetAutomationId(pick,L"toolbar-segment-"+id+L"-"+to_hstring(i));
                 row.Children().Append(pick);buttons.push_back(pick);
             }
@@ -659,7 +659,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto pick=button(data,str(choice,L"label"),[]{});
         pick.Background(data->brush(L"input"));pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         pick.Padding({6,0,6,0});AutomationProperties::SetAutomationId(pick,L"toolbar-choice-"+id);
-        ToolTipService::SetToolTip(pick,box_value(str(choice,L"label")));
+        tooltip(pick,str(choice,L"label"));
         auto labelText=std::make_shared<J>(choice);auto shown=std::make_shared<hstring>();
         pick.Click([weak,labelText](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
@@ -711,7 +711,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock())self->send(O({{L"type",S(L"invoke")},{L"command",S(command)}}));
         });
         auto glyph=str(state,L"icon");pick.Content(icon(glyph.empty()?L"settings":glyph,data->theme(),iconSize));
-        ToolTipService::SetToolTip(pick,box_value(str(state,L"tooltip")));
+        tooltip(pick,str(state,L"tooltip"));
         AutomationProperties::SetAutomationId(pick,L"toolbar-action-"+command);
         Field result;result.row=pick;result.action=true;
         result.update=[pick,checkable,data=data](J const& option){

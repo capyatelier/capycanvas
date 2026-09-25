@@ -213,11 +213,11 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         Grid::SetColumn(row.pinned,3);content.Children().Append(row.pinned);
         AutomationProperties::SetAutomationId(row.pinned,L"workspace-manager-pinned-"+id);
         AutomationProperties::SetName(row.pinned,L"Shown in top bar");
-        row.pinned.IsHitTestVisible(true);ToolTipService::SetToolTip(row.pinned,box_value(L"Shown in top bar"));
+        row.pinned.IsHitTestVisible(true);tooltip(row.pinned,L"Shown in top bar");
         row.current.Width(14);row.current.Height(14);row.current.Margin({0,0,8,0});
         row.current.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.current,2);content.Children().Append(row.current);
         AutomationProperties::SetAutomationId(row.current,L"workspace-manager-current-"+id);
-        AutomationProperties::SetName(row.current,L"Current workspace");ToolTipService::SetToolTip(row.current,box_value(L"Current workspace"));
+        AutomationProperties::SetName(row.current,L"Current workspace");tooltip(row.current,L"Current workspace");
         row.grip.Width(20);row.grip.Height(32);row.grip.Margin({0,0,8,0});row.grip.Padding({0,0,0,0});
         row.grip.Background(clear());row.grip.BorderThickness({0,0,0,0});
         row.grip.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.grip,0);

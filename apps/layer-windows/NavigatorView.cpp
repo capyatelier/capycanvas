@@ -54,7 +54,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             auto pick=button(data,str(command,L"label"),[data=data,id]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));});
             pick.Content(icon(str(command,L"icon"),data->theme()));pick.Height(32);
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);
-            ToolTipService::SetToolTip(pick,box_value(str(command,L"label")));
+            tooltip(pick,str(command,L"label"));
             AutomationProperties::SetAutomationId(pick,hstring(L"navigator-")+id);
             Grid::SetColumn(pick,column++);actions.Children().Append(pick);
             bindings.emplace_back([data=data,id,pick]{auto command=find(array(data->state,L"commands"),L"id",id);

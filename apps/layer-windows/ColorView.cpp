@@ -418,7 +418,7 @@ struct View:std::enable_shared_from_this<View>{
         edit=control(L"Edit Color",[weak]{if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor(self->edit);});
         Grid editContent;auto pencil=icon(L"pencil",data->theme());pencil.HorizontalAlignment(HorizontalAlignment::Center);pencil.VerticalAlignment(VerticalAlignment::Center);
         editContent.Children().Append(editFill);editContent.Children().Append(pencil);edit.Content(editContent);
-        ToolTipService::SetToolTip(edit,box_value(L"Edit Color\u2026"));AutomationProperties::SetAutomationId(edit,L"color-edit");
+        tooltip(edit,L"Edit Color\u2026");AutomationProperties::SetAutomationId(edit,L"color-edit");
         edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
         stage.Children().Append(edit);
@@ -698,7 +698,7 @@ struct View:std::enable_shared_from_this<View>{
                 for(auto child:glyph.Children())child.as<Shapes::Path>().Data().Transform(rotation);
                 content.Children().Append(glyph);shapes[i].Content(content);shapeGlyphs[i]=glyph;
                 auto title=L"Use "+hstring(shape==L"circle"?L"Okhsv":shape==L"triangle"?L"HLS":L"HSV")+L" "+shape;
-                AutomationProperties::SetName(shapes[i],title);ToolTipService::SetToolTip(shapes[i],box_value(title));
+                AutomationProperties::SetName(shapes[i],title);tooltip(shapes[i],title);
             }
         }
         for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?accent(data):data->brush(L"text"));
@@ -712,7 +712,7 @@ struct View:std::enable_shared_from_this<View>{
             if(!(chosen||quickHovered[i]))ring.A=64;
             quickEdges[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
             quickPaint[i].Fill(fill(rgba(array(preset,L"rgba"))));
-            auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);ToolTipService::SetToolTip(quick[i],box_value(name));
+            auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);tooltip(quick[i],name);
             AutomationProperties::SetItemStatus(quick[i],chosen?L"Selected":L"");
         }
         updateArc(view);

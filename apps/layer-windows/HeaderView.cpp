@@ -171,7 +171,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
             item.Background(id==active?chosen:clear());
             item.Foreground(data->brush(L"text"));
-            AutomationProperties::SetName(item,name);ToolTipService::SetToolTip(item,box_value(L"Switch to "+name+L" workspace"));
+            AutomationProperties::SetName(item,name);tooltip(item,L"Switch to "+name+L" workspace");
         }
         auto children=switches.Children();
         for(uint32_t i=0;i<next.size();++i){
@@ -388,7 +388,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label");
             input->Source(native.frame,O({{L"kind",S(L"item")},{L"value",N(id)}}),label);
             AutomationProperties::SetName(native.editor,label);
-            ToolTipService::SetToolTip(native.frame,box_value(kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label));
+            tooltip(native.frame,kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label);
             native.content.ColumnDefinitions().GetAt(0).Width({editing?20.:0.,GridUnitType::Pixel});
             native.grip.Visibility(editing?Visibility::Visible:Visibility::Collapsed);native.editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);
             native.view.IsHitTestVisible(!editing);native.editor.IsTabStop(editing);

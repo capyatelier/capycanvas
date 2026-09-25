@@ -176,7 +176,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 choice.BorderThickness({0});AutomationProperties::SetName(choice,options.GetStringAt(i));
                 for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
                     choice.Resources().Insert(box_value(role),selected(data));
-                ToolTipService::SetToolTip(choice,box_value(options.GetStringAt(i)));
+                tooltip(choice,options.GetStringAt(i));
                 if(i<icons.Size())themeBindings.emplace_back([data=data,choice,id=icons.GetStringAt(i)]{
                     choice.Content(icon(id,data->theme(),48));
                 });
@@ -194,7 +194,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             for(uint32_t i=0;i<options.Size();++i){
                 Button choice;choice.Width(28);choice.Height(28);choice.MinWidth(0);choice.MinHeight(0);choice.Padding({0});
                 choice.CornerRadius({14,14,14,14});choice.BorderThickness({0});choice.Background(clear());
-                AutomationProperties::SetName(choice,options.GetStringAt(i));ToolTipService::SetToolTip(choice,box_value(options.GetStringAt(i)));
+                AutomationProperties::SetName(choice,options.GetStringAt(i));tooltip(choice,options.GetStringAt(i));
                 AutomationProperties::SetAutomationId(choice,L"preference-"+id+L"-"+to_hstring(i));
                 choice.Click([data=data,id,i](auto&&,auto&&){if(!data->updating)edit(data,id,N(i));});
                 auto paint=[data=data,id,i,choice,alphas]{
@@ -295,7 +295,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                         check.Foreground(foreground.ValueType()==JsonValueType::String?fill(color(foreground.GetString())):data->brush(L"text"));
                         circle.Content(check);
                     }else if(auto glyph=str(swatch,L"icon");!glyph.empty())circle.Content(icon(glyph,data->theme(),side*.5));
-                    ToolTipService::SetToolTip(circle,box_value(str(swatch,L"label")));
+                    tooltip(circle,str(swatch,L"label"));
                     AutomationProperties::SetName(circle,str(swatch,L"label"));AutomationProperties::SetAutomationId(circle,L"setting-"+id+L"-swatch-"+to_hstring(i));
                     AutomationProperties::SetItemStatus(circle,active?L"Selected":L"");
                     circle.Click([data,id,swatch,entry](auto&&,auto&&){

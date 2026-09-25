@@ -26,7 +26,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     ColumnDefinition right;right.Width({1,GridUnitType::Auto});header.ColumnDefinitions().Append(right);
     auto text=label(data,title);text.Margin(Thickness{preference?0.:6.,0,0,0});text.VerticalAlignment(VerticalAlignment::Center);
     text.LineHeight(20);text.TextTrimming(TextTrimming::CharacterEllipsis);
-    ToolTipService::SetToolTip(text,box_value(title));
+    tooltip(text,title);
     StackPanel labels;labels.UseLayoutRounding(false);labels.VerticalAlignment(VerticalAlignment::Center);labels.Children().Append(text);
     if(!presentation.description.empty()){
         auto detail=label(data,presentation.description);detail.FontSize(data->textSize()/1.2);
@@ -142,7 +142,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             if(!cancel&&changed)set(local->value);
         }catch(hresult_error const& error){
             entry.BorderThickness(Thickness{1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));
-            ToolTipService::SetToolTip(entry,box_value(error.message()));
+            tooltip(entry,error.message());
         }
     };
     if(commits)commits->emplace_back([commit]{commit(false);});

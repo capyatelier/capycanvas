@@ -202,6 +202,16 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }
+inline bool& touchContact(){thread_local bool touch=false;return touch;}
+inline void tooltip(DependencyObject const& target,hstring const& text){
+    if(auto current=ToolTipService::GetToolTip(target).try_as<ToolTip>()){
+        if(unbox_value_or<hstring>(current.Content(),L"")!=text)current.Content(box_value(text));
+        return;
+    }
+    ToolTip tip;tip.Content(box_value(text));
+    tip.Opened([](winrt::Windows::Foundation::IInspectable const& sender,auto&&){if(touchContact())sender.as<ToolTip>().IsOpen(false);});
+    ToolTipService::SetToolTip(target,tip);
+}
 inline bool pickerControl(J const& control){
     auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");
 }

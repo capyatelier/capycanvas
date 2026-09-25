@@ -72,7 +72,7 @@ void LayersView::init(){
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
         }});
         pick.Width(24);pick.Height(24);pick.Content(icon(spec.icon,data->theme()));
-        AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));ToolTipService::SetToolTip(pick,box_value(spec.label));
+        AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));CapyUi::tooltip(pick,spec.label);
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
             pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
         });
@@ -85,7 +85,7 @@ void LayersView::init(){
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
         reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?self->data->tint(L"text",31):clear());
-        auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);ToolTipService::SetToolTip(reference,box_value(text));
+        auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);CapyUi::tooltip(reference,text);
     }});
     header.Children().Append(tools);root.Children().Append(header);
     auto factory=make_self<ElementFactory>();factory->owner=weak;repeater.ItemTemplate(factory.as<IElementFactory>());
@@ -97,7 +97,7 @@ void LayersView::init(){
     footer.Orientation(Orientation::Horizontal);footer.Spacing(2);footer.Padding({6,4,6,4});
     auto footerButton=[&](hstring const& iconName,hstring const& text,hstring const& id,std::function<void()> action){
         auto pick=button(data,text,std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
-        AutomationProperties::SetAutomationId(pick,id);ToolTipService::SetToolTip(pick,box_value(text));footer.Children().Append(pick);return pick;
+        AutomationProperties::SetAutomationId(pick,id);CapyUi::tooltip(pick,text);footer.Children().Append(pick);return pick;
     };
     footerButton(L"add-layer",L"New layer",L"layer-new",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(false)},{L"clipped",B(false)}}));});
     footerButton(L"folder",L"New group",L"layer-new-group",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(true)},{L"clipped",B(false)}}));});

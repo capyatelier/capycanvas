@@ -68,7 +68,7 @@ class HeaderStatus {
                 cap.Visibility(charging?Visibility::Collapsed:Visibility::Visible);bolt.Visibility(charging?Visibility::Visible:Visibility::Collapsed);
                 bolt.Fill(fill(light?ink:color(L"#e5e7eb")));bolt.Stroke(fill(light?track:color(L"#202226")));
                 auto description=known?L"Battery "+to_hstring(level)+L"%"+(charging?L", charging":low?L", low":L""):L"Battery unavailable";
-                AutomationProperties::SetName(batteryTile,description);ToolTipService::SetToolTip(batteryTile,box_value(description));
+                AutomationProperties::SetName(batteryTile,description);tooltip(batteryTile,description);
             }
             clock.Foreground(data->brush(L"text"));
             SYSTEMTIME now{};GetLocalTime(&now);

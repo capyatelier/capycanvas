@@ -66,7 +66,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     void refresh(){
         Updating updating(data);
         auto view=object(data->state,L"layer_properties");
-        title.Text(str(view,L"title"));ToolTipService::SetToolTip(title,box_value(str(view,L"description")));
+        title.Text(str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"label",S(str(c,L"label"))},
                 {L"section",S(str(c,L"section"))},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")}}));
@@ -122,7 +122,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                         row.Children().Append(color);
                         auto bucket=button(data,L"Use selected color",[property,action]{if(property->current()&&!property->data->updating&&flag(property->view(),L"enabled"))property->data->dispatchDocument(action,to_hstring(uint64_t(property->epoch)));});
                         bucket.Content(icon(L"fill",data->theme()));bucket.Height(36);bucket.VerticalAlignment(VerticalAlignment::Top);
-                        ToolTipService::SetToolTip(bucket,box_value(L"Use selected color"));AutomationProperties::SetAutomationId(bucket,L"paper-color-bucket");Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
+                        CapyUi::tooltip(bucket,L"Use selected color");AutomationProperties::SetAutomationId(bucket,L"paper-color-bucket");Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
                     }else body.Children().Append(color);
                 }else if(type==L"curve"){
                     curves.emplace_back(name,CurveField(property,fields));
