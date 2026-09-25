@@ -403,7 +403,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .palette-normal > .panel-frame { flex: none; }
 .palette-scroll { min-height: 84px; max-height: 172px; overflow: hidden auto; overscroll-behavior: contain; scrollbar-width: none; }
 .palette-chevron-up { transform: rotate(180deg); }
-.palette-cover { position: absolute; inset: 0; z-index: 2; background: var(--panel); }
+.palette-cover { position: absolute; inset: 0; z-index: 2; }
+.palette-normal[inert] { visibility: hidden; }
 .palette-expanded { align-content: start; overflow: hidden; }
 .palettes-panel button { touch-action: manipulation; }
 .panel .palette-tile { position: relative; min-height: 0; height: 40px; padding: 3px; border-radius: var(--control-radius); background: transparent; touch-action: none; cursor: grab; }

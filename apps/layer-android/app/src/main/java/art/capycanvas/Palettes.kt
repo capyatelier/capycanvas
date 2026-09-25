@@ -338,7 +338,7 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
         val covered = controller.chooser || controller.expanded
         Column(Modifier.fillMaxWidth().then(if (bounded) Modifier.fillMaxHeight() else Modifier).padding(horizontal = 8.dp, vertical = 6.dp)) {
             Box((if (bounded) Modifier.weight(1f) else Modifier).fillMaxWidth().onSizeChanged { bodyHeight = it.height / density }) {
-                Column(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().alpha(if (covered) 0f else 1f)) {
                     Column(Modifier.onSizeChanged { top = it.height / density }) {
                         HistoryRow(controller, view, cells, covered, expanded = false, rows = 1)
                         HorizontalDivider(Modifier.padding(vertical = 6.dp), color = colors.divider)
@@ -349,7 +349,7 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
                         SwatchGrid(controller, view, swatches, cells, geometry, owner, covered)
                     }
                 }
-                if (controller.expanded) Box(Modifier.matchParentSize().background(colors.panel).blockInput().testTag("palette-history-expanded")) {
+                if (controller.expanded) Box(Modifier.matchParentSize().blockInput().testTag("palette-history-expanded")) {
                     HistoryRow(controller, view, cells, false, expanded = true,
                         rows = (((bodyHeight + Gap) / (Tile + Gap)).toInt()).coerceIn(1, HistoryRows))
                 }
@@ -658,7 +658,7 @@ private fun DrawScope.checker() {
     LaunchedEffect(Unit) { if (controller.keyboard) focus.requestFocus() }
     val palettes = view.array("palettes").objects()
     val matches = palettes.filter { it.getString("name").lowercase().contains(query.trim().lowercase()) }
-    Column(modifier.background(colors.panel).blockInput().testTag("palette-browser"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier.blockInput().testTag("palette-browser"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             CoreTextField(query, { query = it }, Modifier.weight(1f).paletteFocus(controller).focusRequester(focus).testTag("palette-search"), height = 24.dp,
                 shape = ControlShape, placeholder = { Text("Find a palette") }, leadingIcon = { SharedIcon("search", null, Modifier.size(14.dp)) })
