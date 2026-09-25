@@ -104,6 +104,8 @@ class AndroidInteractionTest {
         settle()
     }
     private fun customize(value: JSONObject) = action(obj("type" to "customize", "action" to value))
+    private fun transparency() = listOf("off", "low", "medium", "high").indexOf(state().getJSONObject("settings").getString("transparency"))
+    private fun transparency(value: Int) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to value)))
     private fun restore() = action(obj("type" to "restore_workspace", "workspace" to fixture))
     private fun event(action: Int, next: Offset = point) {
         point = next
@@ -1126,8 +1128,7 @@ class AndroidInteractionTest {
 
     @Test fun drawerButtonsAndBridgesKeepTheirColors() {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-        val originalTransparency = listOf("off", "low", "medium", "high").indexOf(state().getJSONObject("settings").getString("transparency"))
-        fun transparency(value: Int) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to value)))
+        val originalTransparency = transparency()
         val toolbar = fixture.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
         val tile = toolbar.getJSONObject("content").array("tiles").getJSONObject(0).getInt("id")
         val alternateTile = fixture.getJSONObject("layout").getInt("next_tile_id")
@@ -1269,7 +1270,8 @@ class AndroidInteractionTest {
 
     @Test fun drawerTabsKeepActiveColorsAndPadding() {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-        try { for (theme in listOf("light", "dark")) {
+        val originalTransparency = transparency()
+        try { transparency(0); for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme)); restore()
             val docked = bounds("tab-brushes")
             val name = bounds("tab-name-brushes")
@@ -1300,7 +1302,7 @@ class AndroidInteractionTest {
             assertEquals("Drawer name padding", name.left - docked.left, bounds("tab-name-brushes").left - drawer.left, 1f)
             assertEquals("Drawer icon padding", icon.left - docked.left, bounds("tab-icon-brushes").left - drawer.left, 1f)
             assertEquals("Drawer active background and text match the docked tab in $theme", colors, pixels("drawer-tab-brushes"))
-        } } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+        } } finally { action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency) }
     }
 
     @Test fun detachedPanelsKeepBodiesAndWiderResizeTargets() {

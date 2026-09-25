@@ -4,6 +4,8 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
  const dir='artifacts/workspace-motion';await mkdir(dir,{recursive:true});
  const send=async a=>{await evaluate(`layerApp.dispatch(${JSON.stringify(a)})`);await settle();await evaluate('new Promise(r=>setTimeout(r,250))');};
  const saved=await evaluate('layerApp.state().workspace'),fixture=structuredClone(saved);
+ const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
+ await send({type:'preferences',action:{type:'edit',id:'transparency',value:0}});
  const tabs=(id,panels)=>({kind:'tabs',id,panels,active:panels[0],tab_style:'name'});
  Object.assign(fixture.layout,{bands:[{id:40,edge:'left',extent:252,root:tabs(41,['brushes','sizes'])},{id:42,edge:'right',extent:360,root:tabs(43,['layers','properties','adjustments'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(44,fixture.layout.next_id)});fixture.zen_mode=false;
  for(const dpr of [1,2]) {
@@ -140,5 +142,5 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   }
 
  }
- await send({type:'restore_workspace',workspace:saved});console.log('PASS: native pixels at 1x/2x, model rebase/cancel, mouse/touch/pen clipping, compact/short/long drops, squashed/preserved source heights, footer anchor, undo/redo');
+ await send({type:'restore_workspace',workspace:saved});await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});console.log('PASS: native pixels at 1x/2x, model rebase/cancel, mouse/touch/pen clipping, compact/short/long drops, squashed/preserved source heights, footer anchor, undo/redo');
 }
