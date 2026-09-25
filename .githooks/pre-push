@@ -1,0 +1,3 @@
+#!/bin/sh
+# Capy Canvas commit message guard.
+exec "$(dirname "$0")/check-commit-messages.sh" push

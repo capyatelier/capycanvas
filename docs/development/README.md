@@ -7,6 +7,9 @@ that client and focused crate tests; you do not need every platform SDK installe
 The [architecture guide](../architecture.md) explains the code boundaries before
 you choose where to make a change.
 
+Before contributing, install the commit and push guards with
+`sh tools/git/install-hooks.sh` and follow the [commit guide](../COMMIT_GUIDE.md).
+
 ## Build a client
 
 Run the commands in these guides from the repository root unless stated otherwise.

@@ -1,3 +1,11 @@
+# Commit attribution
+
+Do not add `Co-Authored-By` trailers naming AI assistants or coding agents,
+including Claude, Codex, Grok, ChatGPT, Gemini, Copilot, or other agents. Human
+coauthors are allowed. Install the commit and push guards with
+`sh tools/git/install-hooks.sh`; do not bypass them. Before pushing, remove any
+agent attribution from all commits being introduced, including merged history.
+
 # Before merging
 
 Follow the final checks in [the commit guide](docs/COMMIT_GUIDE.md) before

@@ -1,3 +1,35 @@
+# Commit and push checks
+
+Do not attribute commits to AI assistants or coding agents with `Co-Authored-By`
+trailers. This includes Claude, Codex, Grok, ChatGPT, Gemini, Copilot, Cursor, and
+other agents. Human coauthors are allowed; ordinary mentions of an agent in the
+commit description are allowed.
+
+After cloning, install the local guards from the repository root:
+
+```sh
+sh tools/git/install-hooks.sh
+```
+
+The installer shares the guards across linked worktrees, including older branches.
+Run it again after updating the tracked hooks. It refuses to replace unrelated
+hooks or override `core.hooksPath`; integrate the guards into existing hooks in
+that case. Git does not install hooks automatically in other clones, and these
+local checks are not a server-side branch rule. Do not bypass them.
+
+`commit-msg` rejects agent attribution before a commit is created. `pre-push`
+checks the complete ancestry of every pushed commit or tag, including merge
+parents, so merging an old branch cannot restore prohibited trailers. Remove
+the trailers from the affected history before pushing. Ref deletions and tags
+pointing at non-commit objects do not introduce commit messages.
+
+To audit a branch manually or validate changes to the guards:
+
+```sh
+sh .githooks/check-commit-messages.sh history HEAD
+python3 -m unittest discover -s tools/git -p 'test_*.py'
+```
+
 # Before merging to main
 
 - **Replace obsolete paths.** Refactor or delete superseded code instead of

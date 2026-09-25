@@ -1,3 +1,6 @@
+.githooks/* text eol=lf
+tools/git/*.sh text eol=lf
+
 # Preserve the published crates byte-for-byte, including their line endings and
 # Markdown hard breaks. The recorded unified patch also contains blank context.
 vendor/wgpu/** -text -whitespace
