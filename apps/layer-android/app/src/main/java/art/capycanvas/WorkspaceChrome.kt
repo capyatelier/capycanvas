@@ -125,8 +125,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 } }
                                 val shape = drawerButtonShape(if (selected) opened?.getString("direction") ?: dock.drawerSources[id.toString()]?.direction else null)
                                 HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
-                                    .testTag("column-icon-$panel").semantics { this.selected = selected }.dragSource(dock, target, holdToDrag = true)) {
-                                    Box(Modifier.fillMaxSize().clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
+                                    .dragSource(dock, target, holdToDrag = true)) {
+                                    Box(Modifier.fillMaxSize().testTag("column-icon-$panel").semantics { this.selected = selected }
+                                        .clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
                                         .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
                                             host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
                                         }), contentAlignment = Alignment.Center) {
