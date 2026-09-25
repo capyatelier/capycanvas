@@ -568,11 +568,72 @@ fn native_document_tab_input() {
             w.documents.drag_active(),
             "native tab drag started without hold, touch={touch}"
         );
+        let bounds = |id: u64| {
+            let tab = find_named(w.window.upcast_ref(), &format!("document-tab-{id}")).unwrap();
+            tab.compute_bounds(&w.surface).unwrap()
+        };
+        let (first, pitch) = (bounds(1), bounds(2).x() - bounds(1).x());
+        let (held, offsets) = w.documents.slide().expect("live tab slide");
+        assert!(
+            (held - first.x() - 60.).abs() < 1.,
+            "held tab follows, touch={touch}"
+        );
+        assert_eq!(
+            offsets,
+            [0., 0., 0.],
+            "neighbors wait for halfway, touch={touch}"
+        );
+        perform(if touch {
+            serde_json::json!([{"touch":"move", "point":[from[0]+pitch*0.9,from[1]]}])
+        } else {
+            serde_json::json!([{"point":[from[0]+pitch*0.9,from[1]]}])
+        });
+        assert_eq!(
+            w.documents.slide().unwrap().1,
+            [0., -pitch, 0.],
+            "first neighbor slides, touch={touch}"
+        );
         perform(if touch {
             serde_json::json!([{"touch":"move", "point":to}, {"touch":"move", "point":[to[0]-2.,to[1]]}])
         } else {
             serde_json::json!([{"point":to}, {"point":[to[0]-2.,to[1]]}])
         });
+        let (held, offsets) = w.documents.slide().unwrap();
+        assert_eq!(
+            offsets,
+            [0., -pitch, -pitch],
+            "both neighbors slide, touch={touch}"
+        );
+        assert!(
+            (held - bounds(3).x()).abs() < 1.,
+            "held tab stays in the strip, touch={touch}"
+        );
+        if !touch {
+            crate::capture(&w, "/tmp/capy-document-tabs-slide.png");
+        }
+        let away = [to[0], to[1] + first.height() * 2.];
+        perform(if touch {
+            serde_json::json!([{"touch":"move", "point":away}])
+        } else {
+            serde_json::json!([{"point":away}])
+        });
+        let (held, offsets) = w.documents.slide().unwrap();
+        assert_eq!(
+            offsets,
+            [0., 0., 0.],
+            "leaving the strip detaches, touch={touch}"
+        );
+        assert_eq!(held, first.x());
+        perform(if touch {
+            serde_json::json!([{"touch":"move", "point":to}, {"touch":"move", "point":[to[0]-2.,to[1]]}])
+        } else {
+            serde_json::json!([{"point":to}, {"point":[to[0]-2.,to[1]]}])
+        });
+        assert_eq!(
+            w.documents.slide().unwrap().1,
+            [0., -pitch, -pitch],
+            "returning reattaches, touch={touch}"
+        );
         perform(if touch {
             serde_json::json!([{"touch":"up"}])
         } else {
@@ -601,6 +662,20 @@ fn native_document_tab_input() {
             &[1, 2, 3],
             "cancelled drag"
         );
+        assert!(w.documents.slide().is_none());
+        assert_eq!(bounds(1).x(), first.x(), "cancel restores tab widgets");
+        let away = [to[0], to[1] + first.height() * 2.];
+        perform(if touch {
+            serde_json::json!([{"touch":"down", "point":from}, {"touch":"move", "point":to}, {"touch":"move", "point":away}, {"touch":"up"}])
+        } else {
+            serde_json::json!([{"point":from}, {"down":true}, {"point":to}, {"point":away}, {"down":false}])
+        });
+        assert_eq!(
+            w.documents.model.borrow().order(),
+            &[1, 2, 3],
+            "release outside the strip cancels"
+        );
+        assert!(!w.documents.model.borrow().can_undo());
     }
     // Native clicks still select, and keyboard cycling follows visual order.
     let first = point(1, 0.3);

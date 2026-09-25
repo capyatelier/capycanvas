@@ -32,7 +32,7 @@ mod tab_drag;
 mod tool_catalog;
 #[path = "workspace_update.rs"]
 mod workspace_update;
-use tab_drag::NativeTabSlide;
+pub(crate) use tab_drag::{NativeTabSlide, SlidingTab};
 
 mod allocation {
     use super::*;
@@ -448,13 +448,13 @@ mod allocation {
                 );
             }
             if let Some(owner) = &owner {
-                owner.header.snapshot_drag(
-                    snapshot,
-                    self.obj()
-                        .frame_clock()
-                        .map_or(0, |clock| clock.frame_time()),
-                    self.obj().scale_factor() as f32,
-                );
+                let now = self
+                    .obj()
+                    .frame_clock()
+                    .map_or(0, |clock| clock.frame_time());
+                let scale = self.obj().scale_factor() as f32;
+                owner.documents.snapshot_drag(snapshot, now, scale);
+                owner.header.snapshot_drag(snapshot, now, scale);
             }
             if let Some((node, point)) = self.drag_overlay.borrow().as_ref() {
                 snapshot.push_clip(&gtk::graphene::Rect::new(
@@ -874,7 +874,7 @@ pub struct Workspace {
     pub(crate) documents: crate::documents::Documents,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
-    surface: DockSurface,
+    pub(crate) surface: DockSurface,
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
     header: header::Header,

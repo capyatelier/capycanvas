@@ -871,7 +871,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .proof-controls > p:empty { display:none; }
 
 /* Drawing tabs use the final flexible title allocation, independently of dock tabs. */
-.drawing-title { display:flex; flex:1; min-width:0; width:100%; height:100%; }
+.drawing-title { position:relative; display:flex; flex:1; min-width:0; width:100%; height:100%; }
 .drawing-title [hidden] { display:none !important; }
 .drawing-tabs { display:flex; flex:1; width:100%; min-width:0; gap:6px; margin-block:1px; border-radius:var(--header-radius); background:var(--header-surface); }
 .drawing-tab { position:relative; display:flex; flex:1 1 0; min-width:0; border-radius:999px; background:transparent; }
@@ -888,8 +888,9 @@ body[data-theme="light"] #header { text-shadow:none; }
 .drawing-list-pick[aria-current="true"] { background:var(--accent-bg, #477b9c); }
 .drawing-grip { touch-action:none; }
 .drawing-row-menu { display:flex; flex-wrap:wrap; gap:4px; padding-top:8px; }
-.drawing-tabs [data-drawing-drop="before"] { box-shadow:inset 3px 0 #55acff; }
-.drawing-tabs [data-drawing-drop="after"] { box-shadow:inset -3px 0 #55acff; }
+.drawing-slide { position:absolute; z-index:1; overflow:hidden; pointer-events:none; }
+.drawing-slide > .drawing-tab { position:absolute; margin:0; }
+.drawing-slide > .dragged-tab-preview { z-index:2; background:var(--tabbar); }
 .drawing-list-row[data-drawing-drop="before"] { box-shadow:inset 0 3px #55acff; }
 .drawing-list-row[data-drawing-drop="after"] { box-shadow:inset 0 -3px #55acff; }
 .drawing-dragging, .drawing-dragging * { cursor:grabbing !important; }

@@ -25,6 +25,7 @@ pub(crate) struct TabDrag {
     tabs: Vec<TabHit>,
     pub(crate) clip: Bounds,
     switches: Vec<f32>,
+    shift: f32,
 }
 
 impl TabDrag {
@@ -66,6 +67,15 @@ impl TabDrag {
         if switches.iter().any(|x| !x.is_finite()) || switches.windows(2).any(|p| p[0] >= p[1]) {
             return None;
         }
+        let gap = tabs
+            .get(source + 1)
+            .map(|next| next.bounds.x - bounds.x - bounds.width)
+            .or_else(|| {
+                let previous = tabs.get(source.checked_sub(1)?)?.bounds;
+                Some(bounds.x - previous.x - previous.width)
+            })
+            .unwrap_or(0.)
+            .max(0.);
         Some(Self {
             group,
             source,
@@ -73,6 +83,7 @@ impl TabDrag {
             tabs,
             clip,
             switches,
+            shift: bounds.width + gap,
         })
     }
 
@@ -99,9 +110,9 @@ impl TabDrag {
             .map(|tab| TabDragOffset {
                 index: tab.index,
                 x: if tab.index < self.source && tab.index >= slot {
-                    bounds.width
+                    self.shift
                 } else if tab.index > self.source && tab.index <= slot {
-                    -bounds.width
+                    -self.shift
                 } else {
                     0.
                 },
@@ -192,5 +203,42 @@ mod tests {
         assert_eq!(p.bounds.width, 100.);
         assert_eq!(p.offsets[2].x, -100.);
         assert!(drag.preview([f32::NAN, 38.]).is_none());
+    }
+
+    #[test]
+    fn gapped_strips_shift_neighbors_by_the_source_pitch() {
+        let tabs: Vec<_> = (0..3)
+            .map(|index| TabHit {
+                group: 0,
+                index,
+                bounds: Bounds {
+                    x: 10. + index as f32 * 106.,
+                    y: 0.,
+                    width: 100.,
+                    height: 34.,
+                },
+            })
+            .collect();
+        let clip = Bounds {
+            x: 10.,
+            y: 0.,
+            width: 312.,
+            height: 34.,
+        };
+        let first = TabDrag::new(0, 0, [40., 17.], &tabs, clip).unwrap();
+        assert_eq!(first.switches, [56., 162.]);
+        let p = first.preview([40. + 162., 17.]).unwrap();
+        assert_eq!(p.insertion, 3);
+        assert_eq!(
+            p.offsets.iter().map(|o| o.x).collect::<Vec<_>>(),
+            [0., -106., -106.]
+        );
+        let last = TabDrag::new(0, 2, [260., 17.], &tabs, clip).unwrap();
+        let p = last.preview([260. - 57., 17.]).unwrap();
+        assert_eq!(p.insertion, 1);
+        assert_eq!(
+            p.offsets.iter().map(|o| o.x).collect::<Vec<_>>(),
+            [0., 106., 0.]
+        );
     }
 }

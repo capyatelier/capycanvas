@@ -87,8 +87,10 @@ Original recovery files survive until the replacement checkpoint is durable.
 2. Open several files including duplicate names, the same URI/file twice, and a
    corrupt file between valid files. Valid results append in order; rejected
    results leave existing drawings intact. Cancel stops subsequent admissions.
-3. Drag an inactive tab immediately with mouse, touch or pen. Selection stays
-   unchanged. Escape, native cancellation, leaving the strip, resize or rotation
+3. Drag an inactive tab immediately with mouse, touch or pen. It follows the
+   contact while neighbors slide aside, using the panel tabs' frozen halfway
+   points. Selection stays unchanged. Leaving the strip vertically returns the
+   neighbors; releasing there, Escape, native cancellation, resize or rotation
    cancels without a history entry. Reorder undo changes order only.
 4. Narrow the title bar until it becomes a selector. Select/close by stable ID,
    use keyboard reorder or immediate handles. Touch/pen row bodies scroll before

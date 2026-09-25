@@ -6,7 +6,7 @@
 
 mod camera;
 mod document_tabs;
-pub use document_tabs::{DocumentTabs, DocumentTabHit};
+pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
 pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;

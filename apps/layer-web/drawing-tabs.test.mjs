@@ -86,18 +86,36 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   for(const device of ['mouse','pen','touch']){
     const positions=await evaluate(`(()=>{const list=document.querySelector(${JSON.stringify(compact?'.drawing-list-rows':'.drawing-tabs')}),rows=[...list.children];const source=rows[0].querySelector(${JSON.stringify(compact?'.drawing-grip':'.drawing-tab-pick')}).getBoundingClientRect(),target=rows.at(-1).getBoundingClientRect();return{from:[source.x+source.width/2,source.y+source.height/2],to:[target.x+target.width-${compact?'target.width/2':'8'},target.y+target.height-${compact?'8':'target.height/2'}]};})()`);
     const [x,y]=positions.from,[tx,ty]=positions.to;
-    if(device==='touch'){
-      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:12,x,y,radiusX:3,radiusY:3,force:1}]});
-      await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:12,x:tx,y:ty,radiusX:3,radiusY:3,force:1}]});
-      await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-    }else{
-      for(const[type,px,py,buttons]of[['mousePressed',x,y,1],['mouseMoved',tx,ty,1],['mouseReleased',tx,ty,0]])await call('Input.dispatchMouseEvent',{type,x:px,y:py,button:'left',buttons,clickCount:1,pointerType:device,force:buttons?.7:0});
-    }
-    await settle();
+    const send=async(type,px,py)=>{
+      if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:12,x:px,y:py,radiusX:3,radiusY:3,force:1}]});
+      else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],x:px,y:py,button:'left',buttons:type==='up'?0:1,clickCount:1,pointerType:device,force:type==='up'?0:.7});
+      await settle();
+    };
+    const slide=()=>evaluate(`(()=>{const o=document.querySelector('.drawing-slide');return o&&{hidden:[...document.querySelectorAll('.drawing-tabs > .drawing-tab')].every(n=>getComputedStyle(n).visibility==='hidden'),offsets:[...o.children].map(n=>parseFloat(n.style.transform.slice(11)))};})()`);
+    const near=(actual,expected,message)=>assert.ok(actual.length===expected.length&&actual.every((v,i)=>Math.abs(v-expected[i])<1),`${message}: ${actual} vs ${expected}`);
+    await send('down',x,y);
+    if(!compact){
+      const pitch=await evaluate(`(()=>{const [a,b]=document.querySelectorAll('.drawing-tabs > .drawing-tab');return b.getBoundingClientRect().x-a.getBoundingClientRect().x;})()`);
+      const height=await evaluate(`document.querySelector('.drawing-tabs').getBoundingClientRect().height`);
+      await send('move',x+pitch*.9,y);
+      let live=await slide();assert.equal(live?.hidden,true,`${device} hides live tabs while sliding`);
+      near(live.offsets,[pitch*.9,-pitch,0],`${device} passes one neighbor`);
+      await send('move',tx,ty);near((await slide()).offsets,[pitch*2,-pitch,-pitch],`${device} clamps to the strip and passes both neighbors`);
+      await send('move',tx,ty+height*2);near((await slide()).offsets,[0,0,0],`${device} leaving the strip detaches`);
+      await send('move',tx,ty);near((await slide()).offsets,[pitch*2,-pitch,-pitch],`${device} returning reattaches`);
+    }else await send('move',tx,ty);
+    await send('up',tx,ty);
+    assert.equal(await evaluate('!!document.querySelector(".drawing-slide,.dragged-tab-source")'),false,'Release removes the slide');
     assert.deepEqual((await tabs()).tabs.map(t=>t.id),[second,third,first],`${device} reorders ${compact?'an explicit list handle':'the tab body'} without a hold`);
     assert.equal((await tabs()).selected,third,'Reordering does not activate the dragged drawing');
     await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');await settle();
     assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third]);
+    if(!compact){
+      await send('down',x,y);await send('move',tx,ty);await send('move',tx,ty+80);await send('up',tx,ty+80);
+      assert.equal(await evaluate('!!document.querySelector(".drawing-slide,.dragged-tab-source")'),false);
+      assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third],`${device} release outside the strip cancels`);
+      assert.equal((await tabs()).can_undo,false);
+    }
   }
   if(compact)await evaluate(`document.querySelector('.drawing-list header button').click()`);
   // Selector bodies preserve pre-hold scrolling, then keep the same touch/pen

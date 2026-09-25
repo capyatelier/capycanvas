@@ -121,6 +121,15 @@ impl DocumentTabs {
             i.checked_sub(1).map(|i| Some(self.order[i]))
         }
     }
+    pub fn drag(
+        &self,
+        id: u64,
+        press: [f32; 2],
+        hits: &[DocumentTabHit],
+        clip: crate::Bounds,
+    ) -> Option<DocumentTabDrag> {
+        DocumentTabDrag::new(&self.order, id, press, hits, clip)
+    }
     /// Only measured, visible members accept a drop. Out-of-strip movement is
     /// cancellation, never an implicit move-to-end or a window tear-off.
     pub fn drop_target(
@@ -159,6 +168,91 @@ pub struct DocumentTabHit {
     pub bounds: crate::Bounds,
 }
 
+pub struct DocumentTabDrag {
+    id: u64,
+    order: Vec<u64>,
+    clip: crate::Bounds,
+    slide: crate::tab_drag::TabDrag,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DocumentTabSlide {
+    pub bounds: crate::Bounds,
+    pub offsets: Vec<f32>,
+    pub attached: bool,
+    pub before: Option<u64>,
+}
+
+impl DocumentTabDrag {
+    pub fn new(
+        order: &[u64],
+        id: u64,
+        press: [f32; 2],
+        hits: &[DocumentTabHit],
+        clip: crate::Bounds,
+    ) -> Option<Self> {
+        if hits.len() != order.len()
+            || hits.iter().zip(order).any(|(hit, id)| hit.id != *id)
+            || !press[1].is_finite()
+            || !clip.y.is_finite()
+            || !clip.height.is_finite()
+        {
+            return None;
+        }
+        let source = order.iter().position(|v| *v == id)?;
+        let tabs: Vec<_> = hits
+            .iter()
+            .enumerate()
+            .map(|(index, hit)| crate::TabHit {
+                group: 0,
+                index,
+                bounds: hit.bounds,
+            })
+            .collect();
+        Some(Self {
+            id,
+            order: order.to_vec(),
+            clip,
+            slide: crate::tab_drag::TabDrag::new(0, source, press, &tabs, clip)?,
+        })
+    }
+    pub fn is_current(&self, order: &[u64]) -> bool {
+        self.order == order
+    }
+    pub fn preview(&self, point: [f32; 2]) -> Option<DocumentTabSlide> {
+        let preview = self.slide.preview(point)?;
+        let reach = self.clip.height / 2.;
+        if !point[1].is_finite()
+            || point[1] < self.clip.y - reach
+            || point[1] > self.clip.y + self.clip.height + reach
+        {
+            return Some(DocumentTabSlide {
+                bounds: self.slide.source_bounds(),
+                offsets: vec![0.; self.order.len()],
+                attached: false,
+                before: None,
+            });
+        }
+        let source = self.order.iter().position(|v| *v == self.id)?;
+        let slot = preview.insertion - usize::from(preview.insertion > source);
+        let mut offsets = vec![0.; self.order.len()];
+        for offset in &preview.offsets {
+            offsets[offset.index] = offset.x;
+        }
+        Some(DocumentTabSlide {
+            bounds: preview.bounds,
+            offsets,
+            attached: true,
+            before: self
+                .order
+                .iter()
+                .filter(|v| **v != self.id)
+                .nth(slot)
+                .copied(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +278,58 @@ mod tests {
         tabs.close(b);
         assert!(tabs.order().is_empty());
         assert_eq!(tabs.adjacent(true), None);
+    }
+    #[test]
+    fn strip_drag_slides_gapped_neighbors_and_detaches_vertically() {
+        let mut tabs = DocumentTabs::default();
+        let b = tabs.add();
+        let c = tabs.add();
+        let hits: Vec<_> = tabs
+            .order()
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| DocumentTabHit {
+                id,
+                bounds: crate::Bounds {
+                    x: 10. + i as f32 * 106.,
+                    y: 1.,
+                    width: 100.,
+                    height: 32.,
+                },
+            })
+            .collect();
+        let clip = crate::Bounds {
+            x: 10.,
+            y: 1.,
+            width: 312.,
+            height: 32.,
+        };
+        let drag = tabs.drag(1, [40., 17.], &hits, clip).unwrap();
+        let still = drag.preview([40., 17.]).unwrap();
+        assert_eq!(still.offsets, [0., 0., 0.]);
+        assert_eq!(still.before, Some(b));
+        assert!(!tabs.reorder(1, still.before));
+        let over = drag.preview([40. + 57., 30.]).unwrap();
+        assert_eq!(over.offsets, [0., -106., 0.]);
+        assert_eq!(over.bounds.x, 67.);
+        assert_eq!(over.before, Some(c));
+        let end = drag.preview([500., 17.]).unwrap();
+        assert_eq!(end.offsets, [0., -106., -106.]);
+        assert_eq!(end.bounds.x, 222.);
+        assert_eq!(end.before, None);
+        assert!(end.attached);
+        assert!(drag.preview([500., 33. + 16.]).unwrap().attached);
+        let away = drag.preview([500., 33. + 17.]).unwrap();
+        assert!(!away.attached);
+        assert_eq!(away.offsets, [0., 0., 0.]);
+        assert_eq!(away.bounds, hits[0].bounds);
+        assert!(drag.is_current(tabs.order()));
+        assert!(tabs.reorder(1, end.before));
+        assert_eq!(tabs.order(), &[b, c, 1]);
+        assert!(!drag.is_current(tabs.order()));
+        assert!(tabs.drag(1, [40., 17.], &hits, clip).is_none());
+        assert!(tabs.drag(1, [40., 17.], &hits[..2], clip).is_none());
+        assert!(tabs.drag(9, [40., 17.], &hits, clip).is_none());
     }
     #[test]
     fn width_and_cycle_boundaries() {
