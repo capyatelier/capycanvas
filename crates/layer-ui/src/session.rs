@@ -15602,7 +15602,7 @@ mod tests {
     }
 
     #[test]
-    fn sketch_color_and_layers_drawers_survive_canvas_contacts_and_replace_each_other() {
+    fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session(); s.set_platform(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
@@ -15611,11 +15611,10 @@ mod tests {
                     e.item == HeaderItem::Tool { control }).unwrap().id;
                 s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }] }).unwrap();
                 s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
-                let drawer = s.state.customization.drawer.clone().unwrap();
-                assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
+                assert_eq!(s.state.customization.drawer.as_ref().unwrap().dismissal, DrawerDismissal::OutsideContact);
                 let reply = chrome(&mut s, ChromeEvent::Contact { position: [700., 500.], canvas: true }, ChromeFacts::default());
-                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
-                assert!(!reply.handled, "canvas input continues with the drawer open");
+                assert!(s.state.customization.drawer.is_none());
+                assert!(reply.handled && !reply.paint, "the dismissing contact does not paint");
             }
         }
     }
@@ -15787,9 +15786,12 @@ mod tests {
             },
             ChromeFacts::default(),
         );
-        assert!(!reply.handled);
-        assert!(s.state.customization.drawer.is_some());
-        // Color remains open until toggled or replaced.
+        assert!(reply.handled && !reply.paint);
+        assert!(s.state.customization.drawer.is_none());
+        // Explicit policy is for persistent column drawers: outside does not
+        // dismiss, without a per-platform special case.
+        activate(&mut s, 6);
+        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
         chrome(
             &mut s,
             ChromeEvent::Contact {

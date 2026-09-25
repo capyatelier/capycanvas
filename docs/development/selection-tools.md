@@ -212,8 +212,8 @@ Additional reproducible checks:
   80 ms on first use and 28–30 ms for 32/128-pixel Grow/Shrink. These measure a
   completed operation, not brush latency; tablet timings depend on its GPU.
 
-Layers and Color drawers stay open during canvas input. Opening another header
-or toolbar drawer replaces them; their existing close/toggle actions still work.
+Layers and Color drawers close on an outside contact like other tool drawers;
+a canvas contact that dismisses them does not paint.
 Photo's secondary panel strip opens individual panels by default. Default
 upgrades preserve customized workspace layouts.
 
