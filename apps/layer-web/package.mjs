@@ -37,6 +37,11 @@ function replaceRequired(text, from, to) {
   return text.replaceAll(from, to);
 }
 
+// Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
+// Hash final bytes after rewriting dependencies; no bundler required.
+const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
+const workers = ["workspace-worker.js", "raster-worker.js", "proof-worker.js"];
+
 export function fingerprintAssets(directory) {
   const files = filesIn(directory), names = {};
   const publish = (path, data = readFileSync(join(directory, path))) => {
@@ -47,11 +52,8 @@ export function fingerprintAssets(directory) {
     rmSync(join(directory, path));
     names[path] = name;
   };
-  // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
-  // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
-    if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js" && path !== "proof-worker.js")
+    if (path.endsWith(".js") && !modules.includes(path) && !workers.includes(path))
       throw new Error(`Add the new module to the package dependency order: ${path}`);
     if (!path.endsWith(".js") && path !== "style.css") publish(path);
   }
@@ -185,7 +187,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "app.js", "raster-worker-client.js", "raster-worker.js", "proof-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-preload.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js", "selection-masks.js", "editor-panels.js", "workspace-chrome.js", "glass.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "style.css"])
+    for (const path of [...modules.filter(path => !path.startsWith("pkg/")), ...workers, "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));

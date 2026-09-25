@@ -1553,7 +1553,7 @@ function dropHint(e, item) {
     });
   } catch {
     return null;
-  } // Invalid/foreign payloads have no accepted core target.
+  }
 }
 function showDropHint(hint) {
   dropIndicator.hidden = !hint;
