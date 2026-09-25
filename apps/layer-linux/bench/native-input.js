@@ -292,7 +292,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, nativeTest || workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, nativeTest || workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher || iconAudit ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;
