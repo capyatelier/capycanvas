@@ -329,6 +329,12 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(presses)presses->listen(pick);
         return pick;
     }
+    bool holdsFocus(UIElement const& container)const{
+        if(!container||!container.XamlRoot())return false;
+        for(auto node=FocusManager::GetFocusedElement(container.XamlRoot()).try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))
+            if(node==container)return true;
+        return false;
+    }
     static bool shown(FrameworkElement element){
         if(!element||!element.IsLoaded()||element.ActualWidth()<=0)return false;
         for(auto node=element.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))
@@ -554,12 +560,23 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             place(native.frame,bounds);Canvas::SetZIndex(native.frame,id==held?30:5);
             bool compact=num(bounds,L"width")<num(findId(metrics,id),L"width")-.5;
             auto kind=str(object(native.entry,L"item"),L"kind");
-            if(kind==L"menu_labels"){menuCapsule.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
+            if(kind==L"menu_labels"){
+                bool focused=holdsFocus(menuGroup),switching=(menuOverflow.Visibility()==Visibility::Visible)!=compact;
+                menuCapsule.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
+                if(focused&&switching){if(compact)menuOverflow.Focus(FocusState::Keyboard);else if(!menus.empty())menus.front().Focus(FocusState::Keyboard);}
+            }
             bool inBar=joined.contains(id);
             bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty()&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
             native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius({corner(),corner(),corner(),corner()});native.outline.CornerRadius({corner(),corner(),corner(),corner()});
-            if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
+            if(kind==L"workspaces"){
+                bool focused=holdsFocus(switcher)||holdsFocus(workspaceOverflow),switching=(workspaceOverflow.Visibility()==Visibility::Visible)!=compact;
+                switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
+                if(focused&&switching){if(compact)workspaceOverflow.Focus(FocusState::Keyboard);else if(!workspaces.empty()){
+                    auto target=std::find_if(workspaces.begin(),workspaces.end(),[](auto const& p){auto checked=p.first.IsChecked();return checked&&checked.Value();});
+                    (target==workspaces.end()?workspaces.front():*target).first.Focus(FocusState::Keyboard);
+                }}
+            }
             native.outline.BorderThickness(editing?Thickness{1,1,1,1}:Thickness{});
             native.outline.BorderBrush(held==id&&flag(preview,L"detached")?fill(color(L"#dc3545")):input->Selected()==id?accent(data):data->brush(L"tabbar"));
             AutomationProperties::SetItemStatus(native.frame,editing&&input->Selected()==id?L"Selected":L"");

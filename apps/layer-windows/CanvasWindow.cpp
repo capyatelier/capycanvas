@@ -683,7 +683,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
         key==VirtualKey::Escape||key==VirtualKey::Left||key==VirtualKey::Right||
         key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
         key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
-        key==VirtualKey::Menu||(GetKeyState(VK_MENU)&0x8000);
+        key==VirtualKey::Menu||((GetKeyState(VK_MENU)&0x8000)&&!(GetKeyState(VK_CONTROL)&0x8000));
     // F11 remains a window action while a toolbar button or native field has focus.
     bool editing=key!=VirtualKey::F11&&(ownedKeys||menuOpen.load()||(!canvas&&(!button||navigation)));
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;

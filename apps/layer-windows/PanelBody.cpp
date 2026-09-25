@@ -58,7 +58,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             auto view=navigator->Root();root=view;
         }else if(str(panel,L"id")==L"adjustments"&&shows(panel,L"adjustments")){
             auto view=FiltersPanel(data,bindings,&contentHeight,&scrollMetrics,flag(geometry,L"split_filters"));root=view;
-        }else if(str(panel,L"id")==L"filter_types"){
+        }else if(str(panel,L"id")==L"filter_types"&&shows(panel,L"filter_types")){
             root=FilterTypesPanel(data,bindings);
         }else if(str(panel,L"id")==L"layers"){
             auto view=LayersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
@@ -235,7 +235,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
         scrollMetrics=[]{return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
     if(!scrollable){
         auto id=str(panel,L"id");
-        if(id==L"filter_types"||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);
+        if((id==L"filter_types"&&shows(panel,L"filter_types"))||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);
         else if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
         else if(navigator)root.Height(navigator->NaturalHeight(num(object(geometry,L"bounds"),L"width",272)));
     }

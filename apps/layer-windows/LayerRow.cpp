@@ -109,7 +109,7 @@ void LayerRow::init(){
     meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);name.Content(caption);
     Grid::SetColumn(name,8);body.Children().Append(name);
     rename.MinWidth(0);rename.MinHeight(24);rename.Height(24);rename.Padding({2,0,2,0});rename.Margin({6,0,2,0});rename.FontSize(data->textSize());
-    rename.MaxLength(256);rename.Background(data->brush(L"input"));rename.Visibility(Visibility::Collapsed);
+    rename.MaxLength(128);rename.Background(data->brush(L"input"));rename.Visibility(Visibility::Collapsed);
     AutomationProperties::SetName(rename,L"Layer name");Grid::SetColumn(rename,8);body.Children().Append(rename);
     rename.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(e.Key()==Windows::System::VirtualKey::Enter){self->commit(false);e.Handled(true);}
@@ -157,7 +157,9 @@ void LayerRow::commit(bool cancel){
     if(!renaming||committing||data->updating||!current())return;
     if(renameTarget(data)!=id)return;
     committing=true;
-    action(cancel?O({{L"op",S(L"cancel_rename")}}):O({{L"op",S(L"rename")},{L"id",N(id)},{L"name",S(rename.Text())}}));
+    std::wstring_view text=rename.Text();
+    bool blank=text.find_first_not_of(L" \t\r\n")==std::wstring_view::npos;
+    action(cancel||blank||rename.Text()==str(model(),L"label")?O({{L"op",S(L"cancel_rename")}}):O({{L"op",S(L"rename")},{L"id",N(id)},{L"name",S(rename.Text())}}));
 }
 void LayerRow::highlight(int position){
     // Keep row geometry stable throughout the drag.
@@ -185,7 +187,8 @@ void LayerRow::refresh(){
     bool selectionLayer=flag(layer,L"selection_layer");
     hstring eyeName=selectionLayer?(flag(layer,L"visible")?L"Hide selection overlay":L"Show selection overlay"):(flag(layer,L"visible")?L"Hide layer":L"Show layer");
     AutomationProperties::SetName(eye,eyeName);ToolTipService::SetToolTip(eye,box_value(eyeName));
-    AutomationProperties::SetName(content,selectionLayer?L"Edit selection layer":L"Edit layer content");
+    hstring contentName=selectionLayer?L"Edit selection layer":flag(layer,L"group")?(flag(layer,L"collapsed")?L"Expand group":L"Collapse group"):L"Edit layer content";
+    AutomationProperties::SetName(content,contentName);ToolTipService::SetToolTip(content,box_value(contentName));
     load.Visibility(selectionLayer?Visibility::Visible:Visibility::Collapsed);
     body.ColumnDefinitions().GetAt(5).Width({selectionLayer?32.:0.,GridUnitType::Pixel});
     if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);ToolTipService::SetToolTip(load,box_value(tip));}
@@ -198,9 +201,13 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(6).Width({hasMask?14.:0.,GridUnitType::Pixel});
     body.ColumnDefinitions().GetAt(7).Width({hasMask?32.:0.,GridUnitType::Pixel});
     link.Opacity(flag(layer,L"mask_linked")?1:.35);link.IsEnabled(!flag(layer,L"locked"));
+    hstring linkName=flag(layer,L"mask_linked")?L"Unlink mask from layer":L"Link mask to layer";
+    AutomationProperties::SetName(link,linkName);ToolTipService::SetToolTip(link,box_value(linkName));
     maskImage.Opacity(flag(layer,L"mask_enabled")?1:.4);
     body.ColumnDefinitions().GetAt(2).Width({std::min(24.,num(layer,L"depth")*8),GridUnitType::Pixel});
     clip.Opacity(flag(layer,L"clipped")?1:0);lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);
+    AutomationProperties::SetName(lockImage,flag(layer,L"locked")?L"Editing locked":flag(layer,L"alpha_locked")?L"Alpha locked":L"");
+    AutomationProperties::SetAccessibilityView(lockImage,flag(layer,L"locked")||flag(layer,L"alpha_locked")?Automation::Peers::AccessibilityView::Content:Automation::Peers::AccessibilityView::Raw);
     body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
     body.ColumnDefinitions().GetAt(10).Width({flag(layer,L"can_drop_below")?12.:0.,GridUnitType::Pixel});
     grip.Visibility(flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);

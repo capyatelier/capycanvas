@@ -155,6 +155,10 @@ Invoke-Control 'Undo'
 Wait-Until {(Read-Model).preferences.shortcut_editor} 'Shortcut editor did not open'
 Invoke-Control 'Add Shortcut'
 Wait-Until {(Read-Model).preferences.capture} 'Shortcut capture did not open'
+foreach($chord in @(@(0x20,'Space'),@(0x0D,'Enter'))){
+    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]$chord[0])
+    Wait-Until {$capture=(Read-Model).preferences.capture;$capture -and $capture.shortcut -eq $chord[1]} "Shortcut capture did not record $($chord[1])"
+}
 Invoke-Control 'Cancel'
 Wait-Until {!(Read-Model).preferences.capture -and (Read-Model).preferences.shortcut_editor} 'Cancel did not return to the shortcut editor'
 Invoke-Control 'Close'
