@@ -691,7 +691,14 @@ impl Panel {
     }
 
     pub fn palettes_presented_on(platform: crate::Platform) -> bool {
-        matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+        matches!(
+            platform,
+            crate::Platform::Gtk
+                | crate::Platform::Web
+                | crate::Platform::Android
+                | crate::Platform::Mac
+                | crate::Platform::Ios
+        )
     }
 
     /// Keep saved panel identities while hosts add their native projections.

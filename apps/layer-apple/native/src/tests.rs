@@ -53,6 +53,8 @@ mod toolbar_component;
 mod picker;
 #[path = "tonal_tests.rs"]
 mod tonal;
+#[path = "palette_tests.rs"]
+mod palette;
 
 type RasterSamples = (
     std::collections::BTreeMap<

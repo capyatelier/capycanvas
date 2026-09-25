@@ -40,6 +40,39 @@ final class ColorPreferencesStore: @unchecked Sendable {
     private static func missing(_ error: NSError) -> Bool {
         error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code)
     }
+    static func paletteFile(_ request: JSON, bytes: Data = Data(), output: Int32 = -1) throws -> JSON {
+        let pointer = try request.encoded().withCString { request in
+            bytes.withUnsafeBytes { buffer in
+                capy_palette_file(request, buffer.bindMemory(to: UInt8.self).baseAddress, bytes.count, output)
+            }
+        }
+        guard let pointer else { throw HostFailure(message: "Palette files are unavailable") }
+        defer { capy_apple_string_free(pointer) }
+        let value = try JSON.decode(String(cString: pointer))
+        if !value["error"].isNull { throw HostFailure(message: value["error"].string) }
+        return value
+    }
+    static func paletteExtensions() -> [String] {
+        ((try? paletteFile(JSON(["type": "limits"])))?["extensions"].array ?? []).map(\.string)
+    }
+    static func importPalette(_ url: URL) throws -> JSON {
+        let limit = Int(try paletteFile(JSON(["type": "limits"]))["read_bytes"].uint)
+        let data = try ProjectFileIO.coordinate(url, writing: false) { try read($0, limit: limit) }
+        return try paletteFile(JSON(["type": "import", "file_name": url.lastPathComponent]), bytes: data)["action"]
+    }
+    static func exportPalette(_ palette: JSON, format: String) throws -> (metadata: JSON, data: Data) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("capy-palette-" + UUID().uuidString)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw HostFailure(message: "Could not prepare the palette export")
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try FileHandle(forWritingTo: url)
+        let metadata: JSON
+        do { metadata = try paletteFile(JSON(["type": "export", "palette": palette.raw, "format": format]), output: file.fileDescriptor) }
+        catch { try? file.close(); throw error }
+        try file.close()
+        return (metadata, try Data(contentsOf: url))
+    }
     func exportDraft(recipe: JSON, action: JSON = JSON(["type": "refresh"])) throws -> JSON {
         try recipe.encoded().withCString { recipe in
             try action.encoded().withCString { try result(capy_export_draft(recipe, $0)) }
@@ -75,7 +108,9 @@ final class ColorPreferencesStore: @unchecked Sendable {
         return directory.appendingPathComponent(key + ".icc")
     }
     private func read(_ url: URL) throws -> Data {
-        let limit = Int(try library(JSON(["type": "limits"]))["read_bytes"].uint)
+        try Self.read(url, limit: Int(try library(JSON(["type": "limits"]))["read_bytes"].uint))
+    }
+    private static func read(_ url: URL, limit: Int) throws -> Data {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         var data = Data()

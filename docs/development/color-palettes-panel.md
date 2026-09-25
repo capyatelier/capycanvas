@@ -1,16 +1,17 @@
 # Color palettes
 
-GTK, Web and Android place the Palettes tab immediately after Color in the Paint
-and Photo defaults, and the same component below the wheel in Sketch’s color
-drawer. Untouched included layouts migrate; customized layouts keep their
-placement and can show Palettes through the Window menu (GTK and Android also
-through the color swatch menu's Palettes action). Windows, macOS and iPadOS do
-not expose the panel yet. GTK ([`color_library.rs`](../../apps/layer-linux/src/color_library.rs)),
-Web ([`palettes.js`](../../apps/layer-web/palettes.js)) and Android
+GTK, Web, Android, macOS and iPadOS place the Palettes tab immediately after
+Color in the Paint and Photo defaults, and the same component below the wheel in
+Sketch’s color drawer. Untouched included layouts migrate; customized layouts
+keep their placement and can show Palettes through the Window menu (GTK and
+Android also through the color swatch menu's Palettes action). Windows does not
+expose the panel yet. GTK ([`color_library.rs`](../../apps/layer-linux/src/color_library.rs)),
+Web ([`palettes.js`](../../apps/layer-web/palettes.js)), Android
 ([`Palettes.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Palettes.kt))
+and Apple ([`PalettePanel.swift`](../../apps/layer-apple/Shared/Editor/PalettePanel.swift))
 render the shared [`PalettePanelView`](../../crates/layer-ui/src/color/palette_view.rs),
-its menus and reorder previews; the descriptions below apply to all three
-unless a host is named.
+its menus and reorder previews; the descriptions below apply to every host
+unless one is named.
 
 ## Layout and interaction
 
@@ -189,7 +190,8 @@ Files are limited to 1 MB. ZIP-based formats read only their palette member,
 with expansion bounded to 8 MB and CRC-checked; ZIP64 size records from macOS
 are accepted. Libraries retain the limits of 64 palettes and 4096 total swatches.
 Hosts read and parse files off their UI thread (Web in its worker, Android on
-an I/O dispatcher, GTK through GIO's blocking pool), and failed imports leave the
+an I/O dispatcher, GTK through GIO's blocking pool, macOS and iPadOS on the
+project I/O queue through `capy_palette_file`), and failed imports leave the
 library unchanged. Library mutations retain existing tile widgets; brush frames
 do not rebuild the palette chooser.
 
@@ -282,6 +284,41 @@ Chrome's save picker and the download fallback; import used the Android picker.
 and `drawerTabsKeepActiveColorsAndPadding` also occur on the base revision.
 Avoid `AndroidColorPanelTest`'s two-pointer helpers on this tablet: their stale
 down times restarted Android's system server.
+
+### macOS and iPadOS
+
+Apple hosts render the shared view in SwiftUI and reach the menus, reorder
+previews and dry-run validation through the bridge's query request; library
+edits return their validation error to the control. Saved tiles use the native
+reorder adapters with an immediate `.swatch` surface: AppKit and UIKit supply
+movement slop, a touch or Pencil hold opens the swatch menu through the same
+recognizer, and mouse holds open nothing, so a stationary mouse release still
+selects as on Web. Chooser rows are menu-only sources that let the list scroll
+before a touch or Pencil hold. Neighbors slide for 140 ms unless Reduce Motion is
+on, and the lifted swatch is a workspace overlay. Long palettes scroll in the
+20-point inner and 12-point outer edge bands at 240 points per second. Import
+and export use the system open and save panels (the document picker on iPad),
+mounted at the editor root so a closing drawer cannot dismiss them; the codec
+runs on the project I/O queue and writes export bytes to a descriptor. Escape
+closes the innermost palette overlay before a drawer, and ⌘Z, ⇧⌘Z and ⌘Y undo
+and redo reorders after a palette interaction. Automatic tab names measure the
+bold title at the current text size and call the shared stateless
+`automatic_tab_names` toolbar query; tab slides reuse the fitted labels. A group
+holding both Color and Palettes measures the hidden page so switching tabs keeps
+its fitted height.
+
+```sh
+cargo test --locked -p layer-apple palette
+xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj -scheme CapyCanvas-Mac \
+  -destination 'platform=macOS,arch=arm64' -only-testing:CapyCanvas-MacTests/EditorLaunchTests/testPalettes test
+```
+
+The bridge tests cover the starters, default placement and the Sketch drawer,
+previews that never edit, dry-run duplicates, one-step reorder undo, menu labels,
+revealing the tab and codec round trips for every export format. `testPalettes`
+covers placement and fitting, the six-column grid, choosing, adding and naming
+colors with a duplicate error, chooser search and selection, New Palette with
+live validation, a mouse reorder with ⌘Z and the secondary-click swatch menu.
 
 GTK is the reference implementation for subsequent host ports. The earlier
 [research](color-palettes-research.md) and [HTML study](prototypes/color-palettes.html)

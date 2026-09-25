@@ -10,6 +10,11 @@ import SwiftUI
     let tabSlide: WorkspaceTabSlide
     let sliderPreview = ToolbarSliderPreview()
     var tabFrames: [String: WorkspaceTabFrame] = [:]
+    var fittedTabs: [UInt64: [Bool]] = [:]
+    func presentedTabs(group: UInt64, panels: [JSON]) -> [JSON] {
+        guard let fitted = fittedTabs[group], fitted.count == panels.count else { return panels }
+        return zip(panels, fitted).map { $0.replacing("tab", with: JSON(["show_icon": true, "show_name": $1])) }
+    }
     private weak var store: EditorStore?
     private var shownPanel: String?
     private var configurationHeight = 0.0
@@ -209,7 +214,7 @@ import SwiftUI
             frames[source].bounds.intersection(frames[source].clip).contains(point),
             !frames[source].clip.isEmpty, !frames[source].clip.isInfinite else { return nil }
         return WorkspaceTabSlide.Grab(group: id, source: source, frames: frames, clip: frames[source].clip,
-            panels: group["panels"].array.map { store.panel($0.string) }, active: group["active"].string)
+            panels: presentedTabs(group: id, panels: group["panels"].array.map { store.panel($0.string) }), active: group["active"].string)
     }
     func move(_ item: JSON, point: CGPoint, released: Bool = false) {
         guard drag?.item.stableKey == item.stableKey else { return }

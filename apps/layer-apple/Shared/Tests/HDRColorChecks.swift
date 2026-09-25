@@ -54,7 +54,7 @@ extension XCTestCase {
         XCTAssertEqual(Double(ev.value as? String ?? ""), 2, "Use Color must commit the final EV character")
         workspaceActivate(app.buttons["Cancel"].firstMatch)
         XCTAssertTrue(ev.waitForNonExistence(timeout: 15))
-        XCTAssertFalse(app.buttons["Palettes"].exists)
+        XCTAssertFalse(app.buttons["paint-palettes"].exists)
         command("Proof SDR")
         let dial = app.descendants(matching: .any)["proof-dial"].firstMatch
         XCTAssertTrue(dial.waitForExistence(timeout: 15))

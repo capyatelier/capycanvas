@@ -22,6 +22,29 @@ pub unsafe extern "C" fn capy_profile_library(request: *const c_char, bytes: *co
 }
 
 /// # Safety
+/// Worker only. Borrows NUL-terminated request JSON and count readable bytes.
+/// Encoded export bytes are written to output at its current offset when it is
+/// not -1. Returns owned metadata/error JSON; the host publishes files atomically.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_palette_file(request: *const c_char, bytes: *const u8, count: usize, output: i32) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        if count > layer_ui::ColorLibrary::MAX_IMPORT_BYTES + 1 { return Err("Palette files must be at most 1 MB".into()); }
+        let bytes = if count == 0 { &[][..] } else {
+            if bytes.is_null() { return Err("Palette bytes are unavailable".into()); }
+            unsafe { std::slice::from_raw_parts(bytes, count) }
+        };
+        let request = serde_json::from_str(unsafe { read_title(request) }?).map_err(|e| e.to_string())?;
+        let (metadata, encoded) = layer_ui::palette_file(request, bytes)?;
+        if output >= 0 && !encoded.is_empty() {
+            let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(output) });
+            file.write_all(&encoded).map_err(|e| e.to_string())?;
+        }
+        Ok(metadata)
+    })();
+    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
+}
+
+/// # Safety
 /// Worker only. Borrows NUL-terminated recipe/action JSON; returns owned draft/error JSON.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_export_draft(recipe: *const c_char, action: *const c_char) -> *mut c_char {

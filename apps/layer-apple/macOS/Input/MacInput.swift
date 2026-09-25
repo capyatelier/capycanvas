@@ -50,7 +50,7 @@ import QuartzCore
         if tablet(event), event.buttonNumber != 0 { return }
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
-            store.layerSwipe.close(); store.workspace.dismissTransients(at: nil)
+            store.layerSwipe.close(); store.palettes.focused = false; store.workspace.dismissTransients(at: nil)
             guard contact == nil else { return }
             view?.window?.makeFirstResponder(view)
             nextContact &+= 1

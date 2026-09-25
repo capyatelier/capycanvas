@@ -42,6 +42,7 @@ struct PanelControls: View {
     @ViewBuilder private var contents: some View {
         if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof) }
         else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        else if panel["id"].string == "palettes" { PalettePanel(store: store, controller: store.palettes, docked: scrollable) }
         else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {

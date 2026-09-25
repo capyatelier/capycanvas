@@ -5,12 +5,12 @@ import CoreGraphics
 /// distinct from mouse, including AppKit's tablet-backed mouse events.
 enum ReorderDevice { case mouse, touch, pen }
 enum ReorderSurface: Equatable {
-    case tile, row, handle, headerEditor, control
+    case tile, row, handle, headerEditor, control, swatch
     func requiresHold(_ device: ReorderDevice) -> Bool {
         switch self {
         case .tile: return true
         case .row: return device != .mouse
-        case .handle, .headerEditor, .control: return false
+        case .handle, .headerEditor, .control, .swatch: return false
         }
     }
 }
