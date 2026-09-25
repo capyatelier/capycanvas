@@ -104,6 +104,19 @@ impl BrowserDatabase {
     pub fn encoded(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
     }
+    pub fn release_unlocked(&mut self, live: &[String], queried_at: u64) -> bool {
+        let mut released = false;
+        for record in self.items.values_mut() {
+            if record.claim.as_ref().is_some_and(|c| {
+                !live.contains(&c.owner.id)
+                    && c.expires_at_ms <= queried_at.saturating_add(OWNER_LEASE_MS)
+            }) {
+                record.claim = None;
+                released = true;
+            }
+        }
+        released
+    }
     fn record(&self, id: &str) -> Result<&BrowserRecord> {
         self.items.get(id).ok_or_else(|| {
             StoreError::new(

@@ -51,6 +51,8 @@ pub fn workspace_database(
     request: String,
     pending: bool,
     now: f64,
+    live_owners: Option<Vec<String>>,
+    owners_at: f64,
 ) -> Result<JsValue, JsValue> {
     let result = (|| -> Result<JsValue, StoreError> {
         let cached = DATABASE_CACHE.with(|cache| cache.borrow_mut().take());
@@ -69,6 +71,13 @@ pub fn workspace_database(
                 }
             }
         };
+        if let Some(live) = &live_owners
+            && cached
+                .database
+                .release_unlocked(live, owners_at.max(0.) as u64)
+        {
+            cached.list = None;
+        }
         let request: StoreRequest = serde_json::from_str(&request)?;
         let read_only = !pending && matches!(&request,
             StoreRequest::List | StoreRequest::Load { .. } | StoreRequest::Raw { .. }

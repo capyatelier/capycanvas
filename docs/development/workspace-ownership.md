@@ -11,7 +11,14 @@ Claim/load/list, writes, renewal and maintenance reconcile stale claims before
 making ownership decisions. An unlocked stale claim is cleared immediately,
 even if other clients remain open. A live lock protects its owner through sleep
 or missed heartbeats; the lease-shaped shared API is refreshed as needed, not
-used to steal native ownership. Browser leases remain timer-based.
+used to steal native ownership.
+
+Browser leases remain timer-based while their owner is alive. Each document also
+holds a Web Lock named for its owner ID until it closes. Before each transaction
+the storage worker lists held and requested owner locks; a claim made before that
+query whose owner has no lock is cleared. Closing, reloading into a new identity
+or navigating away therefore releases ownership immediately, although `pagehide`
+cannot finish an asynchronous release. Without Web Locks, claims wait for expiry.
 
 New locks are held locally through SQL publication, then installed in the
 worker. Failed claims/creations drop unpublished guards. Normal close flushes
@@ -45,3 +52,7 @@ browser lease behavior.
 --native-test=native_workspace_ownership_input --native-storage` runs the GTK
 switch/focus/reclaim journey in the private compositor with disposable storage.
 No acceptance on Linux implies Windows, Apple or physical-tablet GUI testing.
+
+`node apps/layer-web/test.mjs --headless --workspace-windows` navigates a window
+away and back three times within the lease and requires the same workspace
+without a copy, then checks two live windows, reload identity and takeover.

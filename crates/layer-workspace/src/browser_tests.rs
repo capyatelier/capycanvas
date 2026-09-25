@@ -26,6 +26,67 @@ fn normalize(result: Result<StoreResponse, StoreError>) -> serde_json::Value {
     }
 }
 #[test]
+fn browser_claims_of_closed_documents_are_released_without_waiting_for_the_lease() {
+    let mut browser = BrowserDatabase::default();
+    let closed = Owner::fresh();
+    let reopened = Owner::fresh();
+    let layout = layer_ui::DockLayout::for_platform(layer_ui::Platform::Web);
+    let entity = Entity::workspace(
+        "Browser lock",
+        layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
+        layout,
+        None,
+        1000,
+    );
+    let id = entity.id.clone();
+    let batch = CommitBatch::prepare(
+        closed.clone(),
+        vec![Mutation::Create {
+            entity,
+            claim: true,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    browser
+        .execute(StoreRequest::Commit { batch }, 1000)
+        .unwrap();
+    let claim = StoreRequest::Claim {
+        id: id.clone(),
+        owner: reopened.clone(),
+        reset_invalid_default: None,
+    };
+    assert!(!browser.release_unlocked(&[closed.id.clone()], 1001));
+    assert!(
+        !browser.release_unlocked(&[], 999),
+        "A claim made after the lock query stays"
+    );
+    assert_eq!(
+        browser.execute(claim.clone(), 1002).unwrap_err().kind,
+        ErrorKind::OwnedElsewhere
+    );
+    assert!(browser.release_unlocked(&[reopened.id.clone()], 1001));
+    let StoreResponse::Entity(successor) = browser.execute(claim, 1002).unwrap() else {
+        panic!()
+    };
+    assert_eq!(successor.claim.as_ref().unwrap().owner, reopened);
+    assert_eq!(successor.claim.as_ref().unwrap().fence, 2);
+    assert_eq!(
+        browser
+            .execute(
+                StoreRequest::Renew {
+                    id,
+                    owner: closed,
+                    fence: "1".into()
+                },
+                1003
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+}
+#[test]
 fn browser_leases_still_expire_and_fence_stale_writers() {
     let mut browser = BrowserDatabase::default();
     let owner = Owner::fresh();

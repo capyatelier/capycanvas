@@ -1,4 +1,5 @@
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
+import { ownerLock } from "./workspace-store.js";
 export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message, dispatch, hasLegacy, legacyError }) {
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
@@ -145,6 +146,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   try { if (performance.getEntriesByType("navigation")[0]?.type === "reload") owner = JSON.parse(sessionStorage.getItem("capy.workspace.owner")); } catch {}
   if (!owner?.id || !owner?.epoch) owner = {id:crypto.randomUUID(),epoch:crypto.randomUUID()};
   try { sessionStorage.setItem("capy.workspace.owner",JSON.stringify(owner)); } catch {}
+  navigator.locks?.request(ownerLock + owner.id, () => new Promise(() => {})).catch(() => {});
   app.workspace_start(store.execute, JSON.stringify(owner), hasLegacy, legacyError);
   timer = setInterval(tick, 100); tick();
   document.addEventListener("visibilitychange", () => send({ type: document.hidden ? "suspend" : "resume" }));

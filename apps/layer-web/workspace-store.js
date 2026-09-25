@@ -1,7 +1,13 @@
 // IndexedDB transport only. The synchronous Wasm reducer owns validation,
 // fencing, counters, receipts, names, migration and retention policy.
-export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB } = {}) {
+export const ownerLock = "capy-workspace-owner:";
+export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB, locks = globalThis.navigator?.locks } = {}) {
   let database, opening;
+  async function liveOwners() {
+    if (!locks) return [null, 0];
+    const at = Date.now(), { held = [], pending = [] } = await locks.query();
+    return [[...held, ...pending].flatMap(({ name }) => name?.startsWith(ownerLock) ? [name.slice(ownerLock.length)] : []), at];
+  }
   const error = e => JSON.stringify({ kind: e?.name === "QuotaExceededError" ? "storage_full" :
     e?.name === "VersionError" ? "unsupported_schema" : "unavailable", message: e?.message || String(e) });
   function open() {
@@ -24,7 +30,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
   }
   const readOnly = new Set(["list", "load", "raw", "receipt", "binding", "legacy_import", "pending", "reopen", "switcher", "workspace_order"]);
   async function transaction(request, pending = false) {
-    const db = await open(), command = JSON.parse(request);
+    const db = await open(), command = JSON.parse(request), [live, liveAt] = await liveOwners();
     return new Promise((resolve, reject) => {
       let tx, response, failure;
       const readonly = !pending && (readOnly.has(command.type) || command.type === "maintenance" && !command.apply);
@@ -33,7 +39,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
         const store = tx.objectStore("workspace"), read = store.get("database");
         read.onsuccess = () => {
           try {
-            const result = reduce(read.result?.snapshot, request, pending, Date.now());
+            const result = reduce(read.result?.snapshot, request, pending, Date.now(), live, liveAt);
             response = result.response;
             if (!readonly) store.put({ id: "database", snapshot: result.snapshot });
           } catch (e) { failure = typeof e === "string" ? e : error(e); tx.abort(); }

@@ -13,7 +13,13 @@ export async function checkWorkspaceWindows({call,evaluate}) {
   const capture=run=>run('JSON.parse(layerApp.app.workspace_capture())');
   const input=async(run,value)=>{await run(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(value))});null`);await new Promise(r=>setTimeout(r,200));};
   await wait(evaluate,ready);
-  const original=(await view(evaluate)).id;
+  const original=(await view(evaluate)).id,href=await evaluate('location.href'),workspaces=(await view(evaluate)).order.length;
+  for(let i=0;i<3;i++){
+    await call('Page.navigate',{url:'about:blank'});await call('Page.navigate',{url:href});
+    await wait(async expression=>{try{return await evaluate(expression);}catch{return false;}},ready);
+  }
+  assert.equal((await view(evaluate)).id,original,'A document that navigated away releases its workspace without waiting for the lease');
+  assert.equal((await view(evaluate)).order.length,workspaces,'Returning to the app does not create a workspace copy');
   const target=await call('Target.createTarget',{url:'about:blank',newWindow:true,width:1100,height:800},null);
   const {sessionId}=await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null);
   const other=async expression=>{
@@ -53,6 +59,6 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.notEqual((await view(evaluate)).id,original);
     assert.deepEqual((await capture(evaluate)).working,ownCapture.working);
     assert.notDeepEqual((await capture(other)).working,ownCapture.working,'Recovery never overwrites the new owner');
-    console.log('PASS: two browser windows, independent autosaves, owner identity on reload, suspension/takeover, stale-owner protection and Save as New recovery');
+    console.log('PASS: two browser windows, released ownership after navigation, independent autosaves, owner identity on reload, suspension/takeover, stale-owner protection and Save as New recovery');
   } finally { await call('Target.closeTarget',{targetId:target.targetId},null); }
 }
