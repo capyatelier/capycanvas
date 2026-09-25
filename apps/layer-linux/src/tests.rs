@@ -267,6 +267,7 @@ fn native_default_workspace() {
                 let view = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
                 let mut expected: Vec<_> = view.rows.iter().map(|row| row.label).collect();
                 expected.insert(view.chart_after_rows, "chart");
+                expected.push("Start stroke recording");
                 let mut actual = Vec::new();
                 let mut child = w.effects.stats.first_child();
                 while let Some(widget) = child {
