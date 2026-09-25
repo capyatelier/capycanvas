@@ -34,8 +34,9 @@ beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
 outside tap or context change. The preview has the toolbar's tile radius and
 no border. Its header is one row of that toolbar's tiles: the bookmark button
-is a full tile with the tile's icon size in the top-end corner, the value and
-units are vertically centered beside it, and the fade grows with the row. Size uses
+is a full tile with the tile's icon size in the top-end corner, and the value
+and units are vertically centered beside it. As on GTK, the header fade is 52px
+of 65% panel color at every tile size. Size uses
 the current tip at its document-pixel diameter, filling the popup to its rounded
 edges for oversized tips. A background fade keeps the header legible;
 opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,

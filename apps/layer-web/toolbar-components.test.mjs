@@ -211,6 +211,9 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, re
     assert.ok(await evaluate(`(()=>{const p=document.querySelector('${preview}'),c=p.querySelector('canvas'),bg=getComputedStyle(p).backgroundColor.match(/[\\d.]+/g).slice(0,3).map(Number),ctx=c.getContext('2d'),pixel=y=>ctx.getImageData(c.width>>1,y,1,1).data,distance=y=>bg.reduce((n,v,i)=>n+Math.abs(v-pixel(y)[i]),0);return distance(4)<distance(20)&&distance(20)<distance(48)})()`), `${theme}: header fades gradually from the top using the current background`);
     await capture(`size-edge-fill-${theme}`);
   }
+  await send({type:'set_tool_setting',id:'size',value:3});
+  const fade = await evaluate(`(()=>{const c=document.querySelector('${preview} canvas'),r=c.width/c.getBoundingClientRect().width,ctx=c.getContext('2d');return [0,26,56].map(y=>ctx.getImageData(c.width>>1,Math.round(y*r),1,1).data[3])})()`);
+  assert.ok(Math.abs(fade[0]-166)<8&&Math.abs(fade[1]-83)<8&&fade[2]===0, `header fade is GTK's 65% over 52px: ${fade}`);
   await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');
   const alpha = () => evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.reduce((n,v,i)=>n+(i%4===3?v:0),0)})()`);
   await send({type:'set_tool_setting',id:'opacity',value:1}); const full = await alpha();

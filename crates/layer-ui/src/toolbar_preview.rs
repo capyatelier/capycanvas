@@ -209,7 +209,7 @@ pub fn slider_preview_layout(
                 height: side,
             }
         },
-        header_fade: if opacity { 0. } else { tile + 16. },
+        header_fade: if opacity { 0. } else { 52. },
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",
