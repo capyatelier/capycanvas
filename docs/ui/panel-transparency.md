@@ -177,6 +177,10 @@ every pass carries a fixed cost.
   its blur follows about one frame behind. Web and Android place glass in the
   canvas frame that follows the layout.
 - Popovers, menus and tooltips are separate surfaces and stay opaque.
+- The blur only reaches the canvas. A drawer that opens over another panel,
+  such as the Paint tool drawer over the Tool Set column, is translucent over
+  that panel too, so its content shows faintly through the drawer on every
+  host.
 - Near the panels, Android pen completion slows as measured above. Exact
   visual damage from the brush engine, which would also speed up ordinary
   front-buffer repaint, or refreshing glass less often than ink, would reduce it.
