@@ -48,7 +48,7 @@ import SwiftUI
                 compact = tile
             case "clock":
                 let text = editing && !store.state["fullscreen"].bool ? "Clock" : status.time
-                width = max(tile, EditorTextMetrics.width(text, size: 44.0 / 3, weight: .regular, monospacedDigits: true) + 12)
+                width = max(tile, EditorTextMetrics.width(text, size: 44.0 / 3, weight: .regular, monospacedDigits: true) + 16)
                 compact = width
             default: break
             }
@@ -287,7 +287,7 @@ private struct HeaderItemControl: View {
                     WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette, maximumWidth: width, tile: size["tile"].number)
                 } else { Text("Workspaces").lineLimit(1) }
             case "document_title":
-                DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number)
+                DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number, gap: size["gap"].number)
                     .modifier(HeaderControlMeasurement(id: "document-title"))
             case "clock":
                 Text(editing && !store.state["fullscreen"].bool ? "Clock" : status.time).monospacedDigit().lineLimit(1)
@@ -317,7 +317,9 @@ private struct HeaderItemControl: View {
             }
         }.frame(width: width, height: size["tile"].number)
             .background {
-                if ["clock", "battery"].contains(kind) || editing && ["space", "workspaces"].contains(kind) {
+                if kind == "clock" {
+                    SquircleShape.tile.fill(palette.chromeSurface).modifier(GlassRegistration(shape: SquircleShape.tile)).frame(height: 36)
+                } else if kind == "battery" || editing && ["space", "workspaces"].contains(kind) {
                     SquircleShape(radius).fill(palette.chromeSurface).modifier(GlassRegistration(shape: SquircleShape(radius)))
                 }
             }.onHover { hovering = $0 }

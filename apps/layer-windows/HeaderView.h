@@ -20,6 +20,7 @@ public:
     bool Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& event,bool pressed);
     std::vector<winrt::Windows::Graphics::RectInt32> DragRegions(float scale,uint32_t width)const;
     void AppendGlass(winrt::Windows::Data::Json::JsonArray& regions,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
+    void SetDrawerSources(winrt::Windows::Data::Json::JsonArray const& sources);
     std::vector<winrt::Windows::Graphics::RectInt32> InputRegions(float scale,uint32_t width)const;
 private:
     struct Impl;

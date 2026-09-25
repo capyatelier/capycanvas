@@ -111,6 +111,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPalettes() { checkPalettes(in: editorCaptureApplication()) }
     @MainActor func testStrokeRecording() { checkStrokeRecording(in: editorCaptureApplication()) }
     @MainActor func testPanelTransparency() { checkPanelTransparency(in: editorCaptureApplication()) }
+    @MainActor func testZenPreferences() { checkZenPreferences(in: editorCaptureApplication()) }
 
     @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
 

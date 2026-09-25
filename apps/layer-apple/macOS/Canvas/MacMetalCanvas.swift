@@ -52,6 +52,7 @@ final class MacCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         documentDelegate.attach(window)
+        store.cursorChanged = { [weak self] in self?.input.applyCursor() }
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
         if let window {
@@ -97,7 +98,7 @@ final class MacCanvasView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area); tracking = area
     }
     override func layout() {
@@ -154,7 +155,8 @@ final class MacCanvasView: NSView {
     override func otherMouseDragged(with event: NSEvent) { input.mouse(event, phase: 2) }
     override func otherMouseUp(with event: NSEvent) { input.mouse(event, phase: 3) }
     override func mouseMoved(with event: NSEvent) { input.hover(event) }
-    override func mouseExited(with event: NSEvent) { input.clearHover() }
+    override func mouseExited(with event: NSEvent) { input.leaveCanvasCursor(); input.clearHover() }
+    override func cursorUpdate(with event: NSEvent) { input.applyCursor() }
     override func tabletPoint(with event: NSEvent) { input.tabletPoint(event) }
     override func tabletProximity(with event: NSEvent) { input.proximity(event) }
     override func scrollWheel(with event: NSEvent) { input.scroll(event) }

@@ -29,14 +29,16 @@ winrt::com_ptr<ID2D1Geometry> outside(float width,float height,ShadowCut const& 
         sink->BeginFigure({x,y},D2D1_FIGURE_BEGIN_FILLED);sink->AddLine({x+w,y});sink->AddLine({x+w,y+h});sink->AddLine({x,y+h});sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     };
     rectangle(-padding,-padding,width+2*padding,height+2*padding);
-    auto [tl,tr,br,bl]=cut.radii;
-    auto arc=[&](D2D1_POINT_2F to,float radius){
-        if(radius<=0){sink->AddLine(to);return;}
-        sink->AddArc(D2D1::ArcSegment(to,{radius,radius},0,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+    auto radii=cut.radii;for(auto& radius:radii)radius=std::min(radius,std::max(0.f,std::min(width,height)*.5f));
+    auto [tl,tr,br,bl]=radii;
+    auto corner=[&](float cx,float cy,float sx,float sy,float ex,float ey){
+        for(int i=0;i<=24;++i){
+            double angle=i*3.14159265358979/48,along=std::sqrt(std::cos(angle)),across=std::sqrt(std::sin(angle));
+            sink->AddLine({float(cx+sx*along+ex*across),float(cy+sy*along+ey*across)});
+        }
     };
     sink->BeginFigure({tl,0},D2D1_FIGURE_BEGIN_FILLED);
-    sink->AddLine({width-tr,0});arc({width,tr},tr);sink->AddLine({width,height-br});arc({width-br,height},br);
-    sink->AddLine({bl,height});arc({0,height-bl},bl);sink->AddLine({0,tl});arc({tl,0},tl);
+    corner(width-tr,tr,0,-tr,tr,0);corner(width-br,height-br,br,0,0,br);corner(bl,height-bl,0,bl,-bl,0);corner(tl,tl,-tl,0,0,-tl);
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     for(auto const& r:cut.extra)rectangle(r.X,r.Y,r.Width,r.Height);
     winrt::check_hresult(sink->Close());return path;

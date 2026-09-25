@@ -18,6 +18,7 @@ public:
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);
     void SetGlassChanged(std::function<void()> changed);
+    winrt::Windows::Data::Json::JsonArray DrawerSources() const;
     winrt::Windows::Data::Json::JsonArray Glass(winrt::Microsoft::UI::Xaml::UIElement const& reference,winrt::Windows::Data::Json::JsonArray& connections) const;
 private:
     struct Impl;

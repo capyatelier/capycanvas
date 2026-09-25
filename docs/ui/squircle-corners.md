@@ -94,6 +94,15 @@ shape. Open drawers publish their source bounds and
 direction, and panel groups, collapsed columns and drawer bodies square the
 same corners as `DrawerPlacement::source_corners`.
 
+Windows draws panel groups, tab strips and tab tops, collapsed columns, drawers
+and drawer bridges as exact squircle paths (`squircleRectangle`,
+`panelTabShape` and `drawerBridge` sample the same corner curve as Web).
+Composition shadow masks and their Direct2D cut use the same outline, and glass
+regions publish design radii with `BackdropRegion::SQUIRCLE`. Title-bar tools,
+bars, chips, document tabs and toolbar tiles keep WinUI's circular
+`CornerRadius` at the fitted radius (design radius × 0.54), as on Web without
+`corner-shape`. Panel content clips with the fitted circle.
+
 ## Validation
 
 - GTK: `tools/performance/workspace-motion.sh gtk` with

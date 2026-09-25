@@ -204,6 +204,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             for(uint32_t i=0;i<std::min<uint32_t>(options.Size(),uint32_t(fields.size()));++i)fields[i].update(options.GetObjectAt(i));
         }
         if(!measured){layout();measured=true;}
+        if(more){
+            auto facing=drawerFacing(data,item);
+            more.Background(facing.empty()?clear():data->glass(L"open_tile"));
+            more.CornerRadius(facingCorners(num(find(array(data->model,L"panels"),L"id",panelId),L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
+        }
     }
     void Layout(J const& bounds,bool axisVertical){
         auto key=std::to_wstring(num(bounds,L"width"))+L"x"+std::to_wstring(num(bounds,L"height"))+(axisVertical?L"v":L"h");
@@ -229,7 +234,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             sizes.Append(pair);
         }
         auto geometry=toolbarUi(O({{L"type",S(L"options_layout")},{L"width",N(width)},{L"height",N(height)},
-            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"sizes",sizes},{L"button",size},{L"gap",N(vertical?2:10)}})).GetObject();
+            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"sizes",sizes},{L"button",size},{L"gap",N(vertical?num(style,L"gap",2):10)}})).GetObject();
         place(more,object(geometry,L"more"));
         auto placed=array(geometry,L"fields");
         for(size_t i=0;i<fields.size();++i){

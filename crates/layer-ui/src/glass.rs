@@ -24,11 +24,11 @@ impl Transparency {
     const fn alphas(self, dark: bool) -> [f32; 4] {
         match (self, dark) {
             (Self::Off, _) => [1.; 4],
-            (Self::Low, false) => [0.86, 0.7, 0.7, 0.64],
-            (Self::Medium, false) => [0.72, 0.5, 0.55, 0.48],
+            (Self::Low, false) => [0.94, 0.78, 0.78, 0.71],
+            (Self::Medium, false) => [0.76, 0.54, 0.59, 0.51],
             (Self::High, false) => [0.56, 0.34, 0.4, 0.43],
-            (Self::Low, true) => [0.91, 0.81, 0.81, 0.834],
-            (Self::Medium, true) => [0.82, 0.68, 0.71, 0.745],
+            (Self::Low, true) => [0.96, 0.86, 0.86, 0.884],
+            (Self::Medium, true) => [0.845, 0.705, 0.735, 0.77],
             (Self::High, true) => [0.72, 0.5, 0.55, 0.646],
         }
     }
@@ -251,10 +251,6 @@ mod tests {
         let glass = |transparency, theme| {
             Settings { transparency, ..Settings::default() }.palette(theme, Platform::Gtk, None)
         };
-        assert_eq!(
-            glass(Transparency::High, Theme::Dark).glass.panel.0[3],
-            glass(Transparency::Medium, Theme::Light).glass.panel.0[3]
-        );
         for transparency in [Transparency::Low, Transparency::Medium, Transparency::High] {
             for theme in [Theme::Dark, Theme::Light] {
                 let p = glass(transparency, theme);

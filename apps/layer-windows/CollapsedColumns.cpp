@@ -10,6 +10,7 @@ struct Column:std::enable_shared_from_this<Column>{
     std::shared_ptr<WorkspaceData> data;
     std::shared_ptr<WorkspaceGestures> gestures;
     Canvas workspace{nullptr},frame,icons;
+    Shapes::Path surface;
     Border background,grip;
     ScrollViewer scroll;
     uint32_t id=0;
@@ -22,7 +23,8 @@ struct Column:std::enable_shared_from_this<Column>{
     bool applying=false;
     void init(){
         auto weak=weak_from_this();
-        background.Background(data->glass(L"panel"));background.CornerRadius({8,8,8,8});background.Child(frame);
+        background.Background(clear());background.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});background.Child(frame);
+        surface.Fill(data->glass(L"panel"));surface.IsHitTestVisible(false);frame.Children().Append(surface);
         Canvas::SetZIndex(background,160);
         AutomationProperties::SetAutomationId(background,L"collapsed-column-"+to_hstring(id));
         scroll.Content(icons);scroll.HorizontalScrollMode(ScrollMode::Disabled);
@@ -49,7 +51,7 @@ struct Column:std::enable_shared_from_this<Column>{
     void apply(J const& next){
         applying=true;geometry=next;
         auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
-        background.Background(data->glass(L"panel"));background.CornerRadius({8,8,8,8});
+        surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius}));
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
@@ -130,7 +132,7 @@ struct Column:std::enable_shared_from_this<Column>{
         applying=false;
     }
     void collectGlass(A& regions,A& links,UIElement const& reference)const{
-        if(!appendGlass(regions,background,reference,cornerRadii(background.CornerRadius())))return;
+        if(!appendGlass(regions,background,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true))return;
         for(auto value:array(object(geometry,L"open"),L"connections"))appendConnection(links,value.GetArray().GetObjectAt(1),workspace,reference);
     }
     void remove(){

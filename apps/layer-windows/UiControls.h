@@ -106,7 +106,7 @@ struct WorkspaceData {
     std::shared_ptr<FilterPreviewCache> previews;
     std::shared_ptr<LayerThumbnailCache> thumbnails;
     PreviewTransport query;
-    uint64_t windowId=0;bool glassSurfaces=false;
+    uint64_t windowId=0;bool glassSurfaces=false;A drawerSources;
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}

@@ -38,11 +38,12 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   and **New Toolbar…**. Submenu checks show current group membership; choosing
   another panel moves it here, never duplicates it. Style is stored once on the
   group's `DockNode::Tabs`, never on individual panels. On GTK, Web, Android,
-  macOS and iPadOS, Automatic fits complete names to the measured tab-strip width, reserving icons
-  for every tab and adding names left to right while space remains; the shared
-  `TabStyle::automatic_names` chooses them from native measurements. Selection
-  does not change name priority. Windows retains the count-based fallback
-  until its allocation-aware view is ported. Explicit styles do not adapt:
+  macOS, iPadOS and Windows, Automatic fits complete names to the measured
+  tab-strip width, reserving icons for every tab and adding names left to right
+  while space remains; the shared `TabStyle::automatic_names` chooses them from
+  native measurements. Selection does not change name priority. Windows reads
+  each group's style from the snapshot's `windows_tab_styles` and fits docked
+  and drawer strips. Explicit styles do not adapt:
   icons-and-active-name shows every icon and only the active name regardless of
   count; icons-and-names shows both on every tab;
   names-only and icons-only likewise apply to all tabs.

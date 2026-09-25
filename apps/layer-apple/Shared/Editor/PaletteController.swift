@@ -197,7 +197,7 @@ struct BinaryFileDocument: FileDocument {
     func importPalette(_ result: Result<URL, Error>) {
         switch result {
         case .success(let url):
-            NativeProjectTask.io.async {
+            NativeProjectTask.io.async { [weak self] in
                 let action = Result { try ColorPreferencesStore.importPalette(url) }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -213,7 +213,7 @@ struct BinaryFileDocument: FileDocument {
     }
     private func exportPalette(id: UInt64, format: String) {
         guard let palette = store?.state["colors"]["library"]["palettes"].array.first(where: { $0["id"].uint == id }) else { return }
-        NativeProjectTask.io.async {
+        NativeProjectTask.io.async { [weak self] in
             let encoded = Result { try ColorPreferencesStore.exportPalette(palette, format: format) }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

@@ -26,6 +26,9 @@ import SwiftUI
     var interruptInput: (() -> Void)?
     var focusWindow: (() -> Void)?
     var focusCanvas: (() -> Void)?
+    var panCursor = false
+    var cursorChanged: (() -> Void)?
+    var handCursor: Bool { panCursor || state["layer_tools"]["tool"].string == "hand" }
     var systemSceneID: String?
     private(set) var native: NativeOwner?
     private(set) var workspaceLibrary: WorkspaceLibrary?
@@ -122,9 +125,10 @@ import SwiftUI
                 return
             }
             let hadRenderer = snapshot["gpu_ready"].bool
-            let documentEpoch = state["document_file"]["epoch"].uint
+            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor
             switch ui.receive(next) {
             case .full:
+                if hand != handCursor { cursorChanged?() }
                 // Replacing a document retires its GPU readbacks even when
                 // the new renderer is already ready in the same publication.
                 if hadRenderer != snapshot["gpu_ready"].bool || documentEpoch != state["document_file"]["epoch"].uint {
@@ -321,7 +325,14 @@ import SwiftUI
         if value["type"] as? String == "key", value["key"] as? String == "Escape", value["pressed"] as? Bool == true {
             workspace.dismissTransients(at: nil)
         }
-        native?.submit(1, JSON(value)); wake?()
+        native?.submit(1, JSON(value)) { [weak self] reply in
+            guard let pan = reply?["pan_cursor"], !pan.isNull else { return }
+            DispatchQueue.main.async {
+                guard let self, self.panCursor != pan.bool else { return }
+                self.panCursor = pan.bool; self.cursorChanged?()
+            }
+        }
+        wake?()
     }
     /// A captured chord is a complete input pair; closing its sheet cannot leave
     /// a held key in the canvas interaction state.

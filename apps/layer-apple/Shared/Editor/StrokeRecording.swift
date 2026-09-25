@@ -41,7 +41,7 @@ import UniformTypeIdentifiers
     private func save() {
         guard let native = store?.native, !busy else { return }
         busy = true
-        native.strokeRecordingData { result in
+        native.strokeRecordingData { [weak self] result in
             let compressed = result.flatMap { raw in Result { try Self.compress(raw) } }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

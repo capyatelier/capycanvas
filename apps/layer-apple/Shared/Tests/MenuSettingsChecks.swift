@@ -33,11 +33,12 @@ extension XCTestCase {
             XCTAssertTrue(control.waitForExistence(timeout: 20)); XCTAssertTrue(control.isEnabled)
             workspaceActivate(control)
             #if os(macOS)
-            let option = app.menuItems[label].firstMatch
+            let option = control.menuItems[label].firstMatch
+            XCTAssertTrue(option.waitForExistence(timeout: 5)); option.click()
             #else
             let option = app.buttons[label].firstMatch
-            #endif
             XCTAssertTrue(option.waitForExistence(timeout: 5)); workspaceActivate(option)
+            #endif
             selected(id, label)
         }
         choose("theme", "Dark")
@@ -64,12 +65,14 @@ extension XCTestCase {
             waitForExpectations(timeout: 5)
         }
         page("input")
-        // Grouped macOS forms expose switch labels as separate static text.
-        let master = app.switches.element(boundBy: 0)
-        let native = app.switches.element(boundBy: 1)
+        let hide = app.switches["preference-hide_cursor_while_drawing"]
+        let master = app.switches["preference-feedback"]
+        let native = app.switches["preference-platform_prediction"]
         let amount = app.buttons["number-value-Prediction amount"]
-        XCTAssertTrue(master.waitForExistence(timeout: 10)); XCTAssertTrue(native.exists)
-        XCTAssertEqual(app.switches.count, 2)
+        XCTAssertTrue(master.waitForExistence(timeout: 10)); XCTAssertTrue(native.exists); XCTAssertTrue(hide.exists)
+        XCTAssertEqual(app.switches.count, 3)
+        active(hide, true); workspaceActivate(hide); active(hide, false)
+        reopen("input"); active(hide, false); workspaceActivate(hide); active(hide, true)
         active(master, true); active(native, false); enabled(native, false)
         XCTAssertTrue(amount.exists); enabled(amount, true)
         workspaceActivate(master); active(master, false); enabled(native, false); enabled(amount, false)

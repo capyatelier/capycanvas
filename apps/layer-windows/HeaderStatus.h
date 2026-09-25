@@ -20,10 +20,11 @@ class HeaderStatus {
             using namespace CapyUi;
             clock=label(data,L"");clock.VerticalAlignment(VerticalAlignment::Center);
             AutomationProperties::SetAutomationId(clock,L"system-clock");
-            clockTile.Child(clock);clockTile.Height(36);clockTile.Padding({6,0,6,0});
+            clockTile.Child(clock);clockTile.Height(36);clockTile.Padding({8,0,8,0});
 
             batteryTile.Width(36);batteryTile.Height(36);
-            for(auto tile:{clockTile,batteryTile}){tile.Background(headerSurface(data));tile.CornerRadius({6,6,6,6});}
+            for(auto tile:{clockTile,batteryTile})tile.Background(headerSurface(data));
+            clockTile.CornerRadius({18,18,18,18});batteryTile.CornerRadius({18*.54,18*.54,18*.54,18*.54});
             battery.Width(26);battery.Height(14);battery.VerticalAlignment(VerticalAlignment::Center);
             battery.HorizontalAlignment(HorizontalAlignment::Center);
             shell.Width(22);shell.Height(14);shell.HorizontalAlignment(HorizontalAlignment::Left);shell.CornerRadius({4,4,4,4});

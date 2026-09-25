@@ -210,12 +210,13 @@ struct DrawingTabsHeader: View {
     @ObservedObject var tabs: DrawingTabsController
     let width: CGFloat
     var tile: CGFloat = 36
+    var gap: CGFloat = 2
     @Environment(\.editorPalette) private var palette
     var body: some View {
         Group {
             if tabs.rows.count > 1 && width / CGFloat(tabs.rows.count) >= 140 {
-                DrawingTabList(store: store, tabs: tabs, vertical: false)
-                    .padding(.vertical, 1).glassSurface(SquircleShape(tile / 2), fill: palette.chromeSurface)
+                DrawingTabList(store: store, tabs: tabs, vertical: false, tile: tile, gap: gap)
+                    .glassSurface(SquircleShape(tile / 2), fill: palette.chromeSurface)
             } else {
                 Button { tabs.presented = true } label: {
                     HStack(spacing: 5) {
@@ -233,6 +234,8 @@ private struct DrawingTabList: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var tabs: DrawingTabsController
     let vertical: Bool
+    var tile: CGFloat = 36
+    var gap: CGFloat = 2
     @StateObject private var interaction = DrawingTabInteraction()
     @Environment(\.editorPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -242,31 +245,27 @@ private struct DrawingTabList: View {
         return slide["offsets"][index].number
     }
     var body: some View {
-        let layout = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 6))
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: gap))
         layout {
             ForEach(Array(tabs.rows.enumerated()), id: \.element.drawingID) { index, row in
                 let id = row["id"].uint
-                HStack(spacing: 5) {
+                Group {
                     if vertical {
-                        SharedIcon(name: "grip", size: 12).frame(width: 24, height: 44).contentShape(Rectangle())
-                            .modifier(DrawingMeasure(id: id, part: \.grip)).accessibilityLabel("Move drawing")
+                        HStack(spacing: 5) {
+                            SharedIcon(name: "grip", size: 12).frame(width: 24, height: 44).contentShape(Rectangle())
+                                .modifier(DrawingMeasure(id: id, part: \.grip)).accessibilityLabel("Move drawing")
+                            pick(row, alignment: .leading)
+                            close(row).buttonStyle(.plain).frame(width: 24, height: 44)
+                        }.padding(.horizontal, 7).frame(height: 48)
+                    } else {
+                        ZStack(alignment: .trailing) {
+                            pick(row, alignment: .center).padding(.horizontal, tile / 2 + 12)
+                            close(row).buttonStyle(DrawingCloseStyle()).frame(width: 24, height: 24)
+                                .padding(.trailing, max(0, tile / 2 - 12))
+                        }.frame(maxHeight: .infinity)
                     }
-                    Button {
-                        guard !interaction.contact.consumeClick() else { return }
-                        tabs.select(id) { if $0 && vertical { tabs.presented = false } }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row["title"].string + (row["modified"].bool ? " •" : "")).lineLimit(1)
-                            if vertical { Text(row["location"].string).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).help(row["location"].string)
-                        .accessibilityIdentifier("drawing-tab-\(id)").accessibilityAddTraits(id == tabs.selected ? .isSelected : [])
-                        .accessibilityValue(id == tabs.selected ? tabs.selectedDescription : row["location"].string)
-                    Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(width: 24, height: vertical ? 44 : 28).contentShape(Rectangle()) }
-                        .buttonStyle(.plain).accessibilityLabel("Close " + row["title"].string).accessibilityIdentifier("drawing-close-\(id)")
-                        .modifier(DrawingMeasure(id: id, part: \.close))
-                }.padding(.horizontal, 7).frame(height: vertical ? 48 : nil).frame(maxHeight: vertical ? nil : .infinity)
-                    .modifier(DrawingTabBackground(selected: id == tabs.selected, vertical: vertical))
+                }
+                    .modifier(DrawingTabBackground(selected: id == tabs.selected, vertical: vertical, radius: tile / 2))
                     .opacity(vertical && interaction.dragged == id ? 0.4 : 1)
                     .modifier(DrawingMeasure(id: id))
                     .offset(x: offset(id, index))
@@ -290,6 +289,26 @@ private struct DrawingTabList: View {
             }
             .onScrollPhaseChange { _, phase in if phase != .idle && !interaction.contact.held && !interaction.contact.dragging { interaction.cancel() } }
     }
+    private func pick(_ row: JSON, alignment: Alignment) -> some View {
+        let id = row["id"].uint
+        return Button {
+            guard !interaction.contact.consumeClick() else { return }
+            tabs.select(id) { if $0 && vertical { tabs.presented = false } }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row["title"].string + (row["modified"].bool ? " •" : "")).lineLimit(1)
+                if vertical { Text(row["location"].string).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment).contentShape(Rectangle())
+        }.buttonStyle(.plain).help(row["location"].string)
+            .accessibilityIdentifier("drawing-tab-\(id)").accessibilityAddTraits(id == tabs.selected ? .isSelected : [])
+            .accessibilityValue(id == tabs.selected ? tabs.selectedDescription : row["location"].string)
+    }
+    private func close(_ row: JSON) -> some View {
+        let id = row["id"].uint
+        return Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+            .accessibilityLabel("Close " + row["title"].string).accessibilityIdentifier("drawing-close-\(id)")
+            .modifier(DrawingMeasure(id: id, part: \.close))
+    }
     private func update() {
         interaction.controller = tabs; interaction.vertical = vertical
         interaction.enabled = !tabs.busy && !store.projectFiles.busy
@@ -301,6 +320,7 @@ private extension JSON { var drawingID: UInt64 { self["id"].uint } }
 private struct DrawingTabBackground: ViewModifier {
     let selected: Bool
     let vertical: Bool
+    let radius: CGFloat
     @State private var hovering = false
     @Environment(\.editorPalette) private var palette
     func body(content: Content) -> some View {
@@ -309,11 +329,28 @@ private struct DrawingTabBackground: ViewModifier {
                 SquircleShape.control.fill(selected ? palette.active : Color.primary.opacity(0.035))
             } else {
                 ZStack {
-                    if selected { SquircleShape.tile.fill(palette.glassDocumentTab) }
-                    if hovering { SquircleShape.tile.fill(palette["text"].opacity(selected ? 0.03 : 0.07)) }
+                    if selected { SquircleShape(radius).fill(palette.glassDocumentTab) }
+                    if hovering { SquircleShape(radius).fill(palette["text"].opacity(selected ? 0.03 : 0.07)) }
                 }
             }
         }.onHover { hovering = $0 }
+    }
+}
+
+private struct DrawingCloseStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration) }
+    private struct Face: View {
+        let configuration: Configuration
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var enabled
+        @Environment(\.editorPalette) private var palette
+        var body: some View {
+            configuration.label.background {
+                if enabled && (configuration.isPressed || hovering) {
+                    Circle().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.10))
+                }
+            }.opacity(enabled ? 1 : 0.38).onHover { hovering = $0 }
+        }
     }
 }
 

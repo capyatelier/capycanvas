@@ -14,9 +14,9 @@ struct WorkspaceSwitcher: View {
         Self.naturalWidth(choices, textSize: textSize)
     }
     static func naturalWidth(_ choices: [JSON], textSize: Double) -> CGFloat {
-        8 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
+        10 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
             width + min(110, EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
-                + 20
+                + 16
         }
     }
     var body: some View {
@@ -54,8 +54,8 @@ struct WorkspaceSwitcher: View {
                         ForEach(choices, id: \.switcherID) { workspace in
                             choice(workspace).id(workspace["id"].string)
                         }
-                    }.padding(4)
-                }.frame(height: 34)
+                    }.padding(5)
+                }.frame(height: 36)
                     .onChange(of: choices.first?["id"].string) { _, first in
                         if let first, first == library.status["active_id"].string { scroll.scrollTo(first, anchor: .leading) }
                     }
@@ -68,7 +68,7 @@ struct WorkspaceSwitcher: View {
             WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium),
                 maximum: 110) {
                 Text(workspace["name"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
-            }.padding(.horizontal, 10).frame(height: 26)
+            }.padding(.horizontal, 8).frame(height: 26)
                 .foregroundStyle(palette["text"])
         }.buttonStyle(SwitcherChoiceStyle(selected: selected, palette: palette)).fixedSize(horizontal: true, vertical: false)
             .help("Switch to \(workspace["name"].string) workspace")

@@ -128,9 +128,7 @@ origins, bar membership and history are shared Rust. GTK owns native widgets,
 measurements, caption behavior and device timing. Web, Android, Windows, macOS and
 iPadOS paint the same bars, surfaces and selection roles; macOS has no Main Menu or
 menu labels because the system menu bar owns them. This is not a claim of
-macOS/Windows tablet testing. macOS, iPadOS and Windows receive the flush bars
-and tile gaps from Rust but still paint the earlier 1px in-bar inset and 34px
-switcher/menu tracks until their hosts adopt the rules above.
+macOS/Windows tablet testing.
 
 ## Regression checks
 

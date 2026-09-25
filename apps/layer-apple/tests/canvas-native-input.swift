@@ -50,6 +50,11 @@ private final class TabletEvent: NSEvent {
         }
     }
     @MainActor static func run(_ platform: UInt32) async throws {
+        for (azimuth, x, y) in [(0.0, 1.0, 0.0), (Double.pi / 2, 0, 1), (Double.pi, -1, 0), (-Double.pi / 2, 0, -1)] {
+            let tilt = StylusTilt.towardBarrel(altitude: .pi / 4, azimuth: azimuth)
+            try require(abs(tilt.x - x * .pi / 4) < 1e-9 && abs(tilt.y - y * .pi / 4) < 1e-9,
+                "Pencil azimuth \(azimuth) must tilt toward the barrel in view axes")
+        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-canvas-input-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -348,6 +353,24 @@ private final class TabletEvent: NSEvent {
             try await invoke("undo")
             let undone = try await pixels(); try require(undone == paper, "One Undo removes the chorded line")
         }
+        func moveOverCanvas() async throws {
+            let point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)
+            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0) else { throw HostFailure(message: "No mouse event") }
+            canvas.mouseMoved(with: event); try await drain(0.05)
+        }
+        try await moveOverCanvas()
+        try require(NSCursor.current.image.size == NSSize(width: 1, height: 1), "The system arrow hides over the canvas")
+        let painting = store.state["commands"].array.first {
+            $0["selected"].bool && ["pen", "pencil", "brush", "drawing_brush", "airbrush"].contains($0["id"].string)
+        }?["id"].string
+        try await invoke("hand")
+        try await moveOverCanvas()
+        try require(NSCursor.current == NSCursor.openHand, "The Hand tool shows the open hand over the canvas")
+        try await invoke(painting ?? "pen")
+        try await moveOverCanvas()
+        try require(NSCursor.current.image.size == NSSize(width: 1, height: 1), "Leaving the Hand tool hides the cursor again")
         // Match the existing UIKit figure checks with actual AppKit mouse and
         // modifier delivery through the assembled editor's canvas hit target.
         // Changing Shift while stationary must affect the committed figure;

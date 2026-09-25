@@ -195,7 +195,7 @@ struct HeaderButtonStyle: ButtonStyle {
                         } else if configuration.isPressed || style.hovering {
                             shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
                         }
-                    }.padding(.vertical, style.inBar && !style.drawerOpen ? 1 : 0)
+                    }
                 }
             }.modifier(GlassRegistration(shape: shape, active: !style.inBar))
         }

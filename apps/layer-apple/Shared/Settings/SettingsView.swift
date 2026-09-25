@@ -113,6 +113,7 @@ struct SettingsView: View {
             switch kind["type"].string {
             case "switch":
                 Toggle(row["title"].string, isOn: Binding(get: { kind["active"].bool }, set: { edit(row, $0) }))
+                    .accessibilityIdentifier("preference-" + row["id"].string)
             case "choice":
                 choice(row)
             case "number":

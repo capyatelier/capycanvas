@@ -97,6 +97,38 @@ import SwiftUI
                                 }
                                 precondition(platform != 1 || elements.keys.allSatisfy { !$0.hasPrefix("menu-") && $0 != "application-menus" },
                                     "Mac menus belong in the OS menu bar")
+                                let metrics = store.snapshot["header"]["sizes"].array.first { $0["id"].string == size }!
+                                let tile = metrics["tile"].number, gap = metrics["gap"].number
+                                let scale = Double(bitmap.pixelsWide) / width
+                                func pixel(_ x: CGFloat, _ y: CGFloat) -> [CGFloat] {
+                                    let color = bitmap.colorAt(x: Int(x * scale), y: Int(y * scale))!.usingColorSpace(.sRGB)!
+                                    return [color.redComponent, color.greenComponent, color.blueComponent]
+                                }
+                                let bars = store.header.geometry["bars"].array
+                                for bar in bars {
+                                    precondition(abs(bar["bounds"]["height"].number - tile) < 0.5, "Title-bar bars are exactly one tile tall")
+                                    let members = bar["items"].array.compactMap { id in expected.first { $0["id"].uint == id.uint }?["bounds"].rect }
+                                        .sorted { $0.minX < $1.minX }
+                                    for (left, right) in zip(members, members.dropFirst()) {
+                                        precondition(abs(right.minX - left.maxX - gap) < 0.5, "Joined title-bar tiles keep the toolbar tile gap")
+                                    }
+                                }
+                                let barred = Set(bars.flatMap { $0["items"].array.map(\.uint) })
+                                for item in store.snapshot["header"]["items"].array where item["selected"].bool && barred.contains(item["id"].uint) {
+                                    let frame = geometry.frames["header-item-\(item["id"].uint)"]!
+                                    let top = pixel(frame.midX, frame.minY), side = pixel(frame.minX + 3, frame.midY)
+                                    precondition(zip(top, side).allSatisfy { abs($0 - $1) < 0.02 },
+                                        "A selected title-bar tile fills its full height: \(top)/\(side)")
+                                }
+                                for (track, prefix) in [("workspace-switcher", "workspace-switch-"), ("header-menu-labels", "menu-")] {
+                                    let choices = elements.keys.filter { $0.hasPrefix(prefix) }.compactMap { geometry.frames[$0] }
+                                    guard let bounds = geometry.frames[track], !choices.isEmpty else { continue }
+                                    precondition(abs(bounds.height - 36) < 0.5, "\(track) keeps a 36px track")
+                                    for choice in choices {
+                                        precondition(abs(choice.height - 26) < 0.5 && abs(choice.minY - bounds.minY - 5) < 0.5,
+                                            "\(track) choices are 26px capsules inset 5px")
+                                    }
+                                }
                                 fixtures.append(JSON(["name": name, "platform": platform, "viewport": [width, 870],
                                     "scale": Double(bitmap.pixelsWide) / width, "clip": ["x": 0, "y": 0, "width": width, "height": height],
                                     "theme": theme, "fullscreen": true, "size": size, "clock": status.time, "battery_percent": 85,

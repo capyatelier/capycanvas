@@ -79,4 +79,9 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
 Commit and push to `origin/main` at each significant milestone (a complete
 feature area, building and validated on both targets), not for every small
 change. Rebase on the latest `origin/main` before pushing and port anything new
-that the rebase brings in.
+that the rebase brings in. Install the repository's commit and push guards with
+`sh tools/git/install-hooks.sh` and never add `Co-Authored-By` trailers naming an
+AI assistant or agent (see [Commit and push checks](COMMIT_GUIDE.md)). If
+`origin/main` has been rewritten, compare the rewritten commits' trees with your
+local ones and move uncommitted work onto the new tip instead of merging the old
+history back in.

@@ -252,6 +252,17 @@ fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity(
         );
         reopened.request(json!({"type":"close"}));
         other.request(json!({"type":"close"}));
+        drop((reopened, other));
+        let fresh = Library::new(platform, &directory.0, "scene:fresh");
+        let fresh_app = App::new(platform);
+        fresh_app.request(6, json!({"type":"begin"})).unwrap();
+        let initial = fresh.request(json!({"type":"initialize","now":9000}));
+        assert_eq!(
+            fresh.adopt(&fresh_app, &initial),
+            other_id,
+            "Restoring a scene claims its workspace without republishing the last selection"
+        );
+        fresh.request(json!({"type":"close"}));
     }
 }
 

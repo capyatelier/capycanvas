@@ -75,8 +75,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Canvas content;
         Grid layout{nullptr},header{nullptr};
         StackPanel tabLabels{nullptr};
+        std::vector<AutomaticTab> automatic;
         ScrollViewer tabScroll{nullptr};
-        Microsoft::UI::Xaml::Shapes::Path background;
+        Microsoft::UI::Xaml::Shapes::Path background,strip;
         Border footer{nullptr};
         std::wstring key;
         J geometry,presented;
@@ -97,7 +98,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     TextBlock camera;
     Grid cameraSlot;
-    Button fitCamera{nullptr};Border cameraSurface;std::function<void()> glassChanged;
+    Button fitCamera{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
     Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -126,9 +127,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();group.footer=nullptr;group.tabs.clear();group.backgroundKey=L"";
+        group.body.reset();group.footer=nullptr;group.tabs.clear();group.automatic.clear();group.backgroundKey=L"";
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
-        group.border.Background(clear());group.border.CornerRadius(CornerRadius{8,8,8,8});
+        group.border.Background(clear());group.border.CornerRadius(CornerRadius{SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
         if(!group.layout){
             group.layout=Grid();
             group.layout.RowDefinitions().Append(RowDefinition());
@@ -144,7 +145,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
         {
             auto tabs=group.tabLabels;tabs.Children().Clear();
-            uint32_t index=0;
+            uint32_t index=0;bool fitted=automaticTabs(data,num(geometry,L"id"));
             for(auto value:array(geometry,L"panels")){
                 auto id=value.GetString();auto model=find(array(data->model,L"panels"),L"id",id);
                 auto tab=button(data,str(model,L"title"),[data=data,id,groupId=num(geometry,L"id")]{
@@ -152,8 +153,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 });tab.Height(36);tab.MinWidth(36);tab.Padding(Thickness{8,4,8,4});tab.CornerRadius(CornerRadius{6,6,0,0});
                 StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
                 auto tabStyle=object(model,L"tab");
-                if(flag(tabStyle,L"show_icon"))content.Children().Append(icon(str(model,L"icon"),data->theme()));
-                if(flag(tabStyle,L"show_name"))content.Children().Append(label(data,str(model,L"title"),true));
+                if(flag(tabStyle,L"show_icon")||fitted)content.Children().Append(icon(str(model,L"icon"),data->theme()));
+                if(flag(tabStyle,L"show_name")||fitted){
+                    auto name=label(data,str(model,L"title"),true);name.Visibility(flag(tabStyle,L"show_name")?Visibility::Visible:Visibility::Collapsed);content.Children().Append(name);
+                    if(fitted)group.automatic.push_back({tab,name,std::wstring(id)+L"\n"+std::wstring(str(model,L"title"))+L"\n"+std::to_wstring(data->textSize())});
+                }
                 tab.Content(content);bool active=id==str(geometry,L"active");
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(id)}});
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
@@ -166,7 +170,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
                 tabScroll.Background(clear());
                 gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
-                group.header=Grid();auto header=group.header;header.Background(data->glass(L"strip"));header.CornerRadius({8,8,0,0});
+                tabScroll.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->fitTabs(id);});
+                group.header=Grid();auto header=group.header;header.Background(clear());
                 ColumnDefinition labels;labels.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(labels);
                 ColumnDefinition trailing;trailing.Width({28,GridUnitType::Pixel});header.ColumnDefinitions().Append(trailing);
                 header.Children().Append(tabScroll);
@@ -180,6 +185,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
         }
+        if(group.tabScroll&&group.tabScroll.ActualWidth()>0)fitAutomaticTabs(group.automatic,group.tabScroll.ActualWidth(),tabWidths);
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
         auto body=group.body->Root();Grid::SetRow(body,1);frame.Children().Append(body);
@@ -292,10 +298,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto panel=find(array(snapshot,L"panels"),L"id",str(geometry,L"active"));
             auto [it,added]=groups.try_emplace(id);auto& group=it->second;
             if(added){
-                group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({8,8,8,8});
+                group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
                 group.frame.RenderTransform(group.translation);group.shadow.Root().RenderTransform(TranslateTransform());
                 group.background.IsHitTestVisible(false);group.background.Fill(data->brush(L"panel"));
-                group.content.Children().Append(group.background);group.content.Children().Append(group.border);
+                group.strip.IsHitTestVisible(false);group.content.Children().Append(group.background);group.content.Children().Append(group.strip);group.content.Children().Append(group.border);
                 group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
                 root.Children().Append(group.shadow.Root());root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
@@ -309,7 +315,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(snapshot,L"panels"),L"id",member.GetString());
                 headers.Append(O({{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
-            }signature.Insert(L"headers",headers);
+            }signature.Insert(L"headers",headers);signature.Insert(L"tab_style",S(str(object(snapshot,L"windows_tab_styles"),to_hstring(id).c_str())));
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key){group.key=std::move(key);build(group,geometry,panel);}
             bool hidden=flag(snapshot,L"chrome_hidden")&&(!flag(geometry,L"floating")||flag(snapshot,L"hide_floating_panels"));
@@ -629,16 +635,21 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             A slots;appendGroupOverviews(slots,group);
             auto bounds=rectangle(placement(group));
             bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
-            auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
+            J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
+                if(str(anchor,L"kind")==L"tile"&&str(anchor,L"panel")==str(group.geometry,L"active"))source=value.GetObject();}
+            std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+            if(source.Size()&&!expanded){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+            auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
             float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
-            auto outline=expanded?expansionShape(group.presented):tabbed?roundedRectangle(width,std::max(0.f,height-36),{0,0,8,8}):roundedRectangle(width,height,{8,8,8,8});
+            auto outline=expanded?expansionShape(group.presented):tabbed?squircleRectangle(width,std::max(0.f,height-36),{0,0,corners[2],corners[3]}):squircleRectangle(width,height,corners);
+            group.strip.Data(tabbed&&!expanded?squircleRectangle(width,36,{SurfaceRadius,SurfaceRadius,0,0}):PathGeometry());group.strip.Fill(data->glass(L"strip"));
             if(tabbed&&!expanded){TranslateTransform body;body.Y(36);outline.Transform(body);}
-            group.background.Fill(expanded?data->brush(L"panel"):data->glass(L"panel"));
+            group.background.Fill(expanded?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel"));
             if(group.header){
-                group.header.Background(expanded?data->brush(L"tabbar"):data->glass(L"strip"));
+                group.header.Background(expanded?data->brush(L"tabbar"):clear());
                 for(auto child:group.tabLabels.Children())if(auto shell=child.try_as<Grid>();shell&&unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell")
                     for(auto layer:shell.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
                         path.Fill(expanded?data->brush(L"panel"):data->glass(L"tab"));
@@ -647,9 +658,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(shadowKey!=group.shadowKey){
                 group.shadowKey=shadowKey;
                 // WinUI geometries have one owner; retain a separate mask outline.
-                auto mask=expanded?expansionShape(group.presented):roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8});
+                auto mask=expanded?expansionShape(group.presented):squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius});
                 group.shadow.Shape(mask,float(num(bounds,L"width")),float(num(bounds,L"height")),expanded?36.f:12.f,expanded?8.f:2.f,expanded?.4f:.16f);
-                if(expanded)group.shadow.Uncut();else group.shadow.Cut({8,8,8,8});
+                if(expanded)group.shadow.Uncut();else group.shadow.Cut({SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius});
             }
             shape.Children().Append(outline);
             for(auto value:slots){
@@ -680,10 +691,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }
+    void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
     void publishOverviews(){
         A slots;
         for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
         if(drawers)drawers->AppendOverviews(slots);
+        if(drawers){
+            auto sources=drawers->Sources();
+            if(sources.Stringify()!=data->drawerSources.Stringify()){
+                data->drawerSources=sources;
+                for(auto& [id,group]:groups){group.backgroundKey=L"";if(group.body)group.body->Apply(!group.hidden);}
+                backgrounds();
+            }
+        }
         auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
         auto json=slots.Stringify();
         if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}
@@ -691,7 +711,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     A glass(UIElement const& reference,A& connections)const{
         A regions;if(flag(data->model,L"chrome_hidden"))return regions;
-        for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{8,8,8,8});
+        for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true);
         collapsed->AppendGlass(regions,connections,reference);drawers->AppendGlass(regions,connections,reference);
         appendGlass(regions,cameraSurface,reference,cornerRadii(cameraSurface.CornerRadius()));
         return regions;
@@ -712,6 +732,7 @@ bool WorkspaceView::CancelGesture(){
 }
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
+JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections)const{return impl->glass(reference,connections);}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};
