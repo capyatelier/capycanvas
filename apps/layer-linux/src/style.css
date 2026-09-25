@@ -276,6 +276,7 @@ window, label, text { font-size: var(--ui-text-size); }
 
 /* Custom angular input and rendering share coordinates without CSS insets. */
 scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-width: 0; min-height: 0; }
+scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */

@@ -690,13 +690,19 @@ fn native_tonal_selection_input() {
     assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
     for id in ["tonal_lower", "tonal_upper"] {
         let number=d.named(&format!("tool-setting-{id}"));
-        let label=number.first_child().unwrap().first_child().unwrap().downcast::<gtk::Label>().unwrap();
-        assert!(label.tooltip_text().unwrap().contains("stops relative to reference white"));
+        assert!(number.tooltip_text().unwrap().contains("stops relative to reference white"));
         let readout=find_css(&number,"number-readout").unwrap().downcast::<gtk::Label>().unwrap();
         assert!(!readout.text().contains("stop"),"units stay in label tooltips");
     }
     let custom_height=settings_height(&d);
-    assert!(custom_height<=210.,"custom controls use {custom_height}px");
+    assert!(custom_height<=170.,"custom controls use {custom_height}px");
+    let range=d.named("tool-range-tonal");
+    assert!(range.height()<=28);
+    assert!(d.named("drawer-panel-ToolSettings").measure(gtk::Orientation::Horizontal,-1).0<=layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    let low=d.named("tool-setting-tonal_lower").compute_bounds(&range).unwrap();
+    let track=d.named("range-track-tonal").compute_bounds(&range).unwrap();
+    let high=d.named("tool-setting-tonal_upper").compute_bounds(&range).unwrap();
+    assert!(low.x()+low.width()<=track.x() && track.x()+track.width()<=high.x());
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
     d.key(b'q' as u32);wait_tonal(&d);
@@ -744,4 +750,78 @@ fn native_tonal_selection_pen_input() {
     d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),Some(first.clone()));
     d.w.dispatch(UiAction::Invoke {command:CommandId::Brush});assert_eq!(selection(&d),Some(first));
     d.w.window.destroy();pump(80);
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_range_input"]
+fn native_tonal_range_input() {
+    tonal_range_input(false);
+}
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_range_pen_input --tablet"]
+fn native_tonal_range_pen_input() {
+    tonal_range_input(true);
+}
+fn tonal_range_input(pen: bool) {
+    let mut d=Driver::new("art.capycanvas.TonalRange");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});
+    let baseline=selection(&d);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    d.click_name("tool-choice-tonal-tones-5");wait_tonal(&d);
+    let bounds=|d:&Driver| {
+        ["tonal_lower","tonal_upper"].map(|id|state(&d.w).tool_settings.iter().find(|f|f.id==id).unwrap().value)
+    };
+    let handle_point=|d:&Driver,index:usize| {
+        let name=["tonal_lower","tonal_upper"][index];
+        let handle=d.named(&format!("range-handle-{name}")).downcast::<crate::range_control::RangeHandle>().unwrap();
+        let mut p=d.point(handle.upcast_ref());
+        p[0]+=handle.position(handle.value()) as f32-handle.width() as f32/2.+if index==0 {-4.} else {4.};p
+    };
+    let move_handle=|d:&mut Driver,index,device:&str,delta| {
+        let a=handle_point(d,index);let b=[a[0]+delta,a[1]];
+        let events=match device {
+            "touch"=>serde_json::json!([{"touch":"down","point":a},{"touch":"move","point":b},{"touch":"up"}]),
+            "pen"=>serde_json::json!([{"pen":"move","point":a},{"pen":"down"},{"pen":"move","point":b},{"pen":"up"},{"pen":"leave"}]),
+            _=>serde_json::json!([{"point":a,"down":true},{"point":b},{"down":false}]),
+        };
+        d.perform(events);wait_tonal(d);
+    };
+    for device in if pen { &["pen"][..] } else { &["mouse","touch"][..] } {
+        let before=bounds(&d);
+        move_handle(&mut d,0,device,-8.);
+        let low=bounds(&d);assert!(low[0]<before[0],"{device}: lower handle moves");assert_eq!(low[1],before[1]);
+        move_handle(&mut d,1,device,8.);
+        let high=bounds(&d);assert!(high[1]>low[1],"{device}: upper handle moves");assert_eq!(high[0],low[0]);
+    }
+    // The synthetic tablet proxy is for contacts. Numeric text focus runs
+    // through the compositor directly in the mouse/touch journey.
+    if pen { assert!(state(&d.w).host_error.is_none()); d.finish(); return; }
+    // Keyboard continues on the focused native handle.
+    let before=bounds(&d);d.key(0xff53);wait_tonal(&d);
+    assert!(bounds(&d)[1]>before[1]);
+    // As with other focused GtkRanges, ordinary shortcuts belong to the
+    // control. Exercise the mask action without changing native key ownership.
+    d.w.dispatch(UiAction::Invoke {command:CommandId::QuickMask});wait_tonal(&d);
+    assert!(state(&d.w).layer_tools.quick_mask);
+    let before=bounds(&d);move_handle(&mut d,0,"mouse",-5.);
+    assert!(bounds(&d)[0]<before[0],"range remains live when Quick Mask changes the tool context");
+    // Escape cancels the current drag and returns just that endpoint.
+    let before=bounds(&d);let a=handle_point(&d,0);let b=[a[0]+15.,a[1]];
+    d.perform(serde_json::json!([{"point":a,"down":true},{"point":b}]));pump(200);
+    assert_ne!(bounds(&d),before);
+    d.key(0xff1b);d.perform(serde_json::json!([{"down":false}]));wait_tonal(&d);
+    assert_eq!(bounds(&d),before);
+    if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
+    let lower=d.named("tool-setting-tonal_lower");let upper=d.named("tool-setting-tonal_upper");
+    d.number(&lower,"-20");wait_tonal(&d);d.number(&upper,"12");wait_tonal(&d);
+    assert_eq!(bounds(&d),[-20.,12.],"typed values extend beyond the normal track domain");
+    d.number(&lower,"13");wait_tonal(&d);assert_eq!(bounds(&d),[12.,12.]);
+    move_handle(&mut d,0,"mouse",-12.);assert!(bounds(&d)[0]<12.,"coincident handles separate again");
+    let result=selection(&d);
+    d.click_name(&opener);d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert_eq!(selection(&d),baseline);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),result);
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.finish();
 }

@@ -324,9 +324,18 @@ mod tonal_checks {
         }
         options.tone = 7;
         options.edit("tonal_lower", 2.).unwrap();
-        assert_eq!(options.custom, [2., 2.]);
+        assert_eq!(options.custom, [-1.5, -1.5]);
         options.edit("tonal_upper", -2.).unwrap();
-        assert_eq!(options.custom, [-2., -2.]);
+        assert_eq!(options.custom, [-1.5, -1.5]);
+        options.edit("tonal_lower", -6.).unwrap();
+        options.edit("tonal_upper", 2.).unwrap();
+        assert_eq!(options.custom, [-6., 2.]);
+        for id in ["tonal_lower", "tonal_upper"] {
+            for value in [f32::NAN, f32::INFINITY, -150., 129.] {
+                assert!(options.edit(id, value).is_err());
+                assert_eq!(options.custom, [-6., 2.]);
+            }
+        }
         for command in [
             CommandId::ApplyTonalSelection,
             CommandId::TonalDetails,

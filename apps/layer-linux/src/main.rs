@@ -24,6 +24,7 @@ mod selection_masks;
 mod swipe_row;
 mod navigator;
 mod number_control;
+mod range_control;
 mod panel_controls;
 mod proof_dial;
 mod local_tone_view;

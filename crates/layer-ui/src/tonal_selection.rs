@@ -175,12 +175,12 @@ impl TonalOptions {
         match id {
             "tonal_softness" => next.softness = value,
             "tonal_lower" if self.tone == 7 => {
-                next.custom[0] = value;
-                next.custom[1] = next.custom[1].max(value);
+                if !value.is_finite() || !(MIN_STOP..=MAX_STOP).contains(&value) { return Err("Invalid tonal bound".into()); }
+                next.custom[0] = value.min(next.custom[1]);
             }
             "tonal_upper" if self.tone == 7 => {
-                next.custom[1] = value;
-                next.custom[0] = next.custom[0].min(value);
+                if !value.is_finite() || !(MIN_STOP..=MAX_STOP).contains(&value) { return Err("Invalid tonal bound".into()); }
+                next.custom[1] = value.max(next.custom[0]);
             }
             _ => return Err("Unknown tonal setting".into()),
         }

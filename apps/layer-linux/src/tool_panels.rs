@@ -231,6 +231,7 @@ pub struct ToolSettings {
     extra_context: Cell<Option<layer_ui::ToolbarContext>>,
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
+    range: RefCell<Option<Rc<crate::range_control::RangeControl>>>,
     actions: RefCell<Vec<(ToolSettingAction, &'static str, gtk::Widget)>>,
     updating: Rc<Cell<bool>>,
 }
@@ -255,6 +256,7 @@ impl ToolSettings {
         Self {
             root, form, picker, extra, modes, mode_container, extra_fields:RefCell::default(), extra_context:Cell::new(None),
             fields: RefCell::default(),
+            range: RefCell::default(),
             actions: RefCell::default(),
             updating: Rc::new(Cell::new(false)),
         }
@@ -276,6 +278,7 @@ impl ToolSettings {
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
         let context=state.toolbar_context();
+        let context_changed=self.extra_context.get()!=Some(context);
         let same=self.extra_context.get()==Some(context) && self.extra_fields.borrow().len()==state.tool_extra.len() && self.extra_fields.borrow().iter().zip(&state.tool_extra).all(|((old,_),next)|old.same_schema(next));
         if !same {
             self.extra_context.set(Some(context));
@@ -292,7 +295,7 @@ impl ToolSettings {
         self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
         let mut actions = self.actions.borrow_mut();
-        let same_schema = fields.len() == controls.len()
+        let same_schema = !context_changed && fields.len() == controls.len()
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.numeric == next.numeric
@@ -306,16 +309,33 @@ impl ToolSettings {
                 .all(|((old, label, _), next)| old == next
                     && state.commands.iter().any(|c| c.id == next.command && c.label == *label));
         if !same_schema {
+            if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
             }
             while let Some(child)=self.modes.first_child() {self.modes.remove(&child);}
             fields.clear();
+            self.range.borrow_mut().take();
             actions.clear();
             let mut group = "";
             let inline_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             let inline_values=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             for control in controls {
+                if compact && control.id == "tonal_upper" { continue; }
+                if compact && control.id == "tonal_lower" {
+                    let upper = controls.iter().find(|f| f.id == "tonal_upper").unwrap();
+                    let weak = Rc::downgrade(workspace);
+                    let ids = [control.id, upper.id];
+                    let range = crate::range_control::RangeControl::new("tonal", "Range in stops relative to reference white (0)", [control, upper], move |index, value| {
+                        if let Some(w) = weak.upgrade() {
+                            w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }) });
+                        }
+                    });
+                    self.form.append(&range.root);
+                    fields.extend([(control.clone(), range.inputs[0].clone()), (upper.clone(), range.inputs[1].clone())]);
+                    self.range.replace(Some(range));
+                    continue;
+                }
                 if group != control.group {
                     group = control.group;
                     if !group.is_empty() {
@@ -427,6 +447,9 @@ impl ToolSettings {
         }
         for ((_, input), control) in fields.iter().zip(controls) {
             input.set_value(control.value as f64);
+        }
+        if let Some(range) = self.range.borrow().as_ref() {
+            range.set_values([fields[0].1.value(), fields[1].1.value()]);
         }
         for (action, _, widget) in actions.iter() {
             if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {

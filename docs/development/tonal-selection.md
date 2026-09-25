@@ -20,9 +20,16 @@ The shared `tonal-select` icon shows tonal bands inside a dashed selection borde
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
 a custom interval. The result applies immediately. **Softness** and **Feather**
-refine it; **Custom** adds only **From** and **To** bounds. These numeric fields
-omit unit suffixes; their label tooltips specify stops relative to reference
-white (0). Moving one bound beyond the other moves that endpoint too.
+refine it. In the GTK panel and its overflow, **Custom** adds one interval slider
+with two movable ends, an editable low value on the left and high value on the
+right. There are no visible bound labels or unit suffixes; tooltips specify stops
+relative to reference white (0). Bounds stop at one another. The existing numeric
+editors retain typed expressions, and each native range handle supports keyboard
+and accessible adjustment. Escape during a drag restores that endpoint.
+The track normally spans −12 to +6 stops and expands to include typed or sampled
+values outside that interval, staying fixed during capture. Both ends remain
+separately reachable when the interval is zero. The same shared bound settings
+continue to drive numeric Tool Options components.
 There is no Apply/Cancel workflow, source
 selector, range manager, destination label, or selection-actions menu in this
 panel. Invert remains an independent selection/mask action in existing menus.
@@ -104,6 +111,11 @@ cannot activate the removed editor.
   actual outline/shading pixels, both mask destinations, sampling and undo/redo.
 - `native_tonal_toolbar_input` checks horizontal and vertical Tool Options and
   the same segmented bar and numeric form in overflow.
+- `native_tonal_range_input` checks both slider ends with mouse and touch,
+  keyboard adjustment, drag cancellation, typed
+  bounds outside the usual track domain, coincident handles and one-step history.
+- `native_tonal_range_pen_input --tablet` separately checks both ends through
+  the injected Wayland pen fixture; numeric editing uses the unproxied journey.
 - `native_tonal_selection_pen_input --tablet` checks injected Wayland pen sampling
   in Quick Mask; this is not a physical-device test.
 

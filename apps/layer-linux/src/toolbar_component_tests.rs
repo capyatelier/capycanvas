@@ -1769,7 +1769,7 @@ fn native_tonal_toolbar_input() {
     let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());
     let custom=find_named(&drawer,"tool-choice-tonal-tones-5").unwrap();d.click(&custom);ready(&d);
     let lower=find_named(&drawer,"tool-setting-tonal_lower").unwrap();d.number(&lower,"1");ready(&d);
-    assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_upper").unwrap().value,1.,"crossing bounds moves the other endpoint");
+    assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_upper").unwrap().value,-1.5,"crossing bounds stops at the other endpoint");
     let upper=find_named(&drawer,"tool-setting-tonal_upper").unwrap();d.number(&upper,"3");ready(&d);
     let softness=find_named(&drawer,"tool-setting-tonal_softness").unwrap();d.number(&softness,"75");ready(&d);
     assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_softness").unwrap().value,0.75);
