@@ -50,9 +50,10 @@ with trivial arithmetic. It is compiled only into tests.
 | Cached 61 MP mask, warm median across final runs | 244–266 ms |
 | Same-device streaming control median | 174–232 ms |
 | Cold source/cache preparation and first mask | 2.32–2.45 s |
+| Native Android application, first mask | 3.50–3.56 s |
 | Native Android application, warm adjustments | 878–937 ms |
-| Native Android Quick Mask adjustment | 1,010 ms |
-| Native Android recovery write | 153 ms |
+| Native Android Quick Mask adjustment | 1,010–1,054 ms |
+| Native Android recovery write | 153–156 ms |
 | 61 MP with 12 px spatial feather, including first shader compilation | 2.97 s |
 | 24 MP, seven bands, no histogram / full-image histogram | 155 / 163 ms |
 
