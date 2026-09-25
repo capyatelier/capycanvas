@@ -29,7 +29,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await point(at(-45,0));
   const maskPixels=async()=>{
     const shot=await call('Page.captureScreenshot',{format:'png'}), center=at(0,0);
-    return evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${shot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const scale=c.width/innerWidth;const p=g.getImageData((${center.x}-120)*scale,(${center.y}-70)*scale,240*scale,140*scale).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
+    return evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${shot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const scale=c.width/innerWidth;const p=g.getImageData((${center.x}-120)*scale,(${center.y}-70)*scale,240*scale,140*scale).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
   };
   let previousPixels=await maskPixels();
   for(const x of [-40,-35]) {
@@ -50,7 +50,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
     await writeFile(`${directory}/quick-mask-${theme}.png`,Buffer.from(shot.data,'base64'));
     const center=at(0,0);
     const mask=shot;
-    const red=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${mask.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const scale=c.width/innerWidth;const p=g.getImageData((${center.x}-90)*scale,(${center.y}-35)*scale,180*scale,70*scale).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
+    const red=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${mask.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const scale=c.width/innerWidth;const p=g.getImageData((${center.x}-90)*scale,(${center.y}-35)*scale,180*scale,70*scale).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
     assert.ok(red>100,`${theme}: painted mask reaches presented pixels (${red})`);
   }
   await toggleLayers();
@@ -62,7 +62,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   assert.ok(await evaluate('layerApp.state().layer_tools.mask_editing.colors.foreground.rgba.every((v,i)=>Math.abs(v-[.1,.6,.9,1][i])<1e-6)'), 'Grayscale mask preserves full-color picking');
   await evaluate(`(()=>{const n=[...document.querySelectorAll('.effect-properties select')].find(n=>n.options[0]?.text==='Paint selection');n.value='0';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
   const propertiesShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/quick-mask-properties.png`,Buffer.from(propertiesShot.data,'base64'));
-  const propertyMaskPixels=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${propertiesShot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);const p=g.getImageData(0,100,c.width*.75,c.height-100).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
+  const propertyMaskPixels=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${propertiesShot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const p=g.getImageData(0,100,c.width*.75,c.height-100).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
   assert.ok(propertyMaskPixels>100,'Changing painting convention preserves the visible mask');
   await send({type:'set_color',rgba:[0,.5,1,1]});
   await evaluate(`document.querySelector('.effect-properties [data-action="paper-color-bucket"]').click()`);await settle();

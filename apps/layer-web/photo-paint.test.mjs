@@ -17,7 +17,7 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
       layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
       let blob;
       if(${JSON.stringify(photoUrl)}){const response=await fetch(${JSON.stringify(photoUrl)});if(!response.ok)throw Error('Photo fixture unavailable');blob=await response.blob();}
-      else{const c=new OffscreenCanvas(4353,769),x=c.getContext('2d');x.fillStyle='rgb(70,140,210)';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}
+      else{const c=new OffscreenCanvas(4353,769),x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='rgb(70,140,210)';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}
       window.showOpenFilePicker=async()=>[{name:'photo-paint.png',async getFile(){return new File([blob],'photo-paint.png')}}];
       window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){photoPaint.files.set(options.suggestedName,bytes)},async abort(){}}}});
     })()`);

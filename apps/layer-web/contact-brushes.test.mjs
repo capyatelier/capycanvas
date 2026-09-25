@@ -23,7 +23,7 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
   await evaluate(`window.contactTestOpen=window.showOpenFilePicker`);
   try {
     {
-      await evaluate(`(async()=>{let blob;if(${JSON.stringify(photoUrl || null)}){const response=await fetch(${JSON.stringify(photoUrl || null)});if(!response.ok)throw Error('Photo unavailable');blob=await response.blob();}else{const c=new OffscreenCanvas(2048,1536),x=c.getContext('2d');x.fillStyle='#c5b58c';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}window.showOpenFilePicker=async()=>[{name:'brush-photo.jpg',async getFile(){return new File([blob],'brush-photo.jpg')}}]})()`);
+      await evaluate(`(async()=>{let blob;if(${JSON.stringify(photoUrl || null)}){const response=await fetch(${JSON.stringify(photoUrl || null)});if(!response.ok)throw Error('Photo unavailable');blob=await response.blob();}else{const c=new OffscreenCanvas(2048,1536),x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='#c5b58c';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}window.showOpenFilePicker=async()=>[{name:'brush-photo.jpg',async getFile(){return new File([blob],'brush-photo.jpg')}}]})()`);
       await invoke('open_document');
       await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
       photoTab=await evaluate('Number(layerApp.app.document_tabs(0).selected)');
@@ -37,7 +37,7 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
       await evaluate('layerApp.canvas.getContext("webgpu").getConfiguration().device.queue.onSubmittedWorkDone()');
       await settle();
       const {data}=await call('Page.captureScreenshot',{format:'png',clip:{x:region.x-region.width/2,y:region.y-region.height/2,width:region.width,height:region.height,scale:1}});
-      const pixels=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${data}';await image.decode();const c=new OffscreenCanvas(image.width,image.height),x=c.getContext('2d');x.drawImage(image,0,0);return [...x.getImageData(0,0,c.width,c.height).data]})()`);
+      const pixels=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${data}';await image.decode();const c=new OffscreenCanvas(image.width,image.height),x=c.getContext('2d',{willReadFrequently:true});x.drawImage(image,0,0);return [...x.getImageData(0,0,c.width,c.height).data]})()`);
       return {data,pixels};
     };
     const delta=(a,b)=>a.reduce((n,v,i)=>n+(Math.abs(v-b[i])>3),0);

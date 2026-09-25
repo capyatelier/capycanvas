@@ -9,7 +9,7 @@ export async function checkTonalSelections({call,evaluate,settle}) {
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)});null`);await idle();};
   const invoke=command=>send({type:'invoke',command});
   const capture=async name=>{const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${name}.png`,Buffer.from(shot.data,'base64'));return shot;};
-  const pixelsAt=(shot,points)=>evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${shot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d');g.drawImage(i,0,0);return ${JSON.stringify(points)}.map(p=>Array.from(g.getImageData(p.x*c.width/innerWidth,p.y*c.height/innerHeight,1,1).data))})()`);
+  const pixelsAt=(shot,points)=>evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${shot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);return ${JSON.stringify(points)}.map(p=>Array.from(g.getImageData(p.x*c.width/innerWidth,p.y*c.height/innerHeight,1,1).data))})()`);
   const rect=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});const r=n.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
   async function gesture(a,b,device='mouse',cancel=false) {
     if(device==='touch') {
@@ -40,7 +40,7 @@ export async function checkTonalSelections({call,evaluate,settle}) {
   }
   await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
   await wait('layerApp.state().commands.find(c=>c.id==="open_document")?.enabled');
-  await evaluate(`window.tonalOpen=window.showOpenFilePicker;window.showOpenFilePicker=async()=>{const c=document.createElement('canvas');c.width=500;c.height=200;const g=c.getContext('2d');[0,64,128,190,255].forEach((v,i)=>{g.fillStyle='rgb('+[v,v,v].join(',')+')';g.fillRect(i*100,0,100,200)});const blob=await new Promise(r=>c.toBlob(r));return[{name:'tonal-patches.png',getFile:async()=>new File([blob],'tonal-patches.png',{type:'image/png'})}]}`);
+  await evaluate(`window.tonalOpen=window.showOpenFilePicker;window.showOpenFilePicker=async()=>{const c=document.createElement('canvas');c.width=500;c.height=200;const g=c.getContext('2d',{willReadFrequently:true});[0,64,128,190,255].forEach((v,i)=>{g.fillStyle='rgb('+[v,v,v].join(',')+')';g.fillRect(i*100,0,100,200)});const blob=await new Promise(r=>c.toBlob(r));return[{name:'tonal-patches.png',getFile:async()=>new File([blob],'tonal-patches.png',{type:'image/png'})}]}`);
   try {
     await invoke('open_document');await wait('layerApp.state().document_file.unsaved_name==="tonal-patches"&&!layerApp.state().document_file.busy');
     await workspace('painter');await invoke('fit_canvas');await invoke('tonal_select');
