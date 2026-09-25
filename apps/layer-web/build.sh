@@ -17,10 +17,13 @@ else
   echo 'Install the matching tool: cargo install wasm-bindgen-cli --version 0.2.128 --locked' >&2
   exit 1
 fi
-layer_profile="${2:-release}"
+layer_profile="${2:-${CAPY_RUST_PROFILE:-dev-perf}}"
 cargo build --locked --profile "$layer_profile" -p layer-web --target wasm32-unknown-unknown
+# Cargo calls the dev/test output directory "debug", not the profile name.
+layer_directory="$layer_profile"
+if [[ "$layer_profile" == dev || "$layer_profile" == test ]]; then layer_directory=debug; fi
 "$layer_bindgen" --target web --out-dir "${1:-apps/layer-web/pkg}" \
-  "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$layer_profile/layer_web.wasm"
+  "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$layer_directory/layer_web.wasm"
 python3 tools/build/web-icons.py "$(dirname -- "${1:-apps/layer-web/pkg}")/icons.svg"
 if [[ $# == 0 ]]; then
   mkdir -p apps/layer-web/filters

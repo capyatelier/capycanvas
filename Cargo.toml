@@ -5,6 +5,7 @@ members = [
     "crates/layer-render",
     "crates/layer-engine",
     "crates/layer-render-wgpu",
+    "crates/layer-shader-cache-key",
     "crates/layer-ffi",
     "crates/layer-bench",
     "crates/layer-ui",
@@ -38,6 +39,19 @@ license = "MIT OR Apache-2.0"
 debug = 1
 
 [profile.bench]
+debug = 1
+
+# Optimized edit/run builds, with the same codegen partition count as release.
+# Keep source locations for profilers without the additional module debug data.
+[profile.dev-perf]
+inherits = "release"
+incremental = true
+codegen-units = 16
+debug = "line-tables-only"
+
+# Vendored dependencies keep their release compilation settings too.
+[profile.dev-perf.package."*"]
+incremental = false
 debug = 1
 
 # Distribution keeps the normal speed optimizations, without native debug data.

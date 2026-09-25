@@ -30,6 +30,12 @@ bindings, stages runtime filters and starts a local Python server. Set
 `LAYER_WEB_PORT` to use a different port. `LAYER_WASM_BINDGEN` can select a specific
 CLI executable.
 
+Development uses `dev-perf`: release optimization level 3, incremental compilation,
+16 codegen units and line tables for source-level profiling. Set
+`CAPY_RUST_PROFILE=release` to compare ordinary release builds. The static packager
+explicitly selects `web-release` (ThinLTO); its profile takes precedence over the
+environment override. See [Rust build times](rust-build-times.md).
+
 ## How the host works
 
 [`app.js`](../../apps/layer-web/app.js) schedules updates through browser animation

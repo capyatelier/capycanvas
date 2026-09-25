@@ -1,0 +1,6 @@
+[package]
+name = "layer-shader-cache-key"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Isolated build generation for the native renderer pipeline cache"

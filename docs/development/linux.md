@@ -35,7 +35,7 @@ normally:
 ```bash
 omarchy install dev-env rust
 source "$HOME/.cargo/env"
-cargo run --locked --release -p layer-linux
+./apps/layer-linux/run.sh
 ```
 
 Capy Canvas runs directly in Omarchy's Wayland session. No XWayland override or
@@ -50,12 +50,15 @@ separate from the canvas's Vulkan renderer.
 ## Build and run
 
 ```bash
-cargo run --locked --release -p layer-linux
+./apps/layer-linux/run.sh
 ```
 
-Use the release profile when judging responsiveness. The executable is normally
-`target/release/layer-linux`; Cargo may use another location when
-`CARGO_TARGET_DIR` is set.
+The launcher uses `dev-perf`: release optimization level 3, incremental compilation,
+16 codegen units and line tables for source-level profiling. Its executable is
+normally `target/dev-perf/layer-linux`; Cargo honors `CARGO_TARGET_DIR`.
+Use `CAPY_RUST_PROFILE=release ./apps/layer-linux/run.sh` for release comparisons.
+Arguments are forwarded to the app. See [Rust build times](rust-build-times.md)
+for measurements and the distinction between development and distribution builds.
 
 ## How the host works
 

@@ -33,7 +33,7 @@ PLATFORMS = {
 
 
 def settings(mode):
-    if mode == "release":
+    if mode in ("release", "configured"):
         return {}
     values = {"incremental": True}
     if mode == "incremental-debug0":
@@ -68,7 +68,7 @@ def benchmark(args):
         "CARGO_INCREMENTAL", "CARGO_TARGET_DIR", "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_INCREMENTAL",
         "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER",
-    } | {key for key in env if key.startswith("CARGO_PROFILE_RELEASE_")}
+    } | {key for key in env if key.startswith("CARGO_PROFILE_")}
     for key in sorted(conflicting_env):
         if env.get(key):
             raise RuntimeError(f"Unset {key} before benchmarking")
@@ -105,7 +105,7 @@ def benchmark(args):
         for mode in args.modes:
             config = output / f"{mode}.toml"
             config.write_text("\n".join(
-                f'[profile.release.package."{name}"]\n' + "\n".join(
+                f'[profile."{args.profile}".package."{name}"]\n' + "\n".join(
                     f"{key} = {json.dumps(value)}" for key, value in settings(mode).items())
                 for name in members) if settings(mode) else "")
             for platform in args.platforms:
@@ -113,7 +113,7 @@ def benchmark(args):
                 command = ["cargo"]
                 if platform.startswith("android"):
                     command += ["ndk", "-t", target, "--platform", "29"]
-                command += ["build", "--offline", "--locked", "--release",
+                command += ["build", "--offline", "--locked", "--profile", args.profile,
                             "-p", package, "--timings"]
                 if target and not platform.startswith("android"):
                     command += ["--target", target]
@@ -146,7 +146,9 @@ def benchmark(args):
                         row["bindgen_s"] = run([
                             "wasm-bindgen", "--target", "web", "--out-dir",
                             str(output / "web-pkg"),
-                            str(ROOT / "target/wasm32-unknown-unknown/release/layer_web.wasm")],
+                            str(ROOT / "target/wasm32-unknown-unknown" /
+                                ("debug" if args.profile in ("dev", "test") else args.profile) /
+                                "layer_web.wasm")],
                             env, output / f"{label}-bindgen.log")
                     results.append(row)
                     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
@@ -162,10 +164,12 @@ if __name__ == "__main__":
     parser.add_argument("--platforms", nargs="+", choices=PLATFORMS,
                         default=list(PLATFORMS))
     parser.add_argument("--modes", nargs="+", choices=(
-                            "release", "incremental", "incremental-debug0",
+                            "release", "configured", "incremental", "incremental-debug0",
                             "incremental-cgu16"),
                         default=["release", "incremental", "incremental-debug0"])
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--profile", default="release",
+                        help="Cargo profile; use --modes configured to measure it unchanged")
     parser.add_argument("--output", default="artifacts/rust-incremental")
     args = parser.parse_args()
     if args.repeats < 1:

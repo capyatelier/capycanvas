@@ -1,10 +1,72 @@
 # Rust edit-to-build profiling
 
-Measured on 2026-09-25 at `2572660b6a26ab731e5703060e323f439a8e61ed`,
+Baseline measured on 2026-09-25 at `2572660b6a26ab731e5703060e323f439a8e61ed`,
 on a Threadripper PRO 9995WX (96 cores / 192 threads, 502 GiB RAM), with
 Rust/Cargo 1.96.0, LLVM 22.1.2, wasm-bindgen 0.2.128, cargo-ndk 4.1.2,
 and Android NDK 29.0.14206865 / API 29. These are local machine measurements,
 not portable estimates for a laptop or CI runner.
+
+## Implemented development workflow
+
+GTK `run.sh`, Web `run.sh`/`build.sh`, and Android debug APKs now default to
+`dev-perf`: release optimization level 3, incremental compilation, **16 codegen
+units**, and `debug="line-tables-only"` for our crates. This retains source lines
+and function names for profiling; it omits the extra module information from
+`debug=1`. Third-party crates retain release compilation settings and `debug=1`.
+Set `CAPY_RUST_PROFILE=release` for ordinary release comparisons. Android also
+accepts `-PcapyRustProfile=release`, taking precedence over the environment.
+Android release/benchmark variants and distribution packagers retain their
+existing release profiles. Android JNI output directories are separate per
+variant, and ABI, profile and Rust version are task inputs.
+
+The native shader-cache generation now lives in `layer-shader-cache-key`, behind
+a non-inlined accessor called at cache initialization. Its build script retains
+every previous invalidation category: renderer source, the generation build
+script, core source, `Cargo.lock` and filter assets. It also hashes the renderer
+and key-crate manifests, its own library source, and source paths/lengths.
+Changing the token recompiles this tiny crate without embedding a
+new string in a large renderer codegen unit. No hashing moved to runtime and no
+per-frame call was added. The obsolete renderer build script was removed.
+
+The final implementation was remeasured after integrating main through
+`67a74f53`, using the same body edit, machine and three-edit methodology:
+
+| Target | Median Rust build | Range | Original release baseline |
+| --- | ---: | ---: | ---: |
+| GTK | **6.82 s** | 6.24–6.93 s | 45.06 s |
+| Web | **6.13 s** | 5.83–6.17 s | 62.51 s |
+| Android arm64 | **5.44 s** | 5.28–5.51 s | 63.07 s |
+| Android x86_64 | **5.23 s** | 5.14–5.41 s | 58.92 s |
+
+Web takes **8.24 s including bindgen** (median of paired totals; bindgen alone
+2.15 s). Summing separate Android ABI medians projects **10.67 s** for both;
+this excludes Gradle, APK packaging and deployment. No third-party compilation
+occurred in measured edits. The historical baseline and final implementation
+use different main revisions; the earlier controlled experiments below isolate
+the incremental-profile and cache-key effects.
+
+Final per-crate median seconds (overlapping Cargo units; do not sum columns):
+
+| Crate | GTK | Web | Android arm64 | Android x86_64 |
+| --- | ---: | ---: | ---: | ---: |
+| layer-shader-cache-key, including build script | 0.03 | — | 0.03 | 0.03 |
+| layer-core | 1.63 | 1.58 | 1.73 | 1.62 |
+| layer-color | 0.40 | 0.39 | 0.40 | 0.41 |
+| layer-render | 0.09 | 0.08 | 0.09 | 0.09 |
+| layer-engine | 0.26 | 0.24 | 0.25 | 0.25 |
+| layer-render-wgpu | 1.03 | 0.86 | 1.09 | 1.05 |
+| layer-ui | 2.32 | 2.30 | 2.41 | 2.33 |
+| layer-workspace | 0.55 | 0.47 | 0.53 | 0.56 |
+| layer-host | — | — | 0.67 | 0.67 |
+| layer-linux | 3.09 | — | — | — |
+| layer-web | — | 2.61 | — | — |
+| layer-android | — | — | 1.61 | 1.41 |
+
+The dependency graph below includes the new native-only edge,
+`layer-shader-cache-key → layer-render-wgpu`. The key crate has no Rust
+dependencies; its source hashing creates build-time invalidation dependencies.
+Broad generic-code refactors and alternative linkers remain unimplemented
+because these experiments did not establish a worthwhile additional gain.
 
 ## What was measured
 
@@ -26,7 +88,7 @@ All measured configurations keep `opt-level=3`, release assertions/overflow
 behavior, and the existing LTO setting. Overrides apply only to our workspace
 packages, leaving third-party release dependencies unchanged.
 
-The normal GTK command and Web launcher use `release`. Android Gradle invokes
+At the baseline, the normal GTK command and Web launcher used `release`. Android Gradle invoked
 `cargo ndk ... build --release` even for a debug APK. The separate Web
 distribution profile, `web-release` (ThinLTO and one code generation unit), is
 not the launcher's default and is outside these measurements.
@@ -128,6 +190,7 @@ flowchart TD
     core --> render[layer-render]
     render --> engine[layer-engine]
     render --> gpu[layer-render-wgpu]
+    key[layer-shader-cache-key] -->|native only| gpu
     color --> gpu
     color --> ui[layer-ui]
     engine --> ui
@@ -148,7 +211,8 @@ flowchart TD
 | layer-color | core |
 | layer-render | core |
 | layer-engine | core, render |
-| layer-render-wgpu | core, color, render |
+| layer-shader-cache-key | None (build-time source hashing described above) |
+| layer-render-wgpu | core, color, render; shader-cache-key on native targets |
 | layer-ui | core, color, engine, render |
 | layer-workspace | ui, render |
 | layer-host | core, engine, render, render-wgpu, ui |
@@ -160,13 +224,13 @@ flowchart TD
 and features have separate compiled artifacts; a warm GTK build cannot warm
 the Web/Android target libraries.
 
-## Options and projection
+## Original options and projection
 
 1. **Enable optimized incremental development builds with 16 code generation
    units.** This is the first change to make. It achieved GTK 9.22 s, Web 8.43 s
    including bindgen, and Android 7.74/7.34 s per ABI. Budget approximately
    **9–10 s GTK, 8–9 s Web, and 7–8 s Android per ABI** for similar small body
-   edits on this machine once caches are warm. Keep `opt-level=3` and `debug=1`.
+   edits on this machine once caches are warm, using `opt-level=3` and `debug=1`.
    This changes compiler caching and code partitioning, so it still needs runtime
    qualification; matching the unit count does not guarantee identical binaries.
 
@@ -226,28 +290,12 @@ descriptors; it was discarded and repeated with descriptor forwarding fixed.
 The linker timings above use only the corrected run. There is little room for
 a linker swap to compete with the measured incremental-compilation savings.
 
-For a permanent workflow, a separate profile could start with:
-
-```toml
-[profile.dev-perf]
-inherits = "release"
-opt-level = 3
-incremental = true
-codegen-units = 16
-debug = 1
-
-# Preserve the existing compilation mode for vendored third-party crates too.
-[profile.dev-perf.package."*"]
-incremental = false
-```
-
-The benchmark instead used named workspace-package overrides inside the
+The original benchmark used named workspace-package overrides inside the
 existing release output directory to preserve cached third-party artifacts.
-A new profile needs its own initial warm-up. Wire the selected profile through
-the GTK launcher, Web build script and Android Gradle Rust task; Android must
-also declare the selected profile as a Gradle task input. Keep release and
-`web-release` available for final performance/distribution qualification.
-No launcher or production profile was changed in this investigation.
+The implemented `dev-perf` profile needs its own initial warm-up. Release and
+`web-release` remain available for final performance/distribution qualification.
+The tables in this section record the original controlled investigation; see
+the implementation section above for the final settings and measurements.
 
 The projections cover this small function-body edit, not arbitrary changes to
 public types, trait implementations, generics, Cargo features or the compiler.
@@ -271,10 +319,61 @@ per second, with change from current release in parentheses:
 
 Individual runs were noisy and the ranges overlap. This does not establish a
 statistically significant regression or exact equivalence. It supports choosing
-16 units over assuming that any `opt-level=3` binary is interchangeable. No
-browser, Android-device or GPU frame-time comparison was performed; qualify
-those workloads before changing the profile used for authoritative performance
-comparisons. Keep the ordinary release/distribution profiles available.
+16 units over assuming that any `opt-level=3` binary is interchangeable. That
+initial comparison covered CPU workloads only.
+
+### Final implementation checks
+
+The final `dev-perf` implementation and ordinary release were built from the
+same source and compared with 11 shuffled, interleaved CPU runs after warm-up,
+pinned to CPU 7. A preliminary run overlapped Gradle configuration; it was
+discarded and repeated without other validation tasks running. Final median
+throughputs were:
+
+| Workload | Release, million ops/s | dev-perf, million ops/s | Change |
+| --- | ---: | ---: | ---: |
+| Queue push/pop | 139.14 | 138.43 | −0.51% |
+| Stroke resampling | 5.737 | 5.718 | −0.32% |
+| 32-map brush dynamics | 3.041 | 2.976 | −2.14% |
+
+Run ranges again overlap substantially; these short samples establish neither
+identical performance nor a statistically significant regression.
+
+`layer-render-wgpu --example brush_frames` also compared release/dev-perf on
+an NVIDIA RTX PRO 6000 Blackwell Max-Q, Vulkan driver 610.57.04. The sequence
+was release, dev-perf, dev-perf, release, each with three 120-frame strokes per
+preset: 720 measured frames per preset/profile. The workload uses a 61 MP
+document, 1000 px brushes, and a 1600×1000 offscreen viewport. Median completed
+frame latency, including GPU completion, was:
+
+| Preset | Release | dev-perf |
+| --- | ---: | ---: |
+| Pencil | 0.653 ms | 0.630 ms |
+| G Pen | 0.608 ms | 0.608 ms |
+| Wet Ink | 0.739 ms | 0.747 ms |
+| Paintbrush | 0.905 ms | 0.911 ms |
+
+Exact rendered-pixel Undo/Redo checks passed for every run. These are native
+offscreen frame measurements, not display latency or browser/Android-device
+performance qualification. Use the retained release/distribution profiles for
+authoritative comparisons on those hosts.
+
+Validation also passed: all four target builds; an arm64 debug APK; Gradle
+profile, property precedence and per-variant JNI dependency/output checks;
+34 launcher/packaging tests; three build-generation tests covering every input
+category, moves, additions, deletions and checkout relocation; four renderer
+cache tests including cached/eager GPU pixel parity; and the Git attribution
+guard tests and ancestry audit. Focused regression commands include:
+
+```sh
+python3 tools/build/test_shader_generation.py
+node --test tools/build/development-profile.test.mjs apps/layer-web/run.test.mjs \
+  apps/layer-web/package.test.mjs apps/layer-linux/package.test.mjs
+cargo test --locked --profile dev-perf -p layer-render-wgpu \
+  shader_cache::tests -- --test-threads=1
+ANDROID_HOME="$HOME/Android/Sdk" apps/layer-android/gradlew \
+  -p apps/layer-android :app:assembleDebug -PcapyAbi=arm64-v8a
+```
 
 ## Reproduction
 
@@ -287,6 +386,10 @@ python3 tools/build/profile-rust-incremental.py --repeats 3
 python3 tools/build/profile-rust-incremental.py \
   --modes incremental-cgu16 --repeats 3 \
   --output artifacts/rust-incremental-cgu16
+# Measure the actual development profile without overriding its settings:
+python3 tools/build/profile-rust-incremental.py \
+  --profile dev-perf --modes configured --repeats 3 \
+  --output artifacts/rust-build-implementation/timings
 ```
 
 Use `--platforms gtk web android-arm64 android-x86_64` to select targets.

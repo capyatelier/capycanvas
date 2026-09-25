@@ -42,5 +42,8 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 [lib]
 path = "src/lib.rs"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+layer-shader-cache-key = { path = "../layer-shader-cache-key" }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi"] }

@@ -64,6 +64,15 @@ CAPY_ANDROID_SERIAL=DEVICE_SERIAL bash apps/layer-android/run.sh
 emulator without a window; `run.sh test` runs instrumented tests. The Gradle
 wrapper supplies Gradle and builds the Rust library through `cargo-ndk`.
 
+Debug APKs use the `dev-perf` Rust profile: release optimization level 3,
+incremental compilation, 16 codegen units and line tables for source-level
+profiling. Release and benchmark APKs use `release`. Set `CAPY_RUST_PROFILE`
+or pass `-PcapyRustProfile=release` to Gradle to override the selection; the Gradle
+property takes precedence. Each variant has its own JNI output directory, and
+profile/ABI changes invalidate its Rust task. Direct Gradle builds default to
+both ABIs; use `-PcapyAbi=arm64-v8a` or `-PcapyAbi=x86_64` for one device.
+See [Rust build times](rust-build-times.md) for measured Rust rebuild times.
+
 ## How the host works
 
 Android runs a single editor window: `MainActivity` is `singleTop` and does not

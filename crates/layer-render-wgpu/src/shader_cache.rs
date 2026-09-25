@@ -21,9 +21,9 @@ impl Cache {
             return None;
         }
         let adapter = wgpu::util::pipeline_cache_key(info)?;
+        let generation = layer_shader_cache_key::generation();
         let identity = format!(
-            "{}:{adapter}:{}:{}",
-            env!("CAPY_SHADER_GENERATION"),
+            "{generation}:{adapter}:{}:{}",
             info.driver,
             info.driver_info
         );
@@ -42,9 +42,8 @@ impl Cache {
             None
         });
         log(&format!(
-            "load bytes={} generation={}",
+            "load bytes={} generation={generation}",
             data.as_ref().map_or(0, Vec::len),
-            env!("CAPY_SHADER_GENERATION")
         ));
         // SAFETY: Only bytes produced by get_data are written to this app-private
         // store. Its generation, length and checksum are checked before use.

@@ -1459,6 +1459,7 @@ dependencies = [
  "layer-core",
  "layer-engine",
  "layer-render",
+ "layer-shader-cache-key",
  "libc",
  "naga",
  "objc2",
@@ -1470,6 +1471,10 @@ dependencies = [
  "wgpu",
  "windows 0.62.2",
 ]
+
+[[package]]
+name = "layer-shader-cache-key"
+version = "0.1.0"
 
 [[package]]
 name = "layer-ui"

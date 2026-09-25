@@ -300,7 +300,7 @@ premultiplied-alpha surface support.
 ```bash
 git clone https://github.com/capyatelier/capycanvas.git
 cd capycanvas
-cargo run --locked --release -p layer-linux
+./apps/layer-linux/run.sh
 ```
 
 The [Linux setup guide](docs/development/linux.md) covers dependencies and

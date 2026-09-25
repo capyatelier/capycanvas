@@ -1,8 +1,18 @@
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 val capyAbis = providers.gradleProperty("capyAbi").getOrElse("arm64-v8a,x86_64").split(",")
+val capyRustProfile = providers.gradleProperty("capyRustProfile")
+    .orElse(providers.environmentVariable("CAPY_RUST_PROFILE"))
+
+abstract class RustBuild : Exec() {
+    @get:OutputDirectory
+    abstract val jniDirectory: DirectoryProperty
+}
 
 android {
     namespace = "art.capycanvas"
@@ -45,7 +55,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs").get().asFile)
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/capy/assets").get().asFile)
     sourceSets["androidTest"].assets.srcDir("../../../examples/filters")
@@ -54,20 +63,26 @@ android {
     testOptions { animationsDisabled = true }
 }
 
-val rustBuild by tasks.registering(Exec::class) {
-    val out = layout.buildDirectory.dir("rustJniLibs").get().asFile
-    workingDir = rootDir.resolve("../..")
-    environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
-    commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
-        listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android"))
-    inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
-    inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
-    inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
-    inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"))
-    inputs.property("abi", capyAbis)
-    outputs.dir(out)
+androidComponents.onVariants { variant ->
+    val profile = capyRustProfile.getOrElse(if (variant.buildType == "debug") "dev-perf" else "release")
+    val rustBuild = tasks.register<RustBuild>("rustBuild${variant.name.replaceFirstChar { it.uppercase() }}") {
+        jniDirectory.set(layout.buildDirectory.dir("rustJniLibs/${variant.name}"))
+        workingDir = rootDir.resolve("../..")
+        environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
+        commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
+            listOf("--platform", "29", "-o", jniDirectory.get().asFile.absolutePath,
+                "build", "--locked", "--profile", profile, "-p", "layer-android"))
+        inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
+        inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
+        inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
+        inputs.files(fileTree(rootDir.resolve("../../assets/filters")))
+        inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"), rootDir.resolve("../../.cargo/config.toml"))
+        inputs.property("abi", capyAbis)
+        inputs.property("profile", profile)
+        inputs.property("rustVersion", providers.exec { commandLine("rustc", "--version") }.standardOutput.asText)
+    }
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(rustBuild) { it.jniDirectory }
 }
-tasks.named("preBuild") { dependsOn(rustBuild) }
 
 // Adapt the existing brand path to Android's maskable launcher format. No second
 // artwork source or checked-in raster exports.
