@@ -1516,16 +1516,6 @@ function dropHint(e, item) {
     return null;
   } // Invalid/foreign payloads have no accepted core target.
 }
-function draggedItem(e) {
-  if (dragItem) return dragItem;
-  try {
-    const item = JSON.parse(e.dataTransfer.getData("text/layer-dock"));
-    return item.kind === "tile" ? item : null;
-  } catch {
-    /* External drags cannot provide data during protected dragover. */
-  }
-  return null;
-}
 function showDropHint(hint) {
   dropIndicator.hidden = !hint;
   if (hint) {
@@ -1538,28 +1528,6 @@ function dropItem(item, hint) {
   if (hint && item.kind === "tile")
     dispatch({ type: "move_tile", panel: item.panel, tile: item.tile, target: hint.target });
 }
-workspace.addEventListener("dragover", (e) => {
-  if (!e.dataTransfer.types.includes("text/layer-dock")) return;
-  e.preventDefault();
-  const item = draggedItem(e);
-  if (!item) return;
-  const hint = dropHint(e, item);
-  showDropHint(hint);
-  if (hint) {
-    e.dataTransfer.dropEffect = "move";
-  }
-});
-workspace.addEventListener("dragleave", (e) => {
-  if (!workspace.contains(e.relatedTarget)) dropIndicator.hidden = true;
-});
-workspace.addEventListener("drop", (e) => {
-  e.preventDefault();
-  dropIndicator.hidden = true;
-  const item = draggedItem(e);
-  if (!item) return;
-  const hint = dropHint(e, item);
-  dropItem(item, hint);
-});
 try {
   // Compile once and share the immutable module with workspace storage. Its
   // independent instance keeps validation off the UI thread without fetching
