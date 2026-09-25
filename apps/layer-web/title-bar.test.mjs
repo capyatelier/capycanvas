@@ -229,9 +229,8 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
       await click(`[data-header-item="${color.id}"] .header-tool`);await pause(180);
       const background=await evaluate('JSON.stringify(layerApp.state().colors.background)');await click('.content-drawer .color-swap');
       assert.equal(await evaluate('JSON.stringify(layerApp.state().colors.foreground)'),background);
-      await pointer('down',{x:720,y:2});await pointer('up');await settle();assert.ok(await evaluate('!!layerApp.state().customization.drawer'),'Color drawer ignores title-space contact');
-      await click(`[data-header-item="${color.id}"] .header-tool`);await wait('!layerApp.state().customization.drawer');
-      results.push(`${pointerType}: Brush/Sculpt/Eraser/Select/Transform drawer activation and selected feedback; Color swap and explicit close`);
+      await pointer('down',{x:720,y:2});await pointer('up');await wait('!layerApp.state().customization.drawer');
+      results.push(`${pointerType}: Brush/Sculpt/Eraser/Select/Transform drawer activation and selected feedback; Color swap and title-space dismissal`);
     }
     device='mouse';await begin();await drop('#header-component-tools',{x:720,y:25});await wait("document.querySelector('#tool-picker').open");
     await click('#tool-search');await call('Input.insertText',{text:'Zoom In'});await settle();await click('.tool-choice input');await click('#confirm-tools');await click('#header-edit-done');
