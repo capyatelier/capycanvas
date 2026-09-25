@@ -48,7 +48,7 @@ impl SwatchSelector {
             .max_width_chars(9)
             .max_length(7)
             .placeholder_text(placeholder)
-            .halign(gtk::Align::Start)
+            .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)
             .build();
         entry.add_css_class("preference-entry");
@@ -78,7 +78,7 @@ impl SwatchSelector {
                 .column_spacing(10)
                 .row_spacing(10)
                 .max_children_per_line(swatches.len() as u32)
-                .halign(gtk::Align::Start)
+                .halign(gtk::Align::Center)
                 .build()
                 .upcast()
         };

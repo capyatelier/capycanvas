@@ -42,6 +42,11 @@ fn native_accent_preferences_input() {
             .unwrap();
         assert!(near(rgb(&d, &shot, &d.named(&swatch(0)), 5., 16.), system));
         assert!(near(rgb(&d, &shot, &d.named(&swatch(6)), 5., 16.), red));
+        let accent_row = d.named("setting-accent");
+        let first = d.named(&swatch(0)).compute_bounds(&accent_row).unwrap();
+        let last = d.named(&swatch(ACCENTS.len() + 1)).compute_bounds(&accent_row).unwrap();
+        let (left, right) = (first.x(), accent_row.width() as f32 - last.x() - last.width());
+        assert!((left - right).abs() <= 2., "accent circles are centered: {left} {right}");
 
         let (key, default) = match theme {
             Theme::Dark => ("dark-base", 2),
