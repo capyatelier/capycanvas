@@ -2040,7 +2040,10 @@ impl Workspace {
                     );
                     self.workspaces.observe(self, change.regions);
                 }
-                if let Some(update) = publication.filter(|_| change.regions != 0) {
+                if let Some(update) = publication.filter(|update| {
+                    change.regions != 0
+                        && (change.regions != regions::CAMERA || update.drag.is_some())
+                }) {
                     self.publish_workspace(update);
                 }
                 if change.canvas_wake {
@@ -2467,7 +2470,9 @@ impl Workspace {
             self.proof_panel.refresh(self, &state);
         }
         self.documents.refresh(self);
-        self.header.refresh(self, &state);
+        if regions != regions::CAMERA {
+            self.header.refresh(self, &state);
+        }
         self.view_info
             .set_visible(state.workspace.layout.canvas_info.visible);
         self.view_info.set_halign(gtk::Align::End);
