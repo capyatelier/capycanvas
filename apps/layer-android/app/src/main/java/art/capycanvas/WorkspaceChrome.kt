@@ -217,9 +217,10 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             val progress = if (!animate) 1f else ((withFrameNanos { it } - start) / 200_000_000f).coerceIn(0f, 1f)
             geometry = host.awaitQuery(obj("type" to "drawer", "column" to columnId, "heights" to JSONArray(heights.toList()),
                 "progress" to progress, "from" to from, "closing" to (current == null)))
-            if (current != null && geometry?.objectOrNull("connection") != null)
+            if (geometry?.objectOrNull("connection") != null)
                 geometry!!.getJSONObject("placement").let { placement ->
-                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"), placement.getJSONObject("anchor").rect())
+                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"),
+                        placement.getJSONObject("anchor").rect(), model.getJSONObject("anchor"))
                 }
             else dock.drawerSources.remove(id)
             if (id == "tool") { dock.drawer = geometry; dock.refresh() }

@@ -293,8 +293,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
-                  val source = dock.drawerSources.containsKey("tool") && group.getString("active") ==
-                      state.getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.optString("panel")
+                  val source = dock.drawerSources["tool"]?.anchor?.optString("panel") == group.getString("active")
                   val z = if (source) 199 else (if (group.optBoolean("floating")) 180 else 100) + index
                   CompositionLocalProvider(LocalWorkspaceZ provides z) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }

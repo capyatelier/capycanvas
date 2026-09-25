@@ -121,6 +121,17 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:500,y:450,buttons:0});await wait();
   };
   const style=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(n);return{background:s.backgroundColor,selected:n.getAttribute('aria-selected'),facing:n.dataset.drawerFacing,radii:[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomRightRadius,s.borderBottomLeftRadius],tileRadius:parseFloat(s.getPropertyValue('--tile-radius'))*parseFloat(s.getPropertyValue('--corner-fit'))}})()`);
+  const closeJoined=async(selector,id,name)=>{
+    const {facing}=await style(selector),b=await rect(selector),p={x:b.x+b.width/2,y:b.y+b.height/2};
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0});await settle();
+    await call('Input.dispatchMouseEvent',{type:'mousePressed',...p,button:'left',buttons:1,clickCount:1});
+    await call('Input.dispatchMouseEvent',{type:'mouseReleased',...p,button:'left',buttons:0,clickCount:1});
+    const closing=await evaluate(`new Promise(resolve=>{let frames=0;const drawer=document.querySelector('.content-drawer[data-drawer="${id}"]'),step=()=>drawer.inert&&frames++>=2?resolve({open:drawer.isConnected,facing:document.querySelector(${JSON.stringify(selector)}).dataset.drawerFacing}):requestAnimationFrame(step);step()})`);
+    assert.deepEqual(closing,{open:true,facing},`${name}: the opener stays joined while its drawer closes`);
+    await wait();
+    assert.equal((await style(selector)).facing,undefined,`${name}: the closed opener returns to rounded corners`);
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:500,y:450,buttons:0});await wait();
+  };
   const sample=async(data,points)=>evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const scale=i.width/innerWidth;return ${JSON.stringify(points)}.map(([x,y])=>[...g.getImageData(Math.floor(x*scale),Math.floor(y*scale),1,1).data]);})()`);
   const check=async(selector,id,name)=>{
     const s=await style(selector),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[s.facing];
@@ -173,7 +184,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         assert.equal((await style(selector)).selected,'false','Previous sidebar tab is no longer active');
         assert.equal((await style(alternateSelector)).selected,'true','Sidebar selection follows the drawer tab');
         await check(alternateSelector,group,`${theme}-switched-column-${group}`);
-        await click(alternateSelector);assert.equal((await style(alternateSelector)).background,'rgba(0, 0, 0, 0)');
+        await closeJoined(alternateSelector,group,`${theme}-column-${group}`);assert.equal((await style(alternateSelector)).background,'rgba(0, 0, 0, 0)');
         await customize({type:'set_column_collapsed',group,collapsed:false});
         assert.equal(await evaluate(`document.querySelector('.collapsed-column[data-column="${group}"]')`),null,'Shared expand action opens the column');
         await customize({type:'set_column_collapsed',group,collapsed:true});
@@ -185,7 +196,8 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         await click(alternateTool);await check(alternateTool,'tool',`${theme}-toolbar-${edge}-switched`);
         assert.equal((await style(tool)).facing,undefined,'Previous toolbar source returns to rounded corners');
         assert.equal((await style(tool)).background,'rgba(0, 0, 0, 0)','Previous panel opener loses its open grey');
-        await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}-switched-back`);await click(tool);
+        await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}-switched-back`);
+        await closeJoined(tool,'tool',`${theme}-toolbar-${edge}`);
       }
       await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});
       await click('.collapsed-column [data-panel="toolbar"]');

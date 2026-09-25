@@ -60,7 +60,7 @@ private data class PanelMeasurement(val tabWidth: Float = 0f, val content: Panel
 /** Native hit geometry and gesture capture only. Rust owns movement, tear-off,
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
-    data class DrawerSource(val direction: String, val bounds: Rect)
+    data class DrawerSource(val direction: String, val bounds: Rect, val anchor: JSONObject? = null)
     data class Region(val token: Any, val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int,
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
     val regions = mutableMapOf<Any, Region>()
@@ -70,6 +70,8 @@ internal class DockInteraction(val host: CanvasHost) {
     val drawerSources = mutableStateMapOf<String, DrawerSource>()
     var drawerTileRevision by mutableIntStateOf(0)
         private set
+    fun tileDrawerSource(panel: String, tile: Int) =
+        drawerSources["tool"]?.takeIf { it.anchor?.optString("panel") == panel && it.anchor.optInt("tile") == tile }
     private val drawerTiles = mutableMapOf<String, JSONObject>()
     private val columnDrawers = mutableMapOf<Int, JSONObject>()
     val anchors = mutableMapOf<String, Rect>()

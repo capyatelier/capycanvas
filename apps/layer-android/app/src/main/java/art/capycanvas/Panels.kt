@@ -47,10 +47,8 @@ import kotlin.math.roundToInt
                     return@forEachIndexed
                 }
                 val colors = LocalPalette.current
-                val drawerAnchor = host.snapshot?.getJSONObject("state")?.getJSONObject("customization")
-                    ?.objectOrNull("drawer")?.getJSONObject("anchor")
-                val opensDrawer = drawerAnchor?.optString("panel") == panel.getString("id") && drawerAnchor.optInt("tile") == tile.getInt("id")
-                val shape = drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null)
+                val source = dock.tileDrawerSource(panel.getString("id"), tile.getInt("id"))
+                val shape = drawerButtonShape(source?.direction)
                 val activate=pickerClick(host,control,obj("kind" to "tile","panel" to panel.getString("id"),"tile" to tile.getInt("id"))) {
                     host.dispatch(obj("type" to "activate_tile","panel" to panel.getString("id"),"tile" to tile.getInt("id")))
                 }
@@ -58,7 +56,7 @@ import kotlin.math.roundToInt
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(when {
                         tile.optBoolean("selected") -> colors.active
-                        opensDrawer -> colors.panel
+                        source != null -> colors.panel
                         else -> Color.Transparent
                     })
                     .combinedClickable(enabled = tile.getBoolean("enabled"),

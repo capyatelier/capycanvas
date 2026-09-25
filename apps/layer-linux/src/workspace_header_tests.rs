@@ -1147,6 +1147,7 @@ fn native_header_spacing_visual() {
                     .unwrap(),
             );
             d.click(&tool);
+            pump(PANEL_EXPANSION_MS.into());
             assert!(!button.has_css_class("drawer-origin-bottom"));
             d.edit();
             assert_shared_icons(d.w.header.root.upcast_ref());
@@ -1275,6 +1276,7 @@ fn native_drawer_dismissal_input() {
                     state(&d.w).customization.drawer.is_none(),
                     "{theme:?}/{touch}/{outside}"
                 );
+                pump(PANEL_EXPANSION_MS.into());
                 assert!(!color_button.has_css_class("drawer-open"));
                 if outside == "menu" {
                     assert!(

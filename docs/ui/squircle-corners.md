@@ -33,7 +33,8 @@ A drawer's source tile squares only the corners facing its drawer and keeps
 its selected blue; an unselected source turns panel grey. Its container
 flattens facing corners within `SURFACE_RADIUS` of the tile
 (`DrawerPlacement::source_corners`), so a padded container's larger rounding
-never clips the square join.
+never clips the square join. A closing drawer keeps these joins while its body
+and connector shrink; they round again only once the drawer is removed.
 
 ## Scope
 

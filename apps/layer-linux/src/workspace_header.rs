@@ -479,13 +479,7 @@ impl Header {
                     _ => (true, false),
                 };
                 button.set_sensitive(enabled || editing);
-                let drawer = state
-                    .customization
-                    .drawer
-                    .as_ref()
-                    .is_some_and(|d| d.anchor == DrawerAnchor::Header { id: item.entry.id });
                 selected(button, active);
-                customization::drawer_origin(button, drawer.then_some(Edge::Bottom));
                 if let HeaderItem::Tool { control } = item.entry.item
                     && let Some(image) = button.child().and_downcast::<gtk::Image>()
                 {
@@ -1082,6 +1076,18 @@ impl Header {
             .iter()
             .find(|i| i.entry.id == id && i.root.is_child_visible())
             .and_then(|i| i.button.clone())
+    }
+    pub fn mark_drawer_origin(&self, origin: Option<(u32, Edge)>) {
+        for item in self.items.borrow().iter() {
+            if let Some(button) = &item.button {
+                customization::drawer_origin(
+                    button,
+                    origin
+                        .filter(|(id, _)| *id == item.entry.id)
+                        .map(|(_, edge)| edge),
+                );
+            }
+        }
     }
     pub fn drop_at(&self, point: [f32; 2]) -> Option<(HeaderZone, Option<u32>)> {
         if !self.editing.get() {

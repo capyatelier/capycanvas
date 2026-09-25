@@ -2356,10 +2356,18 @@ fn native_tool_drawers() {
                 }
             }
             capture_reference(&w, &format!("{output}/drawer-{id}-{theme:?}.png"), 1.0);
+            let origin = ["drawer-origin-right", "drawer-open"];
+            assert!(origin.iter().all(|class| button.has_css_class(class)), "tile {id}");
             click(&button);
-            pump(240);
             assert!(state(&w).customization.drawer.is_none());
+            assert!(!w.drawer.is_closed(), "tile {id}: drawer is still closing");
+            assert!(
+                origin.iter().all(|class| button.has_css_class(class)),
+                "tile {id}: opener stays joined until the drawer has closed"
+            );
+            pump(240);
             assert!(find_named(w.surface.upcast_ref(), "tool-drawer").is_none());
+            assert!(!origin.iter().any(|class| button.has_css_class(class)), "tile {id}");
         }
     }
     // Two live filter projections share one GPU producer and the same textures.
