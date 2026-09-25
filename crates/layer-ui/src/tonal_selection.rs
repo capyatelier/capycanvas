@@ -68,18 +68,18 @@ impl From<StoredTonalOptions> for TonalOptions {
     }
 }
 impl TonalOptions {
-    pub const NAMES: [&'static str; 8] = [
-        "Shadows",
-        "Mid-shadows",
-        "Midtones",
-        "Mid-highlights",
-        "Highlights",
-        "Deep shadows",
-        "Bright HDR",
-        "Custom",
+    pub const CHOICES: [(&'static str, &'static str); 8] = [
+        ("Shadows · below −5 stops", "tonal-shadows"),
+        ("Mid-shadows · −5 to −3.5 stops", "tonal-mid-shadows"),
+        ("Midtones · −3.5 to −1.5 stops", "tonal-midtones"),
+        ("Mid-highlights · −1.5 to −0.5 stops", "tonal-mid-highlights"),
+        ("Highlights · above −0.5 stops", "tonal-highlights"),
+        ("Deep shadows · below −7 stops", "tonal-deep-shadows"),
+        ("Bright HDR · above +1 stop", "tonal-bright-hdr"),
+        ("Custom · set or sample a range in stops", "tonal-custom"),
     ];
     pub fn validate(&self) -> Result<(), String> {
-        if self.tone >= Self::NAMES.len() {
+        if self.tone >= Self::CHOICES.len() {
             return Err("Unknown tone".into());
         }
         self.softness_control()
@@ -325,7 +325,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Choose Tonal range first".into());
         }
         let TonalAction::Preset { index } = action;
-        if index >= TonalOptions::NAMES.len() {
+        if index >= TonalOptions::CHOICES.len() {
             return Err("Unknown tone".into());
         }
         self.cancel_tonal();
@@ -392,13 +392,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         vec![ToolOption::Choice {
             id: "tonal-tones",
-            label: "Tones",
-            segmented: false,
+            label: "Tones · stops relative to reference white",
+            segmented: true,
             items: [5, 0, 1, 2, 3, 4, 6, 7]
                 .into_iter()
                 .map(|index| ToolSetItem {
-                    label: TonalOptions::NAMES[index],
-                    icon: "tonal-select",
+                    label: TonalOptions::CHOICES[index].0,
+                    icon: TonalOptions::CHOICES[index].1,
                     action: UiAction::Tonal {
                         action: TonalAction::Preset { index },
                     },

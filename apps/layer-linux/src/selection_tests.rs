@@ -641,6 +641,18 @@ fn native_tonal_selection_input() {
     let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
     let tones=d.named("tool-choice-tonal-tones-1").compute_bounds(&panel).unwrap();
     assert!(modes.y()<tones.y(),"selection mode comes first");
+    let bar=d.named("tool-choice-bar-tonal-tones");
+    assert!(bar.height()<=36,"all tones occupy one compact bar");
+    let mut right=0.;
+    for index in 0..8 {
+        let button=d.named(&format!("tool-choice-tonal-tones-{index}"));
+        assert!(button.is::<gtk::ToggleButton>());
+        let bounds=button.compute_bounds(&bar).unwrap();
+        assert_eq!(bounds.y(),0.,"tone choices must not wrap into rows");
+        assert!(bounds.x()>=right && bounds.width()>=24.);
+        right=bounds.x()+bounds.width();
+        assert!(button.tooltip_text().unwrap().contains("stop"));
+    }
     let p=d.point(&d.named("tool-choice-tonal-tones-1"));
     d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));wait_tonal(&d);
     let first=wait_selection(&d);
@@ -661,7 +673,7 @@ fn native_tonal_selection_input() {
         feather.y()+feather.height()-modes.y()
     };
     let preset_height=settings_height(&d);
-    assert!(preset_height<=250.,"preset controls use {preset_height}px");
+    assert!(preset_height<=150.,"preset controls use {preset_height}px");
     eprintln!("Tonal preset: controls {preset_height}px; drawer {}px",d.named("tool-drawer").height());
     assert_shared_icons(&d.named("tool-drawer"));
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-presets.png")).unwrap();
@@ -673,9 +685,9 @@ fn native_tonal_selection_input() {
     d.click_name(&opener);
     assert_eq!(state(&d.w).tool_settings.len(),4,"Custom adds just two bounds");
     assert!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value < -5.);
-    assert!(d.named("tool-choice-tonal-tones-7").downcast_ref::<gtk::CheckButton>().unwrap().is_active());
+    assert!(d.named("tool-choice-tonal-tones-7").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
     let custom_height=settings_height(&d);
-    assert!(custom_height<=320.,"custom controls use {custom_height}px");
+    assert!(custom_height<=210.,"custom controls use {custom_height}px");
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
     d.key(b'q' as u32);wait_tonal(&d);

@@ -1726,8 +1726,8 @@ fn native_tonal_toolbar_input() {
     let mut d=Driver::new("art.capycanvas.TonalToolbar");
     restore(&d,WorkspacePreset::Photographer);
     let options=component_id(&d,ToolbarControl::TOOL_OPTIONS);
-    // Give this component the full lane so both axes exercise its fields;
-    // normal mixed toolbars still retain the complete form through overflow.
+    // A horizontal lane fits both mode and tone bars. The eight-tone group
+    // exceeds the narrow vertical component's budget and uses its overflow.
     let mut workspace=state(&d.w).workspace;
     let removed:Vec<_>=workspace.layout.panel(Panel::Commands).unwrap().tiles().iter()
         .filter(|t|t.control.options_style().is_none()).map(|t|t.id).collect();
@@ -1745,12 +1745,25 @@ fn native_tonal_toolbar_input() {
     };
     for edge in [Edge::Top,Edge::Left] {
         d.w.dispatch(UiAction::MovePanel {panel:Panel::Commands,target:DockTarget::Edge {edge,outer:true},viewport:[1600.,1000.]});pump(180);
-        let choice=d.named("toolbar-choice-tonal-tones");assert!(choice.is_mapped());
-        d.click(&choice);d.key(0xff50);for _ in 0..5 {d.key(0xff54);}d.key(0xff0d);ready(&d);
+        let choice=d.named("toolbar-segments-tonal-tones");
+        if edge==Edge::Top {
+            assert!(choice.is_mapped());
+            d.click_name("toolbar-segment-tonal-tones-5");ready(&d);
+            assert_shared_icons(&choice);
+        } else {
+            assert!(!choice.is_mapped(),"complete tone group uses the narrow bar's overflow");
+            d.click_name(&format!("tile-{options}"));pump(150);
+            let bar=d.named("tool-choice-bar-tonal-tones");
+            assert!(bar.is_mapped() && bar.height()<=36);
+            assert_shared_icons(&bar);
+            d.click_name("tool-choice-tonal-tones-1");ready(&d);
+            d.click_name("tool-choice-tonal-tones-5");ready(&d);
+        }
         assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[5].selected)));
         assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
         let _=crate::snapshot(&d.w);pump(120);
         crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
+        if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}
     }
     d.click_name(&format!("tile-{options}"));pump(150);
     let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());

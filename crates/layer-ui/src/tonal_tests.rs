@@ -174,8 +174,12 @@ mod tonal_checks {
         assert!(s.state.tool_settings.iter().all(|f| f.group.is_empty()));
         assert_eq!(s.state.tool_actions.len(), 4);
         assert!(
-            matches!(s.state.tool_extra.as_slice(),[ToolOption::Choice {id:"tonal-tones",items,..}] if items.len()==8 && items.iter().all(|i|!i.selected))
+            matches!(s.state.tool_extra.as_slice(),[ToolOption::Choice {id:"tonal-tones",segmented:true,items,..}] if items.len()==8 && items.iter().all(|i|!i.selected && i.label.contains("stop")))
         );
+        let ToolOption::Choice {items,..}=&s.state.tool_extra[0] else {unreachable!()};
+        let icons:std::collections::BTreeSet<_>=items.iter().map(|i|i.icon).collect();
+        assert_eq!(icons.len(),8,"each tonal range has its own icon");
+        assert!(icons.iter().all(|icon| ui_catalog().icons.contains(icon)));
         let context = s.state.toolbar_context();
         s.dispatch(UiAction::ToolbarEdit {
             context,

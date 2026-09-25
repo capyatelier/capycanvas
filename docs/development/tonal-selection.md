@@ -3,11 +3,16 @@
 GTK exposes **Tonal range** in the Select family. It writes ordinary byte-coverage
 selections and saved selection masks. The shared Rust model supplies the same
 choice, numeric and selection-mode controls to the GTK panel and Tool Options bar.
-The panel presents the tones as a visible radio group; a narrow bar uses a compact
-native choice and offers the complete radio group in its overflow panel.
-GTK uses compact radio rows without a separate heading, and a reusable numeric
-row with the label, slider and editable value on one line. The Select command
-list also uses compact rows so it does not force the adjacent panel to be taller.
+The panel presents all eight tones in one horizontal segmented radio-button bar.
+Each segment has a distinct band-profile icon, ordered from dark to bright, with
+a range-handle icon for Custom. Tooltips and accessibility labels give the preset
+name and exact full-strength range in stops relative to reference white. Tool
+Options uses the same segmented choice and icons, including in its overflow panel.
+If the complete group cannot fit in a narrow toolbar, that existing overflow
+exposes the horizontal bar without splitting or hiding individual presets.
+GTK uses a reusable numeric row with the label, slider and editable value on one
+line. The Select command list also uses compact rows so it does not force the
+adjacent panel to be taller.
 The shared `tonal-select` icon shows tonal bands inside a dashed selection border.
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
@@ -88,10 +93,11 @@ unavailable, so old shortcuts/layouts cannot activate the removed editor.
 - `cargo test --locked -p layer-render-wgpu tonal_` needs a hardware GPU and checks
   HDR/SDR coverage, composites, transparent samples and percentiles.
 - `tools/performance/workspace-motion.sh gtk --native-test=native_tonal_selection_input`
-  checks radio controls, their ordering, native numeric edits, automatic updates,
+  checks the single-row preset bar, its height, ordering and range tooltips,
+  native numeric edits, automatic updates,
   actual outline/shading pixels, both mask destinations, sampling and undo/redo.
 - `native_tonal_toolbar_input` checks horizontal and vertical Tool Options and
-  the complete radio/numeric form in overflow.
+  the same segmented bar and numeric form in overflow.
 - `native_tonal_selection_pen_input --tablet` checks injected Wayland pen sampling
   in Quick Mask; this is not a physical-device test.
 
