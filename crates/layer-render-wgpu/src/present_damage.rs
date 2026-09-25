@@ -58,6 +58,7 @@ pub(super) struct Retained {
     pub hdr: [f32; 8],
     pub proof: [u32; 4],
     pub cursor: PixelRect,
+    pub cursor_rects: Vec<PixelRect>,
     pub picker: Option<[f32; 4]>,
     pub overviews: Vec<[f32; 24]>,
 }
@@ -70,6 +71,7 @@ impl Default for Retained {
             hdr: [f32::NAN; 8],
             proof: [u32::MAX; 4],
             cursor: PixelRect::EMPTY,
+            cursor_rects: Vec::new(),
             picker: None,
             overviews: Vec::new(),
         }
@@ -92,6 +94,22 @@ pub(super) fn surface_bounds(bounds: [f32; 4], view: ViewState, turns: u32) -> P
         right.ceil().clamp(0., extent[0]) as u32,
         bottom.ceil().clamp(0., extent[1]) as u32,
     )
+}
+
+pub(super) fn cursor_rects(
+    segments: &[layer_render::CursorSegment],
+    view: ViewState,
+    turns: u32,
+    out: &mut Vec<PixelRect>,
+) {
+    out.extend(segments.iter().map(|s| {
+        let margin = 3.5 * s.scale.max(1.);
+        let left = s.from[0].min(s.to[0]) - margin;
+        let top = s.from[1].min(s.to[1]) - margin;
+        let right = s.from[0].max(s.to[0]) + margin;
+        let bottom = s.from[1].max(s.to[1]) + margin;
+        surface_bounds([left, top, right - left, bottom - top], view, turns)
+    }));
 }
 
 pub(super) fn cursor_bounds(
