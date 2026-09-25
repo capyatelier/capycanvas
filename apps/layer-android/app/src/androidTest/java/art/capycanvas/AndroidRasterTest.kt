@@ -200,7 +200,7 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() == 6 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 7 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }

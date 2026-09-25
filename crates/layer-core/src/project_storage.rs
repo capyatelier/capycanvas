@@ -7,11 +7,14 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 mod sources;
 use sources::SourceIndex;
+mod selections;
+use selections::SelectionIndex;
 #[cfg(test)]
 mod native_color;
 
-// Version 6 uses LZ4 blocks for all tiles; earlier versions are unsupported.
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x06\0";
+// Version 7 also stores selection coverage in the indexed LZ4 payload.
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x07\0";
+const LEGACY_MAGIC: &[u8; 12] = b"CAPYRASTER\x06\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +54,8 @@ struct Manifest<D = Document> {
     blobs: Vec<BlobRecord>,
     sources: Vec<SourceRecord>,
     tiled_sources: SourceIndex,
+    #[serde(default)]
+    selections: SelectionIndex,
 }
 
 pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), String> {
@@ -101,6 +106,8 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     }
     let (mut tiled_sources, profiles) =
         SourceIndex::collect(&project.document, &mut blobs, &mut ids, &mut tile_count);
+    let mut document = project.document.clone();
+    let selections = SelectionIndex::collect(&mut document, &mut blobs, &mut ids, &mut tile_count)?;
     if tile_count > limits.tiles {
         return Err("Project has too many raster/source tiles".into());
     }
@@ -140,12 +147,13 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         })
         .collect();
     let manifest = Manifest {
-        document: &project.document,
+        document: &document,
         tile_size: TILE_SIZE,
         rasters,
         blobs: records,
         sources,
         tiled_sources,
+        selections,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
     output.write_all(MAGIC).map_err(io_error)?;
@@ -169,7 +177,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
 pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Project, String> {
     let mut magic = [0; 12];
     input.read_exact(&mut magic).map_err(io_error)?;
-    if &magic != MAGIC {
+    if &magic != MAGIC && &magic != LEGACY_MAGIC {
         return Err("Unsupported Capy Canvas project version".into());
     }
     let mut length = [0; 8];
@@ -186,6 +194,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     }
     let mut manifest: Manifest =
         serde_json::from_slice(&json).map_err(|e| format!("Invalid project metadata: {e}"))?;
+    manifest.selections.check_version(&mut manifest.document, &magic == LEGACY_MAGIC)?;
     validate_document(&manifest.document, limits)?;
     if manifest.tile_size != TILE_SIZE
         || manifest.blobs.len() > limits.tiles
@@ -216,6 +225,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         &mut referenced,
         &mut tile_count,
     )?;
+    manifest.selections.validate(&manifest.document, &manifest.blobs, limits, &mut referenced, &mut tile_count)?;
     let mut asset_ids = BTreeSet::new();
     for source in &manifest.sources {
         if source.offset != offset
@@ -289,6 +299,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     manifest
         .tiled_sources
         .read(&mut input, &tiles, &mut manifest.document)?;
+    manifest.selections.restore(&tiles, &mut manifest.document)?;
     for raster in manifest.rasters {
         let mask = manifest
             .document
@@ -569,7 +580,7 @@ mod tests {
         assert!(Project::read(&invalid[..52 + length], Default::default()).unwrap_err().contains("interpretation differs"));
         let invalid = rewrite_manifest(&bytes, |v| v["tiled_sources"]["images"][0]["depth"] = "U8".into());
         assert!(Project::read(invalid.as_slice(), Default::default()).unwrap_err().contains("interpretation differs"));
-        for version in [0, 1, 2, 3, 4, 5, 7, 255] {
+        for version in [0, 1, 2, 3, 4, 5, 8, 255] {
             let mut obsolete = bytes.clone(); obsolete[10] = version;
             assert!(Project::read(obsolete.as_slice(), Default::default()).unwrap_err().contains("Unsupported"));
         }

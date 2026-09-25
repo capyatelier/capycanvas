@@ -114,7 +114,7 @@ private final class ContactEvent: UIEvent {
                 }
             }
             let bytes = try Data(contentsOf: url)
-            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{6}\0".utf8), "Ruler archive header")
+            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{7}\0".utf8), "Ruler archive header")
             let count = bytes[12..<20].enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
             try require(count <= bytes.count - 52, "Complete ruler archive")
             return JSON(try JSONSerialization.jsonObject(with: bytes.subdata(in: 52..<(52 + Int(count)))))["document"]["rulers"]

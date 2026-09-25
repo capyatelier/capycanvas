@@ -366,7 +366,13 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
         return Err("Invalid editing target".into());
     }
     let mut selection_bytes = 0u64;
-    for selection in doc.selection.iter().chain(doc.layers.iter().filter_map(|l| l.selection.as_ref())) {
+    let mut pixel_owners = BTreeSet::new();
+    for selection in doc.selection.iter().chain(doc.layers.iter().flat_map(|l| {
+        l.selection.iter().chain(l.mask.iter().filter_map(|m| m.initial.as_ref()))
+    })) {
+        selection.validate().map_err(|e| e.to_string())?;
+        if let SelectionShape::Pixels(p) = &selection.shape
+            && !pixel_owners.insert(Arc::as_ptr(p) as usize) { continue; }
         validate_selection(selection, limits)?;
         selection_bytes = selection_bytes.saturating_add(match &selection.shape {
             SelectionShape::Pixels(p) => p.words().len() as u64 * 4,
