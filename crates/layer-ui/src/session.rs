@@ -3206,10 +3206,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 else if self.eyedropper.picking.previous.is_some() { self.resample_picker(); }
                 changed |= BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW;
             }
-            if !self.tonal_active() || revision != self.engine.document().revision || tool_before.1 != self.layer_interaction.tool {
+            if !self.tonal_active() {
                 self.region_tools.cancel();
-                if self.tonal_active() && tool_before.1 != self.layer_interaction.tool {self.queue_tonal(None)?;}
-                else if self.tonal_tools.draft.is_some() {self.cancel_tonal();}
+            } else if tool_before.1 != self.layer_interaction.tool {
+                self.queue_tonal(None)?;
+            } else if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
+                || d.target != self.selection_masks.target().unwrap_or(layer_core::SelectionTarget::Current)) {
+                self.cancel_tonal();
             }
         }
         if !was_filter_drawer && self.filter_drawer_open() {
@@ -3387,7 +3390,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Err(error) = self.selection_brush_pen(event) { self.state.host_error = Some(error); }
             return Ok(());
         }
-        if self.selection_masks.target().is_some()
+        if self.selection_masks.target().is_some() && !self.tonal_active()
             && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
             if event.phase == PenPhase::Down { self.state.host_error = Some("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing".into()); }
             return Ok(());
@@ -4966,9 +4969,11 @@ mod tests {
         region_requests: Vec<layer_render::RegionRequest>,
         region_reply: Option<layer_render::RegionResult>,
         transform: Option<layer_render::TransformPreview>,
+        overlay: Option<layer_render::SelectionOverlay>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}
         fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
         fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
             if self.prepared_color != Some(color) { return Ok(false); }

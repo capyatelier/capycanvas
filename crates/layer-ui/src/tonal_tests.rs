@@ -272,4 +272,93 @@ mod tonal_checks {
         assert!(options.edit("tonal_upper", f32::INFINITY).is_err());
         assert_eq!(options, before);
     }
+    #[test]
+    fn tonal_quick_mask_switch_preserves_preview_and_source() {
+        let mut s = start();
+        let artwork = s.engine.document().active_layer;
+        invoke(&mut s, CommandId::TonalSelect);
+        reply(&mut s, None);
+        assert!(
+            !s.renderer_mut().overlay.unwrap().active,
+            "ordinary selection uses marching ants"
+        );
+        s.dispatch(UiAction::Tonal {
+            action: TonalAction::Source {
+                layer: Some(artwork.0),
+            },
+        })
+        .unwrap();
+        reply(&mut s, None);
+        let preview = s.tonal_tools.preview.clone();
+        for quick in [true, false, true] {
+            invoke(&mut s, CommandId::QuickMask);
+            assert_eq!(s.selection_masks.quick(), quick);
+            assert!(s.tonal_active());
+            assert!(s.tonal_tools.ready,"quick={quick} draft={} docrev={}",s.tonal_tools.draft.as_ref().map_or(999,|d|d.revision),s.engine.document().revision);
+            assert_eq!(s.tonal_tools.preview, preview);
+            assert_eq!(s.tonal_tools.source, Some(artwork));
+            s.frame(2, 2).unwrap();
+            assert_eq!(s.renderer_mut().overlay.unwrap().active, quick);
+        }
+        invoke(&mut s, CommandId::ApplyTonalSelection);
+        assert_eq!(s.engine.document().selection, preview);
+        assert!(s.selection_masks.quick());
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().selection.is_none());
+    }
+    #[test]
+    fn tonal_saved_mask_is_destination_and_never_sampling_source() {
+        let mut s = start();
+        invoke(&mut s, CommandId::SelectAll);
+        let current = s.engine.document().selection.clone();
+        invoke(&mut s, CommandId::NewSelectionLayer);
+        let target = s.selection_masks.target().unwrap();
+        let layer_core::SelectionTarget::Saved(id) = target else {
+            panic!("saved mask")
+        };
+        let before = s.mask_coverage(target).unwrap();
+        invoke(&mut s, CommandId::TonalSelect);
+        assert_eq!(s.selection_masks.target(), Some(target));
+        reply(&mut s, None);
+        let request = s.renderer_mut().region_requests.last().unwrap();
+        let RegionSource::Tonal(t) = &request.source else {
+            panic!("tonal request")
+        };
+        assert_eq!(t.source, RegionSource::Composite);
+        assert_eq!(
+            request.selection.as_ref().unwrap().previous.as_deref(),
+            Some(&before)
+        );
+        let overlay = s.renderer_mut().overlay.unwrap();
+        assert!(overlay.active);
+        assert_eq!(overlay.editing, Some(id));
+        let preview = s.tonal_tools.preview.clone().unwrap();
+        assert_eq!(
+            s.mask_coverage(target).unwrap(),
+            before,
+            "draft leaves history untouched"
+        );
+        invoke(&mut s, CommandId::ApplyTonalSelection);
+        assert_eq!(s.mask_coverage(target).unwrap(), preview);
+        assert_eq!(s.engine.document().selection, current);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.mask_coverage(target).unwrap(), before);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.mask_coverage(target).unwrap(), preview);
+        assert!(
+            s.dispatch(UiAction::Tonal {
+                action: TonalAction::Source { layer: Some(id.0) }
+            })
+            .is_err()
+        );
+        s.dispatch(UiAction::SetToolSetting {
+            id: "tonal_lower".into(),
+            value: -1.,
+        })
+        .unwrap();
+        reply(&mut s, None);
+        invoke(&mut s, CommandId::CancelTonalSelection);
+        assert_eq!(s.mask_coverage(target).unwrap(), preview);
+        assert_eq!(s.engine.document().selection, current);
+    }
 }

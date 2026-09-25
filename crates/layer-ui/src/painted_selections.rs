@@ -236,15 +236,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.tool.selection_tool() == Some(SelectionTool::Brush)
     }
     pub(super) fn sync_selection_overlay(&mut self) {
-        if self.tonal_active() && let Some(selection)=self.tonal_tools.preview.clone() {
-            let display=&self.selection_tools.options.display;
-            self.engine.set_selection_display(Some(Some(selection)));
-            self.engine.backend_mut().set_selection_overlay(Some(SelectionOverlay {active:true,editing:None,color:display.color,protected:false,saved_protected:false}));
-            return;
-        }
         let display = &self.selection_tools.options.display;
         let properties = self.mask_properties();
         let target = self.selection_masks.target();
+        let preview = self.tonal_tools.draft.as_ref()
+            .filter(|d| self.tonal_active() && d.target == target.unwrap_or(SelectionTarget::Current))
+            .and(self.tonal_tools.preview.as_ref());
         let visible = match target {
             Some(SelectionTarget::Saved(id)) => self
                 .engine
@@ -270,16 +267,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         });
         let selection = if let Some(target) = target {
             Some(if display.overlay && active {
-                self.mask_coverage(target).ok()
+                preview.cloned().or_else(|| self.mask_coverage(target).ok())
             } else {
                 None
             })
         } else if !display.outline && !self.selection_brush_active() {
             Some(None)
         } else {
-            None
+            preview.cloned().map(Some)
         };
-        let quick = self.selection_masks.quick().then(|| self.current_selection().unwrap_or_else(Selection::empty));
+        let quick = self.selection_masks.quick().then(|| preview.cloned().or_else(|| self.current_selection()).unwrap_or_else(Selection::empty));
         self.engine.backend_mut().set_quick_mask_thumbnail(quick.as_ref());
         self.engine.set_selection_display(selection);
         self.engine.backend_mut().set_selection_overlay(overlay);

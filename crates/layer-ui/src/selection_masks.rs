@@ -640,7 +640,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let SelectionTarget::Saved(id) = target {
             self.engine.document().saved_selection(id).map_err(error)?;
         }
-        self.cancel_layer_gesture()?;
+        let tonal = self.tonal_active();
+        let keep_draft = tonal && target == SelectionTarget::Current
+            && self.tonal_tools.draft.as_ref().is_some_and(|d| d.target == target);
+        if !keep_draft { self.cancel_layer_gesture()?; }
         if self.selection_masks.target().is_none() {
             self.selection_masks.colors = self.state.colors.clone();
             self.selection_masks
@@ -661,8 +664,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.set_active_layer(id).map_err(error)?;
             self.layer_interaction.selected = std::collections::BTreeSet::from([id]);
         }
-        self.layer_interaction.tool = LayerCanvasTool::Paint;
+        self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {LayerCanvasTool::Paint};
         self.refresh_document();
+        if tonal && !keep_draft { self.queue_tonal(None)?; }
+        self.sync_selection_overlay();
         Ok(())
     }
     pub(super) fn reconcile_selection_mask(&mut self) {
@@ -696,6 +701,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(editing) = self.selection_masks.editing.take() else {
             return Ok(());
         };
+        let tonal = self.tonal_active();
+        let changing_target = tonal && editing.target != SelectionTarget::Current;
+        if changing_target {self.cancel_tonal();}
         self.cancel_selection_contact();
         let doc = self.engine.document();
         let artwork = doc
@@ -708,15 +716,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .find(|l| l.kind == LayerKind::Paint)
                     .map(|l| l.id)
             });
-        if let Some(id) = artwork {
+        if let Some(id) = artwork.filter(|id| *id != self.engine.document().active_layer) {
             self.engine.set_active_layer(id).map_err(error)?;
         }
-        self.engine
-            .apply_edit(Edit::SetMaskTarget(false))
-            .map_err(error)?;
-        self.layer_interaction.tool = editing.tool;
+        if self.engine.document().active_mask {
+            self.engine.apply_edit(Edit::SetMaskTarget(false)).map_err(error)?;
+        }
+        self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {editing.tool};
         self.engine.set_selection_display(None);
         self.refresh_document();
+        if changing_target {self.queue_tonal(None)?;}
+        self.sync_selection_overlay();
         Ok(())
     }
     pub(super) fn selection_mask_command(&mut self, command: CommandId) -> Result<bool, String> {

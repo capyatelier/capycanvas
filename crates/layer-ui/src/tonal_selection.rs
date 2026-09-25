@@ -2,7 +2,7 @@
 //! Hosts present shared fields and forward contacts; sampling never clips location.
 use super::*;
 use layer_core::{
-    Affine, Edit, Point, Selection,
+    Affine, Point, Selection, SelectionTarget,
     tonal::{MAX_BANDS, MAX_STOP, MIN_STOP, TonalBand},
 };
 use layer_render::{RegionRequest, SelectionRefinement, TonalProbe, TonalRequest, TonalSample};
@@ -192,6 +192,7 @@ pub(super) struct TonalDraft {
     pub revision: u64,
     pub baseline: Option<Selection>,
     pub mode: SelectionMode,
+    pub target: SelectionTarget,
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn tonal_active(&self) -> bool {
@@ -255,12 +256,32 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             self.cancel_tonal();
         }
+        let target = self
+            .selection_masks
+            .target()
+            .unwrap_or(SelectionTarget::Current);
+        if self
+            .tonal_tools
+            .draft
+            .as_ref()
+            .is_some_and(|d| d.target != target)
+        {
+            self.cancel_tonal();
+        }
+        let baseline = if target == SelectionTarget::Current {
+            self.current_selection()
+        } else {
+            Some(self.mask_coverage(target)?)
+        };
         let mode = self.effective_selection_mode();
         let doc = self.engine.document();
+        doc.selection_edit(target, baseline.clone().unwrap_or_else(Selection::empty))
+            .map_err(error)?;
         let draft = self.tonal_tools.draft.get_or_insert_with(|| TonalDraft {
             revision: doc.revision,
-            baseline: doc.selection.clone(),
+            baseline,
             mode,
+            target,
         });
         if probe.is_some() {
             draft.mode = mode;
@@ -326,9 +347,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             // the display mask now; waiting for another document frame leaves a
             // ready preview showing its predecessor on an otherwise idle canvas.
             self.sync_selection_overlay();
+            let display = self.engine.display_selection().map(|s| s.into_owned());
             self.engine
                 .backend_mut()
-                .set_selection_outline(self.tonal_tools.preview.as_ref())
+                .set_selection_outline(display.as_ref())
                 .map_err(error)?;
         }
         self.tonal_tools.changed = true;
@@ -348,10 +370,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Wait for the current tonal preview".into());
         }
         let selection = self.tonal_tools.preview.clone();
+        let target = self.tonal_tools.draft.as_ref().map(|d| d.target);
         self.cancel_tonal();
         self.layer_interaction.path.clear();
         if apply {
-            self.layer_edit(Edit::SetSelection(selection))?;
+            self.set_mask_coverage(
+                target.ok_or("No tonal selection to apply")?,
+                selection.unwrap_or_else(Selection::empty),
+            )?;
         }
         self.sync_selection_overlay();
         let display = self.engine.display_selection().map(|s| s.into_owned());

@@ -987,7 +987,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
-                if tool.selection_tool().is_some() { self.return_to_artwork()?; }
+                if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
                 if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
                     return Err("Return to artwork to use this tool".into());
                 }
