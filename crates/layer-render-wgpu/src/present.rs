@@ -1111,17 +1111,16 @@ impl ViewportPresenter {
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
         let preserve_target = !overview_only && self.retained && self.history.valid;
-        let (mut regions, full, content_damage) = if !overview_only {
+        let (mut regions, full, content_damage, moved) = if !overview_only {
             let previous = &self.history;
-            let full = !previous.valid
-                || bindings_changed
-                || camera_changed
+            let content = !previous.valid
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
                 || (previous.selection_revision != renderer.selection_paint_revision
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
+            let full = content || bindings_changed || camera_changed;
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -1199,9 +1198,9 @@ impl ViewportPresenter {
             previous.cursor = cursor;
             previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);
-            (regions, full, content_damage)
+            (regions, full, content_damage, camera_changed && !bindings_changed && !content)
         } else {
-            (vec![crate::pixel_rect::PixelRect::full(extent)], true, None)
+            (vec![crate::pixel_rect::PixelRect::full(extent)], true, None, false)
         };
         let timestamp_writes = if regions.is_empty() && self.retained {
             None
@@ -1220,6 +1219,8 @@ impl ViewportPresenter {
                 encoder,
                 [view.width_px, view.height_px],
                 self.quarter_turns,
+                layer_core::Affine(view.document_to_surface),
+                moved,
                 content_damage.as_deref(),
                 |pass| {
                     pass.set_pipeline(pipeline);

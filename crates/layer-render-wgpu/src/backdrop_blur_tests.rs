@@ -129,7 +129,7 @@ fn navigator_overviews_draw_above_the_glass() {
 }
 
 #[test]
-fn cached_blur_is_reused_until_the_camera_or_a_long_move() {
+fn cached_blur_is_reused_until_a_long_move() {
     let size = [512, 256];
     let r = document(size);
     let surface = texture(&r, size);
@@ -148,13 +148,45 @@ fn cached_blur_is_reused_until_the_camera_or_a_long_move() {
     place(&mut presenter, 300.);
     present(&r, &mut presenter, &surface, 0.);
     assert_eq!(presenter.backdrop_frames(), [2, 2], "a long move recomputes");
-    present(&r, &mut presenter, &surface, 8.);
-    assert_eq!(presenter.backdrop_frames(), [3, 2], "camera changes recompute");
-    present(&r, &mut presenter, &surface, 16.);
-    assert_eq!(presenter.backdrop_frames(), [4, 2], "continued camera motion recomputes");
-    place(&mut presenter, 324.);
-    present(&r, &mut presenter, &surface, 16.);
-    assert_eq!(presenter.backdrop_frames(), [5, 2], "glass blurred during camera motion keeps no slack");
+}
+
+#[test]
+fn camera_motion_moves_the_cached_blur_between_refreshes() {
+    let size = [512, 256];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_backdrop(&r, &[region([200., 16., 64., 64.], [8.; 4])], Default::default(), false);
+    present(&r, &mut presenter, &surface, 0.);
+    for (x, frames) in [(4., [1, 1]), (8., [1, 2]), (12., [1, 3]), (16., [2, 3]), (20., [2, 4])] {
+        present(&r, &mut presenter, &surface, x);
+        assert_eq!(presenter.backdrop_frames(), frames, "camera frames reuse the moved blur and refresh every fourth at {x}");
+    }
+    present(&r, &mut presenter, &surface, 20.);
+    assert_eq!(presenter.backdrop_frames(), [3, 4], "the first still frame recomputes the exact blur");
+    present(&r, &mut presenter, &surface, 20.);
+    assert_eq!(presenter.backdrop_frames(), [3, 5]);
+    present(&r, &mut presenter, &surface, 180.);
+    assert_eq!(presenter.backdrop_frames(), [4, 5], "a pan beyond the cached slack recomputes");
+}
+
+#[test]
+fn strokes_after_a_gesture_keep_the_moved_blur_until_they_end() {
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let glass = [region([140., 32., 96., 64.], [12.; 4])];
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    present(&r, &mut presenter, &surface, 0.);
+    let moved = present(&r, &mut presenter, &surface, 6.);
+    presenter.set_backdrop(&r, &glass, Default::default(), true);
+    let stroke = present(&r, &mut presenter, &surface, 6.);
+    assert_eq!(presenter.backdrop_frames(), [1, 2], "a stroke keeps the moved blur");
+    assert_eq!(stroke, moved);
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    present(&r, &mut presenter, &surface, 6.);
+    assert_eq!(presenter.backdrop_frames(), [2, 2], "the stroke's end recomputes the exact blur");
 }
 
 #[test]
@@ -164,7 +196,7 @@ fn retained_targets_repaint_only_changed_glass() {
     let frame = |blur: &mut BackdropBlur, damage: Option<&[PixelRect]>| {
         let mut encoder = r.device().create_command_encoder(&Default::default());
         let mut repaint = Vec::new();
-        blur.encode(&r, &mut encoder, [512, 256], 0, damage, |_| {}, None, &mut repaint);
+        blur.encode(&r, &mut encoder, [512, 256], 0, layer_core::Affine::IDENTITY, false, damage, |_| {}, None, &mut repaint);
         r.queue().submit([encoder.finish()]);
         repaint
     };
@@ -353,14 +385,14 @@ fn backdrop_blur_cost() {
     eprintln!("adapter: {:?}", r.adapter().get_info());
     let iterations = std::env::var("LAYER_BLUR_BENCH_ITERATIONS").map_or(200, |v| v.parse().unwrap());
     for (scale, extent) in [(1., [1600, 1000]), (2., [3200, 2000]), (1., [3840, 2160]), (2., [5120, 2880])] {
-        let camera = |i: u32| ViewState {
+        let camera = |x: f32| ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            document_to_surface: [0.8, 0.1, -0.1, 0.8, 200. + (i % 2) as f32, 100.],
+            document_to_surface: [0.8, 0.1, -0.1, 0.8, x, 100.],
             background_rgba_linear: [0.5, 0.5, 0.5, 1.],
         };
         r.submit(FramePacket {
-            view: camera(0),
+            view: camera(200.),
             document_extent: [4096, 3072],
             layers: &[Layer::paint(LayerId(1), "bench")],
             dabs: &[],
@@ -377,7 +409,7 @@ fn backdrop_blur_cost() {
         let p95 = |v: &[f64]| v[v.len() * 95 / 100];
         let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
         let present = measure(&r, iterations, |encoder, i| {
-            presenter.encode(&r, encoder, &target, camera(i), surround).unwrap();
+            presenter.encode(&r, encoder, &target, camera(200. + (i % 2) as f32), surround).unwrap();
         });
         let regions = layout(scale, extent);
         let area: f32 = regions.iter().map(|r| r.bounds[2] * r.bounds[3]).sum();
@@ -387,15 +419,18 @@ fn backdrop_blur_cost() {
             let mut cpu = Vec::new();
             let moving = measure(&r, iterations, |encoder, i| {
                 let start = std::time::Instant::now();
-                presenter.encode(&r, encoder, &target, camera(i), surround).unwrap();
+                presenter.encode(&r, encoder, &target, camera(200. + 400. * (i % 2) as f32), surround).unwrap();
                 cpu.push(start.elapsed().as_secs_f64() * 1000.);
             });
             cpu.sort_by(f64::total_cmp);
+            let moved = measure(&r, iterations, |encoder, i| {
+                presenter.encode(&r, encoder, &target, camera(200. + i as f32), surround).unwrap();
+            });
             let cached = measure(&r, iterations, |encoder, _| {
-                presenter.encode(&r, encoder, &target, camera(0), surround).unwrap();
+                presenter.encode(&r, encoder, &target, camera(200.), surround).unwrap();
             });
             eprintln!(
-                "{extent:?} @{scale}x glass {:.0}% of surface, reach {}px, levels {} offset {}: viewport median {:.4} ms p95 {:.4}; with glass, moving camera median {:.4} ms p95 {:.4} (CPU encode {:.4} ms), cached median {:.4} ms p95 {:.4}",
+                "{extent:?} @{scale}x glass {:.0}% of surface, reach {}px, levels {} offset {}: viewport median {:.4} ms p95 {:.4}; with glass, recomputing camera median {:.4} ms p95 {:.4} (CPU encode {:.4} ms), moved blur median {:.4} ms, cached median {:.4} ms p95 {:.4}",
                 100. * area / (extent[0] * extent[1]) as f32,
                 style.reach(),
                 style.levels,
@@ -405,9 +440,78 @@ fn backdrop_blur_cost() {
                 median(&moving),
                 p95(&moving),
                 median(&cpu),
+                median(&moved),
                 median(&cached),
                 p95(&cached),
             );
+        }
+    }
+}
+
+#[test]
+fn reprojected_glass_tracks_the_camera() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut dabs = Vec::new();
+    let mut seed = 7u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    for _ in 0..200 {
+        let mut dab = crate::layer_tests::dab([next(), next(), next(), 1.]);
+        dab.center = layer_core::Point { x: next() * 512., y: next() * 256. };
+        dab.radii = [3. + next() * 20.; 2];
+        dabs.push(dab);
+    }
+    let mut batch = crate::layer_tests::batch(1);
+    batch.dab_count = dabs.len() as u32;
+    batch.damage = layer_core::Rect { min: layer_core::Point { x: 0., y: 0. }, max: layer_core::Point { x: 512., y: 256. } };
+    let view = |matrix: [f32; 6]| ViewState { width_px: 512, height_px: 256, document_to_surface: matrix, background_rgba_linear: [0.; 4] };
+    r.submit(FramePacket {
+        view: view([1., 0., 0., 1., 0., 0.]),
+        document_extent: [512, 256],
+        layers: &[Layer::paint(LayerId(1), "reprojection")],
+        dabs: &dabs,
+        dab_batches: &[batch],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    let glass = [region([40., 40., 160., 176.], [12.; 4]), region([320., 30., 150., 190.], [12.; 4])];
+    for turns in 0..4 {
+        let size = if turns % 2 == 0 { [512, 256] } else { [256, 512] };
+        let surface = texture(&r, size);
+        let present = |presenter: &mut ViewportPresenter, matrix| {
+            presenter.present(&r, &surface.create_view(&Default::default()), view(matrix), [0.2, 0.2, 0.2, 1.]).unwrap();
+            crate::layer_tests::page_bytes(&r, &surface)
+        };
+        for (motion, moved) in [("pan", [1.2, 0., 0., 1.2, -22.7, -31.4]), ("zoom", [1.236, 0., 0., 1.236, -47.7, -23.8])] {
+            let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+            presenter.set_surface_rotation(turns);
+            presenter.set_backdrop(&r, &glass, BackdropBlurStyle::default(), false);
+            present(&mut presenter, [1.2, 0., 0., 1.2, -40., -20.]);
+            present(&mut presenter, [1.2, 0., 0., 1.2, -41., -20.]);
+            let reused = present(&mut presenter, moved);
+            assert_eq!(presenter.backdrop_frames(), [1, 2], "turns {turns} {motion}");
+            let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
+            fresh.set_surface_rotation(turns);
+            fresh.set_backdrop(&r, &glass, BackdropBlurStyle::default(), false);
+            let full = present(&mut fresh, moved);
+            let mut diffs = Vec::new();
+            for g in &glass {
+                let [x, y, w, h] = g.rotated(turns, [512., 256.]).bounds.map(|v| v as u32);
+                for py in y + 12..y + h - 12 {
+                    for px in x + 12..x + w - 12 {
+                        let i = ((py * size[0] + px) * 4) as usize;
+                        diffs.push((0..3).map(|c| reused[i + c].abs_diff(full[i + c])).max().unwrap());
+                    }
+                }
+            }
+            let mean = diffs.iter().map(|d| f64::from(*d)).sum::<f64>() / diffs.len() as f64;
+            let worst = diffs.iter().max().unwrap();
+            assert!(mean < 3. && *worst < 20, "turns {turns} {motion}: moved blur differs from a fresh blur by {mean:.2} on average, {worst} at worst");
         }
     }
 }

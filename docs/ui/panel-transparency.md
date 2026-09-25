@@ -149,28 +149,33 @@ look slightly darker at High than the opaque theme.
 The blur is cached. Its input is the composite repaint plus selection paint;
 cursor, picker and overviews do not affect it. When that damage lies within the
 blur reach of cached glass, only the glass within reach of the damage is
-recomputed, from its own reach of artwork. New regions, regions that move beyond
-a 96-pixel slack, and camera changes recompute whole regions. Glass recomputed
-on consecutive camera frames keeps no slack, since the next frame recomputes it
-anyway. While a brush
-stroke is in progress (`has_active_stroke`), artwork damage leaves the cached
-blur in place; the first frame after the stroke refreshes the glass it
-reached, so pen latency never includes a glass refresh. Retained targets, such
-as Android's front buffer, repaint only glass that changed. Idle views present
-nothing.
+recomputed, from its own reach of artwork. New regions and regions that move
+beyond a 96-pixel slack recompute whole regions. While only the camera moves,
+the glass samples its cached blur through the camera change, so it moves and
+zooms with the canvas, and recomputes it every fourth frame or as soon as a
+panel would sample beyond it; blur recomputed mid-gesture keeps a 48-pixel slack
+for that. The first still frame recomputes the exact blur. A new document,
+proofing, HDR or a camera change that rebinds the display cache recomputes at
+once. While a brush stroke is in progress (`has_active_stroke`), artwork damage
+leaves the cached blur in place; the first frame after the stroke refreshes the
+glass it reached, so pen latency never includes a glass refresh. A stroke that
+begins just after a gesture keeps the moved blur until it ends. Retained
+targets, such as Android's front buffer, repaint only glass that changed. Idle
+views present nothing.
 
 GPU time per presented frame on an RTX PRO 6000 (`backdrop_blur_cost`, the
 default Paint layout's glass):
 
-| Surface (glass share) | Viewport only | Cached glass | Moving camera, Low / High |
-| --- | --- | --- | --- |
-| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.026 / 0.031 ms |
-| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.048 / 0.054 ms |
-| 3840×2160 @1× (15%) | 0.044 ms | 0.044 ms | 0.055 / 0.060 ms |
-| 5120×2880 @2× (23%) | 0.070 ms | 0.069 ms | 0.081 / 0.089 ms |
+| Surface (glass share) | Viewport only | Cached glass | Recomputed, Low / High | Moved, Low |
+| --- | --- | --- | --- | --- |
+| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.026 / 0.031 ms | 0.017 ms |
+| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.048 / 0.054 ms | 0.036 ms |
+| 3840×2160 @1× (15%) | 0.044 ms | 0.044 ms | 0.056 / 0.062 ms | 0.046 ms |
+| 5120×2880 @2× (23%) | 0.071 ms | 0.070 ms | 0.084 / 0.090 ms | 0.071 ms |
 
-Cached glass costs no more than the plain viewport, because its interiors
-replace viewport pixels. A moving camera recomputes every frame.
+Cached and moved glass cost no more than the plain viewport, because their
+interiors replace viewport pixels. A moving camera recomputes the blur on every
+fourth frame.
 
 The Huion tablet (Mali-G57 MC2, 2400×1600) sets the tight budget. For
 navigation, two injected fingers pan or pinch a 1024 px document at 205% for
@@ -179,14 +184,18 @@ frame's newest input to its GPU completion (p50):
 
 | Motion | Off | Low | Medium | High |
 | --- | --- | --- | --- | --- |
-| Pan, half-resolution blur | 25.7 ms | 31.1 ms | 30.7 ms | 32.2 ms |
-| Pan, quarter-resolution blur | 25.8 ms | 27.4 ms | 27.1 ms | 28.1 ms |
-| Pinch, half-resolution blur | 29.5 ms | 41.5 ms | 40.2 ms | 42.5 ms |
-| Pinch, quarter-resolution blur | 29.4 ms | 36.8 ms | 37.5 ms | 37.9 ms |
+| Pan, half-resolution blur every frame | 25.7 ms | 31.1 ms | 30.7 ms | 32.2 ms |
+| Pan, quarter-resolution blur every frame | 25.8 ms | 27.4 ms | 27.1 ms | 28.1 ms |
+| Pan, moved between refreshes | 25.6 ms | 25.7 ms | 25.8 ms | 26.0 ms |
+| Pinch, half-resolution blur every frame | 29.5 ms | 41.5 ms | 40.2 ms | 42.5 ms |
+| Pinch, quarter-resolution blur every frame | 29.4 ms | 36.8 ms | 37.5 ms | 37.9 ms |
+| Pinch, moved between refreshes | 29.5 ms | 30.8 ms | 31.4 ms | 31.5 ms |
 
-Panning at Low now presents 88 frames/s against 89 at Off (76 before). A pinch
-already keeps this GPU nearly busy at Off while display mips follow the zoom,
-so even the smaller recompute makes it GPU-bound and queues a frame.
+A pinch already keeps this GPU nearly busy at Off while display mips follow the
+zoom, so recomputing the blur on every frame made it GPU-bound and queued a
+frame even at quarter resolution. Moving the cached blur between refreshes
+recomputes it on about a quarter of the frames; pan and pinch then present 89
+and 72 frames/s at Low, as at Off.
 
 The tablet's pen measurements compare the same build at each level, drawing an
 18 px round brush on a 1024 px document with replayed OS pen input.
@@ -238,6 +247,10 @@ strokes held the glass:
   host.
 - Glass over artwork that a stroke is still painting shows the new ink only
   when the stroke ends.
+- During a pan or pinch the blur is recomputed every fourth frame and moved
+  with the canvas in between, so artwork sliding beneath a panel, and the blur
+  size while zooming, trail by up to three frames. At the window edges the
+  moved blur repeats its outermost pixels for up to 48 pixels.
 - The blur reach is in device pixels, so on a 2× display it covers half the
   distance it does at 1×. Scaling it to logical pixels roughly doubled the
   refreshed area on the tablet and added pen latency, so it was not adopted.

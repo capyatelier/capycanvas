@@ -1,4 +1,5 @@
 use crate::pixel_rect::PixelRect;
+use layer_core::{Affine, Point};
 #[cfg(test)]
 #[path = "backdrop_blur_tests.rs"]
 mod tests;
@@ -78,8 +79,20 @@ fn merge(rects: &mut Vec<PixelRect>, mut rect: PixelRect) {
 }
 
 const PASS_STRIDE: u64 = 256;
-const PASS_SIZE: u64 = 32;
+const PASS_SIZE: u64 = 56;
+const REPROJECTION_OFFSET: u64 = 32;
 const SLACK: u32 = 96;
+const MOTION_SLACK: u32 = 48;
+const REFRESH_FRAMES: u32 = 4;
+
+fn surface_rotation(turns: u32, [width, height]: [f32; 2]) -> Affine {
+    match turns {
+        1 => Affine([0., 1., -1., 0., height, 0.]),
+        2 => Affine([-1., 0., 0., -1., width, height]),
+        3 => Affine([0., -1., 1., 0., 0., width]),
+        _ => Affine::IDENTITY,
+    }
+}
 
 pub(crate) struct BackdropBlur {
     style: BackdropBlurStyle,
@@ -102,6 +115,9 @@ pub(crate) struct BackdropBlur {
     hold: bool,
     held: Vec<PixelRect>,
     moving: bool,
+    document: Option<Affine>,
+    reprojection: Affine,
+    age: u32,
     edges: u32,
     region_buffer: Option<wgpu::Buffer>,
     uploaded: bool,
@@ -229,6 +245,9 @@ impl BackdropBlur {
             hold: false,
             held: Vec::new(),
             moving: false,
+            document: None,
+            reprojection: Affine::IDENTITY,
+            age: 0,
             edges: 0,
             region_buffer: None,
             uploaded: false,
@@ -380,6 +399,7 @@ impl BackdropBlur {
         }
         let mut data = vec![0u8; PASS_STRIDE as usize * (2 * levels as usize - 3)];
         let quarter = self.level_size(2);
+        let reprojection = self.reprojection.0;
         let mut write = |index: u32, target: [u32; 2], source: [u32; 2]| {
             let values = [
                 1. / target[0] as f32,
@@ -390,8 +410,10 @@ impl BackdropBlur {
                 0.,
                 0.25 / quarter[0] as f32,
                 0.25 / quarter[1] as f32,
-            ];
-            let bytes: Vec<u8> = values.iter().flat_map(|v: &f32| v.to_ne_bytes()).collect();
+            ]
+            .into_iter()
+            .chain(reprojection);
+            let bytes: Vec<u8> = values.flat_map(f32::to_ne_bytes).collect();
             data[index as usize * PASS_STRIDE as usize..][..bytes.len()].copy_from_slice(&bytes);
         };
         write(0, extent, quarter);
@@ -458,6 +480,8 @@ impl BackdropBlur {
         encoder: &mut wgpu::CommandEncoder,
         logical: [u32; 2],
         turns: u32,
+        camera: Affine,
+        moved: bool,
         damage: Option<&[PixelRect]>,
         viewport: impl Fn(&mut wgpu::RenderPass),
         timestamps: Option<wgpu::RenderPassTimestampWrites>,
@@ -478,6 +502,7 @@ impl BackdropBlur {
             self.valid.clear();
             self.held.clear();
             self.moving = false;
+            self.document = None;
             self.extent = [0; 2];
             return false;
         }
@@ -489,6 +514,19 @@ impl BackdropBlur {
             self.drawn.clone_from(&bounds);
         }
         let reach = self.style.reach();
+        let document = camera.then(surface_rotation(turns, size));
+        let settled = damage.is_some() && self.document.is_some_and(|d| d != document);
+        if (damage.is_none() && moved && self.reproject(renderer.queue(), document, &bounds)) || (settled && self.hold) {
+            self.frames[1] += 1;
+            return false;
+        }
+        let damage = if settled { None } else { damage };
+        self.age = 0;
+        self.document = Some(document);
+        if self.reprojection != Affine::IDENTITY {
+            self.reprojection = Affine::IDENTITY;
+            self.write_reprojection(renderer.queue());
+        }
         let damage = match damage {
             None => {
                 self.held.clear();
@@ -506,7 +544,7 @@ impl BackdropBlur {
                 Some(all)
             }
         };
-        let slack = if damage.is_none() && self.moving { 0 } else { SLACK };
+        let slack = if damage.is_none() && self.moving && !settled { MOTION_SLACK } else { SLACK };
         self.moving = damage.is_none();
         let old = if damage.is_some() { std::mem::take(&mut self.valid) } else { Vec::new() };
         let cached_before = |b: &PixelRect| old.iter().any(|v| contains(*v, *b));
@@ -549,6 +587,41 @@ impl BackdropBlur {
             repaint.extend(changed.iter().map(|c| c.intersect(b)).filter(|r| !r.is_empty()));
         }
         timestamps.is_some()
+    }
+
+    fn write_reprojection(&self, queue: &wgpu::Queue) {
+        let bytes: Vec<u8> = self.reprojection.0.into_iter().flat_map(f32::to_ne_bytes).collect();
+        queue.write_buffer(&self.uniforms, REPROJECTION_OFFSET, &bytes);
+    }
+
+    fn reproject(&mut self, queue: &wgpu::Queue, document: Affine, bounds: &[PixelRect]) -> bool {
+        let Some(relative) = self
+            .document
+            .filter(|_| self.age + 1 < REFRESH_FRAMES)
+            .and_then(|cached| Some(document.inverse()?.then(cached)))
+        else {
+            return false;
+        };
+        let beyond = MOTION_SLACK as f32;
+        let [width, height] = self.extent.map(|v| v as f32);
+        let covered = bounds.iter().all(|b| {
+            let corners = [[b.min_x(), b.min_y()], [b.max_x(), b.min_y()], [b.min_x(), b.max_y()], [b.max_x(), b.max_y()]]
+                .map(|[x, y]| relative.map(Point { x: x as f32, y: y as f32 }));
+            let (x0, x1) = corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+            let (y0, y1) = corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+            let low = |edge: u32| if edge == 0 { -beyond } else { edge as f32 };
+            let high = |edge: u32, end: f32| if edge as f32 == end { end + beyond } else { edge as f32 };
+            self.valid.iter().any(|v| {
+                x0 >= low(v.min_x()) && y0 >= low(v.min_y()) && x1 <= high(v.max_x(), width) && y1 <= high(v.max_y(), height)
+            })
+        });
+        if !covered {
+            return false;
+        }
+        self.age += 1;
+        self.reprojection = relative;
+        self.write_reprojection(queue);
+        true
     }
 
     fn compute(
