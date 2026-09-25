@@ -127,7 +127,7 @@ mod tests {
         let input = CString::new(request).unwrap();
         let reply = unsafe { capy_document_tab_slide(input.as_ptr()) };
         let value = serde_json::from_str(unsafe { CStr::from_ptr(reply) }.to_str().unwrap()).unwrap();
-        unsafe { crate::capy_string_free(reply) };
+        drop(unsafe { CString::from_raw(reply) });
         value
     }
     #[test]
