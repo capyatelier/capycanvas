@@ -8,7 +8,16 @@ export async function checkParity({ call, evaluate, settle }) {
   const dir = "artifacts/ui/parity";
   await mkdir(dir, { recursive: true });
   const native = JSON.parse(await readFile(`${dir}/gtk-dark.json`, "utf8"));
+  const tabs = (id, panel) => ({ kind: "tabs", id, panels: [panel], active: panel, tab_style: "automatic" });
+  const fixture = { version: 1, zen_mode: false, layout: { next_id: 9, bands: [
+    { id: 3, edge: "left", extent: 232, root: { kind: "split", id: 4, axis: "vertical", fraction: .68, first: tabs(5, "brushes"), second: tabs(6, "sizes") } },
+    { id: 7, edge: "right", extent: 232, root: { kind: "tabs", id: 8, panels: ["layers", "adjustments", "properties"], active: "layers", tab_style: "automatic" } },
+    { id: 1, edge: "top", extent: 42, root: tabs(2, "toolbar") },
+  ] } };
+  const restoreFixture = async (zen_mode = false) => { await evaluate(`layerApp.dispatch({type:'restore_workspace',workspace:${JSON.stringify({ ...fixture, zen_mode })}})`); await settle(); };
+  await restoreFixture();
   const catalog = await evaluate("layerApp.app.catalog()");
+  const settings = await evaluate("layerApp.state().settings");
   assert.deepEqual(
     await evaluate(`(() => {
     const n=document.querySelector('#size-number .number-entry');
@@ -20,19 +29,16 @@ export async function checkParity({ call, evaluate, settle }) {
     await evaluate(
       `[...document.querySelectorAll('.toolbar-controls > .tile-button svg')].map(s=>s.dataset.asset)`,
     ),
-    ["brush", "eraser", "lasso", "move", "undo", "redo", "color", "opacity"],
+    ["brush", "eraser", "lasso", "move", "undo", "redo", "colors", "opacity"],
+  );
+  const menus = await evaluate("layerApp.app.editor_models(0,0).application_menus.map(m=>m.id)");
+  assert.deepEqual(
+    await evaluate("[...document.querySelectorAll('.header-menu[data-menu]')].map(m=>m.dataset.menu)"),
+    menus,
   );
   assert.deepEqual(
-    await evaluate(
-      "[...document.querySelectorAll('.header-menu')].filter(m=>!m.querySelector('#workspace-menu')).map(m=>[...m.querySelectorAll('button')].map(b=>b.dataset.command))",
-    ),
-    catalog.menus.filter(m=>m.sections.length).map(m => m.sections.flat()),
-  );
-  assert.deepEqual(
-    await evaluate(
-      "[...document.querySelectorAll('.brush-list h3')].map(n=>n.textContent)",
-    ),
-    catalog.brush_categories.map((c) => c.label),
+    await evaluate("[...document.querySelectorAll('.brushes-control .tool-choice-button')].map(n=>n.dataset.toolChoice)"),
+    await evaluate("(({groups,subtools})=>[...groups,...subtools].map(i=>i.label))(layerApp.state().tool_panels.brushes ?? layerApp.state().tool_set)"),
   );
   for (const [id, spec] of [
     ["size-number", catalog.brush_size],
@@ -105,11 +111,11 @@ export async function checkParity({ call, evaluate, settle }) {
   await action({ type: "invoke", command: "fit_canvas" });
   const metrics = {};
   for (const theme of ["dark", "light"]) {
-    await action({ type: "invoke", command: "brush" });
+    await action({ type: "invoke", command: "pen" });
     await action({ type: "system_theme_changed", theme });
     await capture(theme);
     metrics[theme] = await evaluate(`(() => {
-      const selectors = ['#document-title','#zen-button','.header-menu > summary','.brush-list h3','.brush-choice','.size-controls','.size-controls .number-control','.size-button','.layer-row','.layer-row > button','.layer-name','.layer-thumbnail:not([hidden])','#layer-opacity','#view-info','.dock-group','.dock-tab'];
+      const selectors = ['#document-title','#zen-button','.header-menu > summary','.tool-groups .tool-choice-button','.tool-subtools .tool-choice-button[data-brush]','.size-controls','.size-controls .number-control','.size-button','.layer-row','.layer-row > button','.layer-name','.layer-thumbnail:not([hidden])','#layer-opacity','#view-info','.dock-group','.dock-tab'];
       return Object.fromEntries(selectors.map(s=>[s,[...document.querySelectorAll(s)].map(n=>{const b=n.getBoundingClientRect(),c=getComputedStyle(n);return {bounds:[b.x,b.y,b.width,b.height],font:c.font,color:c.color,background:c.backgroundColor}})]));
     })()`);
     await click('[data-command="settings"]');
@@ -138,25 +144,21 @@ export async function checkParity({ call, evaluate, settle }) {
     n.children.forEach(flatten);
   };
   flatten(native);
-  const nativeHeader = nodes.filter((n) => n.css.includes("chrome-control") && n.bounds[0] < 600)
+  const nativeHeader = nodes.filter((n) => (n.css.includes("chrome-control") || n.css.includes("capy-button")) && n.bounds[0] < 600)
     .sort((a, b) => a.bounds[0] - b.bounds[0]);
   const webHeader = [
     ...metrics.dark["#zen-button"],
-    ...metrics.dark[".header-menu > summary"],
+    ...metrics.dark[".header-menu > summary"].filter((n) => n.bounds[2] > 0),
   ];
   for (const header of [nativeHeader, webHeader]) {
-    assert.equal(header.length, 1 + catalog.menus.length);
+    assert.equal(header.length, 1 + menus.length);
     assert.deepEqual(header[0].bounds, [6, 6, 36, 36]);
-    header.forEach((n, i) => {
-      assert.equal(n.bounds[1], 6);
-      assert.equal(n.bounds[3], 36);
-      if (i)
-        assert.equal(
-          n.bounds[0] - header[i - 1].bounds[0] - header[i - 1].bounds[2],
-          6,
-        );
+    header.slice(1).forEach((n, i) => {
+      assert.deepEqual([n.bounds[1], n.bounds[3]], [11, 26]);
+      assert.ok(Math.abs(n.bounds[0] - header[i].bounds[0] - header[i].bounds[2] - (i ? 2 : 10)) <= 1);
     });
   }
+  webHeader.forEach((n, i) => assert.ok(Math.abs(n.bounds[2] - nativeHeader[i].bounds[2]) <= 1));
   const nativePanels = nodes.filter((n) => n.css.includes("dock-panel"));
   const leftPanel = nativePanels[0].bounds;
   const rightPanel = nativePanels.find((n) => n.bounds[0] > 900).bounds;
@@ -192,13 +194,11 @@ export async function checkParity({ call, evaluate, settle }) {
   nativeFonts(native);
   const webFonts = await evaluate(`(() => {
     const target=getComputedStyle(document.querySelector('.size-button')).fontSize;
-    return {target, different:[...document.querySelectorAll('.panel button,.panel input,.panel label,.panel span,#view-info')].filter(n=>getComputedStyle(n).fontSize!==target).map(n=>n.className||n.id), tab:getComputedStyle(document.querySelector('.dock-tab')).fontSize, headings:[...document.querySelectorAll('.brush-list h3')].map(n=>getComputedStyle(n).fontSize)};
+    return {target, different:[...document.querySelectorAll('.panel button,.panel input,.panel label,.panel span,#view-info')].filter(n=>getComputedStyle(n).fontSize!==target).map(n=>n.className||n.id), tab:getComputedStyle(document.querySelector('.dock-tab')).fontSize};
   })()`);
   assert.ok(Math.abs(parseFloat(webFonts.target) - 11 * 4 / 3) < .02);
   assert.deepEqual(webFonts.different, []);
   assert.equal(webFonts.tab, webFonts.target);
-  assert.ok(webFonts.headings.length > 0);
-  assert.ok(webFonts.headings.every((font) => font === webFonts.tab));
   const toolSizes = await evaluate(`(() => {
     const size=n=>{const b=n.getBoundingClientRect();return [b.width,b.height]};
     return {tiles:[...document.querySelectorAll('.toolbar-controls > .tile-button')].map(size), icons:[...document.querySelectorAll('.toolbar-controls > .tile-button svg')].map(size), columns:[...document.querySelectorAll('.layer-row > button')].map(size)};
@@ -211,8 +211,8 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(nativeColumns.length, toolSizes.columns.length);
   for (const n of nativeColumns) assert.deepEqual(n.bounds.slice(2), [24, 36]);
   const comparisons = [
-    [".brush-list h3", (n) => n.css.includes("heading")],
-    [".brush-choice", (n) => n.css.includes("brush-choice")],
+    [".tool-groups .tool-choice-button", (n) => n.css.includes("tool-group")],
+    [".tool-subtools .tool-choice-button[data-brush]", (n) => n.css.includes("brush-choice")],
     [".size-controls .number-control", (n) => n.name === "brush-size"],
     [".size-button", (n) => n.css.includes("size-preset")],
     [".layer-row", (n) => n.css.includes("layer-row")],
@@ -281,8 +281,10 @@ export async function checkParity({ call, evaluate, settle }) {
     );
     await call("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: [] });
   }
-  // Both renderers encode these review captures as sRGB. Compare real shadow
-  // pixels as well as CSS parameters; GTK/Skia blur rounding can differ slightly.
+  // Compare real shadow pixels as well as CSS parameters; GTK/Skia blur
+  // rounding can differ slightly. Chrome tags captures with its output ICC
+  // profile, so decode both hosts' PNGs in the page to compare sRGB values.
+  // GTK's render-node capture extends evenly past the window for panel shadows.
   const toolbar = nodes.find((n) => n.css.includes("tool-strip")).bounds;
   const points = [
     [500, 100],
@@ -293,7 +295,7 @@ export async function checkParity({ call, evaluate, settle }) {
   const pixels = async (name, samples = points) => {
     const png = await readFile(`${dir}/${name}.png`);
     return evaluate(
-      `(async () => {const image=new Image();image.src='data:image/png;base64,${png.toString("base64")}';await image.decode();const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return ${JSON.stringify(samples)}.map(([x,y])=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3));})()`,
+      `(async () => {const image=new Image();image.src='data:image/png;base64,${png.toString("base64")}';await image.decode();const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const dx=(image.width-1200)/2,dy=(image.height-900)/2;return ${JSON.stringify(samples)}.map(([x,y])=>Array.from(ctx.getImageData(x+dx,y+dy,1,1).data).slice(0,3));})()`,
     );
   };
   const shadow = {};
@@ -321,17 +323,19 @@ export async function checkParity({ call, evaluate, settle }) {
       `${theme} panel/shadow pixels differ by ${maxDelta}/255`,
     );
     // GTK symbolic recoloring applies per SVG shape: classes only on a
-    // parent <g> incorrectly filled these outlines. A hollow center is mostly
-    // background even with GTK/Skia's different antialiasing of this tiny hole.
+    // parent <g> incorrectly filled outlines. The eye keeps a clear iris
+    // around a filled pupil despite GTK/Skia's different antialiasing.
     const eyes = nativeColumns.filter((_, i) => i % 2 === 0).flatMap(({ bounds: [x, y, w, h] }) =>
-      [[x - 3, y + h / 2], [x + w / 2, y + h / 2]]);
+      [[x - 3, y + h / 2], [x + w / 2 + 2, y + h / 2], [x + w / 2, y + h / 2]]);
     const foreground = metrics[theme][".layer-row > button"][0].color.match(/[\d.]+/g).slice(0, 3).map(Number);
     const distance = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
     for (const host of ["gtk", "web"]) {
       const samples = await pixels(`${host}-${theme}`, eyes);
-      for (let i = 0; i < samples.length; i += 2)
-        assert.ok(distance(samples[i], samples[i + 1]) < .5 * distance(samples[i], foreground),
-          `${host} ${theme} eye ${i / 2} must have a hollow center`);
+      for (let i = 0; i < samples.length; i += 3) {
+        const [background, iris, pupil] = samples.slice(i, i + 3), contrast = distance(background, foreground);
+        assert.ok(distance(background, iris) < .5 * contrast, `${host} ${theme} eye ${i / 3} must have a clear iris`);
+        assert.ok(distance(pupil, foreground) < .5 * contrast, `${host} ${theme} eye ${i / 3} must have a filled pupil`);
+      }
     }
   }
 
@@ -378,18 +382,20 @@ export async function checkParity({ call, evaluate, settle }) {
     0,
   );
   assert.equal(await evaluate("dismissPenCalls"), 0);
-  await click('.toolbar-controls [aria-label="Brush opacity"]');
+  await evaluate(
+    "[...document.querySelectorAll('.toolbar-controls > .tile-button')].find(t=>t.querySelector('svg[data-asset=opacity]')).querySelector('button').click()",
+  );
+  await settle();
+  assert.ok(await evaluate("layerApp.state().customization.drawer"));
   assert.equal(
-    await evaluate("document.querySelectorAll(':popover-open').length"),
-    1,
+    await evaluate("(({left,right,top,bottom})=>300>=left&&300<=right&&800>=top&&800<=bottom)(document.querySelector('.content-drawer').getBoundingClientRect())"),
+    false,
   );
   await evaluate(
-    "canvas.dispatchEvent(new PointerEvent('pointerdown',{pointerId:902,pointerType:'pen',button:0,buttons:1,clientX:600,clientY:450,bubbles:true,cancelable:true}));",
+    "canvas.dispatchEvent(new PointerEvent('pointerdown',{pointerId:902,pointerType:'pen',button:0,buttons:1,clientX:300,clientY:800,bubbles:true,cancelable:true}));",
   );
-  assert.equal(
-    await evaluate("document.querySelectorAll(':popover-open').length"),
-    0,
-  );
+  await settle();
+  assert.equal(await evaluate("layerApp.state().customization.drawer ?? null"), null);
   assert.equal(await evaluate("dismissPenCalls"), 0);
   await evaluate(
     "layerApp.app.pen=dismissOriginalPen; delete window.dismissOriginalPen;",
@@ -437,7 +443,7 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   await click('[data-command="settings"]');
   await click('[data-settings-page="input"]');
-  await click('#setting-pressure .number-step:last-child');
+  await click('#setting-pressure [aria-label="Increase Pressure response"]');
   await click("#close-settings");
   assert.ok(
     Math.abs(
@@ -446,20 +452,19 @@ export async function checkParity({ call, evaluate, settle }) {
   );
 
   // Geometry, pressure, transformed mask and DPI cases live in shared Rust
-  // cursor tests. Browser suites share the actual GPU pixel/input checks.
-  await action({ type: "invoke", command: "reset_layout" });
+  // cursor tests. Browser suites share the actual GPU pixel/input checks,
+  // which inject CDP input that this suite otherwise ignores.
+  await restoreFixture();
+  await call("Input.setIgnoreInputEvents", { ignore: false });
   await checkPenRendering({call, evaluate, settle});
-  await action({ type: "invoke", command: "settings" });
-  await action({
-    type: "edit_settings",
-    settings: { theme: null, pressure_gamma: 1, cursor: "brush_size" },
-  });
-  await action({ type: "close_settings" });
+  await call("Input.setIgnoreInputEvents", { ignore: true });
+  await action({ type: "restore_settings", settings });
 
   // No desktop input injection required: exercise host DOM listeners directly
   // for Zen/scroll, and the same shared actions used by native docking controls.
-  await action({ type: "set_theme", theme: "dark" });
-  await click('[data-command="zen_mode"]');
+  await action({ type: "system_theme_changed", theme: "dark" });
+  await action({ type: "restore_settings", settings: { ...settings, zen_reveal_at_edges: true } });
+  await click("#zen-button");
   // Read the synchronous listener result in the same task, before compositor
   // hover events from the real desktop can replace the test pointer position.
   const point = (x, y) =>
@@ -485,7 +490,7 @@ export async function checkParity({ call, evaluate, settle }) {
     });
   assert.equal(await point(600, 450), true);
   assert.equal(await point(1, 450), true); // No remaining left dock.
-  for (const panel of ["brushes", "sizes", "layers"])
+  for (const panel of ["brushes", "sizes", ...fixture.layout.bands[1].root.panels])
     await action({type:"customize",action:{type:"set_panel_visible",panel,visible:false}});
   await action({
     type: "move_panel",
@@ -499,10 +504,11 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await point(600, 450), true);
   assert.equal(await point(600, 899), true);
   assert.equal(await point(600, 1), false); // Header always remains reachable.
-  await action({ type: "invoke", command: "reset_layout" });
+  await restoreFixture(true);
   assert.equal(await point(600, 450), true);
   await capture("zen");
-  await click('[data-command="zen_mode"]');
+  await click("#zen-button");
+  assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), false);
   const camera = await evaluate(
     "(({zoom,translation})=>({zoom,translation}))(layerApp.state().camera)",
   );
@@ -571,7 +577,7 @@ export async function checkParity({ call, evaluate, settle }) {
   })()`);
   assert.ok(Math.abs(bottomInset - 8) < 0.01);
   await capture("vertical-ribbon");
-  await action({ type: "invoke", command: "reset_layout" });
+  await restoreFixture();
   await action({ type: "invoke", command: "fit_canvas" });
   const group = await evaluate(
     "layerApp.app.layout(1200,900).groups.find(g=>g.panels.includes('brushes')).id",
@@ -607,8 +613,11 @@ export async function checkParity({ call, evaluate, settle }) {
     } finally {session.free();}
   })()`);
   assert.deepEqual(fresh.workspace, savedWorkspace);
-  assert.deepEqual(fresh.layout, savedLayout);
-  await action({ type: "invoke", command: "reset_layout" });
+  // The work area also reflects this host's measured window bar, which is
+  // runtime presentation rather than serialized workspace state.
+  const topology = ({ work_area, ...layout }) => layout;
+  assert.deepEqual(topology(fresh.layout), topology(savedLayout));
+  await restoreFixture();
   await action({ type: "restore_workspace", workspace: savedWorkspace });
   assert.deepEqual(
     await evaluate("layerApp.app.layout(1200,900)"),
@@ -628,13 +637,14 @@ export async function checkParity({ call, evaluate, settle }) {
   })()`),
     true,
   );
-  await action({ type: "invoke", command: "reset_layout" });
+  await restoreFixture();
+  await action({ type: "restore_settings", settings });
   await action({ type: "invoke", command: "fit_canvas" });
   assert.equal(
     await evaluate("document.querySelector('#status').textContent"),
     "",
   );
   console.log(
-    "PASS: GTK/web geometry ≤1px, dark/light/settings captures, nonselectable chrome/no focus halos, copyable title, live controls, immediate settings persistence, occupied-edge Zen 80/80, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
+    "PASS: GTK/web geometry ≤1px incl. Tool Set groups/brush rows, dark/light glass/shadow pixels ≤3/255, settings captures, nonselectable chrome/no focus halos, copyable title, menu/drawer dismissal without ink, live controls, immediate settings persistence, GPU pen cursor, occupied-edge Zen 80/80, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
   );
 }

@@ -386,6 +386,9 @@ Use isolated `LAYER_SETTINGS_FILE` paths and a Wayland/Vulkan display. After
 building/serving the web client, run `node apps/layer-web/test.mjs --customization`,
 `--tab-styles`, `--workspace` and `--parity` against `LAYER_WEB_URL`, or add `--package` to test
 the static build. `--workspace --gestures` runs only the pointer/touch subset.
+`--parity` restores GTK's `WorkspaceState::default()` fixture at 1200×900 and
+compares it with the `native_web_parity_reference` JSON and PNGs; run it with a
+headed browser, since its pixel checks sample the presented canvas and glass.
 Web customization/workspace captures are under
 `artifacts/ui/workspace-management/web/`; parity captures remain under
 `artifacts/ui/parity/`. These directories are ignored. The browser
