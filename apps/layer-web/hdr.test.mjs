@@ -254,7 +254,7 @@ export async function checkBlackIntensityMarker({evaluate,settle}) {
     try {
       const image=new Image();image.src=url;await image.decode();
       const canvas=document.createElement('canvas');canvas.width=Math.ceil(bounds.width*2);canvas.height=Math.ceil(bounds.height*2);
-      const context=canvas.getContext('2d');context.scale(2,2);context.drawImage(image,0,0);
+      const context=canvas.getContext('2d',{willReadFrequently:true});context.scale(2,2);context.drawImage(image,0,0);
       const [x,y]=geometry.point,radius=geometry.geometry.marker_radius;
       const pixel=(x,y)=>Array.from(context.getImageData(Math.round(x*2),Math.round(y*2),1,1).data);
       return {size:[bounds.width,bounds.height],stage:[stage.width,stage.height],blackRamp:view.intensity_ramp.every(c=>c.slice(0,3).every(v=>v===0)),center:pixel(x,y),ring:Array.from({length:16},(_,i)=>pixel(x+radius*Math.cos(i*Math.PI/8),y+radius*Math.sin(i*Math.PI/8)))};

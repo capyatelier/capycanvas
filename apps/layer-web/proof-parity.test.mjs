@@ -7,13 +7,13 @@ export async function checkProofPattern({evaluate}) {
     const canvas=document.querySelector('.proof-tone-pad');
     if(!canvas?.getBoundingClientRect().width)throw Error('SDR Proof must be visible');
     const source=document.createElement('canvas');source.width=source.height=512;
-    source.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(layerApp.app.proof_texture(512)),512,512),0,0);
+    source.getContext('2d',{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(layerApp.app.proof_texture(512)),512,512),0,0);
     const deadline=performance.now()+15000;
     for(;;){
       const size=canvas.getBoundingClientRect().width;
       const d=layerApp.app.color_ui({type:'proof_dial',size,recipe:layerApp.app.proof_form().rendition});
       const reference=document.createElement('canvas');reference.width=canvas.width;reference.height=canvas.height;
-      const ctx=reference.getContext('2d'),scale=canvas.width/size,[cx,cy]=d.center;
+      const ctx=reference.getContext('2d',{willReadFrequently:true}),scale=canvas.width/size,[cx,cy]=d.center;
       ctx.scale(scale,scale);ctx.drawImage(source,cx-d.radius,cy-d.radius,d.radius*2,d.radius*2);
       const expected=ctx.getImageData(0,0,canvas.width,canvas.height).data;
       const actual=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
