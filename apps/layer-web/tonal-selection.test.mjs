@@ -39,6 +39,7 @@ export async function checkTonalSelections({call,evaluate,settle}) {
     await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:${id}'&&!JSON.parse(layerApp.app.workspace_view()).busy`);await idle();
   }
   await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
+  await wait('layerApp.state().commands.find(c=>c.id==="open_document")?.enabled');
   await evaluate(`window.tonalOpen=window.showOpenFilePicker;window.showOpenFilePicker=async()=>{const c=document.createElement('canvas');c.width=500;c.height=200;const g=c.getContext('2d');[0,64,128,190,255].forEach((v,i)=>{g.fillStyle='rgb('+[v,v,v].join(',')+')';g.fillRect(i*100,0,100,200)});const blob=await new Promise(r=>c.toBlob(r));return[{name:'tonal-patches.png',getFile:async()=>new File([blob],'tonal-patches.png',{type:'image/png'})}]}`);
   try {
     await invoke('open_document');await wait('layerApp.state().document_file.unsaved_name==="tonal-patches"&&!layerApp.state().document_file.busy');

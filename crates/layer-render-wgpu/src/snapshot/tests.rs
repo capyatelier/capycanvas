@@ -452,7 +452,7 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         let words = (0..389)
             .flat_map(|y| {
                 (0..641u32.div_ceil(8)).map(move |word| {
-                    (0..8).fold(0u32, |v, n| {
+                    (0..8).filter(|n| word * 8 + n < 641).fold(0u32, |v, n| {
                         v | (((word * 8 + n) / 17 + y / 11) % 5) << (n * 4)
                     })
                 })

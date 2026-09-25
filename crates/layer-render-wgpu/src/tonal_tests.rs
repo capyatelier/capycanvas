@@ -20,8 +20,9 @@ fn receive(
     probe: Option<TonalProbe>,
     previous: Option<Selection>,
 ) -> RegionResult {
-    assert!(
-        r.request_region(RegionRequest {
+    receive_request(
+        r,
+        RegionRequest {
             request_id: 73,
             contiguous: false,
             position: [0, 0],
@@ -32,7 +33,7 @@ fn receive(
                 source,
                 bands,
                 invert,
-                probe
+                probe,
             })),
             selection: Some(SelectionRefinement {
                 resize: 0,
@@ -44,11 +45,13 @@ fn receive(
                 antialias: true,
                 feather: 0.,
                 previous: previous.map(Arc::new),
-                source_to_document: Affine::IDENTITY
+                source_to_document: Affine::IDENTITY,
             }),
-        })
-        .unwrap()
-    );
+        },
+    )
+}
+fn receive_request(r: &mut WgpuRasterizer, request: RegionRequest) -> RegionResult {
+    assert!(r.request_region(request).unwrap());
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     loop {
         if let Some(result) = r.take_region() {
@@ -63,6 +66,370 @@ fn receive(
 }
 fn byte(p: &layer_core::SelectionPixels, x: u32, y: u32) -> u8 {
     (p.words()[(y * p.extent()[0].div_ceil(4) + x / 4) as usize] >> ((x % 4) * 8)) as u8
+}
+
+#[test]
+fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() {
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::Srgb,
+        depth: SampleDepth::F32,
+    })
+    .unwrap();
+    let mut builder = SourceBuilder::new(
+        [3, 1],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::F32,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        1024 * 1024,
+    )
+    .unwrap();
+    builder
+        .push_row(
+            &[0f32, 0., 0., 1., 2., 2., 2., 0.5, 1., 1., 1., 1.]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let mut layer = Layer::paint(LayerId(1), "HDR source");
+    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let band = TonalBand {
+        name: "HDR".into(),
+        lower: Some(0.5),
+        upper: None,
+        falloff: [0.; 2],
+    };
+    let submit = |r: &mut WgpuRasterizer, layer: &Layer, saved: Option<Selection>| {
+        let mut layers = vec![layer.clone()];
+        if let Some(saved) = saved {
+            layers.insert(0, Layer::selection(LayerId(2), "Saved", saved));
+        }
+        r.submit(FramePacket {
+            view: ViewState {
+                document_to_surface: [2., 0., 0., 2., 15., 15.],
+                ..view()
+            },
+            document_extent: [3, 1],
+            layers: &layers,
+            dabs: &[],
+            dab_batches: &[],
+            restore_rasters: &[],
+            reset_layers: false,
+            time_seconds: 0.,
+            composite_all: true,
+        })
+        .unwrap();
+    };
+    submit(&mut r, &layer, None);
+    let first = receive(
+        &mut r,
+        RegionSource::Composite,
+        vec![band.clone()],
+        false,
+        None,
+        None,
+    );
+    assert_eq!(
+        [
+            byte(&first.pixels, 0, 0),
+            byte(&first.pixels, 1, 0),
+            byte(&first.pixels, 2, 0)
+        ],
+        [0, 128, 0]
+    );
+    assert!(r.regions.as_ref().unwrap().raw.tonal_cached());
+    submit(
+        &mut r,
+        &layer,
+        Some(Selection::pixels(first.pixels.clone())),
+    );
+    assert!(
+        r.regions.as_ref().unwrap().raw.tonal_cached(),
+        "Selection nodes and view changes keep raw artwork valid"
+    );
+    let cached = receive(
+        &mut r,
+        RegionSource::Composite,
+        vec![band.clone()],
+        false,
+        Some(TonalProbe {
+            bounds: [1, 0, 2, 1],
+            point: true,
+            quad: None,
+        }),
+        None,
+    );
+    assert_eq!(cached.pixels, first.pixels);
+    assert!((cached.tonal_sample.unwrap().stops[0] - 1.).abs() < 0.00001);
+    layer.opacity = 0.5;
+    submit(&mut r, &layer, None);
+    assert!(!r.regions.as_ref().unwrap().raw.tonal_cached());
+    let changed = receive(
+        &mut r,
+        RegionSource::Composite,
+        vec![band],
+        false,
+        None,
+        None,
+    );
+    assert_eq!(byte(&changed.pixels, 1, 0), 64);
+}
+
+#[test]
+fn opaque_photo_cache_preserves_odd_rows_and_falls_back_for_opacity() {
+    let extent = [259, 3];
+    let mut builder = SourceBuilder::new(
+        extent,
+        SourceInterpretation {
+            channels: SourceChannels::Rgb,
+            depth: SampleDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..extent[1] {
+        let row: Vec<_> = (0..extent[0])
+            .flat_map(|x| {
+                if x == 0 || x == 258 {
+                    [128; 3]
+                } else {
+                    [(x + y) as u8, (x * 7 + y) as u8, (x * 11 + y) as u8]
+                }
+            })
+            .collect();
+        builder.push_row(&row).unwrap();
+    }
+    let mut layer = Layer::paint(LayerId(1), "Opaque source");
+    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let submit = |r: &mut WgpuRasterizer, layer: &Layer| {
+        r.submit(FramePacket {
+            view: view(),
+            document_extent: extent,
+            layers: std::slice::from_ref(layer),
+            dabs: &[],
+            dab_batches: &[],
+            restore_rasters: &[],
+            reset_layers: false,
+            time_seconds: 0.,
+            composite_all: true,
+        })
+        .unwrap()
+    };
+    submit(&mut r, &layer);
+    let bands = vec![TonalBand {
+        name: "Midrange".into(),
+        lower: Some(-5.),
+        upper: Some(-1.),
+        falloff: [1.; 2],
+    }];
+    let cold = receive(
+        &mut r,
+        RegionSource::Composite,
+        bands.clone(),
+        false,
+        None,
+        None,
+    )
+    .pixels;
+    let warm = receive(&mut r, RegionSource::Composite, bands, false, None, None).pixels;
+    assert_eq!(warm, cold);
+    assert_eq!(warm.bounds(), [0, 0, 259, 3]);
+    layer.opacity = 0.5;
+    submit(&mut r, &layer);
+    let all = vec![TonalBand {
+        name: "All".into(),
+        lower: None,
+        upper: None,
+        falloff: [0.; 2],
+    }];
+    let result = receive(
+        &mut r,
+        RegionSource::Composite,
+        all.clone(),
+        false,
+        None,
+        None,
+    )
+    .pixels;
+    let cached = receive(&mut r, RegionSource::Composite, all, false, None, None).pixels;
+    assert_eq!(result, cached);
+    for y in 0..3 {
+        for x in 0..259 {
+            assert_eq!(byte(&cached, x, y), 128);
+        }
+    }
+}
+
+/// A generated photo-sized source: no artist files or Android application data.
+#[test]
+#[ignore = "61 MP hardware performance and recovery benchmark"]
+fn tonal_61mp_performance() {
+    let extent = [9504, 6336];
+    let color = DocumentColor::default();
+    let mut builder = SourceBuilder::new(
+        extent,
+        SourceInterpretation {
+            channels: SourceChannels::Rgb,
+            depth: SampleDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        512 * 1024 * 1024,
+    )
+    .unwrap();
+    let mut row = vec![0u8; extent[0] as usize * 3];
+    for y in 0..extent[1] {
+        for (x, p) in row.chunks_exact_mut(3).enumerate() {
+            let v = ((x as u32 * 13 + y * 7 + ((x as u32 ^ y) & 31)) % 256) as u8;
+            p.copy_from_slice(&[v, v, v]);
+        }
+        builder.push_row(&row).unwrap();
+    }
+    let mut layer = Layer::paint(LayerId(1), "Generated 61 MP photograph");
+    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    r.submit(FramePacket {
+        view: view(),
+        document_extent: extent,
+        layers: &[layer.clone()],
+        dabs: &[],
+        dab_batches: &[],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    let before = r.telemetry().resident_bytes;
+    let mut held = Vec::new();
+    let mut warm = Vec::new();
+    for i in 0..7 {
+        let started = std::time::Instant::now();
+        let result = receive(
+            &mut r,
+            RegionSource::Composite,
+            vec![TonalBand {
+                name: "Benchmark".into(),
+                lower: Some(-3.5 + i as f32 * 0.1),
+                upper: Some(-0.5),
+                falloff: [0.5; 2],
+            }],
+            false,
+            None,
+            None,
+        );
+        let elapsed = started.elapsed().as_secs_f64() * 1000.;
+        if i >= 2 {
+            warm.push(elapsed);
+        }
+        let gpu = r
+            .regions
+            .as_ref()
+            .and_then(|r| r.timing.as_ref())
+            .map(|t| t.completed_snapshot(&r.device, &r.queue).gpu.ordered());
+        eprintln!(
+            "TONAL_61MP run={i} total_ms={elapsed:.3} gpu_ms={gpu:?} baseline_gpu_bytes={before} gpu_bytes={} region_bytes={} history_bytes={}",
+            r.telemetry().resident_bytes,
+            r.regions.as_ref().unwrap().storage_bytes(),
+            result.pixels.words().len() * 4
+        );
+        if i == 0 {
+            let mut t = telemetry::Telemetry::new(&r.device, &r.queue);
+            t.enabled = true;
+            r.regions.as_mut().unwrap().timing = Some(t);
+        }
+        assert_eq!(result.pixels.extent(), extent);
+        held.push(result.pixels.clone());
+        assert!(r.selection_clip.storage_bytes() <= 128 * 1024 * 1024);
+        if i == 6 {
+            let mut doc = layer_core::Document::new("61 MP recovery", extent[0], extent[1]);
+            doc.layers = vec![layer.clone()];
+            doc.active_layer = layer.id;
+            doc.selection = Some(Selection::pixels(result.pixels));
+            let project = layer_core::Project {
+                document: doc,
+                assets: Default::default(),
+            };
+            let start = std::time::Instant::now();
+            let mut output = Vec::new();
+            let saved = project.write(&mut output);
+            eprintln!(
+                "TONAL_61MP recovery_ms={:.3} bytes={} result={saved:?}",
+                start.elapsed().as_secs_f64() * 1000.,
+                output.len()
+            );
+            saved.unwrap();
+            {
+                let reopened =
+                    layer_core::Project::read(output.as_slice(), Default::default()).unwrap();
+                assert_eq!(reopened.document.selection, project.document.selection);
+            }
+        }
+    }
+    r.regions.as_mut().unwrap().raw.streaming_control = true;
+    let mut controls = Vec::new();
+    for i in 0..6 {
+        let started = std::time::Instant::now();
+        let result = receive(&mut r, RegionSource::Composite, vec![], false, None, None);
+        let elapsed = started.elapsed().as_secs_f64() * 1000.;
+        if i > 0 {
+            controls.push(elapsed);
+        }
+        eprintln!("TONAL_61MP streaming_control run={i} total_ms={elapsed:.3}");
+        assert_eq!(result.pixels.extent(), extent);
+    }
+    warm.sort_by(f64::total_cmp);
+    controls.sort_by(f64::total_cmp);
+    eprintln!(
+        "TONAL_61MP warm_median_ms={:.3} streaming_median_ms={:.3} ratio={:.3}",
+        warm[2],
+        controls[2],
+        warm[2] / controls[2]
+    );
+    assert!(
+        warm[2] < controls[2] * 2.,
+        "Tonal classification should remain close to the same hardware streaming path"
+    );
+    assert!(warm[2] < 350., "61 MP warm selection target is 350 ms");
+    r.regions.as_mut().unwrap().raw.streaming_control = false;
+    let started = std::time::Instant::now();
+    let feathered = receive_request(
+        &mut r,
+        RegionRequest {
+            request_id: 74,
+            contiguous: false,
+            position: [0, 0],
+            tolerance: 0.,
+            refinement: Default::default(),
+            limit: None,
+            source: RegionSource::Tonal(Box::new(TonalRequest {
+                source: RegionSource::Composite,
+                bands: vec![TonalBand::defaults()[2].clone()],
+                invert: false,
+                probe: None,
+            })),
+            selection: Some(SelectionRefinement {
+                resize: 0,
+                mode: SelectionMode::New,
+                antialias: true,
+                feather: 12.,
+                previous: None,
+                source_to_document: Affine::IDENTITY,
+            }),
+        },
+    );
+    eprintln!(
+        "TONAL_61MP feather_12_ms={:.3}",
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    assert_eq!(feathered.pixels.extent(), extent);
+    assert!(feathered.pixels.words().iter().any(|word| *word != 0));
 }
 #[test]
 fn tonal_hdr_masks_and_probes_match_luminance_reference() {

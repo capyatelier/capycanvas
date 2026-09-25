@@ -1,20 +1,29 @@
 //! Small GPU probe summaries; source pixels are never read back for classification.
 use layer_render::{TonalProbe, TonalSample};
-pub(super) const STAT_WORDS: usize = 4498;
+const BINS: usize = 4434;
+const SHARDS: usize = 64;
+const POINT_OFFSET: usize = BINS * SHARDS;
+pub(super) const STAT_WORDS: usize = POINT_OFFSET + 50;
 pub(super) fn sample(bytes: &[u8], probe: TonalProbe) -> Option<TonalSample> {
     if bytes.len() < STAT_WORDS * 4 {
         return None;
     }
     let word = |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
-    let count = (0..4434).map(word).sum::<u32>();
+    let mut histogram = [0u32; BINS];
+    for shard in 0..SHARDS {
+        for (i, count) in histogram.iter_mut().enumerate() {
+            *count += word(shard * BINS + i);
+        }
+    }
+    let count = histogram.iter().sum::<u32>();
     if count == 0 {
         return None;
     }
     let stops = if probe.point {
         let (mut value, mut weight) = (0f64, 0f64);
         for i in 0..25 {
-            let a = f64::from(f32::from_bits(word(4449 + i * 2)));
-            value += f64::from(f32::from_bits(word(4448 + i * 2))) * a;
+            let a = f64::from(f32::from_bits(word(POINT_OFFSET + 1 + i * 2)));
+            value += f64::from(f32::from_bits(word(POINT_OFFSET + i * 2))) * a;
             weight += a;
         }
         let y = value / weight;
@@ -28,8 +37,8 @@ pub(super) fn sample(bytes: &[u8], probe: TonalProbe) -> Option<TonalSample> {
         let quantile = |fraction: f64| {
             let target = (f64::from(count - 1) * fraction).floor() as u32;
             let mut sum = 0;
-            for i in 0..4434 {
-                sum += word(i);
+            for (i, count) in histogram.iter().enumerate() {
+                sum += count;
                 if sum > target {
                     return if i == 0 {
                         -149.

@@ -26,11 +26,33 @@ pub(super) fn capture_selection<T: Send + 'static>(
                     let read = |offset: usize| {
                         u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
                     };
+                    let count = extent[0].div_ceil(if byte_coverage { 4 } else { 8 }) as usize
+                        * extent[1] as usize;
+                    // One bulk copy into immutable history. A per-word iterator
+                    // also builds an intermediate Vec and performs slow scalar
+                    // reads from mapped device memory on mobile GPUs.
+                    #[cfg(target_endian = "little")]
+                    let words: std::sync::Arc<[u32]> = {
+                        let source = &bytes[32..32 + count * 4];
+                        let mut words = std::sync::Arc::<[u32]>::new_uninit_slice(count);
+                        // SAFETY: the fresh, uniquely owned allocation has count
+                        // u32 slots. Copy exactly that many initialized bytes;
+                        // every u32 bit pattern is valid, in native byte order.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                source.as_ptr(),
+                                std::sync::Arc::get_mut(&mut words)
+                                    .unwrap()
+                                    .as_mut_ptr()
+                                    .cast::<u8>(),
+                                source.len(),
+                            );
+                            words.assume_init()
+                        }
+                    };
+                    #[cfg(target_endian = "big")]
                     let words: std::sync::Arc<[u32]> =
-                        (0..extent[0].div_ceil(if byte_coverage { 4 } else { 8 }) as usize
-                            * extent[1] as usize)
-                            .map(|i| read(32 + i * 4))
-                            .collect();
+                        (0..count).map(|i| read(32 + i * 4)).collect();
                     let bounds = if read(coverage_size as usize + 16) == 0 {
                         [0; 4]
                     } else {
@@ -49,7 +71,7 @@ pub(super) fn capture_selection<T: Send + 'static>(
                             pixels: std::sync::Arc::new(pixels),
                         },
                         read(coverage_size as usize + 20) != 0,
-                        &bytes[coverage_size as usize+32..],
+                        &bytes[coverage_size as usize + 32..],
                     ))
                 });
             ready.unmap();
