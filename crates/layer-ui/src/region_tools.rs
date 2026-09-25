@@ -21,6 +21,7 @@ struct Target {
     layer: LayerId,
     operation: Option<layer_core::LayerOperationKind>,
     tonal: bool,
+    color: Option<layer_core::color::RgbColor>,
     basis: layer_core::Affine,
 }
 impl Default for RegionTools {
@@ -204,6 +205,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     layer: doc.active_layer,
                     tonal: false,
                     operation: fill.then(|| self.fill_operation()),
+                    color: (fill
+                        && !self.state.colors.transparent()
+                        && self.state.brush.opacity > 0.)
+                        .then(|| self.state.colors.definition()),
                     basis: if !fill && self.selection_refinement(basis).is_some() { layer_core::Affine::IDENTITY } else { basis },
                 });
             }
@@ -220,15 +225,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             position: [0,0], tolerance: 0., refinement: Default::default(), limit: None,
         });
         self.region_tools.target = Some(Target {
-            generation: self.region_tools.generation, revision: doc.revision, layer: doc.active_layer,
-            tonal: false, operation: None, basis: layer_core::Affine::IDENTITY,
+            generation: self.region_tools.generation,
+            revision: doc.revision,
+            layer: doc.active_layer,
+            operation: None,
+            color: None,
+            tonal: false,
+            basis: layer_core::Affine::IDENTITY,
         });
     }
     pub(super) fn queue_tonal_region(&mut self, mut request: RegionRequest) {
         self.region_tools.cancel();
         request.request_id=self.region_tools.generation;
         let doc=self.engine.document();
-        self.region_tools.target=Some(Target {generation:request.request_id,revision:doc.revision,layer:doc.active_layer,operation:None,tonal:true,basis:layer_core::Affine::IDENTITY});
+        self.region_tools.target=Some(Target {generation:request.request_id,revision:doc.revision,layer:doc.active_layer,operation:None,color:None,tonal:true,basis:layer_core::Affine::IDENTITY});
         self.region_tools.queued=Some(request);
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
@@ -255,7 +265,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     let selection = Selection::pixels(result.pixels).transformed(target.basis).map_err(error)?;
                     if let Some(operation) = target.operation {
-                        self.paint_operation(Some(selection), operation)?;
+                        self.paint_operation(Some(selection), operation, target.color.as_slice())?;
                     } else {
                         self.layer_edit(Edit::SetSelection(Some(selection)))?;
                     }

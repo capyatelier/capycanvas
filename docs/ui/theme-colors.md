@@ -44,6 +44,7 @@ in the table is transformed per channel using the same rule as a grey.
 | GTK/web settings cards | White at 8% in GTK; text at 8% in web, over the settings surface | White | Existing compositing already follows the new surface; white stays white |
 | Android settings cards | `#414141`, same as panel | White | Reuse panel / keep white |
 | Slider thumb | `#d3d3d3` = mix(B,W,160/204) in web/Android | `#fafafa` = mix(B,W,66/71) | Regenerate; GTK numeric slider uses this role too |
+| Transparency checkerboard (`checker_light`, `checker_dark`) | `#dcdcdc` / `#aaaaaa` in 5px cells | Same | Fixed in both modes; GTK composites alpha in linear light, Web/Android in sRGB |
 | Compact grey slider fill | mix(panel,text,50%) | mix(panel,text,50%) | Recomputed from panel; CSS sRGB, native Compose interpolation retained |
 | Main text and monochrome icons | `#fafafb` | `#2e2e32` | Fixed per mode |
 | Secondary text, headings, shortcut hints | Main text at 55–65% opacity | Same | Keep opacity; effective pixel color changes with the surface |

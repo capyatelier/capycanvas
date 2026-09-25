@@ -595,6 +595,7 @@ pub enum Panel {
     Tools,
     ToolSettings,
     Color,
+    Palettes,
     Sizes,
     Layers,
     Adjustments,
@@ -618,6 +619,7 @@ impl From<Panel> for String {
             Panel::Tools => "tools".into(),
             Panel::ToolSettings => "tool_settings".into(),
             Panel::Color => "color".into(),
+            Panel::Palettes => "palettes".into(),
             Panel::Sizes => "sizes".into(),
             Panel::Layers => "layers".into(),
             Panel::Adjustments => "adjustments".into(),
@@ -642,6 +644,7 @@ impl TryFrom<String> for Panel {
             "tools" => Self::Tools,
             "tool_settings" => Self::ToolSettings,
             "color" => Self::Color,
+            "palettes" => Self::Palettes,
             "sizes" => Self::Sizes,
             "layers" => Self::Layers,
             "adjustments" => Self::Adjustments,
@@ -681,6 +684,7 @@ impl Panel {
             Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
                 254.
             }
+            Self::Palettes => 280.,
             Self::Proof => 300.,
             Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => TILE_SIZE,
         }
@@ -688,6 +692,9 @@ impl Panel {
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
+        if self == Self::Palettes {
+            return matches!(platform, crate::Platform::Gtk | crate::Platform::Generic);
+        }
         if matches!(self, Self::FilterTypes | Self::BrushSets | Self::SculptSets | Self::Tools) {
             return true;
         }
@@ -728,12 +735,13 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
         Self::ToolSettings,
         Self::Color,
+        Self::Palettes,
         Self::Sizes,
         Self::Layers,
         Self::Adjustments,
@@ -757,6 +765,7 @@ impl Panel {
             Self::Tools => "Tools",
             Self::ToolSettings => "Tool",
             Self::Color => "Color",
+            Self::Palettes => "Palettes",
             Self::Sizes => "Brush size",
             Self::Layers => "Layers",
             Self::Adjustments => "Filters",
@@ -778,6 +787,7 @@ impl Panel {
             Self::Tools => "brush",
             Self::ToolSettings => "settings",
             Self::Color => "color",
+            Self::Palettes => "colors",
             Self::Sizes => "size",
             Self::Layers => "layers",
             Self::Adjustments => "adjustments",
@@ -984,6 +994,21 @@ pub struct PanelMeasurement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PanelScrollMeasurement>,
 }
+impl PanelMeasurement {
+    /// Compact content stays whole; scrollers reserve controls and four rows
+    /// (or all rows when shorter). Shared by fitting and floating drop sizing.
+    fn minimum_content_height(&self) -> f32 {
+        self.scroll.map_or(self.content_height, |m| {
+            (m.fixed_height
+                + 4. * if m.unit_height > 0. {
+                    m.unit_height
+                } else {
+                    TILE_SIZE
+                })
+            .min(self.content_height)
+        })
+    }
+}
 
 #[cfg(test)]
 #[path = "floating_drop_tests.rs"]
@@ -1047,6 +1072,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::SculptSets
                 | Panel::Tools
                 | Panel::Color
+                | Panel::Palettes
                 | Panel::Navigator
                 | Panel::Proof
         ) && !panels.iter().any(|p| p.id == default.id)
@@ -2042,7 +2068,15 @@ impl DockLayout {
         let group = next.allocate()?;
         let band = next.allocate()?;
         let edge = match panel {
-            Panel::FilterTypes | Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
+            Panel::FilterTypes
+            | Panel::BrushSets
+            | Panel::SculptSets
+            | Panel::Tools
+            | Panel::Brushes
+            | Panel::ToolSettings
+            | Panel::Color
+            | Panel::Palettes
+            | Panel::Sizes => Edge::Left,
             Panel::Layers
             | Panel::Adjustments
             | Panel::Properties
@@ -2417,6 +2451,21 @@ impl DockLayout {
         }
     }
     fn fitted_height(&self, node: &DockNode) -> Option<f32> {
+        if let DockNode::Split {
+            axis,
+            first,
+            second,
+            ..
+        } = node
+        {
+            let first = self.fitted_height(first)?;
+            let second = self.fitted_height(second)?;
+            return Some(if *axis == Axis::Vertical {
+                first + second + WORKSPACE_SPACING
+            } else {
+                first.max(second)
+            });
+        }
         let DockNode::Tabs {
             id, panels, active, ..
         } = node
@@ -2426,14 +2475,19 @@ impl DockLayout {
         if !self.fit_height_groups.contains(id) {
             return None;
         }
-        let content = self
-            .measurements
-            .iter()
-            .find(|m| m.panel == *active)
-            .map(|m| m.content_height)
-            .filter(|h| *h > 0.0)?;
+        // Fitting belongs to the group, not the selected page. Reserve enough
+        // room for its pages so switching tabs never moves adjacent dividers.
+        let content = self.group_content_height(panels)?;
         let grip = panels.len() == 1 && self.panel(*active).is_ok_and(|p| p.hide_tab);
         Some(content + if grip { PANEL_GRIP_HEIGHT } else { TAB_BAR_HEIGHT })
+    }
+    fn group_content_height(&self, panels: &[Panel]) -> Option<f32> {
+        self.measurements
+            .iter()
+            .filter(|m| panels.contains(&m.panel))
+            .map(PanelMeasurement::minimum_content_height)
+            .filter(|h| *h > 0.0)
+            .reduce(f32::max)
     }
     fn fitted_split(&self, first: &DockNode, second: &DockNode, usable: f32) -> Option<f32> {
         let (height, sibling, leading) = match self.fitted_height(first) {
@@ -2484,6 +2538,7 @@ impl DockLayout {
                     Panel::ToolSettings => TOOL_SETTINGS_MIN_WIDTH,
                     Panel::Navigator => 192.0,
                     Panel::Color => 4.0 * TILE_SIZE,
+                    Panel::Palettes => 280.,
                     _ => 0.0,
                 })
                 .fold(0.0, f32::max)
@@ -3115,11 +3170,6 @@ impl DockLayout {
         {
             let changed = *active != panel;
             *active = panel;
-            if changed
-                && let Some(floating) = self.floating.iter_mut().find(|f| f.root.id() == group)
-            {
-                floating.height = None;
-            }
             Ok(changed)
         } else {
             Err("Panel is not in this tab group".into())
@@ -3435,14 +3485,7 @@ impl DockLayout {
                 // than a uniform tile-count grid. Use the same body allocator.
                 toolbar_content_height(width, config.tiles(), config.tile_style) + TAB_BAR_HEIGHT
             } else {
-                (self
-                    .measurements
-                    .iter()
-                    .find(|m| m.panel == *active)
-                    // Hosts can measure a tab before mounting its body. A zero
-                    // body measurement must not turn tear-off into a header only.
-                    .filter(|m| m.content_height > 0.0)
-                    .map_or(320.0, |m| m.content_height)
+                (self.group_content_height(panels).unwrap_or(320.)
                     + if panels.len() == 1 && config.hide_tab {
                         PANEL_GRIP_HEIGHT
                     } else {
@@ -3557,16 +3600,8 @@ impl DockLayout {
             .max(TAB_BAR_HEIGHT)
             .min(usable);
         let scroll = measurement.and_then(|m| m.scroll);
-        let minimum = scroll.map_or(natural, |m| {
-            (chrome
-                + m.fixed_height
-                + 4.0
-                    * if m.unit_height > 0.0 {
-                        m.unit_height
-                    } else {
-                        TILE_SIZE
-                    })
-            .min(natural)
+        let minimum = scroll.map_or(natural, |_| {
+            (chrome + measurement.unwrap().minimum_content_height()).min(natural)
         });
         let budget = 400.0_f32.min(usable * 0.5).max(minimum).min(usable);
         let preferred = if !newly_floating {
@@ -6321,7 +6356,10 @@ mod tests {
         let current = resolve(&layout);
         let floating = current.groups.iter().find(|g| g.id == group).unwrap();
         assert_eq!(floating.bounds.width, 362.0);
-        assert_eq!(floating.bounds.height, 136.0);
+        assert_eq!(
+            floating.bounds.height, 675.0,
+            "group fitting includes its taller page"
+        );
         for [x, y] in [
             [floating.bounds.x + 1.0, floating.bounds.y + 1.0],
             [
@@ -6353,8 +6391,8 @@ mod tests {
             .unwrap();
         assert_eq!(resized.bounds.width, 230.0);
         assert_eq!(
-            resized.bounds.height, 675.0,
-            "changing tabs restores natural height after manual resize"
+            resized.bounds.height, 300.0,
+            "changing tabs preserves the manually resized group"
         );
         layout.validate().unwrap();
         let saved = serde_json::to_value(&layout).unwrap();

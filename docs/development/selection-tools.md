@@ -242,8 +242,12 @@ readout clear of both shortcuts. Web caches the fitted geometry across color
 changes.
 
 The transparency circle matches the secondary color's diameter, with its top
-aligned to the primary color at the opposite edge. Equally sized, smaller black and white
-circles overlap along the wheel's curve with the same edge clearance as
-transparency. White stays above the opposite footer's bottom edge, allowing
-about one pixel of clearance variation at compact widths. HDR
-places its exposure readout below the circles so the compact overlap stays clear.
+aligned to the primary color at the opposite edge. Black is about 80% of its
+diameter and white about 64%, keeping 20px tap targets. Each overlaps the
+previous circle with its inner edge at transparency's distance from the ring,
+so their centers follow an arc that curves inward more than the wheel. White
+stays above the footer's bottom edge; below about 200px its 20px minimum can
+bring it up to 1.5px closer to the ring. Every host paints these swatches as a
+panel-colored disc with the paint inset 1px (3px for the primary color) and a
+25% text-colored outline. HDR places its exposure readout below the circles so
+the compact overlap stays clear.

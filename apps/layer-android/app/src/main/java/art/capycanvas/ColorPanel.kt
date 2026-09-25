@@ -105,7 +105,8 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                         .semantics { selected = preset.getBoolean("selected") },
                         onClick = { color(obj("op" to "quick_color", "white" to white)) }) { _, hovered ->
                         Canvas(Modifier.matchParentSize()) {
-                            drawCircle(preset.array("rgba").color())
+                            drawCircle(colors.panel)
+                            drawCircle(preset.array("rgba").color(), size.minDimension / 2 - 1.dp.toPx())
                             val stroke = (if (preset.getBoolean("selected") || hovered) 2.dp else 1.dp).toPx()
                             drawCircle(colors.text.copy(alpha = if (preset.getBoolean("selected") || hovered) 1f else .25f), size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
                         }
@@ -246,7 +247,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             clipPath(field) {
                 val tile = 5.dp.toPx()
                 for (y in 0..ceil(size.height / tile).toInt()) for (x in 0..ceil(size.width / tile).toInt()) {
-                    drawRect(if ((x + y) % 2 == 0) Color(0xffcccccc) else Color(0xff8c8c8c), Offset(padding + x * tile, padding + y * tile), Size(tile, tile))
+                    drawRect(if ((x + y) % 2 == 0) colors.checkerLight else colors.checkerDark, Offset(padding + x * tile, padding + y * tile), Size(tile, tile))
                 }
                 drawRect(swatch.array("rgba").color())
             }

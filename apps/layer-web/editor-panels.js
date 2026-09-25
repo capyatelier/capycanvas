@@ -315,7 +315,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}
         const pressed=String(swatch.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
-        paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;
+        paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 0 0 / 10px 10px`;
       });
       shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":shape==="circle"?"Okhsv":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
       readout.setAttribute("aria-label",view.readout_description);queuePaint();

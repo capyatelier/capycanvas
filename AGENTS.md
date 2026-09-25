@@ -10,7 +10,9 @@ When adding, changing, or reviewing draggable UI, follow the application-wide
 behavior on GTK, Web, Android, macOS, iPadOS, and Windows:
 
 - Reorderable button/tile bodies require **press, hold, then drag** with mouse,
-  touch, and pen.
+  touch, and pen, except for saved palette colors.
+- Saved palette color tiles drag immediately after movement slop with every
+  device. A tap selects; a stationary touch/pen hold opens the context menu.
 - In **Customize Title Bar**, the whole editable item and component-bank chip
   drag immediately after movement slop, with every device. Bank chips have no
   click-to-add action; placement is drag-only. This explicit customization

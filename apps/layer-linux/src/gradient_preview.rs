@@ -76,16 +76,17 @@ mod imp {
             let bounds = gtk::graphene::Rect::new(6., 0., width - 12., height - 12.);
             snapshot.push_clip(&bounds);
             snapshot.append_texture(&textures[0], &bounds);
-            for y in 0..((height - 12.) / 8.).ceil() as i32 {
-                for x in 0..((width - 12.) / 8.).ceil() as i32 {
+            let cell = layer_ui::TRANSPARENCY_CHECKER_CELL;
+            for y in 0..((height - 12.) / cell).ceil() as i32 {
+                for x in 0..((width - 12.) / cell).ceil() as i32 {
                     if (x + y) % 2 == 0 {
                         continue;
                     }
                     snapshot.push_clip(&gtk::graphene::Rect::new(
-                        6. + (x * 8) as f32,
-                        (y * 8) as f32,
-                        8.,
-                        8.,
+                        6. + x as f32 * cell,
+                        y as f32 * cell,
+                        cell,
+                        cell,
                     ));
                     snapshot.append_texture(&textures[1], &bounds);
                     snapshot.pop();

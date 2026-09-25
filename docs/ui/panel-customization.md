@@ -37,9 +37,11 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   **Add built-in panel** / **Add Toolbar** submenus,
   and **New Toolbar…**. Submenu checks show current group membership; choosing
   another panel moves it here, never duplicates it. Style is stored once on the
-  group's `DockNode::Tabs`, never on individual panels. Automatic shows icons and
-  names with one or two tabs, and icons with only the active tab's name at three
-  or more. It adapts as tabs are added or removed. Explicit styles do not adapt:
+  group's `DockNode::Tabs`, never on individual panels. On GTK, Automatic fits
+  complete names to the measured tab-strip width, reserving icons for every tab
+  and adding names left to right while space remains. Selection does not change
+  name priority. Other hosts retain their existing count-based fallback until
+  their allocation-aware views are ported. Explicit styles do not adapt:
   icons-and-active-name shows every icon and only the active name regardless of
   count; icons-and-names shows both on every tab;
   names-only and icons-only likewise apply to all tabs.
@@ -316,6 +318,12 @@ must wait for a hold on every input device; headers and grips stay immediate.
 Context gestures open the shared context model. The source inventory records
 the current pickup-policy gaps separately from these requirements.
 
+Content fitting belongs to a tab group: its preferred height is the largest
+measured minimum height among its pages, so selecting a shorter page does not
+move dock dividers. Compact pages stay whole; scrollers reserve controls and four
+rows using the same rule as floating drops. Manual dock resizing opts out of fitting. Floating groups retain a
+manually set height across tab selection, rather than discarding it on every switch.
+
 Floating groups remain composed when Zen hides docked groups. Core bounds drive
 their layout, external handles and compact/vertical/horizontal presets; Compose
 animates size changes but follows drag coordinates immediately. Native text and
@@ -350,8 +358,8 @@ top snap coordinates and Zen hidden-edge/floating-only targets. The complete
 suite also retains drawing, settings, numeric-input and lifecycle checks.
 
 The group-tab-style tests on GTK, web and Android check all five modes with
-every tab active in turn, in both themes, and Automatic switching between two
-and three tabs without changing the saved style. Shared tests also cover serialization,
+every tab active in turn, in both themes. GTK additionally checks Automatic
+resizing between full and mixed labels without changing the saved style. Shared tests also cover serialization,
 undo/redo, whole-group moves, merging into a differently styled group and
 splitting out a new default-style group. GTK keeps the existing tab widgets and
 changes child visibility; all hosts render the Rust-resolved icon/name flags.

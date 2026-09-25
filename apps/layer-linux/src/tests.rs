@@ -1238,7 +1238,7 @@ fn native_nested_tool_drawers() {
         pump(300);
         assert_eq!(
             state(&w).customization.drawer.as_ref().unwrap().columns,
-            [vec![Panel::Color]]
+            [vec![Panel::Color, Panel::Palettes]]
         );
         capture_reference(&w, &format!("{output}/columns-nested-{theme:?}.png"), 1.);
         w.window.unmaximize();
@@ -6557,8 +6557,10 @@ fn native_group_tab_styles() {
                     let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
                     let expected = layout.tab_presentation(*panel);
                     assert_eq!(icon.is_visible(), expected.show_icon);
-                    assert_eq!(label.is_visible(), expected.show_name);
-                    if !expected.show_name {
+                    if style != TabStyle::Automatic {
+                        assert_eq!(label.is_visible(), expected.show_name);
+                    }
+                    if !label.is_visible() {
                         let bounds = button.compute_bounds(&w.surface).unwrap();
                         assert_eq!(bounds.width(), bounds.height(), "icon-only tabs are square");
                     }
@@ -6608,7 +6610,11 @@ fn native_group_tab_styles() {
             target: DockTarget::Tab { group, index: None },
         });
         pump(150);
-        assert_eq!(visible_names(), 1);
+        assert_eq!(
+            visible_names(),
+            3,
+            "a group fitted to its tabs has room for every name"
+        );
     }
     w.window.destroy();
     pump(100);

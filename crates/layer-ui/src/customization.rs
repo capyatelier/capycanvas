@@ -14,6 +14,24 @@ pub enum TabStyle {
     Icon,
 }
 impl TabStyle {
+    /// Native hosts supply complete and icon-only widths at the current font
+    /// size. Reserve every icon, then spend the remaining width left to right.
+    /// Selection never changes Automatic's label priority.
+    pub fn automatic_names(available: f32, widths: &[[f32; 2]]) -> Vec<bool> {
+        let mut spare = (available - widths.iter().map(|w| w[1]).sum::<f32>()).max(0.);
+        widths
+            .iter()
+            .map(|[full, icon]| {
+                let extra = (full - icon).max(0.);
+                if extra <= spare {
+                    spare -= extra;
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
     pub const ALL: [Self; 5] = [
         Self::Automatic,
         Self::ActiveName,
@@ -30,6 +48,8 @@ impl TabStyle {
             Self::Icon => "Icons only",
         }
     }
+    // Unmeasured fallback for hosts awaiting the allocation-aware projection.
+    // GTK refines Automatic with automatic_names and native measurements.
     fn presentation(self, active: bool, tab_count: usize) -> TabPresentation {
         TabPresentation {
             show_icon: self != Self::Name,
@@ -38,6 +58,20 @@ impl TabStyle {
                 || (self == Self::ActiveName && active),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn automatic_tab_names_follow_measured_space_and_left_priority() {
+    let widths = [[80., 32.], [100., 32.], [60., 32.], [70., 32.]];
+    assert_eq!(TabStyle::automatic_names(310., &widths), [true; 4]);
+    assert_eq!(
+        TabStyle::automatic_names(220., &widths),
+        [true, false, true, false]
+    );
+    assert_eq!(TabStyle::automatic_names(128., &widths), [false; 4]);
+    assert_eq!(TabStyle::automatic_names(40., &widths[..1]), [false]);
+    assert_eq!(TabStyle::automatic_names(180., &widths[..2]), [true; 2]);
 }
 
 /// Resolved in Rust from the group's style and selection; hosts only render it.
@@ -1879,6 +1913,9 @@ impl CustomizationState {
                     _ => unreachable!(),
                 };
                 drawer.configure_picker(layout, platform);
+                if platform == Platform::Gtk && drawer.columns == [vec![Panel::Color]] {
+                    drawer.columns[0].push(Panel::Palettes);
+                }
                 if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {
                     drawer.columns = vec![vec![Panel::Adjustments]];
                 }

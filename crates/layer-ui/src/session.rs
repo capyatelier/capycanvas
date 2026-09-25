@@ -173,6 +173,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         colors.set_document_depth(engine.document().color.depth)?;
         let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
+        engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
             engine,
@@ -326,6 +327,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.platform_prediction_available = None;
         }
         self.state.platform = platform;
+        if platform == Platform::Gtk {
+            self.state.colors.library.ensure_starters();
+        }
         self.refresh_feedback_config();
         self.state.palette = self
             .state
@@ -2742,6 +2746,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.apply_brush()?;
                 (BRUSH, false)
             }
+            UiAction::Color {
+                action: ColorAction::Library { action },
+            } => {
+                let mut affected = BRUSH;
+                if let Some(color) = self.state.colors.library.apply(action)? {
+                    if self.selection_masks.target().is_some() {
+                        self.mask_color_action(ColorAction::Definition { color })?;
+                        affected |= DOCUMENT;
+                    } else {
+                        self.state.colors.set_color(color)?;
+                        self.state.brush.color =
+                            self.state.colors.preview(self.state.colors.definition());
+                        self.apply_brush()?;
+                    }
+                }
+                (affected, false)
+            }
             UiAction::Color { action } => {
                 if self.selection_masks.target().is_some() {
                     self.mask_color_action(action)?;
@@ -3793,6 +3814,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
+        for color in self.engine.take_used_colors() {
+            self.state.colors.library.record_use(color);
+            changed |= regions::BRUSH;
+        }
         self.input_pending = self.engine.has_pending_input();
         let modified = self.state.document_file.modified;
         self.refresh_file_state();
@@ -4437,6 +4462,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         brush.opacity = state.opacity;
         brush.color_rgba_linear = self.state.colors.definition().linear_in(self.engine.document().color.space)?;
         self.engine.set_brush(brush).map_err(error)?;
+        self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(
             if state.tool == Tool::Eraser || self.state.colors.transparent() {
                 StrokeTool::Eraser
@@ -5121,6 +5147,7 @@ mod tests {
     }
 
     include!("session_color_tests.rs");
+    include!("palette_tests.rs");
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
@@ -15567,7 +15594,7 @@ mod tests {
                             &vec![400.; previous.columns.len()],
                         )
                         .unwrap();
-                    let next = ContentDrawer::for_tile(
+                    let mut next = ContentDrawer::for_tile(
                         &s.state.workspace.layout,
                         TileAnchor {
                             panel: Panel::Toolbar,
@@ -15601,6 +15628,9 @@ mod tests {
                         "Press retains the drawer until activation"
                     );
                     let change = activate(&mut s, tile);
+                    if platform == Platform::Gtk && next.columns == [vec![Panel::Color]] {
+                        next.columns[0].push(Panel::Palettes);
+                    }
                     assert_eq!(s.state.customization.drawer.as_ref().unwrap(), &next);
                     assert_ne!(change.regions & regions::CUSTOMIZATION, 0);
                     if tile != color {
@@ -15817,7 +15847,7 @@ mod tests {
         assert_eq!(s.state.brush.tool, tool);
         assert_eq!(
             s.state.customization.drawer.as_ref().unwrap().columns,
-            [vec![Panel::Color]]
+            [vec![Panel::Color, Panel::Palettes]]
         );
         s.dispatch(UiAction::Customize {
             action: CustomizationAction::ShowAllControls {

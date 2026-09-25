@@ -75,10 +75,12 @@ fn present(preview:layer_render_wgpu::snapshot::SnapshotPreview,display_hdr:bool
     // half-float display transport, like the canvas, after Float32 processing.
     let to_srgb = preview.space.linear_transform(layer_core::color::RgbSpace::Srgb);
     let to_2020 = layer_core::color::hdr::srgb_to_bt2020();
+    let checker = crate::display_color::checker_linear().map(f64::from);
+    let cell = layer_ui::TRANSPARENCY_CHECKER_CELL as u32;
     for (i, pixel) in preview.pixels.iter().enumerate() {
         let x = i as u32 % preview.extent[0];
         let y = i as u32 / preview.extent[0];
-        let checker = if (x / 8 + y / 8) % 2 == 0 { 0.94 } else { 0.80 };
+        let checker = checker[((x / cell + y / cell) % 2) as usize];
         let rgb = std::array::from_fn(|c| f64::from(pixel[c]) + checker * (1. - f64::from(pixel[3])));
         if display_hdr {
             let rgb = layer_core::color::rgb::apply(to_2020, layer_core::color::rgb::apply(to_srgb, rgb));

@@ -118,9 +118,16 @@ impl<B: CanvasRenderer> UiSession<B> {
         {
             return Ok(());
         }
+        let both = figure.paint == FigurePaint::Both;
+        let colors = if both {
+            [self.state.colors.foreground, self.state.colors.background]
+        } else {
+            [self.state.colors.definition(); 2]
+        };
         self.paint_operation(
             self.engine.document().selection.clone(),
             LayerOperationKind::Figure(figure),
+            &colors[..if both { 2 } else { 1 }],
         )
     }
 }

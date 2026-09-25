@@ -156,7 +156,7 @@ impl ViewColor {
             let rgb = rendition.mapper(document, self.space()).map_rgb([p[0], p[1], p[2]]);
             [rgb[0], rgb[1], rgb[2], p[3]]
         } else { color.linear_in(self.space()).expect("validated artwork color") };
-        [0.94, 0.80].map(|checker| {
+        checker_linear().map(|checker| {
             let mut rgba = [1.; 4];
             for c in 0..3 {
                 rgba[c] = (self.space().encode(f64::from(
@@ -288,12 +288,17 @@ pub(crate) fn checker_textures(color: RgbColor, view: ViewColor, headroom: f32) 
         let alpha = p[3] as f64;
         p[3] = 1.;
         let rgb = hdr_display_rgb(p, headroom, document.linear_transform(RgbSpace::Srgb));
-        [0.94, 0.80].map(|checker| {
+        checker_linear().map(|checker| {
+            let checker = f64::from(checker);
             let bytes = rgb.into_iter().map(|v| ((v * alpha + checker * (1. - alpha)).clamp(0., 10000. / 203.)) as f32)
                 .chain([1.]).flat_map(|v| half::f16::from_f32(v).to_bits().to_ne_bytes()).collect();
             hdr_texture([1, 1], bytes)
         })
     } else { view.checker_colors(color).map(|rgba| view.solid(rgba)) }
+}
+
+pub(crate) fn checker_linear() -> [f32; 2] {
+    layer_ui::TRANSPARENCY_CHECKER.map(|gray| gray.linear()[0])
 }
 
 #[path = "color_pair.rs"]
@@ -308,11 +313,12 @@ fn checker(snapshot: &gtk::Snapshot, bounds: gtk::graphene::Rect, radius: f32,
     snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(bounds, radius));
     // An opaque base avoids alpha seams at fractional checker edges.
     paint(0, &bounds);
-    for y in 0..(bounds.height() / 8.).ceil() as i32 {
-        for x in 0..(bounds.width() / 8.).ceil() as i32 {
+    let cell = layer_ui::TRANSPARENCY_CHECKER_CELL;
+    for y in 0..(bounds.height() / cell).ceil() as i32 {
+        for x in 0..(bounds.width() / cell).ceil() as i32 {
             if (x + y) % 2 == 0 { continue; }
             paint(1, &gtk::graphene::Rect::new(
-                bounds.x() + (x * 8) as f32, bounds.y() + (y * 8) as f32, 8., 8.,
+                bounds.x() + x as f32 * cell, bounds.y() + y as f32 * cell, cell, cell,
             ));
         }
     }

@@ -48,7 +48,7 @@ pub use toolbar_preview::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
-    ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor,
+    ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
 };
@@ -132,7 +132,10 @@ pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
-pub use theme::{ACCENTS, DEFAULT_ACCENT, HexColor, Theme, ThemePalette};
+pub use theme::{
+    ACCENTS, DEFAULT_ACCENT, HexColor, TRANSPARENCY_CHECKER, TRANSPARENCY_CHECKER_CELL, Theme,
+    ThemePalette,
+};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     durable_layout, layout_change_description,
