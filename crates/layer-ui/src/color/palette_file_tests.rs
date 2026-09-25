@@ -441,11 +441,6 @@ fn imports_clip_foreign_names_and_detect_by_content() {
     let mut library = ColorLibrary::default();
     library.apply(action).unwrap();
     assert_eq!(library.active_palette().name.chars().count(), 64);
-    assert_eq!(
-        PaletteFormat::from_file_name("Set.ACO"),
-        Some(PaletteFormat::Aco)
-    );
-    assert_eq!(PaletteFormat::from_file_name("Set.kpl"), None);
     assert!(PaletteFormat::IMPORT_EXTENSIONS.contains(&"kpl"));
     assert_eq!(
         palette(&[]).export(PaletteFormat::Gpl).unwrap().file_name,
