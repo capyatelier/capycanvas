@@ -61,7 +61,8 @@ alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
 For timed programs, `fx_time` supplies accumulated playback phase in seconds.
 The shared clock integrates the numeric `speed` parameter (default 1), so speed
 edits affect subsequent motion without seeking. Shaders must not multiply that
-time by speed again. With animation disabled, `time` supplies the explicit phase.
+time by speed again. With animation disabled, `fx_time` is the explicit `time`
+scaled by `speed`.
 Canvas rendering, exact artwork queries and export use the same clock snapshot.
 
 Native curves continue linearly beyond their endpoint controls. Identity curves
