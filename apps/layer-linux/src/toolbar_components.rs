@@ -765,7 +765,7 @@ impl Component {
                             .map(|c| c as f64 / 255.);
                         let fade =
                             gtk::cairo::LinearGradient::new(0., 0., 0., layout.header_fade as f64);
-                        fade.add_color_stop_rgba(0., r, g, b, 0.65);
+                        fade.add_color_stop_rgba(0., r, g, b, layout.header_fade_opacity as f64);
                         fade.add_color_stop_rgba(1., r, g, b, 0.);
                         let _ = cr.set_source(&fade);
                         cr.rectangle(0., 0., f64::from(layout.side), f64::from(layout.header_fade));

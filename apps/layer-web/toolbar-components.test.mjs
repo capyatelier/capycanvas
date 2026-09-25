@@ -212,8 +212,9 @@ async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, re
     await capture(`size-edge-fill-${theme}`);
   }
   await send({type:'set_tool_setting',id:'size',value:3});
-  const fade = await evaluate(`(()=>{const c=document.querySelector('${preview} canvas'),r=c.width/c.getBoundingClientRect().width,ctx=c.getContext('2d');return [0,26,56].map(y=>ctx.getImageData(c.width>>1,Math.round(y*r),1,1).data[3])})()`);
-  assert.ok(Math.abs(fade[0]-166)<8&&Math.abs(fade[1]-83)<8&&fade[2]===0, `header fade is GTK's 65% over 52px: ${fade}`);
+  const fade = await evaluate(`(()=>{const p=document.querySelector('${preview}'),style=p.closest('[data-toolbar-component]').dataset.tileStyle,g=layerApp.app.toolbar_ui({type:'slider_preview',control:{kind:'brush_size_slider'},style,value:3,length:0,extent:1}),c=p.querySelector('canvas'),r=c.width/c.getBoundingClientRect().width,ctx=c.getContext('2d'),alpha=y=>ctx.getImageData(c.width>>1,Math.round(y*r),1,1).data[3];return {style,length:g.header_fade,opacity:g.header_fade_opacity,alpha:[0,g.header_fade/2,g.header_fade+4].map(alpha)}})()`);
+  assert.equal(fade.style, 'medium'); assert.equal(fade.length, 52);
+  assert.ok(Math.abs(fade.alpha[0]-255*fade.opacity)<8&&Math.abs(fade.alpha[1]-255*fade.opacity/2)<8&&fade.alpha[2]===0, `header fade follows the shared layout: ${JSON.stringify(fade)}`);
   await click('[data-toolbar-component=brush_opacity_slider] input.number-slider');
   const alpha = () => evaluate(`(()=>{const c=document.querySelector('${preview} canvas');return c.getContext('2d').getImageData(0,0,c.width,c.height).data.reduce((n,v,i)=>n+(i%4===3?v:0),0)})()`);
   await send({type:'set_tool_setting',id:'opacity',value:1}); const full = await alpha();

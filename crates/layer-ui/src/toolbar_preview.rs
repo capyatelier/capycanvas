@@ -135,6 +135,7 @@ pub struct SliderPreviewLayout {
     pub stamp: Bounds,
     pub viewport: Bounds,
     pub header_fade: f32,
+    pub header_fade_opacity: f32,
     pub opacity: f32,
     pub text: String,
 }
@@ -209,7 +210,8 @@ pub fn slider_preview_layout(
                 height: side,
             }
         },
-        header_fade: if opacity { 0. } else { 52. },
+        header_fade: if opacity { 0. } else { 52. * tile / TileStyle::Medium.size()[1] },
+        header_fade_opacity: 0.4,
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",

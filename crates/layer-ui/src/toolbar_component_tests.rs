@@ -1129,7 +1129,8 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
     assert_eq!(size.stamp.width, 64.);
     assert_eq!(size.stamp.y, size.stamp.x);
     assert_eq!(size.viewport, Bounds { x: 0., y: 0., width: 180., height: 180. });
-    assert_eq!(size.header_fade, 52.);
+    assert_eq!(size.header_fade, 52. * 36. / 54.);
+    assert_eq!(size.header_fade_opacity, 0.4);
     assert_eq!(size.opacity, 1.);
     assert_eq!(size.text, "Size: 64 px");
     let opacity = slider_preview_layout(
@@ -1182,7 +1183,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
         assert_eq!(layout.viewport.y, tile);
         let size =
             slider_preview_layout(ToolbarControl::BrushSizeSlider, style, 64., 0., 1.).unwrap();
-        assert_eq!(size.header_fade, 52., "{style:?} keeps GTK's header fade");
+        assert_eq!(size.header_fade, 52. * tile / 54., "{style:?} header fade");
         assert!(layout.stamp.y >= tile);
     }
     assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 200.).is_err());

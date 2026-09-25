@@ -390,7 +390,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                             alpha = layout.number("opacity"), colorFilter = ColorFilter.tint(colors.text))
                     }
                     val fade = layout.number("header_fade")*density
-                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.65f),
+                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=layout.number("header_fade_opacity")),
                         1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
                 }
                 Box(Modifier.placed(layout.getJSONObject("caption"), density), contentAlignment = Alignment.CenterStart) {

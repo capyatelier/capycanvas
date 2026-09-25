@@ -93,7 +93,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       if (geometry.header_fade) {
         const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).backgroundColor;
         fade.addColorStop(0, background); fade.addColorStop(1, 'transparent');
-        ctx.save(); ctx.globalAlpha = .65; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
+        ctx.save(); ctx.globalAlpha = geometry.header_fade_opacity; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
       }
     }
     function update(option) {
