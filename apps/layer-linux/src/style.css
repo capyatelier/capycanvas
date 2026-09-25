@@ -24,8 +24,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar #document-selector > button,
 .window-bar windowcontrols > button > image { background-color: var(--header-control-bg); }
 .window-bar .header-readout { border-radius: var(--header-radius); min-height: 36px; }
+.window-bar .header-readout.header-text { border-radius: calc(18px * var(--corner-fit)); }
 .window-bar #document-selector > button { border-radius: var(--header-radius); }
-.window-bar .document-title { padding: 6px; }
+.window-bar .document-title { padding: 6px 8px; }
 .window-bar .header-tool:hover,
 .window-bar menubutton.chrome-control > button:hover,
 .window-bar #document-selector > button:hover,
@@ -48,9 +49,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar menubutton.chrome-control.in-bar > button { background-color: transparent; }
 .window-bar .header-item.in-bar .header-tool,
 .window-bar .header-item.in-bar menubutton > button,
-.window-bar menubutton.chrome-control.in-bar > button { min-width: 0; min-height: 0; padding: 0; border-style: solid; border-color: transparent; border-width: 1px 0; border-radius: var(--header-radius); background-clip: padding-box; }
+.window-bar menubutton.chrome-control.in-bar > button { min-width: 0; min-height: 0; padding: 0; border-radius: var(--header-radius); }
 .window-bar .header-item.in-bar .header-tool.selected-tool { background-color: var(--header-selection); background-image: none; }
-.window-bar .header-item.in-bar .header-tool.drawer-open { border-width: 0; }
 .window-bar .header-item.in-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black, .18); }
 .header-editor-content { padding: 8px 12px; }
@@ -66,12 +66,12 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar windowcontrols button { margin: 0; padding: 0; min-width: 36px; min-height: 36px; }
 .window-bar.header-medium windowcontrols button { min-width: 48px; min-height: 48px; }
 .window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
-.document-title { font-weight: 600; min-height: 24px; padding: 6px; }
-.header-clock { min-height: 36px; padding: 0 6px; }
+.document-title { font-weight: 600; min-height: 24px; padding: 6px 8px; }
+.header-clock { min-height: 36px; padding: 0 8px; }
 .window-bar .workspace-switcher { background: var(--glass-switcher); }
 .window-bar .header-menu-labels { background: var(--header-control-bg); }
-.window-bar .workspace-switcher, .window-bar .header-menu-labels { border: 0; border-radius: calc(17px * var(--corner-fit)); padding: 4px; }
-.workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
+.window-bar .workspace-switcher, .window-bar .header-menu-labels { border: 0; border-radius: calc(18px * var(--corner-fit)); padding: 5px; }
+.workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
 .window-bar .header-menu-labels menubutton.chrome-control > button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); font-weight: 500; }
 .workspace-switcher button:hover { background: alpha(var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: var(--header-selection); color: var(--window-fg-color); }
@@ -292,8 +292,8 @@ scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */
-.document-tabs { border-spacing: 6px; margin: 1px 0; border-radius: var(--header-radius); background-color: var(--header-control-bg); }
-.document-tab { min-height: 26px; padding: 4px; border-radius: calc(17px * var(--corner-fit)); background-color: transparent; transition: background-color 150ms ease-in-out; }
+.document-tabs { border-radius: var(--header-radius); background-color: var(--header-control-bg); }
+.document-tab { padding: 0; border-radius: var(--header-radius); background-color: transparent; transition: background-color 150ms ease-in-out; }
 .document-tab:hover { background-image: image(alpha(currentColor, .07)); }
 .document-tab:active { background-image: image(alpha(currentColor, .16)); }
 .document-tab.selected { background-color: var(--panel-bg); }
@@ -302,8 +302,8 @@ scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 /* Only adjacent idle tabs need a divider; selection/hover supplies the edge. */
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active) { background-image: image(color-mix(in srgb, currentColor var(--border-opacity), transparent)); background-size: 1px 80%; background-position: left center; background-repeat: no-repeat; }
 .document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active):dir(rtl) { background-position: right center; }
-.document-tab button.document-tab-select { min-width: 0; min-height: 26px; padding: 0 4px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: normal; outline: none; }
-.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; margin: 0; padding: 0; border-radius: calc(12px * var(--corner-fit)); }
+.document-tab button.document-tab-select { min-width: 0; min-height: 26px; padding: 0 4px; border-radius: var(--header-radius); background: transparent; box-shadow: none; font-weight: normal; outline: none; }
+.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; padding: 0; border-radius: calc(12px * var(--corner-fit)); }
 .document-tab:focus-within:focus-visible { outline: 2px solid alpha(var(--accent-color), .5); outline-offset: -2px; }
 @media (prefers-contrast: more) {
   .document-tab:hover, .document-tab:active, .document-tab.selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor var(--border-opacity), transparent); }

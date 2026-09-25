@@ -107,6 +107,14 @@ impl TileStyle {
         let [width, height] = self.size();
         width.min(height) / 2.0
     }
+    /// Space between neighboring tiles and lanes. Like the radius, it follows
+    /// the shorter side so labeled tiles match their square counterparts.
+    pub fn gap(self) -> f32 {
+        match self {
+            Self::Small | Self::Medium | Self::MediumLabeled => TILE_GAP,
+            Self::Large | Self::Labeled => 2.0 * TILE_GAP,
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Small => "Small Tiles",
@@ -145,7 +153,7 @@ impl TileStyle {
     }
     pub(crate) fn floating_width(self) -> f32 {
         let columns = if self.label_lines() > 0 { 2.0 } else { 3.0 };
-        columns * (self.size()[0] + 2.0) - 2.0
+        columns * (self.size()[0] + self.gap()) - self.gap()
     }
 }
 

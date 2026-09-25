@@ -121,7 +121,8 @@ recalculate content height or tool count. Native tiles use the same allocator
 with their measured widget size.
 
 `PanelKind::Tiles` uses the shared `tile_layout`: 36-unit square controls,
-two-unit gaps and no outer padding for standalone ribbons, one row on top/bottom
+`TileStyle::gap()` between tiles and lanes (two units, four for Large and
+Large Labeled tiles) and no outer padding for standalone ribbons, one row on top/bottom
 or one column on a side by default. Inside a tabbed panel, Tools retains a 4px
 content inset around the tile grid; it still has no duplicate inner grip.
 Brush-list entries use the same 2px gap as ribbon tiles.

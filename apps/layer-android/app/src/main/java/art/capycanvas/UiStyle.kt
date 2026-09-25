@@ -127,7 +127,7 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
 }
 internal val LocalPalette = staticCompositionLocalOf<Palette> { error("Missing core palette") }
 internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
-internal val HeaderTextPadding = 6.dp
+internal val HeaderTextPadding = 8.dp
 
 /** Tab colors never depend on hover/press. A focus-only indication also avoids
  * Android's native ripple layer changing the rasterization of tab joins. */

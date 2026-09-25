@@ -63,9 +63,11 @@ pub(crate) struct Documents {
     pub closing_tab: Cell<bool>,
     dragging: Cell<bool>,
     drag: RefCell<Option<TabDrag>>,
+    close_inset: Cell<i32>,
     #[cfg(test)]
     pub ram_budget: Cell<usize>,
 }
+const TAB_CLOSE_SIZE: i32 = 24;
 impl Documents {
     fn reset_button(button: &gtk::Widget) {
         // The captured controller consumes motion/release. Retire ancestor
@@ -402,6 +404,7 @@ impl Documents {
             closing_tab: Cell::new(false),
             dragging: Cell::new(false),
             drag: Default::default(),
+            close_inset: Cell::new(0),
             #[cfg(test)]
             ram_budget: Cell::new(layer_ui::DocumentBudget::default().inactive_ram),
         }
@@ -439,6 +442,31 @@ impl Documents {
             }
         ));
         self.root.add_controller(target);
+    }
+    /// Close controls keep equal side and vertical insets, concentric with the tab.
+    pub fn set_header_size(&self, size: layer_ui::HeaderSize) {
+        self.strip.set_spacing(size.gap() as i32);
+        let inset = (size.tile() as i32 - TAB_CLOSE_SIZE) / 2;
+        if self.close_inset.replace(inset) != inset {
+            let mut row = self.strip.first_child();
+            while let Some(tab) = row {
+                row = tab.next_sibling();
+                Self::inset_close(&tab, inset);
+            }
+        }
+    }
+    fn inset_close(tab: &gtk::Widget, inset: i32) {
+        if let Some(balance) = tab
+            .first_child()
+            .and_downcast::<gtk::Button>()
+            .and_then(|select| select.child())
+            .and_then(|content| content.first_child())
+        {
+            balance.set_size_request(TAB_CLOSE_SIZE + inset, -1);
+        }
+        if let Some(close) = tab.last_child() {
+            close.set_margin_end(inset);
+        }
     }
     pub fn allocate(&self, width: f32) {
         self.root.set_visible_child_name(if self.len() == 1 {
@@ -513,9 +541,13 @@ impl Documents {
             )));
             title.set_ellipsize(gtk::pango::EllipsizeMode::End);
             title.set_width_chars(1);
+            title.set_hexpand(true);
             // Balance the close control so the title is centered in the tab.
-            title.set_margin_start(24);
-            let select = gtk::Button::builder().child(&title).hexpand(true).build();
+            let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            content.append(&balance);
+            content.append(&title);
+            let select = gtk::Button::builder().child(&content).hexpand(true).build();
             select.add_css_class("flat");
             select.add_css_class("document-tab-select");
             select.set_focus_on_click(false);
@@ -560,6 +592,7 @@ impl Documents {
                 move |_| w.documents.select(&w, id, true)
             ));
             row.append(&close);
+            Self::inset_close(row.upcast_ref(), self.close_inset.get());
             self.strip.append(&row);
         }
         self.mark_selected();

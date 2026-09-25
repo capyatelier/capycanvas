@@ -546,6 +546,18 @@ fn native_document_tab_input() {
             .unwrap();
         new_photo::ready(&w);
     }
+    pump(250);
+    let size = state(&w).workspace.layout.header.size;
+    let tab = |id: u64| find_named(w.window.upcast_ref(), &format!("document-tab-{id}")).unwrap();
+    let (first, second) = (tab(1).compute_bounds(&w.surface).unwrap(), tab(2).compute_bounds(&w.surface).unwrap());
+    assert_eq!(second.x() - first.x() - first.width(), size.gap(), "tabs use the title-bar tile gap");
+    assert_eq!(first.height(), size.tile(), "tabs fill the title-bar tile height");
+    let close = tab(1).last_child().unwrap().compute_bounds(&tab(1)).unwrap();
+    let inset = (first.height() - close.height()) / 2.;
+    assert!(
+        (close.y() - inset).abs() < 0.5 && (first.width() - close.x() - close.width() - inset).abs() < 0.5,
+        "close button stays concentric with its tab: {close:?} in {first:?}"
+    );
     let point = |id: u64, fraction: f32| {
         let tab = find_named(w.window.upcast_ref(), &format!("document-tab-{id}")).unwrap();
         let b = tab.compute_bounds(&w.window).unwrap();
@@ -604,9 +616,10 @@ fn native_document_tab_input() {
             [0., -pitch, -pitch],
             "both neighbors slide, touch={touch}"
         );
+        let last = bounds(3);
         assert!(
-            (held - bounds(3).x()).abs() < 1.,
-            "held tab stays in the strip, touch={touch}"
+            (held + first.width() - last.x() - last.width()).abs() < 1.,
+            "held tab stays in the strip, touch={touch}: {held} {first:?} {last:?}"
         );
         if !touch {
             crate::capture(&w, "/tmp/capy-document-tabs-slide.png");

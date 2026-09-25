@@ -280,7 +280,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
       return [f.row.scrollWidth, Math.max(fieldHeight, f.row.scrollHeight)];
     });
-    const geometry = app.toolbar_ui({ type: 'options_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', sizes, button: style.size, gap: vertical ? 2 : 10 });
+    const geometry = app.toolbar_ui({ type: 'options_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', sizes, button: style.size, gap: vertical ? style.gap : 10 });
     place(more, geometry.more);
     fields.forEach((f, i) => {
       const bounds = geometry.fields[i];

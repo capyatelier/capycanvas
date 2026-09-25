@@ -523,7 +523,7 @@ class AndroidTitleBarTest {
         val color = entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("kind") == "color" }.getInt("id")
         drag("header-component-workspaces", Offset(bounds("title-bar").right - 150 * density, center().y))
         tap("header-size-large")
-        assertEquals("Pill remains compact", 34f, bounds("workspace-switcher").height / density, .5f)
+        assertEquals("Pill remains compact", 36f, bounds("workspace-switcher").height / density, .5f)
         assertEquals("Pill remains centered", bounds("title-bar").center.y, bounds("workspace-switcher").center.y, density)
         tap("header-show-footer"); tap("header-edit-done")
         var readout = true; instrumentation.runOnMainSync { readout = node("camera-readout") != null }; assertFalse(readout)
@@ -668,6 +668,11 @@ class AndroidTitleBarTest {
         assertFalse(workspace.getJSONObject("layout").getJSONObject("canvas_info").getBoolean("visible"))
         val tools = entries().filter { it.getJSONObject("item").getString("kind") == "tool" }
         assertEquals(8, tools.size)
+        val gap = snapshot().getJSONObject("header").array("sizes").objects().first { it.getString("id") == model().getString("size") }.number("gap")
+        val (first, second) = model().array("zones").values().flatMap { (it as JSONArray).objects().zipWithNext() }
+            .first { pair -> pair.toList().all { it.getJSONObject("item").getString("kind") == "tool" } }.toList()
+            .map { bounds("header-control-${it.getInt("id")}") }
+        assertEquals("Joined tiles use the toolbar tile gap", gap, (second.left - first.right) / density, .5f)
         // Transform is an action; the other seven default tools have drawers.
         for (entry in tools.filter { it.getJSONObject("item").getJSONObject("control").optString("command") != "scale_rotate" }) {
             val id = entry.getInt("id")

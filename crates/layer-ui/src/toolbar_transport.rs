@@ -125,7 +125,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             json!(result)
         }
         ToolbarUiRequest::Style { style } => {
-            json!({"size":style.size(), "icon":style.icon_size(), "labeled":style.label_lines()>0})
+            json!({"size":style.size(), "gap":style.gap(), "icon":style.icon_size(), "labeled":style.label_lines()>0})
         }
         ToolbarUiRequest::AutomaticTabNames { available, widths } => {
             json!(TabStyle::automatic_names(available, &widths))

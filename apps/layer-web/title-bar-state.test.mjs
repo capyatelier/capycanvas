@@ -78,7 +78,7 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
       assert.ok(Math.abs(item.grip.y+item.grip.height/2-item.r.y-item.r.height/2)<.1,'Grips vertically centered');
     }
     const pill=await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.children].map(n=>n.getBoundingClientRect().height),radius:getComputedStyle(p).borderRadius}})()");
-    assert.equal(pill.height,34,'Workspace pill stays compact at every title-bar size');
+    assert.equal(pill.height,36,'Workspace track stays compact at every title-bar size');
     assert.ok(pill.buttons.every(h=>h===26));assert.equal(pill.radius,'999px');
     assert.ok(Math.abs(pill.center-pill.headerCenter)<.1,'Workspace pill stays vertically centered');
     const s=await shot(`${theme}-${size}-${scale}x`);

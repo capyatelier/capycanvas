@@ -12,9 +12,9 @@ the former 8–10px circular corners.
 ## Radii
 
 - **Tiles** use half their shorter side: square tiles become full squircles and
-  labeled tiles become squircle capsules. Title-bar tools, menu labels,
-  readouts, document tabs, the workspace switcher and status bubbles follow the
-  same rule with the header tile.
+  labeled tiles become squircle capsules. Title-bar tools, readouts and
+  document tabs follow the same rule with the header tile; menu labels, the
+  workspace switcher, the clock and status bubbles use half their own height.
 - **Standalone toolbars** use their tile radius, so end tiles fill the toolbar
   ends exactly. `TileStyle::corner_radius` is published per panel as
   `tile_corner_radius`. A slider's brush preview uses its toolbar's tile

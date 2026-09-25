@@ -166,7 +166,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val layoutKey = sizes.toString()
             val layout = remember(width, height, vertical, layoutKey, style) { toolbarUi(obj("type" to "options_layout", "width" to width, "height" to height,
                 "axis" to if (vertical) "vertical" else "horizontal", "sizes" to JSONArray(sizes.map(::JSONArray)),
-                "button" to dimensions.array("size"), "gap" to if (vertical) 2f else 10f)) }
+                "button" to dimensions.array("size"), "gap" to if (vertical) dimensions.number("gap") else 10f)) }
             Box(modifier.pointerInput(item.toString()) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = true)

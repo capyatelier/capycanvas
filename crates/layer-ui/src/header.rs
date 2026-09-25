@@ -36,6 +36,13 @@ impl HeaderSize {
     pub fn height(self) -> f32 {
         self.tile() + 12.
     }
+    /// Space between joined tiles and drawing tabs, matching toolbar tiles.
+    pub fn gap(self) -> f32 {
+        match self {
+            Self::Small | Self::Medium => TileStyle::Small.gap(),
+            Self::Large => TileStyle::Large.gap(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,7 +493,7 @@ impl HeaderGeometry {
     /// Pack neighboring items toward the edges and give the document the space
     /// between them, including in custom side zones. Controls and drag gutters
     /// stay outside this allocation; customization uses the original geometry.
-    pub fn expand_document(&mut self, id: u32, width: f32, insets: [f32; 2]) {
+    pub fn expand_document(&mut self, id: u32, width: f32, insets: [f32; 2], bar_gap: f32) {
         let mut slots: Vec<_> = self.items.iter().map(|i| (Some(i.id), None, i.bounds))
             .chain(self.overflow.iter().enumerate().filter_map(|(i, b)| b.map(|b| (None, Some(i), b))))
             .collect();
@@ -496,7 +503,7 @@ impl HeaderGeometry {
             slot.0.is_some_and(|id| b.items.contains(&id)) || slot.1.is_some() && b.overflow == slot.1
         });
         let gaps: Vec<_> = slots.windows(2)
-            .map(|p| if bar(&p[0]).is_some() && bar(&p[0]) == bar(&p[1]) { 0. } else { 6. })
+            .map(|p| if bar(&p[0]).is_some() && bar(&p[0]) == bar(&p[1]) { bar_gap } else { 6. })
             .collect();
         let mut left = insets[0] + 6.;
         let mut right = width - insets[1] - 6.;
@@ -541,9 +548,9 @@ impl HeaderGeometry {
         }
         Bounds {
             x: left,
-            y: top + 1.,
+            y: top,
             width: right - left,
-            height: bottom - top - 2.,
+            height: bottom - top,
         }
     }
 }
@@ -574,6 +581,7 @@ pub struct HeaderSizeView {
     pub tile: f32,
     pub icon: i32,
     pub height: f32,
+    pub gap: f32,
 }
 #[derive(Serialize)]
 pub struct HeaderComponentView {
@@ -617,6 +625,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     tile: id.tile(),
                     icon: id.icon(),
                     height: id.height(),
+                    gap: id.gap(),
                 })
                 .collect(),
             components: HeaderItem::COMPONENTS
@@ -647,7 +656,7 @@ impl HeaderLayout {
         if !editing && documents > 1
             && let Some(entry) = self.entries().find(|e| e.item == HeaderItem::DocumentTitle)
         {
-            geometry.expand_document(entry.id, width, insets);
+            geometry.expand_document(entry.id, width, insets, self.size.gap());
         }
         geometry
     }
@@ -668,13 +677,15 @@ impl HeaderLayout {
         let tile = self.size.tile();
         let left = (insets[0].max(0.) + 6.).min(width);
         let right = (width - insets[1].max(0.) - 6.).max(left);
-        let mid = width / 2.;
+        let mid = (width / 2.).floor();
         let gap = 12.; // At least 24 logical px of window-drag space around center.
         let item_gap = 6.;
+        let bar_gap = self.size.gap();
         let joins = |e: &HeaderEntry| !editing && e.item.joins_bar();
         let barred = |e: &HeaderEntry| !editing && e.item.has_bar();
-        let spacing =
-            |a: &HeaderEntry, b: &HeaderEntry| if joins(a) && joins(b) { 0. } else { item_gap };
+        let spacing = |a: &HeaderEntry, b: &HeaderEntry| {
+            if joins(a) && joins(b) { bar_gap } else { item_gap }
+        };
         // Zero-width native metrics denote unavailable informational items
         // (e.g. a desktop without a battery), not overflowed interactive items.
         let visible = |e: &&HeaderEntry| !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
@@ -699,8 +710,8 @@ impl HeaderLayout {
         let center_width = span(1, false)
             .min(center_limit)
             .max(span(1, true).min(center_limit));
-        let center_left = (mid - center_width / 2.).max(left);
-        let center_right = (mid + center_width / 2.).min(right);
+        let center_left = (mid - center_width / 2.).floor().max(left);
+        let center_right = (center_left + center_width).min(right);
         let y = 6.;
         result.zones = [
             Bounds {
@@ -728,7 +739,7 @@ impl HeaderLayout {
             // Scale with the usable width, retaining true centering and room
             // for both side regions and protected native window controls.
             let half = if editing {
-                center_limit.min(320.) / 2.
+                (center_limit.min(320.) / 2.).floor()
             } else {
                 gap
             };
@@ -770,9 +781,10 @@ impl HeaderLayout {
                     used += gap + w;
                 }
             }
+            let overflow_joins = shown.last().is_some_and(|p| joins(p.0));
             let overflow_gap = match shown.last() {
                 None => 0.,
-                Some(p) if joins(p.0) => 0.,
+                Some(_) if overflow_joins => bar_gap,
                 Some(_) => item_gap,
             };
             let total = used
@@ -781,13 +793,13 @@ impl HeaderLayout {
                 } else {
                     0.
                 };
-            let mut x = bounds.x
-                + match zone {
-                    1 => (bounds.width - total) / 2.,
-                    2 => bounds.width - total,
-                    _ => 0.,
-                };
+            let mut x = match zone {
+                1 => (mid - total / 2.).floor().max(bounds.x),
+                2 => bounds.x + bounds.width - total,
+                _ => bounds.x,
+            };
             let mut bar: Option<HeaderBar> = None;
+            let mut previous: Option<&HeaderEntry> = None;
             for (entry, w, gap) in shown {
                 x += gap;
                 result.items.push(HeaderItemBounds {
@@ -800,9 +812,10 @@ impl HeaderLayout {
                     },
                 });
                 x += w;
-                if !joins(entry) || gap > 0. {
+                if !previous.is_some_and(|p| joins(p) && joins(entry)) {
                     result.bars.extend(bar.take());
                 }
+                previous = Some(entry);
                 if barred(entry) {
                     bar.get_or_insert_default().items.push(entry.id);
                 }
@@ -819,7 +832,7 @@ impl HeaderLayout {
                     height: tile,
                 });
                 if !editing {
-                    if overflow_gap > 0. {
+                    if !overflow_joins {
                         result.bars.extend(bar.take());
                     }
                     bar.get_or_insert_default().overflow = Some(zone);
@@ -1184,8 +1197,11 @@ mod tests {
                         if let Some(center) = g.items.iter().find(|m| m.id == h.zones[1][0].id) {
                             assert!(
                                 (center.bounds.x + center.bounds.width / 2. - width / 2.).abs()
-                                    < 0.01
+                                    <= 0.5
                             );
+                        }
+                        for b in &rects {
+                            assert_eq!(b.x.fract(), 0., "whole-pixel item {b:?}");
                         }
                     }
                 }
@@ -1219,7 +1235,7 @@ mod tests {
         );
         let id = |zone: usize, i: usize| h.zones[zone][i].id;
         let at = |g: &HeaderGeometry, id| g.items.iter().find(|i| i.id == id).unwrap().bounds;
-        let contiguous = |g: &HeaderGeometry| {
+        let joined = |g: &HeaderGeometry, gap: f32| {
             for bar in &g.bars {
                 let mut members: Vec<_> = bar
                     .items
@@ -1229,20 +1245,21 @@ mod tests {
                     .collect();
                 members.sort_by(|a, b| a.x.total_cmp(&b.x));
                 for pair in members.windows(2) {
-                    assert_eq!(pair[0].x + pair[0].width, pair[1].x, "{bar:?}");
+                    assert_eq!(pair[0].x + pair[0].width + gap, pair[1].x, "{bar:?}");
                 }
                 let (first, last) = (members[0], members[members.len() - 1]);
                 assert_eq!(
                     bar.bounds,
                     Bounds {
                         x: first.x,
-                        y: first.y + 1.,
+                        y: first.y,
                         width: last.x + last.width - first.x,
-                        height: first.height - 2.,
+                        height: first.height,
                     }
                 );
             }
         };
+        let contiguous = |g: &HeaderGeometry| joined(g, TILE_GAP);
         let g = h.resolve(1600., [0.; 2], &[], false);
         assert_eq!(
             g.bars.iter().map(|b| b.items.clone()).collect::<Vec<_>>(),
@@ -1255,8 +1272,8 @@ mod tests {
             ]
         );
         assert_eq!(
-            g.bars[1].bounds.height, 34.,
-            "matches the workspace switcher"
+            g.bars[1].bounds.height, TILE_SIZE,
+            "matches a small toolbar tile"
         );
         assert_eq!(
             at(&g, id(0, 1)).x,
@@ -1270,12 +1287,16 @@ mod tests {
         );
         contiguous(&g);
         contiguous(&h.resolve_documents(1600., [0.; 2], &[], false, 3));
+        let mut large = h.clone();
+        large.size = HeaderSize::Large;
+        joined(&large.resolve(1600., [0.; 2], &[], false), 2. * TILE_GAP);
+        joined(&large.resolve_documents(1600., [0.; 2], &[], false, 3), 2. * TILE_GAP);
 
         let editing = h.resolve(1600., [0.; 2], &[], true);
         assert!(editing.bars.is_empty());
         assert_eq!(at(&editing, id(0, 2)).x, at(&editing, id(0, 1)).x + 42.);
 
-        let mut joined = false;
+        let mut overflow_joined = false;
         for width in (300..900).step_by(12) {
             let g = h.resolve(width as f32, [0.; 2], &[], false);
             contiguous(&g);
@@ -1286,13 +1307,13 @@ mod tests {
                     .find(|b| b.overflow == Some(2))
                     .expect("overflow joins a bar");
                 if let Some(last) = bar.items.last() {
-                    joined = true;
-                    assert_eq!(at(&g, *last).x + at(&g, *last).width, overflow.x);
+                    overflow_joined = true;
+                    assert_eq!(at(&g, *last).x + at(&g, *last).width + TILE_GAP, overflow.x);
                 }
             }
         }
         assert!(
-            joined,
+            overflow_joined,
             "a partly hidden tool bar ends with its overflow button"
         );
     }
@@ -1306,11 +1327,13 @@ mod tests {
                     h.zones[1].clear();
                     let g = h.resolve(width, insets, &[], true);
                     let b = g.zones[1];
-                    assert!((b.x + b.width / 2. - width / 2.).abs() < 0.01);
+                    assert!((b.x + b.width / 2. - width / 2.).abs() <= 0.5);
+                    assert_eq!(b.x.fract(), 0.);
                     let usable = width - insets[0] - insets[1] - 12.;
                     let centered =
                         2. * (width / 2. - insets[0] - 6.).min(width / 2. - insets[1] - 6.);
-                    assert!((b.width - (usable / 3.).min(centered).min(320.)).abs() < 0.01);
+                    let expected = (usable / 3.).min(centered).min(320.);
+                    assert!(b.width <= expected && b.width > expected - 2., "{b:?}");
                     for x in [b.x + 1., b.x + b.width / 2., b.x + b.width - 1.] {
                         assert_eq!(
                             g.destination([x, size.height() / 2.], size.height()),

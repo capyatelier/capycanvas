@@ -470,12 +470,20 @@ mod allocation {
     }
 }
 
-fn allocate_at(child: &gtk::Widget, b: Bounds) {
+/// Places a child on the surface's device-pixel grid. Sizes follow the rounded
+/// far edges, so shared-layout gaps stay whole pixels between neighbors.
+pub(crate) fn allocate_at(child: &gtk::Widget, b: Bounds) {
+    let scale = child
+        .native()
+        .and_then(|native| native.surface())
+        .map_or_else(|| child.scale_factor() as f32, |surface| surface.scale() as f32);
+    let snap = |v: f32| (v * scale).round() / scale;
+    let (x, y) = (snap(b.x), snap(b.y));
     child.allocate(
-        b.width.max(1.0).round() as i32,
-        b.height.max(1.0).round() as i32,
+        (snap(b.x + b.width) - x).round().max(1.0) as i32,
+        (snap(b.y + b.height) - y).round().max(1.0) as i32,
         -1,
-        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x, b.y))),
+        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y))),
     );
 }
 

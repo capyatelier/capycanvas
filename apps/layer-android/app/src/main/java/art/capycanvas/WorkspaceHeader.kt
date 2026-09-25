@@ -68,20 +68,20 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     // first loses pixels at fractional scale and clips the final menu label.
     val menuPadding = (8f * density).roundToInt()
     val menuGap = (2f * density).roundToInt()
-    val menuInset = (4f * density).roundToInt()
+    val menuInset = (5f * density).roundToInt()
     val menuWidth = (menus.sumOf { (measure(it.getString("label")) * density).roundToInt() + 2 * menuPadding } +
         2 * menuInset + menuGap * (menus.size - 1)) / density
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
-    val workspaceWidth = (6f + choices.sumOf { (measure(it.getString("title")) + 22f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
+    val workspaceWidth = (8f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
     val metrics = JSONArray(entries.map { entry ->
         val kind = entry.getJSONObject("item").getString("kind")
         val natural = when (kind) {
             "menu_labels" -> menuWidth
             "workspaces" -> workspaceWidth.coerceAtLeast(tile)
             "document_title" -> measure(title).coerceIn(tile, 350f) + 12f
-            "clock" -> measure("00:00 PM") + 12f
+            "clock" -> measure("00:00 PM") + 2 * HeaderTextPadding.value
             "space" -> tile * .5f
             else -> tile
         }
@@ -249,7 +249,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
         // SurfaceView artwork is outside Compose's render tree, so these use
         // the translucent fallback rather than a blur of the foreground text.
-        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()
+        Box(Modifier.weight(1f).then(if (kind == "clock") Modifier.height(36.dp) else Modifier.fillMaxHeight()).clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
                 Modifier.glass(TileShape, colors.headerSurface) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
@@ -259,7 +259,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.height(34.dp).glass(SquircleShape(50), colors.headerSurface).padding(4.dp),
+                kind == "menu_labels" && !compact -> Row(Modifier.height(36.dp).glass(SquircleShape(50), colors.headerSurface).padding(5.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
@@ -275,7 +275,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     }
                 }
                 kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing)
-                kind == "document_title" -> DrawingHeader(host, title, editing)
+                kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap"))
                 kind == "clock" -> SystemStatus(showBattery = false)
                 kind == "battery" -> SystemStatus(clock = false)
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)
@@ -308,10 +308,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val pressed by interaction.collectIsPressedAsState()
     val click = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(),
         enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
-    val inset = inBar && !open
     HoverTip(label, modifier) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight())
-        .then(if (inset) click.padding(vertical = 1.dp).clip(TileShape) else Modifier.clip(shape))
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
         .then(if (surface && !inBar) Modifier.glass(shape, colors.headerSurface) else Modifier).background(when {
         selected && inBar -> colors.headerActive
         selected -> colors.active
@@ -319,7 +317,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         enabled && pressed -> colors.text.copy(alpha = .16f)
         enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
-    }).then(if (inset) Modifier else click), contentAlignment = Alignment.Center) { content() }
+    }).then(click), contentAlignment = Alignment.Center) { content() }
     }
 }
 

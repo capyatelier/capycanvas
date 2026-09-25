@@ -9,14 +9,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
@@ -126,7 +132,23 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
         else->false
     }
 }
-@Composable internal fun DrawingHeader(host:CanvasHost,title:String,editing:Boolean) {
+private const val TabCloseSize=24f
+/** The close circle keeps equal end and vertical insets, concentric with the tab. */
+@Composable private fun TabClose(label:String,inset:Float,enabled:Boolean,modifier:Modifier,onClick:()->Unit) {
+    val colors=LocalPalette.current
+    val interaction=remember{MutableInteractionSource()}
+    val hovered by interaction.collectIsHoveredAsState()
+    val pressed by interaction.collectIsPressedAsState()
+    Box(modifier.fillMaxHeight().width((TabCloseSize+inset).dp).hoverable(interaction)
+        .clickable(interaction,null,enabled,onClickLabel=label,role=Role.Button,onClick=onClick),contentAlignment=Alignment.CenterStart) {
+        Box(Modifier.size(TabCloseSize.dp).clip(CircleShape).background(when{
+            enabled&&pressed->colors.text.copy(alpha=.16f)
+            enabled&&hovered->colors.text.copy(alpha=.10f)
+            else->Color.Transparent
+        }).alpha(if(enabled)1f else .38f),contentAlignment=Alignment.Center){SharedIcon("close",label,Modifier.size(16.dp))}
+    }
+}
+@Composable internal fun DrawingHeader(host:CanvasHost,title:String,editing:Boolean,tile:Float,gap:Float) {
     val controller=host.drawingTabs
     if(editing){Text(title,Modifier.padding(horizontal=6.dp).testTag("document-title"),maxLines=1,overflow=TextOverflow.Ellipsis);return}
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -137,7 +159,7 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             TextButton({controller.selector=true},Modifier.fillMaxSize().testTag("drawing-selector-button")) {
                 Text(row?.let{it.getString("title")+(if(it.getBoolean("modified"))" •" else "")+(if(controller.rows.size>1)" ▾"else title.substringAfter(" · ", "").let { dimensions -> if(dimensions.isEmpty())"" else " · $dimensions" })}?:title,Modifier.testTag("document-title"),maxLines=1,overflow=TextOverflow.Ellipsis)
             }
-        }else DrawingRows(host,false,Modifier.fillMaxSize())
+        }else DrawingRows(host,false,Modifier.fillMaxSize(),tile,gap)
     }
 }
 @Composable internal fun DrawingSelector(host:CanvasHost) {
@@ -153,10 +175,11 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
             }
         }},confirmButton={TextButton({controller.selector=false}){Text("Done")}})
 }
-@Composable private fun DrawingRows(host:CanvasHost,vertical:Boolean,modifier:Modifier) {
+@Composable private fun DrawingRows(host:CanvasHost,vertical:Boolean,modifier:Modifier,tile:Float=0f,gap:Float=0f) {
     val controller=host.drawingTabs;val rows=controller.rows;val colors=LocalPalette.current
     val drag=remember(vertical){DrawingDrag(vertical)};val scope=rememberCoroutineScope();val scroll=rememberScrollState()
     val focused=LocalWindowInfo.current.isWindowFocused;val density=LocalDensity.current.density
+    val closeInset=((tile-TabCloseSize)/2f).coerceAtLeast(0f)
     val order=rows.map{it.getLong("id")}
     SideEffect{drag.order=order;drag.enabled=!controller.blocked}
     LaunchedEffect(order,focused,controller.switching){drag.cancel()}
@@ -187,16 +210,18 @@ private fun Modifier.drawingKeys(controller:DrawingTabsController,id:Long,menu:(
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
                 .semantics{contentDescription="${item.getString("title")}${if(item.getBoolean("modified"))", modified"else ""}, ${item.getString("location")}"},verticalAlignment=Alignment.CenterVertically) {
                 if(vertical)Box(Modifier.width(32.dp).fillMaxHeight().drawingBounds(drag.handles,id).testTag("drawing-handle-$id"),contentAlignment=Alignment.Center){PanelGrip("Move drawing")}
-                else Spacer(Modifier.width(36.dp))
+                else Spacer(Modifier.width((TabCloseSize+closeInset).dp))
                 Column(Modifier.weight(1f).padding(horizontal=6.dp),horizontalAlignment=if(vertical)Alignment.Start else Alignment.CenterHorizontally) {
                     Text(item.getString("title")+if(item.getBoolean("modified"))" •"else "",maxLines=1,overflow=TextOverflow.Ellipsis)
                     if(vertical)Text(item.getString("location"),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis)
                 }
-                IconButton({controller.select(id,true)},Modifier.size(if(vertical)48.dp else 36.dp).drawingBounds(drag.closes,id).testTag("drawing-close-$id"),enabled=!controller.blocked){SharedIcon("close","Close ${item.getString("title")}",Modifier.size(16.dp))}
+                val close="Close ${item.getString("title")}"
+                if(vertical)IconButton({controller.select(id,true)},Modifier.size(48.dp).drawingBounds(drag.closes,id).testTag("drawing-close-$id"),enabled=!controller.blocked){SharedIcon("close",close,Modifier.size(16.dp))}
+                else TabClose(close,closeInset,!controller.blocked,Modifier.drawingBounds(drag.closes,id).testTag("drawing-close-$id")){controller.select(id,true)}
             }
         }
         if(vertical)Column(Modifier.fillMaxWidth().verticalScroll(scroll)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.fillMaxWidth().height(64.dp))}}}
-        else Row(Modifier.fillMaxSize().padding(vertical=1.dp).glass(TileShape,colors.headerSurface),horizontalArrangement=Arrangement.spacedBy(6.dp)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
+        else Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(gap.dp)){rows.forEach{item->key(item.getLong("id")){row(item,Modifier.weight(1f).fillMaxHeight())}}}
         if(drag.active!=null&&drag.valid) {
             val target=drag.before?.let{drag.rows[it]}?:order.lastOrNull()?.let{drag.rows[it]}
             if(target!=null){val at=if(vertical){(if(drag.before==null)target.bottom else target.top)-drag.area.top}else{(if(drag.before==null)target.right else target.left)-drag.area.left}

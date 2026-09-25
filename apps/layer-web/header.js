@@ -181,7 +181,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(!editing&&wasEditing)document.querySelector('#canvas').focus({preventScroll:true});
     }
     root.dataset.size=size.id;
-    for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon})) {
+    for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon,gap:size.gap})) {
       root.style.setProperty(`--header-${name}`,`${value}px`);
       bank.style.setProperty(`--header-${name}`,`${value}px`);
     }

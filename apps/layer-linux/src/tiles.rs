@@ -77,16 +77,7 @@ mod imp {
                     self.style.get(),
                 )
             });
-            let allocate = |child: &gtk::Widget, b: layer_ui::Bounds| {
-                child.allocate(
-                    b.width as i32,
-                    b.height as i32,
-                    -1,
-                    Some(
-                        gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x, b.y)),
-                    ),
-                );
-            };
+            let allocate = crate::workspace::allocate_at;
             for (child, bounds) in children.iter().zip(layout.tiles) {
                 if let Some(component) =
                     child.downcast_ref::<crate::workspace::toolbar_components::ComponentBody>()

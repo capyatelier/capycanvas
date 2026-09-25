@@ -139,15 +139,7 @@ mod imp {
                         }
                         content = w.next_sibling();
                     }
-                    child.allocate(
-                        b.width.floor() as i32,
-                        b.height.floor() as i32,
-                        -1,
-                        Some(
-                            gtk::gsk::Transform::new()
-                                .translate(&gtk::graphene::Point::new(b.x, b.y)),
-                        ),
-                    );
+                    crate::workspace::allocate_at(child, b);
                     if let Some(editor) = editor {
                         editor.present_popover();
                     }
@@ -204,7 +196,7 @@ mod imp {
                     axis,
                     &sizes,
                     button,
-                    if self.vertical.get() { 2. } else { 10. },
+                    if self.vertical.get() { self.style.get().gap() } else { 10. },
                 );
                 allocate(&children[0], layout.more);
                 for (child, b) in children[1..].iter().zip(layout.fields) {

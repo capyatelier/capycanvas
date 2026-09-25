@@ -66,10 +66,13 @@ designer or opening shortcut.
   Drag motion itself never mutates the session or saves intermediate layouts.
 
 Adjacent icon controls (tools, Main Menu, Settings, Full Screen and a region's
-More button) join one bar, inset 1px so a Small bar matches the workspace
-switcher's 34px. Tiles inside a bar abut, keep whole-tile targets and fill the
-bar's full height with toolbar-style feedback. Capy gets its own single-tile
-bar. Multiple drawing tabs form one full-height strip in the same way. Every
+More button) join one flush bar that is exactly one tile tall, so a Small bar
+matches a Small toolbar tile (36px). Tiles inside a bar are square, fill the
+bar's height with toolbar-style feedback and use the toolbar tile gap:
+`HeaderSize::gap()` is 2px at Small and Medium and 4px at Large, like
+`TileStyle::gap()`. Capy gets its own single-tile bar. Multiple drawing tabs
+form one full-height strip with the same gap; each tab's 24px close button
+keeps equal end and vertical insets so it stays concentric with the tab. Every
 title-bar surface (bars, menu labels, the tab strip, the document title, clock,
 battery, compact menus, the native close button and the Zen Capy) uses the
 canvas surround at 75% opacity in both themes, so artwork behind it stays
@@ -84,10 +87,11 @@ An open action drawer (for example Color or Layers) gives its tile neutral grey
 feedback, not selection blue. Selected drawing tools retain their blue fill;
 native keyboard-focus indication remains independent of both states. The same
 distinction applies to toolbar tiles, including those inside another drawer.
-Menu labels use the workspace selector's capsule: one continuous 34px bar with
-a 4px inset and 26px capsule items, centered in larger bars. Menu labels use
-8px side padding so the full menu still fits beside a centered title in a
-1200px-wide window.
+Menu labels use the workspace selector's track: one continuous 36px bar with
+a 5px inset and 26px capsule items, 2px apart. Text keeps its size, so these
+tracks and the clock stay 36px tall and centered in Medium and Large bars.
+Text items use 8px side padding, so the full menu still fits beside a centered
+title in a 1200px-wide window.
 Native window-control targets grow equally in both axes, with 6px outer clearance.
 
 At narrow widths, each region overflows whole items into a More menu. Tools
@@ -124,7 +128,9 @@ origins, bar membership and history are shared Rust. GTK owns native widgets,
 measurements, caption behavior and device timing. Web, Android, Windows, macOS and
 iPadOS paint the same bars, surfaces and selection roles; macOS has no Main Menu or
 menu labels because the system menu bar owns them. This is not a claim of
-macOS/Windows tablet testing.
+macOS/Windows tablet testing. macOS, iPadOS and Windows receive the flush bars
+and tile gaps from Rust but still paint the earlier 1px in-bar inset and 34px
+switcher/menu tracks until their hosts adopt the rules above.
 
 ## Regression checks
 

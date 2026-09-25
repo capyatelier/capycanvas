@@ -166,16 +166,17 @@ fn apple_header_joins_adjacent_icon_controls_into_bars_outside_customization() {
         assert_eq!(groups.last().unwrap(), &["tool"; 5]);
         let menu = if platform == 0 { vec!["menu"] } else { vec![] };
         assert_eq!(groups[1], [menu, vec!["tool"; 3]].concat());
+        let gap = f64::from(unsafe { &*app.0 }.host.session.state().workspace.layout.header.size.gap());
         for bar in bars {
             let members: Vec<_> = view["items"].as_array().unwrap().iter()
                 .filter(|item| bar["items"].as_array().unwrap().contains(&item["id"])).collect();
             for pair in members.windows(2) {
                 let end = pair[0]["bounds"]["x"].as_f64().unwrap() + pair[0]["bounds"]["width"].as_f64().unwrap();
-                assert_eq!(end, pair[1]["bounds"]["x"].as_f64().unwrap(), "members abut");
+                assert_eq!(end + gap, pair[1]["bounds"]["x"].as_f64().unwrap(), "members sit one tile gap apart");
             }
             let tile = members[0]["bounds"]["height"].as_f64().unwrap();
-            assert_eq!(bar["bounds"]["height"].as_f64().unwrap(), tile - 2.);
-            assert_eq!(bar["bounds"]["y"].as_f64().unwrap(), members[0]["bounds"]["y"].as_f64().unwrap() + 1.);
+            assert_eq!(bar["bounds"]["height"].as_f64().unwrap(), tile);
+            assert_eq!(bar["bounds"]["y"].as_f64().unwrap(), members[0]["bounds"]["y"].as_f64().unwrap());
         }
         app.invoke("customize_workspace_ui");
         assert!(geometry(&app, platform)["bars"].as_array().unwrap().is_empty(), "Customization keeps items separate");

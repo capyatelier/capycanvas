@@ -136,7 +136,7 @@ Restore Starting Layout. Windows keeps the proportional columns. Check with
   displays their current names. Its entries can be changed in Manage Workspaces.
 - The pill defaults to the right of the document title and left of the clock;
   GTK/Web Sketch centers it, and the window-bar builder can reposition it. Its
-  rounded track stays 34 px high with 26 px choices, vertically centered at every
+  rounded track stays 36 px high with 26 px choices, vertically centered at every
   title-bar size. It uses
   normal workspace switching, including outgoing saves and ownership checks.
   Selecting a workspace restores its latest settings and arrangement. It never

@@ -1108,7 +1108,7 @@ fn native_header_spacing_visual() {
                     .compute_bounds(&d.w.surface)
                     .unwrap();
                 let gap = if pair[0].item.joins_bar() && pair[1].item.joins_bar() {
-                    0.
+                    size.gap()
                 } else {
                     6.
                 };
@@ -1202,8 +1202,8 @@ fn native_header_spacing_visual() {
         let bar_bounds = bar.compute_bounds(&d.w.surface).unwrap();
         assert_eq!(
             (bar_bounds.height(), button_bounds.height()),
-            (34., 26.),
-            "menu labels share the workspace switcher pill at {size:?}"
+            (36., 26.),
+            "menu labels share the workspace switcher track at {size:?}"
         );
         let label_bounds = label.compute_bounds(&d.w.surface).unwrap();
         assert!(

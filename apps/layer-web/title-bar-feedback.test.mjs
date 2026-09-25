@@ -58,8 +58,13 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
       await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
       await click(`[data-header-size="${size}"]`); await click('#header-edit-done');
       const pill = await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.children].map(n=>n.getBoundingClientRect().height)}})()");
-      assert.ok(Math.abs(pill.height-34)<.02); assert.ok(pill.buttons.every(height=>Math.abs(height-26)<.02));
+      assert.ok(Math.abs(pill.height-36)<.02); assert.ok(pill.buttons.every(height=>Math.abs(height-26)<.02));
       assert.ok(Math.abs(pill.center-pill.headerCenter)<.1,'Pill remains centered without growing');
+      await wait("!layerApp.state().customization.header_editing && !!document.querySelector('#header .header-bar:not([hidden])')");
+      const bars = await evaluate("(()=>{const r=n=>n.getBoundingClientRect(),items=[...document.querySelectorAll('#header .header-item.in-bar:not([hidden])')].map(r).sort((a,b)=>a.x-b.x);return{gaps:items.slice(1).map((b,i)=>b.x-items[i].x-items[i].width).filter(g=>g<6),heights:[...document.querySelectorAll('#header .header-bar:not([hidden])')].map(n=>r(n).height),tiles:items.map(i=>i.height)}})()");
+      const [tile,gap] = {small:[36,2],medium:[48,2],large:[60,4]}[size];
+      assert.ok(bars.gaps.length && bars.gaps.every(g=>Math.abs(g-gap)<.02),`${size}: joined tiles sit ${gap}px apart like toolbar tiles: ${JSON.stringify(bars)}`);
+      assert.ok([...bars.heights,...bars.tiles].every(h=>Math.abs(h-tile)<.02),`${size}: bars are flush with their ${tile}px tiles: ${JSON.stringify(bars)}`);
     }
     for (const theme of ['dark','light']) {
       await send({type:'set_theme',theme});

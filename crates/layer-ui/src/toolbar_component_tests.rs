@@ -651,11 +651,12 @@ fn vertical_options_shrink_before_reflowing_and_keep_more_accessible() {
         TileStyle::Labeled,
     ] {
         let [w, h] = style.size();
-        let height = 3. * (h + 2.) + 22.;
+        let grip = 20. + style.gap();
+        let height = 3. * (h + style.gap()) + grip;
         let layout = toolbar_tile_layout(w, height, Axis::Vertical, &tiles, true, style);
         assert_eq!(layout.tiles[0].x, layout.tiles[1].x);
         assert!(layout.tiles[1].height < 8. * h);
-        assert!(layout.tiles[1].y + layout.tiles[1].height <= height - 22.);
+        assert!(layout.tiles[1].y + layout.tiles[1].height <= height - grip);
         let fitting = tool_options_layout(
             w,
             layout.tiles[1].height,
@@ -748,7 +749,7 @@ fn toolbar_toolboxes_pack_rows_and_span_dividers_and_options() {
     ] {
         let [w, h] = style.size();
         for columns in [2, 3, 4] {
-            let width = columns as f32 * (w + 2.) - 2.;
+            let width = columns as f32 * (w + style.gap()) - style.gap();
             let layout = toolbar_tile_layout(width, 1000., Axis::Vertical, &tiles, true, style);
             let b = &layout.tiles;
             assert_eq!(b[0].y, b[1].y);

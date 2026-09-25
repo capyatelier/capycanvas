@@ -469,6 +469,7 @@ impl Header {
         let battery = model.entries().any(|e| e.item == HeaderItem::Battery);
         w.system_status.set_components(clock, battery);
         w.system_status.set_header_size(model.size);
+        w.documents.set_header_size(model.size);
         for item in self.items.borrow().iter() {
             if let Some(button) = &item.button {
                 let (enabled, active) = match item.entry.item {
@@ -739,6 +740,9 @@ impl Header {
             if entry.item != HeaderItem::Space {
                 handle.add_css_class("header-readout");
             }
+            if entry.item == HeaderItem::Clock {
+                handle.add_css_class("header-text");
+            }
             handle.set_child(Some(&content));
             handle.upcast::<gtk::Widget>()
         } else {
@@ -750,7 +754,6 @@ impl Header {
                 entry.item,
                 HeaderItem::MenuLabels
                     | HeaderItem::Workspaces
-                    | HeaderItem::DocumentTitle
                     | HeaderItem::Clock
                     | HeaderItem::Battery
             ) {

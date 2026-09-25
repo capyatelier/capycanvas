@@ -36,7 +36,7 @@ export async function checkMenuLabels({call,evaluate,settle}) {
       const natural=(await rect(item(capy))).width+(await rect(item(menu))).width+6;
       await resize(Math.ceil(2*(natural+18+160+4)));
       assert.equal(await evaluate(`document.querySelector('${item(menu)} .header-menu-labels').hidden`),false,'Labels initially fit');
-      assert.equal((await rect(`${item(menu)} .header-menu-labels`)).height,34,'Labels share the workspace switcher pill');
+      assert.equal((await rect(`${item(menu)} .header-menu-labels`)).height,36,'Labels share the workspace switcher track');
       await evaluate(`window.__menuLabelsNode=document.querySelector('${item(menu)}')`);
       await visible(menu);
       const added=[];

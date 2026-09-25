@@ -158,8 +158,9 @@ impl DockLayout {
                         toolbar_span(
                             config.tiles(),
                             config.tile_style.size()[usize::from(axis == Axis::Vertical)],
+                            config.tile_style.gap(),
                             axis,
-                        ) + 20.
+                        ) + TOOLBAR_GRIP_SIZE
                     })
                     .collect();
                 (b.alignment.unwrap(), nodes, lengths)

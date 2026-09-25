@@ -1192,7 +1192,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             } => {
                 let bounds = Bounds {
                     y: *y,
-                    height: panels.len() as f32 * (TILE_SIZE + 2.) - 2.,
+                    height: panels.len() as f32 * (TILE_SIZE + TILE_GAP) - TILE_GAP,
                     ..content
                 };
                 let icons = panels
@@ -1201,7 +1201,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
                     .map(|(index, panel)| ColumnIcon {
                         panel: *panel,
                         bounds: Bounds {
-                            y: *y + index as f32 * (TILE_SIZE + 2.),
+                            y: *y + index as f32 * (TILE_SIZE + TILE_GAP),
                             height: TILE_SIZE,
                             ..content
                         },
