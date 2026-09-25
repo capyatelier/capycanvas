@@ -6052,7 +6052,10 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
         .iter()
         .filter_map(|p| p.upgrade())
         .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
-        .filter(|p| p.parent().is_some_and(|p| p.is::<gtk::MenuButton>()))
+        .filter(|p| {
+            p.parent()
+                .is_some_and(|p| p.is::<gtk::MenuButton>() && p.native().is_some())
+        })
         .collect();
     for popup in popups {
         popup.popup();
