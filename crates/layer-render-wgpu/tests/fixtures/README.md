@@ -6,23 +6,29 @@ artwork, forty filters, four scopes, sampling positions and time as the former
 reference. The comparison remains one byte across all 1,966,080 channels, after applying
 the canonical zero-coverage output contract described below.
 
-The independent checkout changes only `COLOR_FORMAT` to `Rgba8UnormSrgb`, stores
-immutable imported images as `Rgba8Unorm`, and changes scene operation 8 to load
-the exact source texel, explicitly decode sRGB and premultiply. No filter math,
-parameters, preprocessing, composition or explicit linear8 rounding is added.
+The independent checkout applies two patches, in order:
+[the capture patch](../../../../tools/visual/windows-filter-oracle.patch) (with
+`git apply --unidiff-zero`) and
+[the mask-alpha patch](../../../../tools/visual/filter-oracle-mask-alpha.patch).
+The capture patch changes `COLOR_FORMAT` to `Rgba8UnormSrgb`, stores immutable
+imported images as `Rgba8Unorm`, and changes scene operation 8 to load the exact
+source texel, explicitly decode sRGB and premultiply. The mask-alpha patch is
+described below. No filter math, parameters, preprocessing, composition or
+explicit linear8 rounding is added.
 The current test's capture loop is ported to that checkout's `BuiltinEffect::ALL`
-API and writes the new PNG instead of comparing it. The current implementation's
-output is never used to generate expectations. The GPU run is recorded in
+API; it writes the new PNG, then compares it with the capture in
+`CAPY_ORACLE_CANDIDATE`. The current implementation's output is never used to
+generate expectations. The GPU run is recorded in
 `artifacts/color-m1/independent-filter-oracle.txt`.
 
 Pooled mask coverage is stored in alpha, not quantized through an sRGB-encoded
-color channel. The independent checkout applies the same contract on top of
-[the capture patch](../../../../tools/visual/windows-filter-oracle.patch): scene
-operation 2 writes coverage to every channel, operations 3 and 5 and both effect
-mask loads read alpha, and the pooled mask clear stores the default coverage in
-alpha. Without this change the same checkout and GPU reproduce the previous PNG
-(SHA-256 `9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`)
-byte for byte; with it, only the unclipped masked scope changes.
+color channel. [The mask-alpha patch](../../../../tools/visual/filter-oracle-mask-alpha.patch)
+applies the same contract to the independent checkout: scene operation 2 writes
+coverage to every channel, operations 3 and 5 and both effect mask loads read
+alpha, and the pooled mask clear stores the default coverage in alpha. Without
+it, the same checkout and GPU reproduce the previous PNG (SHA-256
+`9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`) byte for
+byte; with it, only the unclipped masked scope changes.
 
 The old v4 PNG and its linear8-specific quantization contract remain available
 in Git history. They are not valid expectations for encoded sRGB8 paint.

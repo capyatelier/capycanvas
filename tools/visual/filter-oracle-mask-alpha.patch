@@ -1,0 +1,57 @@
+diff --git a/crates/layer-render-wgpu/src/effects.rs b/crates/layer-render-wgpu/src/effects.rs
+index 7cc3a9a..63de864 100644
+--- a/crates/layer-render-wgpu/src/effects.rs
++++ b/crates/layer-render-wgpu/src/effects.rs
+@@ -306,7 +306,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
+         let last = stage + 1 >= p.passes.len();
+         source.push_str(&format!("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
+         if last && p.kind == EffectKind::Adjustment {
+-            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
++            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).a;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
+             if p.alpha == layer_core::EffectAlpha::Filter {
+                 source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
+             }
+@@ -326,7 +326,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
+         c*=settings.source_over.x*coverage;
+         if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
+     }
+-    let mask=select(1.,textureLoad(back,vec2<i32>(local),0).r,settings.options.w>.5);
++    let mask=select(1.,textureLoad(back,vec2<i32>(local),0).a,settings.options.w>.5);
+     let position=settings.color.xy+local;
+ "#,
+     );
+diff --git a/crates/layer-render-wgpu/src/scene.rs b/crates/layer-render-wgpu/src/scene.rs
+index 117b87e..66bb853 100644
+--- a/crates/layer-render-wgpu/src/scene.rs
++++ b/crates/layer-render-wgpu/src/scene.rs
+@@ -444,7 +444,7 @@ impl Scene {
+                 r: default,
+                 g: default,
+                 b: default,
+-                a: 1.,
++                a: default,
+             },
+         );
+         for ((id, c), page) in &r.layer_masks.pages {
+diff --git a/crates/layer-render-wgpu/src/scene.wgsl b/crates/layer-render-wgpu/src/scene.wgsl
+index a71147c..08fb3b3 100644
+--- a/crates/layer-render-wgpu/src/scene.wgsl
++++ b/crates/layer-render-wgpu/src/scene.wgsl
+@@ -67,14 +67,14 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
+     let raw = textureSample(front,sampling,v.uv);
+     if op == 6u { let a = raw.r*settings.color.a; return vec4<f32>(settings.color.rgb*a,a); }
+     if op == 1u { return raw*settings.options.y; }
+-    if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
++    if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
+     let dst = textureSample(back,sampling,v.uv);
+     if op == 7u {
+         let m = select(settings.options.z, mix(dst.r,1.-dst.r,settings.options.w-2.), settings.options.w>=2.);
+         return raw * m * settings.options.y;
+     }
+-    if op == 3u { return raw*dst.r; }
+-    if op == 5u { let a = (1.-raw.r)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
++    if op == 3u { return raw*dst.a; }
++    if op == 5u { let a = (1.-raw.a)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
+     let src = raw*settings.options.y;
+     let s = src.rgb/max(src.a,.000001); let d = dst.rgb/max(dst.a,.000001);
+     let b = blend(s,d,u32(settings.options.z));
