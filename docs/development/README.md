@@ -65,6 +65,9 @@ and GPU measurements. Use checks relevant to the behavior you changed, then test
 on the affected hosts. A shared test cannot establish native widget parity or
 physical pen behavior.
 
+[Rust build timings](rust-build-times.md) profiles cached GTK, Web and Android
+rebuilds after a shared-core edit and compares optimized incremental settings.
+
 Generated builds, screenshots and traces belong in ignored output directories,
 not in source commits. The [publication guide](publication.md) covers licensing
 and distribution checks. Contribution priorities are in the
