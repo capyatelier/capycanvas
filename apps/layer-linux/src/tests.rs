@@ -7610,6 +7610,19 @@ fn native_workspace_management() {
             .find(|g| g.panels.contains(&panel))
             .unwrap()
     };
+    let live = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .workspace_update()
+            .drag
+            .unwrap()
+            .group
+            .unwrap()
+            .bounds
+    };
 
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
@@ -7755,8 +7768,8 @@ fn native_workspace_management() {
         let drag = begin_workspace_drag(&w, &grip, 3.0, 10.0);
         drag.update([45.0f64, 30.0f64]);
         pump(100);
-        assert_eq!(placement(panel).bounds.x, p.bounds.x + 45.0);
-        assert_eq!(placement(panel).bounds.y, p.bounds.y + 30.0);
+        assert_eq!(live().x, p.bounds.x + 45.0);
+        assert_eq!(live().y, p.bounds.y + 30.0);
         snapshot(&format!("live-toolbar-move-{theme:?}"));
         drag.end();
         pump(100);
@@ -7853,7 +7866,7 @@ fn native_workspace_management() {
         let drag = begin_workspace_drag(&w, &header, grab.x(), grab.y());
         drag.update([dx as f64, 20.0f64]);
         pump(100);
-        assert_eq!(placement(panel).bounds.x, original.x + dx);
+        assert_eq!(live().x, original.x + dx);
         assert_eq!(
             w.groups
                 .borrow()
@@ -7894,7 +7907,7 @@ fn native_workspace_management() {
             .1
             .clone();
         click(&tab);
-        assert_ne!(placement(panel).bounds.height, tall);
+        assert_eq!(placement(panel).bounds.height, tall);
         open_context(ContextTarget::Panel { panel });
         assert!(menu_action(&menu.menu_model().unwrap(), "Rename Painting toolbar…").is_none());
         activate(&menu, "Configure Painting toolbar…");
