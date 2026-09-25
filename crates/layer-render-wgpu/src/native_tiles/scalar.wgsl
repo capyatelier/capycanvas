@@ -1,4 +1,4 @@
-struct Settings { maximum:u32, components:u32, padding:vec2<u32>, region:vec4<u32> }
+struct Settings { maximum:u32, components:u32, reciprocal:f32, padding:u32, region:vec4<u32> }
 struct Status { invalid:atomic<u32>, clipped:atomic<u32> }
 TEXTURES
 @group(0) @binding(SETTINGS_BINDING) var<uniform> settings:Settings;
@@ -42,7 +42,7 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
         }
         let shift=c*depth;
         word=(word&~(settings.maximum<<shift))|(code<<shift);
-        store_canonical(invocation.z,pixel,vec4(f32(code)/f32(settings.maximum),0.,0.,1.));
+        store_canonical(invocation.z,pixel,vec4(f32(code)*settings.reciprocal,0.,0.,1.));
     }
     store_word(invocation.z,address,word);
 }

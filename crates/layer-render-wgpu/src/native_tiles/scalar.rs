@@ -64,7 +64,7 @@ pub(crate) fn restore_upload(
 ) -> Result<u64, GpuRasterError> {
     let bytes = request.blob.decode().map_err(GpuRasterError::Color)?;
     let step = usize::from(request.blob.descriptor.bits_per_channel / 8);
-    let maximum = if step == 1 { 255. } else { 65535. };
+    let reciprocal = reciprocal(if step == 1 { SampleDepth::U8 } else { SampleDepth::U16 });
     let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("bounded scalar restore upload"),
         size: 256 * 256 * 4,
@@ -88,7 +88,7 @@ pub(crate) fn restore_upload(
                 } else {
                     u16::from_le_bytes(sample.try_into().unwrap()) as f32
                 };
-                *target = (code / maximum).to_le_bytes();
+                *target = (code * reciprocal).to_le_bytes();
             }
             mapped.slice(y * 1024..(y + 1) * 1024).copy_from_slice(&row);
         }
@@ -300,7 +300,7 @@ impl NativeScalarEncoder {
             [
                 depth.maximum(),
                 4 / depth.bytes() as u32,
-                0,
+                reciprocal(depth).to_bits(),
                 0,
                 0,
                 0,
@@ -380,7 +380,7 @@ impl NativeScalarEncoder {
                     let values = [
                         r.depth.maximum(),
                         4 / r.depth.bytes() as u32,
-                        0,
+                        reciprocal(r.depth).to_bits(),
                         0,
                         r.region[0],
                         r.region[1],
@@ -492,6 +492,9 @@ impl NativeScalarEncoder {
             pass.dispatch_workgroups(groups[0], groups[1], groups[2]);
         }
     }
+}
+fn reciprocal(depth: SampleDepth) -> f32 {
+    1. / depth.maximum() as f32
 }
 fn validate(r: &NativeScalarRequest<'_>, in_place: bool) -> Result<(), GpuRasterError> {
     if r.depth.is_float()
