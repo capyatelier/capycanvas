@@ -7,12 +7,16 @@ import test from "node:test";
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 
 test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
-  const canvas = {}, samples = [];
+  const canvas = {}, samples = [], inputs = [], changes = [];
   const context = {
     gpuReady: true, canvas, lastPenEvent: null,
     document: { elementFromPoint: () => canvas },
     position: () => [20, 30], wake() {},
-    app: { cursor_input: sample => samples.push(Array.from(sample)) },
+    applyChange: change => changes.push(change),
+    app: {
+      cursor_input: sample => samples.push(Array.from(sample)),
+      input: event => (inputs.push(event.type), { change: "cursor-left" }),
+    },
   };
   runInNewContext(source.slice(source.indexOf("let canvasCursorActive"), source.indexOf("function wake()")), context);
   for (const [pointerType, buttons, kind] of [["mouse", 0, 1], ["pen", 0, 0], ["pen", 32, 2]]) {
@@ -22,7 +26,9 @@ test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
     assert.equal(samples.at(-1)[9], kind);
   }
   context.cursorInput({ pointerType: "touch" });
-  assert.deepEqual(samples.at(-1), []);
+  assert.equal(samples.length, 3);
+  assert.deepEqual(inputs, ["cursor_leave"]);
+  assert.deepEqual(changes, ["cursor-left"]);
 });
 function harness({ raw = false, prediction = false, paint: allowPaint = true } = {}) {
   const listeners = new Map(), records = [], phases = [], cursors = [];
@@ -46,6 +52,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
       return { paint, handled };
     },
     cursorInput(event) { cursors.push(event?.type ?? null); }, wake() {},
+    window: { addEventListener() {} }, setTimeout: () => 0, clearTimeout() {},
   };
   if (raw) context.onpointerrawupdate = null;
   runInNewContext(source.slice(source.indexOf("function position("),

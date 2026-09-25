@@ -76,9 +76,16 @@ export async function checkToolbarManager({ call, evaluate, settle }) {
     await call('Input.dispatchMouseEvent', {type:'mousePressed',...point,button:'left',clickCount:1});
     await call('Input.dispatchMouseEvent', {type:'mouseReleased',...point,button:'left',clickCount:1}); await settle();
   };
+  const menuItem = async label => {
+    const point = await evaluate(`(() => { const r=[...document.querySelectorAll('#workspace-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await call('Input.dispatchMouseEvent', {type:'mouseMoved',...point});
+    await call('Input.dispatchMouseEvent', {type:'mousePressed',...point,button:'left',clickCount:1});
+    await call('Input.dispatchMouseEvent', {type:'mouseReleased',...point,button:'left',clickCount:1}); await settle();
+  };
   const model = () => evaluate('layerApp.app.toolbar_manager() ?? null');
   const shot = async name => { const image = await call('Page.captureScreenshot', { format: 'png' }); await writeFile(`${dir}/web-${name}.png`, Buffer.from(image.data, 'base64')); };
   const initial = await evaluate('layerApp.state().workspace');
+  const builtins = initial.layout.panels.filter(p=>p.content.kind==='toolbar').length;
   for (const theme of ['dark', 'light']) {
     await send({ type: 'restore_workspace', workspace: initial }); await send({ type: 'set_theme', theme });
     for (const name of ['Sketching', 'Painting']) {
@@ -88,12 +95,12 @@ export async function checkToolbarManager({ call, evaluate, settle }) {
     const hidden = await evaluate("layerApp.state().workspace.layout.panels.at(-1).id");
     await edit({ type: 'set_panel_visible', panel: hidden, visible: false });
     const before = await evaluate('layerApp.state().workspace');
-    await click('summary[aria-label="Workspace"]');
+    await click('[data-menu="window"] > summary'); await menuItem('Quick Access Toolbars');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('#workspace-menu .menu-label')].slice(-2).map(n=>n.textContent)"), ['New Toolbar…','Manage Toolbars…']);
     await click('#workspace-menu button:last-child');
     assert.equal(await evaluate("document.querySelector('#toolbar-manager').open"), true);
     assert.equal(await evaluate("document.querySelector('#delete-managed-toolbar').disabled"), true);
-    assert.equal((await model()).toolbars.length, 3);
+    assert.equal((await model()).toolbars.length, builtins + 2);
     await shot(`${theme}-initial`);
     await click(`.managed-toolbars button[data-panel="${hidden}"]`);
     assert.equal((await model()).selected, hidden);
@@ -110,7 +117,7 @@ export async function checkToolbarManager({ call, evaluate, settle }) {
     assert.equal((await model()).selected, hidden);
     assert.deepEqual(await evaluate('layerApp.state().workspace'), before);
     await click('#delete-managed-toolbar'); await click('#confirm-toolbar');
-    assert.equal((await model()).toolbars.length, 2);
+    assert.equal((await model()).toolbars.length, builtins + 1);
     assert.equal(await evaluate("document.querySelector('#delete-managed-toolbar').disabled"), true);
     await shot(`${theme}-deleted`);
     while ((await model()).toolbars.length) {
@@ -165,6 +172,18 @@ export async function checkTabStyles({ call, evaluate, settle }) {
   console.log('PASS: group context choices and active/inactive tab contents in all five styles, both themes');
 }
 
+const legacyLayout = workspace => {
+  const fixture = structuredClone(workspace);
+  const tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "automatic" });
+  Object.assign(fixture.layout, { bands: [
+    { id: 3, edge: "left", extent: 232, root: { kind: "split", id: 4, axis: "vertical", fraction: .68, first: tabs(5, ["brushes"]), second: tabs(6, ["sizes"]) } },
+    { id: 7, edge: "right", extent: 232, root: tabs(8, ["layers", "adjustments", "properties"]) },
+    { id: 1, edge: "top", extent: 42, root: tabs(2, ["toolbar"]) },
+  ], floating: [], collapsed: [], column_stacks: [], fit_tab_groups: [], fit_height_groups: [], next_id: Math.max(9, workspace.layout.next_id) });
+  fixture.zen_mode = false;
+  return fixture;
+};
+
 // Real browser pointer sequences exercise capture across DOM reconciliation;
 // direct Rust actions are only used to establish each test's starting layout.
 export async function checkWorkspace({ call, evaluate, settle }) {
@@ -199,7 +218,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     const p = await evaluate(`(()=>{const n=[...document.querySelectorAll(${JSON.stringify(selector + " button")})].find(n=>(n.querySelector('.menu-label')?.textContent||n.textContent)===${JSON.stringify(label)});if(!n)throw new Error('Missing menu item '+${JSON.stringify(label)});if(n.disabled)throw new Error('Disabled menu item '+${JSON.stringify(label)});const b=n.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()`);
     await clickAt(p);
   };
-  const workspaceMenu = async () => click('summary[aria-label="Workspace"]');
+  const workspaceMenu = async () => click('[data-menu="window"] > summary');
   const shot = async name => {
     await wait(); const image = await call("Page.captureScreenshot", { format: "png" });
     await writeFile(`${dir}/${name}.png`, Buffer.from(image.data, "base64"));
@@ -224,6 +243,8 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   };
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   await wait();
+  const original = await snapshot();
+  await send({ type: "restore_workspace", workspace: legacyLayout(original) }); await wait();
   const initial = await snapshot();
   const reset = async () => {
     await evaluate("document.querySelector('.panel-context-menu').hidePopover();document.querySelectorAll('details[open]').forEach(n=>n.open=false)");
@@ -237,15 +258,16 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     for (const style of ["automatic", "active_name", "icon_name", "name", "icon"]) {
       await customize({ type: "set_tab_style", group: (await group("sizes")).id, style });
       await wait();
-      const before = await snapshot();
-      for (const hidden of [true, false]) {
-        await clickAt(await point(grip("sizes")), 2);
-        assert.equal((await config("sizes")).hide_tab, hidden, "First double-click toggles docked header");
-        assert.equal((await group("sizes")).floating, false);
-        assert.equal((await group("sizes")).tabs_visible, !hidden);
-        assert.deepEqual((await snapshot()).layout.bands, before.layout.bands, "Dock dimensions remain unchanged");
-        await shot(`docked-handle-${style}-${hidden}-${theme}`);
-      }
+      const before = await snapshot(), column = before.layout.bands.find(b => b.edge === "left").root.id;
+      await clickAt(await point(grip("sizes")), 2);
+      assert.deepEqual((await snapshot()).layout.collapsed.map(c => c.root), [column], "First double-click collapses the docked column");
+      assert.equal(await group("sizes"), undefined);
+      assert.equal((await config("sizes")).hide_tab, false);
+      await shot(`docked-handle-${style}-${theme}`);
+      await customize({ type: "set_column_collapsed", group: column, collapsed: false }); await wait();
+      assert.deepEqual((await snapshot()).layout.collapsed, []);
+      assert.deepEqual((await snapshot()).layout.bands, before.layout.bands, "Expanding restores the dock dimensions");
+      assert.equal((await group("sizes")).tabs_visible, true);
     }
   }
   await reset();
@@ -270,9 +292,9 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     await workspaceMenu(); await shot(`workspace-menu-${theme}`);
     const menuModel = await evaluate("layerApp.app.workspace_menu()");
     assert.equal(menuModel.sections.length, 4);
-    await choose("Brushes panel", "#workspace-menu"); assert.equal(await group("brushes"), undefined);
-    await workspaceMenu(); await choose("Brushes panel", "#workspace-menu"); assert.ok(await group("brushes"));
-    await workspaceMenu(); await choose("New Toolbar…", "#workspace-menu");
+    await choose("Tool Set", "#workspace-menu"); assert.equal(await group("brushes"), undefined);
+    await workspaceMenu(); await choose("Tool Set", "#workspace-menu"); assert.ok(await group("brushes"));
+    await workspaceMenu(); await choose("Quick Access Toolbars", "#workspace-menu"); await choose("New Toolbar…", "#workspace-menu");
     await edit("#toolbar-name", `Review ${theme}`);
     await click(".tool-choice:first-child"); await click("#confirm-tools");
     let custom = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name==='Review ${theme}').id`);
@@ -289,7 +311,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     const duplicate = await evaluate(`layerApp.state().workspace.layout.panels.filter(p=>p.content.kind==='toolbar').at(-1).id`);
     assert.notEqual(custom, duplicate);
     assert.deepEqual((await config(custom)).content.tiles.map(t=>t.control), (await config(duplicate)).content.tiles.map(t=>t.control));
-    await workspaceMenu(); await choose("Manage Toolbars…", "#workspace-menu");
+    await workspaceMenu(); await choose("Quick Access Toolbars", "#workspace-menu"); await choose("Manage Toolbars…", "#workspace-menu");
     await click(`.managed-toolbars button[data-panel="${duplicate}"]`);
     await click("#delete-managed-toolbar");
     await shot(`delete-${theme}`);
@@ -300,16 +322,17 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     await workspaceMenu(); await choose("Redo Layout Change", "#workspace-menu"); assert.equal(await config(duplicate), undefined);
     await context(grip(custom)); await choose(`Hide Study ${theme} toolbar`);
     assert.equal(await group(custom), undefined); assert.ok(await config(custom));
-    await workspaceMenu(); await choose(`Study ${theme} toolbar`, "#workspace-menu"); assert.ok(await group(custom));
+    await workspaceMenu(); await choose("Quick Access Toolbars", "#workspace-menu"); await choose(`Study ${theme}`, "#workspace-menu"); assert.ok(await group(custom));
     await reset();
     const destination = (await group("layers")).id;
+    await customize({ type: "set_tab_style", group: destination, style: "icon" }); await wait();
     await context(grip("layers")); await choose("Add built-in panel"); await shot(`add-panel-${theme}`); await choose("Brush size panel");
     assert.equal((await group("sizes")).id, destination);
     assert.equal(await evaluate(`document.querySelector('[data-group="${destination}"] .tab-list').scrollWidth<=document.querySelector('[data-group="${destination}"] .tab-list').clientWidth`), true);
     await context(grip("sizes")); await choose("Add Toolbar"); await shot(`add-toolbar-${theme}`); await choose("Tools toolbar");
     assert.equal((await group("toolbar")).id, destination);
     await context(tab("toolbar"));
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"), ["Configure Tools toolbar…", "Hide Tools toolbar"]);
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"), ["Collapse column", "Configure Tools toolbar…", "Hide Tools toolbar"]);
     await choose("Configure Tools toolbar…");
     await shot(`toolbar-configuration-${theme}`);
     assert.equal(await evaluate("document.querySelectorAll('.panel-configuration .toolbar-options button').length>6"), true);
@@ -325,10 +348,10 @@ export async function checkWorkspace({ call, evaluate, settle }) {
         await context(grip("toolbar")); await choose(label);
         assert.equal((await snapshot()).layout.floating[0].toolbar_layout, mode, "tile size must retain the selected preset");
         const g = await group("toolbar");
-        const bounds = await evaluate(`(()=>{const strip=document.querySelector('[data-panel="toolbar"] .toolbar-controls'),b=strip.getBoundingClientRect();return[...strip.querySelectorAll('[data-tile]')].map(n=>{const r=n.getBoundingClientRect(),s=n.querySelector('svg').getBoundingClientRect();return{x:r.x-b.x,y:r.y-b.y,width:r.width,height:r.height,glyph:s.width,label:n.querySelector('.tile-label')?.textContent}})})()`);
+        const bounds = await evaluate(`(()=>{const strip=document.querySelector('[data-panel="toolbar"] .toolbar-controls'),b=strip.getBoundingClientRect();return[...strip.querySelectorAll('[data-tile]:not(.tile-divider)')].map(n=>{const r=n.getBoundingClientRect(),s=n.querySelector('svg').getBoundingClientRect();return{x:r.x-b.x,y:r.y-b.y,width:r.width,height:r.height,glyph:s.width,label:n.querySelector('.tile-label')?.textContent}})})()`);
         for (const b of bounds) { assert.equal(b.width, width); assert.equal(b.height, height); assert.equal(b.glyph, glyph); assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=g.bounds.width+.5&&b.y+b.height<=g.bounds.height+.5); if (style.endsWith("labeled")) assert.ok(b.label); }
-        if (mode === "horizontal") assert.ok(bounds.every(b=>b.y===0));
-        if (mode === "vertical") assert.ok(bounds.every(b=>b.x===0));
+        if (mode === "horizontal") assert.ok(new Set(bounds.map(b=>b.x)).size > new Set(bounds.map(b=>b.y)).size && bounds[0].y === 0);
+        if (mode === "vertical") assert.ok(new Set(bounds.map(b=>b.y)).size > new Set(bounds.map(b=>b.x)).size && bounds[0].x === 0);
         await shot(`floating-${mode}-${style}-${theme}`);
       }
     }
@@ -348,7 +371,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   assert.equal((await group("sizes")).floating, true);
   await send({ type: "invoke", command: "undo_workspace" }); assert.deepEqual(await snapshot(), beforeDrag);
   await send({ type: "invoke", command: "redo_workspace" }); await wait();
-  await context(grip("sizes")); await choose("Configure Brush size panel…");
+  await context(tab("sizes")); await choose("Configure Brush size panel…");
   assert.equal(await evaluate("layerApp.state().customization.expanded"), "sizes");
   await customize({ type: "close_expanded" }); await wait();
   // Every hitbox is outside the border, including the top (inside means drag).
@@ -399,6 +422,8 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   assert.equal((await group("sizes")).floating, true);
   await call("Emulation.setTouchEmulationEnabled", {enabled:false}); await shot("touch-floating-panel");
   await reset(); await float("sizes", [450,320]); await float("layers", [720,320]);
+  const settings = await evaluate("layerApp.state().settings");
+  await send({type:"restore_settings",settings:{...settings,zen_reveal_at_edges:true}});
   await send({type:"invoke",command:"zen_mode"});
   await mouse("mouseMoved", {x:620,y:600}); await wait();
   const zenHidden = () => evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')");
@@ -433,6 +458,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   assert.equal(await zenHidden(), false);
   await mouse("mouseReleased", {x:620,y:680}, {button:"left",clickCount:1}); await wait();
   assert.equal(await zenHidden(), true);
+  await send({type:"restore_settings",settings});
   await reset();
   // Stacked dock dividers use the same stable pointer path as float resizing.
   const divider = await evaluate("layerApp.app.layout(innerWidth,innerHeight).dividers.find(d=>d.axis==='vertical')");
@@ -495,16 +521,21 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   const wide = (await group("toolbar")).bounds;
   const edgeDivider = await evaluate(`layerApp.app.layout(innerWidth,innerHeight).dividers.find(d=>d.axis==='horizontal'&&Math.abs(d.bounds.x+d.bounds.width-${wide.x})<1)`);
   const shrinkStart = {x:edgeDivider.bounds.x+edgeDivider.bounds.width/2,y:edgeDivider.bounds.y+edgeDivider.bounds.height/2};
-  await drag(shrinkStart, {x:shrinkStart.x+wide.width-180,y:shrinkStart.y});
+  await drag(shrinkStart, {x:shrinkStart.x+wide.width-250,y:shrinkStart.y});
+  assert.deepEqual((await snapshot()).layout.collapsed, []);
   assert.equal(await evaluate(`(()=>{const n=document.querySelector('[data-group="${tabGroup}"] .tab-list');return n.scrollWidth>n.clientWidth})()`),true);
   const tight = (await group("toolbar")).bounds;
-  await drag(await point(tab("layers")), {x:tight.x+tight.width/2,y:tight.y+tight.height/2}, async () => {
+  const end = await evaluate(`(()=>{const g=document.querySelector('[data-group="${tabGroup}"] .dock-tabs>.panel-grip').getBoundingClientRect();return{x:g.x-2,y:g.y+g.height/2}})()`);
+  const visible = await evaluate(`[...document.querySelectorAll('[data-group="${tabGroup}"] .dock-tab')].filter(n=>n.getBoundingClientRect().x<${end.x}).map(n=>n.dataset.panel)`);
+  await drag(await point(tab("layers")), end, async () => {
     const marker = await evaluate(`(()=>{const b=document.querySelector('.drop-indicator').getBoundingClientRect(),g=document.querySelector('[data-group="${tabGroup}"] .dock-tabs>.panel-grip').getBoundingClientRect();return{width:b.width,top:b.y,right:b.right,grip:g.x}})()`);
     assert.equal(marker.width,3); assert.equal(marker.top,tight.y); assert.ok(Math.abs(marker.right-marker.grip)<1);
     await shot("overflow-tab-append");
   });
-  assert.equal((await group("layers")).panels.at(-1), "layers");
+  const dropped = (await group("layers")).panels;
+  assert.equal(dropped.indexOf("layers"), dropped.indexOf(visible.at(-1)) + 1, "The attached tab drops at its slide preview's slot");
   await reset();
+  await send({ type: "restore_workspace", workspace: original }); await wait();
   console.log("Web workspace gestures: real tear-off/touch/capture, eight-edge resize, first double-click reset, layout cycles, docking/history and Zen floating-only merges passed.");
 }
 
@@ -541,6 +572,8 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   const expanded = () => evaluate("layerApp.state().customization.expanded ?? null");
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   await settle(); await wait();
+  const original = await evaluate("layerApp.state().workspace");
+  await send({ type: "restore_workspace", workspace: legacyLayout(original) }); await wait();
   const initial = await evaluate("layerApp.state().workspace");
   await shot("startup");
   const pixels = await canvasPixels();
@@ -549,7 +582,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await send({ type: "restore_workspace", workspace: initial });
     await send({ type: "set_theme", theme }); await wait();
     await shot(`initial-${theme}`);
-    assert.deepEqual(await context(tab("sizes")), ["Show tab bar", "Configure Brush size panel…", "Hide Brush size panel"]);
+    assert.deepEqual(await context(tab("sizes")), ["Show tab bar", "Collapse column", "Configure Brush size panel…", "Hide Brush size panel"]);
     await shot(`panel-menu-${theme}`);
     await menuItem('Configure Brush size panel…');
     assert.equal(await evaluate(`!!document.querySelector('${tab("sizes")} svg')`), true);
@@ -584,7 +617,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       await shot(`expanded-${edge}-${theme}`); await click(tab("sizes"));
     }
     await send({ type: "restore_workspace", workspace: initial }); await wait();
-    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Automatic", "Icons and active tab name", "Icons and names", "Names only", "Icons only", "Show tab bar", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
+    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Automatic", "Icons and active tab name", "Icons and names", "Names only", "Icons only", "Collapse column", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
     await shot(`group-menu-${theme}`); await click('.panel-context-menu button:last-child');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
     await evaluate("{const name=document.querySelector('#toolbar-name');name.value='Layers';name.dispatchEvent(new Event('input',{bubbles:true}));}");
@@ -616,24 +649,32 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await send({ type: "restore_workspace", workspace: initial }); await send({ type: "restore_workspace", workspace: saved });
     assert.deepEqual(await evaluate("layerApp.state().workspace"), saved);
     await send({ type: "invoke", command: "reset_layout" });
-    assert.ok(await evaluate(`layerApp.state().workspace.layout.panels.some(p=>p.id==='${custom}')`));
+    await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;(function poll(){const cancel=[...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Cancel');if(cancel){cancel.click();resolve();}else if(performance.now()>end)reject(Error('Restore Starting Layout prompt'));else setTimeout(poll,40);})();})`);
+    await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;(function poll(){if(!document.querySelector('.workspace-form[open]')&&!JSON.parse(layerApp.app.workspace_view()).busy)resolve();else if(performance.now()>end)reject(Error('Cancelled restore'));else setTimeout(poll,40);})();})`);
+    assert.ok(await evaluate(`layerApp.state().workspace.layout.panels.some(p=>p.id==='${custom}')`), "Cancelling the starting-layout preview keeps custom toolbars");
     await send({ type: "move_panel", panel: custom, target: { kind: "edge", edge: "bottom", outer: false } }); await wait();
-    // Native HTML DND and touch movement use exactly the same core tile target.
+    const hold = () => evaluate("new Promise(resolve=>setTimeout(resolve,650))");
     const before = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.map(t=>t.id)`);
-    const dragged = await evaluate(`(()=>{window.dragSource=document.querySelector('[data-panel=toolbar] [data-tile]');window.dragData=new DataTransfer();dragSource.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dragData}));const r=document.querySelector('[data-panel="${custom}"] [data-tile]').getBoundingClientRect();window.dropPoint={clientX:r.x+1,clientY:r.y+r.height/2};document.querySelector('#workspace').dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dragData,...dropPoint}));return{tile:Number(dragSource.dataset.tile),kind:document.querySelector('.drop-indicator').dataset.kind,hidden:document.querySelector('.drop-indicator').hidden};})()`);
-    assert.equal(dragged.kind, "tile"); assert.equal(dragged.hidden, false);
+    const source = await evaluate(`(()=>{const n=document.querySelector('[data-panel=toolbar] [data-tile]'),r=n.getBoundingClientRect();return{tile:Number(n.dataset.tile),x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    const dropPoint = await evaluate(`(()=>{const r=document.querySelector('[data-panel="${custom}"] [data-tile]').getBoundingClientRect();return{x:r.x+1,y:r.y+r.height/2}})()`);
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: source.x, y: source.y });
+    await call("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, clickCount: 1, x: source.x, y: source.y });
+    await hold();
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, ...dropPoint }); await settle();
+    assert.equal(await evaluate("document.querySelector('.drop-indicator').dataset.kind"), "tile");
+    assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"), false);
     await shot(`tile-drop-${theme}`);
-    await evaluate(`document.querySelector('#workspace').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dragData,...dropPoint}));dragSource.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dragData}));`);
+    await call("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, clickCount: 1, ...dropPoint });
     await wait();
-    assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.map(t=>t.id)`), [dragged.tile, ...before]);
+    assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.map(t=>t.id)`), [source.tile, ...before]);
     await call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     const touch = (type, point) => call("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ ...point, id: 1, radiusX: 1, radiusY: 1, force: 1 }] : [] });
-    const first = await rect(`[data-panel="${custom}"] [data-tile="${dragged.tile}"]`);
+    const first = await rect(`[data-panel="${custom}"] [data-tile="${source.tile}"]`);
     const last = await rect(`[data-panel="${custom}"] [data-tile="${before.at(-1)}"]`); last.x += 17;
-    await touch("touchStart", first); await touch("touchMove", last); await settle();
+    await touch("touchStart", first); await hold(); await touch("touchMove", last); await settle();
     assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"), false);
     await touch("touchEnd"); await wait();
-    assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.map(t=>t.id)`), [...before, dragged.tile]);
+    assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.map(t=>t.id)`), [...before, source.tile]);
     const holdPoint = await rect(tab("brushes"));
     await touch("touchStart", holdPoint);
     await evaluate("new Promise(resolve=>setTimeout(resolve,550))");
@@ -652,7 +693,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   await click('#confirm-tools');
   const many = await evaluate("layerApp.state().workspace.layout.panels.at(-1).id");
   // Every tile remains configured, even when a tabbed ribbon clips later rows.
-  const clipped = await evaluate(`(()=>{const p=document.querySelector('[data-panel="${many}"] .tile-panel'),r=p.getBoundingClientRect(),tiles=[...p.querySelectorAll('[data-tile]')];return{overflow:getComputedStyle(p).overflowY,count:tiles.length,hidden:tiles.filter(t=>t.getBoundingClientRect().top>=r.bottom).length};})()`);
+  const clipped = await evaluate(`(()=>{const p=document.querySelector('[data-panel="${many}"] .tile-panel'),r=p.getBoundingClientRect(),tiles=[...p.querySelectorAll('[data-tile]')];return{overflow:getComputedStyle(p).overflowY,count:tiles.length,hidden:tiles.filter(t=>t.hidden||t.getBoundingClientRect().top>=r.bottom).length};})()`);
   assert.equal(clipped.overflow, "clip"); assert.ok(clipped.count > 25 && clipped.hidden > 0);
   await shot("clipped-ribbon");
   await send({ type: "move_panel", panel: many, target: { kind: "edge", edge: "left", outer: false } }); await wait();
@@ -673,6 +714,8 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   await shot("animated-tab-switch");
   await send({ type: "restore_workspace", workspace: initial });
   await wait();
+  const settings = await evaluate("layerApp.state().settings");
+  await send({ type: "restore_settings", settings: { ...settings, zen_reveal_at_edges: true } });
   await send({ type: "invoke", command: "zen_mode" });
   await click(tab("sizes"));
   assert.equal(await expanded(), "sizes");
@@ -681,6 +724,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
   await clickAt({ x: 850, y: 450 });
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
-  await send({ type: "restore_workspace", workspace: initial });
+  await send({ type: "restore_settings", settings });
+  await send({ type: "restore_workspace", workspace: original }); await wait();
   console.log("Web customization: native pointer menus/tabs, dynamic toolbars, picker validation, live controls, side drawers and restore passed.");
 }

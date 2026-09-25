@@ -46,8 +46,9 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const pageScale = await evaluate('visualViewport.scale');
   await click('.workspace-switcher button[data-workspace-id="builtin:workspace:painter"]');
   await wait('!JSON.parse(layerApp.app.workspace_view()).busy');
-  assert.deepEqual(await evaluate('layerApp.state().workspace.layout.bands'),[]);
-  assert.equal(await evaluate("[...document.querySelectorAll('.dock-panel')].filter(n=>n.getBoundingClientRect().width>0).length"),0,'Fresh Sketch shows only its title bar');
+  const bands = await evaluate('layerApp.state().workspace.layout.bands');
+  assert.deepEqual(bands.map(b=>[b.edge,b.alignment,b.root.panels.length]),[['left','center',1]],'Sketch docks only its compact brush toolbar');
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('.dock-group')].filter(n=>n.getBoundingClientRect().width>0).map(n=>Number(n.dataset.group))"),[bands[0].root.id],'Fresh Sketch shows only its title bar and compact brush toolbar');
   const entries = await evaluate('layerApp.state().workspace.layout.header.zones.flat()');
   const tool = command => `[data-header-item="${entries.find(e=>e.item.control?.command===command).id}"] .header-tool`;
   const color = `[data-header-item="${entries.find(e=>e.item.control?.kind==='color').id}"] .header-tool`;
