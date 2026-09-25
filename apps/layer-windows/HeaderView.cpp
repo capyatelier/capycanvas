@@ -135,7 +135,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto choice=value.GetObject();auto id=str(choice,L"id");
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
             if(found==workspaces.end()){
-                Primitives::ToggleButton item;item.UseLayoutRounding(false);item.MinWidth(0);item.MinHeight(0);item.Height(26);item.Padding({10,0,10,0});
+                Primitives::ToggleButton item;item.UseLayoutRounding(false);item.MinWidth(0);item.MinHeight(0);item.Height(26);item.Padding({8,0,8,0});
                 item.BorderThickness({0});item.CornerRadius({15,15,15,15});item.FontSize(data->textSize());
                 // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
                 item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
@@ -255,16 +255,16 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));self->fillMenu(item.Items(),object(spec,L"model"));target.Append(item);
             }
         }}));
-        menuCapsule=Border();menuCapsule.Height(34);menuCapsule.Padding({4,4,4,4});menuCapsule.CornerRadius({17,17,17,17});menuCapsule.Background(headerSurface(data));
+        menuCapsule=Border();menuCapsule.Height(36);menuCapsule.Padding({5,5,5,5});menuCapsule.CornerRadius({18,18,18,18});menuCapsule.Background(headerSurface(data));
         menuCapsule.VerticalAlignment(VerticalAlignment::Center);menuCapsule.Child(menuLabels);
         menuGroup=Grid();menuGroup.VerticalAlignment(VerticalAlignment::Center);menuGroup.Children().Append(menuCapsule);menuGroup.Children().Append(menuOverflow);
         zen=command(L"zen_mode");settings=command(L"settings");
         AutomationProperties::SetAutomationId(zen,L"zen-button");AutomationProperties::SetAutomationId(settings,L"settings-button");
         switches=StackPanel();switches.Orientation(Orientation::Horizontal);switches.Spacing(2);switches.UseLayoutRounding(false);
-        switcher=ScrollViewer();switcher.UseLayoutRounding(false);switcher.Content(switches);switcher.Height(34);
+        switcher=ScrollViewer();switcher.UseLayoutRounding(false);switcher.Content(switches);switcher.Height(36);
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});switcher.BorderThickness({0});
+        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,5,5});switcher.CornerRadius({18,18,18,18});switcher.BorderThickness({0});
         switcher.Background(data->glass(L"switcher"));
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,L"Task workspaces");
         workspaceOverflow=button(data,L"Workspaces",[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
@@ -561,7 +561,6 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             bool open=str(drawerAnchor,L"kind")==L"header"&&num(drawerAnchor,L"id")==id&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
             native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));
-            if(auto pick=native.view.try_as<Button>())pick.BorderThickness(inBar?Thickness{0,1,0,1}:Thickness{});
             if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             native.outline.BorderThickness(editing?Thickness{1,1,1,1}:Thickness{});
             native.outline.BorderBrush(held==id&&flag(preview,L"detached")?fill(color(L"#dc3545")):input->Selected()==id?accent(data):data->brush(L"tabbar"));

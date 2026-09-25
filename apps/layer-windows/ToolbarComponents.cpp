@@ -229,7 +229,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             sizes.Append(pair);
         }
         auto geometry=toolbarUi(O({{L"type",S(L"options_layout")},{L"width",N(width)},{L"height",N(height)},
-            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"sizes",sizes},{L"button",size},{L"gap",N(vertical?2:10)}})).GetObject();
+            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"sizes",sizes},{L"button",size},{L"gap",N(vertical?num(style,L"gap",2):10)}})).GetObject();
         place(more,object(geometry,L"more"));
         auto placed=array(geometry,L"fields");
         for(size_t i=0;i<fields.size();++i){
