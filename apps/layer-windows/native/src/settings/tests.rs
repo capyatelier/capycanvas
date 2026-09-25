@@ -406,6 +406,34 @@ fn restoring_settings_does_not_echo_a_save_request() {
 }
 
 #[test]
+fn slider_bookmarks_survive_the_shared_save_and_sync() {
+    let directory = Directory::new();
+    let (wake, woke) = mpsc::channel();
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+        let _ = wake.send(());
+    });
+    let context = host.session.state().toolbar_context();
+    host.dispatch(UiAction::ToolbarEdit {
+        context,
+        action: Box::new(UiAction::ToggleSliderBookmark {
+            control: layer_ui::ToolbarControl::BrushSizeSlider,
+        }),
+    })
+    .unwrap();
+    let saved = host.session.state().settings.slider_bookmarks.clone();
+    assert!(!saved.is_empty());
+    for _ in 0..4 {
+        service.poll(&mut host).unwrap();
+        let _ = woke.recv_timeout(Duration::from_millis(200));
+    }
+    service.poll(&mut host).unwrap();
+    assert_eq!(host.session.state().settings.slider_bookmarks, saved);
+    assert_eq!(directory.file().load().unwrap().unwrap().slider_bookmarks, saved);
+    service.finish(&mut host).unwrap();
+}
+
+#[test]
 fn failed_save_is_reported_and_a_later_success_clears_the_error() {
     let (wake, completed) = mpsc::channel();
     let mut first = true;

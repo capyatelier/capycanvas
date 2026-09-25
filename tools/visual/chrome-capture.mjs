@@ -22,7 +22,7 @@ const width = Number(widthArg), height = Number(heightArg), scale = Number(scale
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'paint-expanded', 'paint-canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions', 'windows-editor', 'number-controls', 'color-panel', 'icons', 'choices', 'inline-numbers'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'paint-expanded', 'paint-canvas-under-header', 'sketch', 'photo', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions', 'windows-editor', 'number-controls', 'color-panel', 'icons', 'choices', 'inline-numbers'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -117,7 +117,8 @@ try {
     await captureWorkspaceTabs({fixture: JSON.parse(await readFile(fixturePath, 'utf8')), output, evaluate, call});
     assert.deepEqual(errors, []);
   } else {
-  if (scenario.startsWith('paint')) {
+  const preset = scenario.startsWith('paint') ? 'illustrator' : {sketch:'painter', photo:'photographer'}[scenario];
+  if (preset) {
     // Native capture metadata records reserved space for OS window controls.
     // Apply it through the shared layout action; the canvas stays full size.
     if (fixturePath) {
@@ -125,14 +126,14 @@ try {
       assert(Number.isFinite(workspace_bottom) && workspace_bottom >= 0 && workspace_bottom < height);
       await evaluate(`layerApp.dispatch({type:'measure_workspace_bottom',inset:${workspace_bottom}})`);
     }
-    await evaluate(`layerApp.dispatch({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:illustrator'}})`);
+    await evaluate(`layerApp.dispatch({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:${preset}'}})`);
     await evaluate(`new Promise((resolve,reject)=>{
       const start=performance.now();
       function check(){
         const workspace=JSON.parse(layerApp.app.workspace_view());
         if(workspace?.error)reject(new Error(workspace.error));
-        else if(workspace?.id==='builtin:workspace:illustrator'&&workspace.ready&&!workspace.busy)resolve(true);
-        else if(performance.now()-start>25000)reject(new Error('Paint workspace did not settle'));
+        else if(workspace?.id==='builtin:workspace:${preset}'&&workspace.ready&&!workspace.busy)resolve(true);
+        else if(performance.now()-start>25000)reject(new Error('Workspace preset did not settle'));
         else setTimeout(check,50);
       }check();
     })`);

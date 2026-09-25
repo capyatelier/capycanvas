@@ -6,6 +6,7 @@
 #include "NativeMenus.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceGeometry.h"
+#include "ColorPair.h"
 #include <chrono>
 #include <set>
 #include <limits>
@@ -40,7 +41,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::unique_ptr<HeaderStatus> systemStatus;
     struct Item{
         Border frame,outline;Grid content;Button editor{nullptr};FrameworkElement view{nullptr};
-        Image grip{nullptr};J entry;hstring key,iconKey;
+        Image grip{nullptr};J entry;hstring key,iconKey;std::shared_ptr<CapyUi::ColorPair> colors;
     };
     std::map<uint32_t,Item> items;
     std::vector<FrameworkElement> bankParts;
@@ -360,10 +361,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 else if(kind==L"settings")iconName=L"settings";else if(kind==L"menu")iconName=L"menu";
                 auto ctl=object(item,L"control");auto ctlKind=str(ctl,L"kind");
                 if(kind==L"tool"&&ctlKind==L"color"){
-                    auto swatch=pick.Content().try_as<Shapes::Ellipse>();if(!swatch){swatch=Shapes::Ellipse();pick.Content(swatch);}
-                    swatch.Width(iconSize*.7);swatch.Height(iconSize*.7);swatch.Stroke(data->brush(L"text"));swatch.StrokeThickness(1.5);
-                    auto rgba=array(object(data->state,L"brush"),L"color");
-                    if(rgba.Size()==4)swatch.Fill(fill({255,uint8_t(std::round(rgba.GetNumberAt(0)*255)),uint8_t(std::round(rgba.GetNumberAt(1)*255)),uint8_t(std::round(rgba.GetNumberAt(2)*255))}));
+                    if(!native.colors)native.colors=std::make_shared<ColorPair>(data);
+                    if(pick.Content()!=native.colors->root){pick.Content(native.colors->root);native.iconKey=L"";}
+                    native.colors->Update(data,iconSize);
                 }else if(kind==L"tool"&&ctlKind==L"divider"){
                     Border line;line.Height(1);line.Margin({6,6,6,6});line.Background(data->brush(L"tabbar"));pick.Content(line);
                 }else if(!iconName.empty()){

@@ -88,7 +88,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     void refreshGeometry(){
         double width=root.ActualWidth(),height=root.ActualHeight();
         if(!root.IsLoaded()||width<=0||height<=0)return;
-        double imageHeight=std::clamp(height-52.,0.,220.);
+        double imageHeight=std::clamp(height-52.,0.,naturalImage(width));
         if(overview.Height()!=imageHeight){overview.Height(imageHeight);return;}
         auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
         float bounds[4]{};
@@ -108,6 +108,10 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         RectangleGeometry clip;clip.Rect({0,0,float(width),float(height)});root.Clip(clip);
         background.Data(shape({0,0,float(width),float(height)}));
         surround.Data(shape({origin.X,origin.Y,float(overview.ActualWidth()),float(overview.ActualHeight())}));
+    }
+    double naturalImage(double width)const{
+        auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
+        return std::max(0.,width-16)*capy_navigator_aspect(uint32_t(num(document,L"width")),uint32_t(num(document,L"height")));
     }
     void apply(bool show){
         visible=show;if(!visible)cancel();
@@ -129,5 +133,6 @@ NavigatorView::NavigatorView(std::shared_ptr<WorkspaceData> data,std::function<v
     impl(std::make_shared<Impl>(std::move(data),std::move(changed))){impl->init();}
 NavigatorView::~NavigatorView(){impl->cancel();}
 FrameworkElement NavigatorView::Root()const{return impl->root;}
+double NavigatorView::NaturalHeight(double width)const{return impl->naturalImage(width)+52;}
 void NavigatorView::Apply(bool visible){impl->apply(visible);}
 J NavigatorView::Placement(UIElement const& reference,Rect clip,int order)const{return impl->placement(reference,clip,order);}

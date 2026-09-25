@@ -6,6 +6,7 @@
 #include "LayersView.h"
 #include "StatsView.h"
 #include "ProofPanel.h"
+#include "ColorPair.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
@@ -61,6 +62,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             auto view=LayersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
+            bool vertical=str(geometry,L"axis",L"vertical")==L"vertical";
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
                 auto tile=views.GetObjectAt(i);double id=num(tile,L"id");auto panelId=str(panel,L"id");
                 auto kind=str(object(tile,L"control"),L"kind");
@@ -69,12 +71,23 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));
                     if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item,false,{},WorkspaceGestures::Pickup::Hold);
                 };
+                if(object(tile,L"component").Size()){
+                    auto component=std::make_shared<ToolbarComponent>(data,panel,tile,gestures);
+                    auto element=component->Root();auto bounds=rects.GetObjectAt(i);
+                    tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));components.emplace(uint32_t(id),component);
+                    place(element,bounds);component->Layout(bounds,vertical);tiles.Children().Append(element);
+                    bindings.emplace_back([data=data,component,panelId,id]{
+                        auto current=findId(array(find(array(data->model,L"panels"),L"id",panelId),L"tiles"),id);
+                        if(object(current,L"component").Size())component->Update(current);
+                    });
+                    continue;
+                }
                 if(kind==L"divider"){
                     auto bounds=rects.GetObjectAt(i);auto slot=button(data,str(tile,L"label"),[]{});place(slot,bounds);
                     Border line;line.Background(data->brush(L"settings_secondary"));line.Opacity(.3);
                     bool horizontal=num(bounds,L"width")>num(bounds,L"height");
-                    line.Width(horizontal?num(bounds,L"width")*.7:1);
-                    line.Height(horizontal?1:num(bounds,L"height")*.7);
+                    line.Width(horizontal?std::max(0.,num(bounds,L"width")-8):1);
+                    line.Height(horizontal?1:std::max(0.,num(bounds,L"height")-8));
                     line.HorizontalAlignment(HorizontalAlignment::Center);line.VerticalAlignment(VerticalAlignment::Center);
                     slot.Content(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
                     tileControls.emplace(uint32_t(id),slot);
@@ -97,14 +110,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
                 if(kind==L"color"){
-                    Microsoft::UI::Xaml::Shapes::Ellipse swatch;
-                    swatch.Width(14);swatch.Height(14);swatch.Stroke(data->brush(L"text"));swatch.StrokeThickness(1.5);
-                    pick.Content(swatch);
-                    bindings.emplace_back([data=data,swatch]{
-                        auto rgba=array(object(data->state,L"brush"),L"color");
-                        if(rgba.Size()==4)swatch.Fill(fill({255,uint8_t(std::round(rgba.GetNumberAt(0)*255)),
-                            uint8_t(std::round(rgba.GetNumberAt(1)*255)),uint8_t(std::round(rgba.GetNumberAt(2)*255))}));
-                    });
+                    auto pair=std::make_shared<ColorPair>(data);pick.Content(pair->root);
+                    bindings.emplace_back([data=data,pair,size=num(panel,L"tile_icon_size",16)]{pair->Update(data,size);});
                 }
                 if(num(panel,L"tile_label_lines")>0){
                     auto image=pick.Content();pick.Content(nullptr);
@@ -125,6 +132,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     pick.Background(flag(current,L"selected")?selected():clear());
                     ToolTipService::SetToolTip(pick,box_value(str(current,L"tooltip")));
                 });
+            }
+            for(uint32_t i=0;i<tileOrder.size()&&i<rects.Size();++i){
+                auto box=rects.GetObjectAt(i);
+                if(num(box,L"width")<=0||num(box,L"height")<=0)tileElements.at(tileOrder[i]).Visibility(Visibility::Collapsed);
             }
             auto grip=object(tileGeometry,L"grip");
             if(grip.Size()&&gestures){
@@ -201,19 +212,24 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
         auto id=str(panel,L"id");
         if(id==L"filter_types"||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);
         else if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
-        else if(navigator)root.Height(272);
+        else if(navigator)root.Height(navigator->NaturalHeight(num(object(geometry,L"bounds"),L"width",272)));
     }
 }
 void PanelBody::Layout(J const& geometry){
     auto layout=object(geometry,L"tiles");auto bounds=array(layout,L"tiles");
+    bool vertical=str(geometry,L"axis",L"vertical")==L"vertical";
     for(uint32_t i=0;i<tileOrder.size();++i){
-        auto element=tileElements.at(tileOrder[i]);element.Visibility(i<bounds.Size()?Visibility::Visible:Visibility::Collapsed);
-        if(i>=bounds.Size())continue;
-        auto box=bounds.GetObjectAt(i);place(element,box);
+        auto element=tileElements.at(tileOrder[i]);
+        auto box=i<bounds.Size()?bounds.GetObjectAt(i):J{};
+        bool shown=num(box,L"width")>0&&num(box,L"height")>0;
+        element.Visibility(shown?Visibility::Visible:Visibility::Collapsed);
+        if(!shown)continue;
+        place(element,box);
+        if(auto found=components.find(tileOrder[i]);found!=components.end())found->second->Layout(box,vertical);
         if(auto found=dividers.find(tileOrder[i]);found!=dividers.end()){
             bool horizontal=num(box,L"width")>num(box,L"height");
-            found->second.Width(horizontal?num(box,L"width")*.7:1);
-            found->second.Height(horizontal?1:num(box,L"height")*.7);
+            found->second.Width(horizontal?std::max(0.,num(box,L"width")-8):1);
+            found->second.Height(horizontal?1:std::max(0.,num(box,L"height")-8));
         }
     }
     if(tileGrip){
@@ -223,9 +239,7 @@ void PanelBody::Layout(J const& geometry){
 }
 double PanelBody::ContentHeight()const{
     if(!root.IsLoaded()||root.Visibility()!=Visibility::Visible||root.ActualWidth()<=0)return -1;
-    // A Navigator has a natural 220-DIP preview and 52-DIP controls. Its
-    // arranged preview shrinks to fit the dock; that is not its natural size.
-    if(navigator)return 272;
+    if(navigator)return navigator->NaturalHeight(root.ActualWidth());
     return contentHeight?contentHeight():-1;
 }
 void PanelBody::Apply(bool visible){
