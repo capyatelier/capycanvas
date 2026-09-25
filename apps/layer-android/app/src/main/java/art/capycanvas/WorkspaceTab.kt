@@ -45,7 +45,7 @@ import org.json.JSONObject
                     lineTo(-f, h); squircleTo(Offset(-f, h-f), Offset(0f, f), Offset(f, 0f))
                     lineTo(0f, r); squircleTo(Offset(r, r), Offset(-r, 0f), Offset(0f, -r)); close()
                 }
-                drawPath(path, colors.panel)
+                drawPath(path, colors.tab)
             }
         }
         .combinedClickable(enabled = enabled,

@@ -15,6 +15,7 @@ pub(crate) struct App {
     pub display_hdr_available: bool,
     pub cache_directory: String,
     pub overviews: Vec<crate::android::OverviewSlot>,
+    pub glass: Vec<layer_render_wgpu::BackdropRegion>,
     pub instance: Option<wgpu::Instance>,
     pub gpu_generation: u64,
     pub gpu_failure: std::sync::Arc<std::sync::OnceLock<String>>,
@@ -48,6 +49,7 @@ impl App {
             gpu_failure: Default::default(),
             cache_directory: String::new(),
             overviews: Vec::new(),
+            glass: Vec::new(),
         })
     }
 }

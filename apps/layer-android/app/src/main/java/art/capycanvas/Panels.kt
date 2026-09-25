@@ -58,7 +58,6 @@ import kotlin.math.roundToInt
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(when {
                         tile.optBoolean("selected") -> colors.active
-                        opensDrawer -> colors.panel
                         else -> Color.Transparent
                     })
                     .combinedClickable(enabled = tile.getBoolean("enabled"),

@@ -50,6 +50,12 @@ def summarize(directory):
                 for sample in batch
                 if sample[2] == 1
             ),
+            "completion_ms": quantiles(
+                (row[2] - row[1]) / 1e6
+                for run in runs
+                for row in run.get("completions", [])
+                if run["begin_ns"] <= row[1] < run["begin_ns"] + duration * 1e9
+            ),
             "cpu_callback_ms": quantiles(frame[10] / 1e6 for frame in submitted),
             "owner_cpu_ms": quantiles(frame[17] / 1e6 for frame in submitted),
             "acquire_ms": quantiles(frame[5] / 1e6 for frame in frames),

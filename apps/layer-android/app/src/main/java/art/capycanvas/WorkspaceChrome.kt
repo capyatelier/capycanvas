@@ -30,6 +30,9 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -55,11 +58,13 @@ import org.json.JSONObject
         val projected = JSONObject(panel.toString()).put("tiles", projectedTiles).put("tile_style", section.getString("style"))
         val shape = dock.drawerContainerShape(section.getJSONObject("bounds"), radius = panel.number("tile_corner_radius"))
         key(id, index) {
-            ToolRibbon(host, projected, obj("tiles" to bounds), dock,
-                Modifier.placed(section.getJSONObject("bounds"), dock.density).zIndex(150f)
-                    .testTag("zen-section-$index").shadow(6.dp, shape)
-                    .clip(shape).background(LocalPalette.current.panel),
-                section.getString("edge") in listOf("left", "right"))
+            CompositionLocalProvider(LocalPalette provides LocalPalette.current.onGlass) {
+                ToolRibbon(host, projected, obj("tiles" to bounds), dock,
+                    Modifier.placed(section.getJSONObject("bounds"), dock.density).zIndex(150f)
+                        .testTag("zen-section-$index").shadow(6.dp, shape)
+                        .clip(shape).glass(shape, LocalPalette.current.panelFill),
+                    section.getString("edge") in listOf("left", "right"))
+            }
         }
     }
 }
@@ -124,9 +129,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                 if (next != old) host.dispatch(obj("type" to "measure_column_scroll", "column" to id, "offset" to next))
                 (old - next) * dock.density
             }
-            CompositionLocalProvider(LocalWorkspaceZ provides 160) {
+            CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).shadow(6.dp, shape).clip(shape).background(LocalPalette.current.panel)
+                    .chromeRegion(dock).shadow(6.dp, shape).clip(shape).glass(shape, LocalPalette.current.panelFill)
                     .combinedClickable(interactionSource = remember { MutableInteractionSource() },
                         indication = rememberChromeFocusIndication(), onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
@@ -238,19 +243,26 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     val corners = connection?.array("square_corners")
     val shape = dock.drawerContainerShape(placement.getJSONObject("bounds"), joined = corners)
     val z = if (id == "tool") 220 else 200
-    CompositionLocalProvider(LocalWorkspaceZ provides z) {
+    val tabbed = tabs != null && columnId != null
+    CompositionLocalProvider(LocalWorkspaceZ provides z, LocalPalette provides LocalPalette.current.onGlass) {
         // Shadow below source chrome; a nested toolbar's source lives in a column drawer.
         val nested = id == "tool" && model.getJSONObject("anchor").optString("panel").let { panel ->
             snapshot.getJSONObject("state").getJSONObject("customization").array("column_drawers").objects()
                 .any { drawer -> drawer.array("columns").values().any { panel in (it as JSONArray).values() } }
         }
+        val cut = connection?.getJSONObject("bounds")?.rect()?.translate(-placement.getJSONObject("bounds").rect().topLeft)
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(if (nested) 199f else 99f)
+            .drawWithContent {
+                if (cut == null) drawContent()
+                else clipRect(cut.left * dock.density, cut.top * dock.density, cut.right * dock.density, cut.bottom * dock.density,
+                    ClipOp.Difference) { this@drawWithContent.drawContent() }
+            }
             .shadow(12.dp, shape, clip = false))
         connection?.let { DrawerBridge(it, dock, z.toFloat()) }
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
             .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
             .then(if (columnId != null) Modifier.columnDrawerBounds(dock, columnId, if (current != null) tabs?.getInt("group") else null) else Modifier)
-            .clip(shape).background(LocalPalette.current.panel)) {
+            .clip(shape).glass(shape, if (tabbed) Color.Transparent else LocalPalette.current.panelFill)) {
             // Placement can lag the model by a frame when switching to a drawer with fewer columns.
             placement.array("columns").objects().take(columns.size).forEachIndexed { index, bounds ->
                 Column(Modifier.placed(bounds, dock.density)) {
@@ -260,7 +272,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                         var tabClip by remember { mutableStateOf(Rect.Zero) }
                         PanelHeaderFeedback {
                             Row(Modifier.fillMaxWidth().height(tabHeight.dp).testTag("column-drawer-header-$id")
-                                .background(LocalPalette.current.tabs).then(if (current != null) Modifier.dragSource(dock, item) else Modifier),
+                                .background(LocalPalette.current.strip).then(if (current != null) Modifier.dragSource(dock, item) else Modifier),
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.weight(1f).clipToBounds().onGloballyPositioned {
                                     tabClip = it.boundsInRoot().translate(-dock.origin); dock.tabClips[group] = tabClip
@@ -287,7 +299,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                         }
                     }
                     var clip by remember { mutableStateOf(Rect.Zero) }
-                    Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().onGloballyPositioned { clip = it.boundsInRoot().translate(-dock.origin) }) {
+                    Box(Modifier.fillMaxWidth().weight(1f).then(if (tabbed) Modifier.background(LocalPalette.current.panelFill) else Modifier)
+                        .clipToBounds().onGloballyPositioned { clip = it.boundsInRoot().translate(-dock.origin) }) {
                         CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip, LocalWorkspaceZ provides (200 + (columnId ?: 100))) {
                             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                                 .onSizeChanged { heights[index] = it.height / dock.density + tabHeight }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -320,7 +333,11 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
 }
 
 @Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
-    val color = LocalPalette.current.panel
+    val color = LocalPalette.current.onGlass.panelFill
+    val host = LocalCanvasHost.current
+    val key = remember { Any() }
+    DisposableEffect(host, key) { onDispose { host.glassConnection(key, null, 0f) } }
+    SideEffect { host.glassConnection(key, connection, dock.density) }
     Canvas(Modifier.placed(connection.getJSONObject("bounds"), dock.density).then(modifier).zIndex(z).chromeRegion(dock)) {
         val t = connection.array("transform")
         fun point(x: Float, y: Float) = Offset((t.getDouble(0).toFloat() * x + t.getDouble(2).toFloat() * y + t.getDouble(4).toFloat()) * dock.density,

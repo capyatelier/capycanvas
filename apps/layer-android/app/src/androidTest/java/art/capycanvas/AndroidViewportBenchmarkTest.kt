@@ -36,6 +36,9 @@ class AndroidViewportBenchmarkTest {
         val pressure = args.getString("pressure")?.toDouble()
         val speed = args.getString("speed", "1")!!.toDouble()
         val brushSize = args.getString("brushSize", "18")!!.toDouble()
+        val strokeOffset = args.getString("strokeOffset", "0")!!.toDouble()
+        val zoomSteps = args.getString("zoomSteps", "0")!!.toInt()
+        val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
         try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -59,7 +62,7 @@ class AndroidViewportBenchmarkTest {
                 Native.projectWork(task, -1, size, size)
                 native { Native.projectAdopt(it, task, "null") }
             } finally { Native.projectFree(task) }
-            scenario.onActivity { host.documentChanged(); host.invoke("fit_canvas") }
+            scenario.onActivity { host.documentChanged(); host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             waitFor { host.snapshot?.getJSONObject("state")?.getJSONArray("tabs")?.getJSONObject(0)?.optInt("width") == size && host.snapshot?.optBoolean("brush_ready") == true }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
             scenario.onActivity {
@@ -67,22 +70,17 @@ class AndroidViewportBenchmarkTest {
                 host.dispatch(obj("type" to "set_brush_size", "value" to brushSize))
                 host.preference(obj("type" to "edit", "id" to "feedback", "value" to prediction))
                 host.preference(obj("type" to "edit", "id" to "platform_prediction", "value" to false))
+                transparency?.let { host.preference(obj("type" to "edit", "id" to "transparency", "value" to it)) }
             }
             SystemClock.sleep(1500)
             assertNull(host.actionError)
             val state = host.snapshot!!.getJSONObject("state")
             val camera = state.getJSONObject("camera")
             val area = camera.getJSONArray("work_area")
-            val cx = area.getDouble(0) + area.getDouble(2) / 2
+            val cx = area.getDouble(0) + area.getDouble(2) * (.5 + strokeOffset)
             val cy = area.getDouble(1) + area.getDouble(3) / 2
             val radius = min(area.getDouble(2), area.getDouble(3)) * .32
             val output = File(activity.getExternalFilesDir(null), "viewport-benchmark").apply { mkdirs() }
-            val info = obj("label" to label, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
-                "display" to native { JSONObject(Native.displayStatus(it)) })
-            File(output, "$label-info.json").writeText(info.toString(2))
-            assertEquals("SharedDemandRefresh", info.getJSONObject("display").getString("present_mode"))
-            assertTrue(info.getJSONObject("display").getBoolean("retained_target"))
-            assertTrue("Navigator survives document adoption", info.getJSONObject("display").getInt("overview_count") > 0)
             var activePresent: JSONArray? = null
             fun stroke(run: Int, milliseconds: Int) {
                 val count = (milliseconds / interval).toInt()
@@ -120,12 +118,18 @@ class AndroidViewportBenchmarkTest {
                 }
             }
             stroke(0, 1500); SystemClock.sleep(800)
+            val info = obj("label" to label, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+                "display" to native { JSONObject(Native.displayStatus(it)) })
+            File(output, "$label-info.json").writeText(info.toString(2))
+            assertEquals("SharedDemandRefresh", info.getJSONObject("display").getString("present_mode"))
+            assertTrue(info.getJSONObject("display").getBoolean("retained_target"))
+            assertTrue("Navigator survives document adoption", info.getJSONObject("display").getInt("overview_count") > 0)
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
                 report(true)
                 val present = JSONArray()
-                native { Native.presentationTimings(it, true) }
+                native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
                 activePresent = present
                 val began = System.nanoTime()
                 stroke(run + 1, duration)
@@ -133,12 +137,14 @@ class AndroidViewportBenchmarkTest {
                 SystemClock.sleep(500)
                 val ended = System.nanoTime()
                 native { present.put(JSONArray(Native.presentationTimings(it, true))) }
+                val completions = native { JSONArray(Native.completionTimings(it, false)) }
                 val afterRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
                 assertNull(host.failure)
                 assertNull(host.actionError)
                 assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
-                val data = report(false).put("presentation", present).put("begin_ns", began).put("end_ns", ended)
+                val data = report(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
+                    .put("display", native { JSONObject(Native.displayStatus(it)) })
                     .put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })
                 assertTrue("CPU frame instrumentation must be enabled", data.getJSONArray("frames").length() > 100)
                 assertTrue("GPU timestamps must be collected", (0 until present.length()).sumOf { present.getJSONArray(it).length() } > 100)

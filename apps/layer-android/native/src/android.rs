@@ -114,6 +114,8 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "present_mode": format!("{:?}", surface.config.present_mode),
                 "retained_target": surface.presenter.retains_target(),
                 "overview_count": a.overviews.len(),
+                "glass_regions": a.glass.len(),
+                "backdrop_frames": surface.presenter.backdrop_frames(),
                 "extent": [surface.config.width, surface.config.height],
                 "desired_maximum_frame_latency": surface.config.desired_maximum_frame_latency,
                 "display_memory_limits": gpu.display_memory_limits(),
@@ -150,6 +152,18 @@ pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
         a.host.dirty = true;
         a.sync_hdr_display();
     }
+}
+
+#[derive(serde::Deserialize)]
+struct Glass {
+    boxes: Vec<[f32; 8]>,
+    connections: Vec<GlassConnection>,
+}
+
+#[derive(serde::Deserialize)]
+struct GlassConnection {
+    connection: layer_ui::DrawerConnection,
+    scale: f32,
 }
 
 #[derive(serde::Deserialize)]
@@ -481,6 +495,8 @@ impl App {
                 })
             })
             .collect();
+        let glass = self.host.session.state().palette.glass;
+        let ready = glass.transparency.enabled() && self.blank_presented && self.host.startup.canvas_ready;
         self.tone.clear_incompatible(&self.host.session, self.gpu_generation);
         let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
@@ -545,6 +561,11 @@ impl App {
         surface.presenter.set_color_picker(gpu, picker);
         surface.presenter.set_surface_rotation(surface.quarter_turns);
         surface.presenter.set_overviews(gpu, &overviews);
+        surface.presenter.set_backdrop(
+            gpu,
+            if ready { &self.glass } else { &[] },
+            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+        );
         surface
             .presenter
             .present(
@@ -1001,6 +1022,39 @@ pub extern "system" fn Java_art_capycanvas_Native_navigatorPlacements(
         slots.sort_by_key(|s| s.order);
         let a = unsafe { app(handle) };
         a.overviews = slots;
+        a.host.dirty = true;
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_glassRegions(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    value: JString,
+) {
+    let result = (|| {
+        let glass: Glass = serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
+        let squircle = layer_render_wgpu::BackdropRegion::SQUIRCLE;
+        let regions: Vec<_> = glass
+            .boxes
+            .iter()
+            .map(|b| layer_render_wgpu::BackdropRegion::rounded([b[0], b[1], b[2], b[3]], [b[4], b[5], b[6], b[7]], squircle))
+            .chain(glass.connections.iter().flat_map(|c| {
+                c.connection.glass().into_iter().map(|(bounds, radii)| layer_render_wgpu::BackdropRegion {
+                    bounds: bounds.map(|v| v * c.scale),
+                    radii: radii.map(|v| v * c.scale),
+                    shape: squircle,
+                })
+            }))
+            .collect();
+        if regions.iter().any(|r| !r.bounds.iter().chain(&r.radii).all(|v| v.is_finite())) {
+            return Err("Invalid glass geometry".into());
+        }
+        let a = unsafe { app(handle) };
+        a.glass = regions;
         a.host.dirty = true;
         Ok(())
     })();

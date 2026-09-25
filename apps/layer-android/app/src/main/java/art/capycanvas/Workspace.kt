@@ -310,11 +310,14 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                                 panels[group.getString("active")]?.number("tile_corner_radius") ?: SurfaceRadius.value else SurfaceRadius.value)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
-                        .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
+                        .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)
+                        .then(if (expansion == null) Modifier.glass(shape) else Modifier)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
                         val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(retainedGroup.toString()).put("tiles", it) } ?: retainedGroup
-                        PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
+                        CompositionLocalProvider(LocalPalette provides if (expansion == null) colors.onGlass else colors) {
+                            PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
+                        }
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {
                                 panels[group.getString("active")]?.let { ConfigurePanel(host, it) { height -> dock.configurationHeight = height } }
@@ -357,12 +360,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Bottom) {
                     if(host.hdr.status.isNotEmpty()) DisplayStatus(host)
-                    if(host.proof.status.isNotEmpty()) Surface(color=colors.headerSurface,shape=TileShape) {
+                    if(host.proof.status.isNotEmpty()) Surface(Modifier.glass(TileShape),color=colors.headerSurface,shape=TileShape) {
                         Text(host.proof.status,Modifier.testTag("proof-status").clickable {host.invoke("soft_proof_setup")}
                             .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     }
                 }
-                Surface(color = colors.headerSurface, shape = TileShape) {
+                Surface(Modifier.glass(TileShape), color = colors.headerSurface, shape = TileShape) {
                     CameraStatus(host)
                 }
             }
@@ -408,7 +411,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 
 @Composable private fun DisplayStatus(host: CanvasHost) {
     var open by remember { mutableStateOf(false) }
-    Surface(color=LocalPalette.current.headerSurface,shape=TileShape) {
+    Surface(Modifier.glass(TileShape),color=LocalPalette.current.headerSurface,shape=TileShape) {
         Text(host.hdr.status,Modifier.testTag("hdr-status").clickable {open=true}
             .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
@@ -459,7 +462,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor); dock.zenButton = null; dock.refresh() } }
     IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
         modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
-            .background(colors.headerSurface, TileShape)
+            .glass(TileShape, colors.headerSurface)
             .onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
                 dock.anchors[anchor] = bounds
@@ -486,10 +489,10 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
         val prefix = "${group.getInt("id")}:"
         onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabSlots.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.getInt("id")) }
     }
-    Surface(modifier, color = colors.panel) {
+    Surface(modifier, color = if (tabsVisible) Color.Transparent else colors.panelFill) {
         Column {
             if (tabsVisible) PanelHeaderFeedback {
-                Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
+                Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.strip).dragSource(dock, groupItem)
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
                         onLongClick = { dock.holdContext(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin) }
@@ -514,7 +517,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                             onLongClick = { dock.holdContext(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
                 }
             }
-            Box(Modifier.weight(1f).testTag("panel-body-$active")) {
+            Box(Modifier.weight(1f).testTag("panel-body-$active").then(if (tabsVisible) Modifier.background(colors.panelFill) else Modifier)) {
                 if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
                 else PanelControls(host, state, panel, Modifier.fillMaxSize(), onContent = { dock.measure(active, content = it) })
             }

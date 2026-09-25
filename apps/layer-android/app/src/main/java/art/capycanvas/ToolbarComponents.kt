@@ -201,7 +201,6 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 val opensDrawer = drawerAnchor?.optString("panel") == panel.getString("id") && drawerAnchor.optInt("tile") == id
                 Box(Modifier.placed(layout.getJSONObject("more"), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
                     .clip(drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null))
-                    .background(if (opensDrawer) colors.panel else Color.Transparent)
                     .testTag("toolbar-more-$id").clickable { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to id)) }, contentAlignment = Alignment.Center) {
                     SharedIcon("more", "More tool options", Modifier.size(panel.getInt("tile_icon_size").dp))
                 }

@@ -118,13 +118,13 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(SquircleShape(50)).background(colors.tabs.copy(alpha = .75f))
+    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(SquircleShape(50)).glass(SquircleShape(50), colors.switcher)
         .horizontalScroll(scroll).padding(4.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         choices.forEach { row ->
             val id = row.getString("id")
             val selected = view.optString("id") == id
             Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(SquircleShape(50))
-                .background(if (selected) colors.headerActive else Color.Transparent)
+                .background(if (selected) colors.switcherActive else Color.Transparent)
                 .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
                     host.workspaceInput(obj("type" to "switch", "id" to id))
                 }.padding(horizontal = 10.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {

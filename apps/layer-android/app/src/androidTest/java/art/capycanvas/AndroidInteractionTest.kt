@@ -1126,6 +1126,8 @@ class AndroidInteractionTest {
 
     @Test fun drawerButtonsAndBridgesKeepTheirColors() {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val originalTransparency = listOf("off", "low", "medium", "high").indexOf(state().getJSONObject("settings").getString("transparency"))
+        fun transparency(value: Int) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to value)))
         val toolbar = fixture.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
         val tile = toolbar.getJSONObject("content").array("tiles").getJSONObject(0).getInt("id")
         val alternateTile = fixture.getJSONObject("layout").getInt("next_tile_id")
@@ -1177,7 +1179,7 @@ class AndroidInteractionTest {
                 }
             }
         }
-        try { for (theme in listOf("light", "dark")) {
+        try { transparency(0); for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme)); restore()
             val panelColor = android.graphics.Color.parseColor(if (theme == "light") "#ededed" else "#414141")
             for ((column, panel) in listOf(41 to "brushes", 43 to "navigator")) {
@@ -1262,7 +1264,7 @@ class AndroidInteractionTest {
                 tap(bounds("column-icon-toolbar").center); waitFor("nested toolbar divider") { exists("tile-toolbar-$nextTile") }
                 line("tile-toolbar-$nextTile", true, "toolbar-divider-in-drawer")
             }
-        } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+        } finally { action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency) }
     }
 
     @Test fun drawerTabsKeepActiveColorsAndPadding() {

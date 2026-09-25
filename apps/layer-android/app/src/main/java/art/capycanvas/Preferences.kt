@@ -48,7 +48,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
@@ -395,7 +405,9 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     onCommit = { host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it)) })
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "swatches" -> SwatchSelector(host, row, kind, enabled)
-                "choice" -> {
+                "choice" -> if (kind.getJSONObject("presentation").getString("type") == "circles") {
+                    TransparencyCircles(host, row.getString("id"), kind, enabled)
+                } else {
                     val id = row.getString("id")
                     val selected = kind.getInt("selected")
                     var open by remember(id, enabled) { mutableStateOf(false) }
@@ -444,6 +456,42 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 "link" -> TextButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(kind.getString("url")))) },
                     Modifier.widthIn(max = controlWidth).heightIn(min = 48.dp), enabled = enabled) {
                     Text(kind.getString("label"), fontSize = 16.sp, lineHeight = 22.sp, textAlign = TextAlign.End)
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun TransparencyCircles(host: CanvasHost, id: String, kind: JSONObject, enabled: Boolean) {
+    val colors = LocalPalette.current
+    val alphas = kind.getJSONObject("presentation").getJSONArray("alphas")
+    Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        kind.array("options").values().forEachIndexed { index, name ->
+            val selected = index == kind.getInt("selected")
+            val alpha = alphas.getJSONArray(index).getDouble(if (colors.dark) 1 else 0).toFloat()
+            Box(Modifier.size(36.dp).clip(CircleShape)
+                .then(if (selected) Modifier.border(2.dp, colors.text, CircleShape) else Modifier)
+                .selectable(selected, enabled = enabled, role = Role.RadioButton) {
+                    host.preference(obj("type" to "edit", "id" to id, "value" to index))
+                }
+                .semantics { contentDescription = name.toString() }.testTag("setting-$id-circle-$index").padding(4.dp)) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val s = size.minDimension
+                    fun grey(v: Float, a: Float = 1f) = Color(v, v, v, a)
+                    clipPath(Path().apply { addOval(Rect(0f, 0f, s, s)) }) {
+                        if (alpha < 1f) for (cell in 0 until 16)
+                            drawRect(grey(if ((cell % 4 + cell / 4) % 2 == 0) .94f else .28f), Offset(cell % 4 * s / 4, cell / 4 * s / 4), Size(s / 4, s / 4))
+                        drawRect(grey(if (colors.dark) .55f else .8f, alpha))
+                        if (alpha < 1f) drawRect(Brush.radialGradient(0f to Color.White.copy(alpha = minOf(1f, .25f + 1.2f * (1 - alpha))),
+                            1f to Color.White.copy(alpha = 0f), center = Offset(.32f * s, .26f * s), radius = .5f * s))
+                    }
+                    drawCircle(grey(.5f, .45f), s / 2 - .5f, style = Stroke(1f))
+                    if (selected) {
+                        val check = Path().apply { moveTo(.3f * s, .52f * s); lineTo(.44f * s, .66f * s); lineTo(.71f * s, .36f * s) }
+                        val (ink, halo) = if (colors.dark) 1f to 0f else .18f to 1f
+                        drawPath(check, grey(halo, .45f), style = Stroke(4 / 28f * s, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                        drawPath(check, grey(ink), style = Stroke(2 / 28f * s, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
                 }
             }
         }

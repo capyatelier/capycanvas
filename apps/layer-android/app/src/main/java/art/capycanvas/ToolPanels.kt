@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -62,7 +63,7 @@ import org.json.JSONArray
     val preview = item.opt("preview").takeIf { it is Number } as? Number
     ActionTip(host, label, action, modifier) {
         Column(Modifier.fillMaxWidth().clip(ControlShape)
-            .background(if (item.optBoolean("selected")) colors.active else colors.panel)
+            .background(if (item.optBoolean("selected")) colors.active else Color.Transparent)
             .clickable { host.dispatch(action) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
             if (preview != null) {
                 val id = preview.toInt()
@@ -122,7 +123,7 @@ import org.json.JSONArray
                 val selected = command.getBoolean("selected")
                 HoverTip(command.getString("tooltip"), Modifier.weight(1f)) {
                     Box(Modifier.fillMaxWidth().height(48.dp).testTag("tool-action-$id")
-                        .background(if (selected) LocalPalette.current.active else LocalPalette.current.panel)
+                        .background(if (selected) LocalPalette.current.active else Color.Transparent)
                         .selectable(selected = selected, enabled = command.getBoolean("enabled"), role = Role.RadioButton) { host.invoke(id) },
                         contentAlignment = Alignment.Center) {
                         SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(20.dp))

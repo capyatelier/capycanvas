@@ -131,6 +131,30 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val payload = JSONArray(overviewSlots.values.toList()).toString()
         post { Native.navigatorPlacements(handle, payload); wake() }
     }
+    private val glassBoxes = linkedMapOf<Any, FloatArray>()
+    private val glassConnections = linkedMapOf<Any, JSONObject>()
+    private var glassQueued = false
+    internal fun glassBox(key: Any, box: FloatArray?) {
+        if (glassBoxes[key]?.contentEquals(box) == true || box == null && key !in glassBoxes) return
+        if (box == null) glassBoxes.remove(key) else glassBoxes[key] = box
+        queueGlass()
+    }
+    internal fun glassConnection(key: Any, connection: JSONObject?, scale: Float) {
+        val entry = connection?.let { obj("connection" to it, "scale" to scale) }
+        if (glassConnections[key]?.toString() == entry?.toString()) return
+        if (entry == null) glassConnections.remove(key) else glassConnections[key] = entry
+        queueGlass()
+    }
+    private fun queueGlass() {
+        if (glassQueued) return
+        glassQueued = true
+        main.post {
+            glassQueued = false
+            val payload = obj("boxes" to JSONArray(glassBoxes.values.map { JSONArray(it.toList()) }),
+                "connections" to JSONArray(glassConnections.values.toList())).toString()
+            post { Native.glassRegions(handle, payload); wake() }
+        }
+    }
     var catalog by mutableStateOf(JSONObject())
         private set
     var failure by mutableStateOf<String?>(null)

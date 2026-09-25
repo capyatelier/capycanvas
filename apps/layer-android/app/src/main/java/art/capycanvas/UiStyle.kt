@@ -18,6 +18,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.*
@@ -57,6 +58,9 @@ import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -72,12 +76,21 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupPositionProvider
 
-internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
+internal class Palette(val dark: Boolean, private val source: org.json.JSONObject, private val inGlass: Boolean = false) {
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
+    private fun glass(name: String) = source.getJSONObject("glass").getJSONArray(name).let {
+        Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat(), it.getDouble(3).toFloat())
+    }
     val surround = role("bg")
-    val headerSurface = surround.copy(alpha = .75f)
+    val headerSurface = glass("chip")
+    val switcher = glass("switcher")
+    val switcherActive = glass("switcher_selection")
+    val documentTab = glass("document_tab")
     val panel = role("panel")
     val tabs = role("tabbar")
+    val panelFill = if (inGlass) glass("panel") else panel
+    val strip = if (inGlass) glass("strip") else tabs
+    val tab = if (inGlass) glass("tab") else panel
     val sidebar = role("sidebar")
     val input = role("input")
     val text = role("text")
@@ -85,8 +98,8 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val accent = role("accent")
     val accentForeground = role("accent_foreground")
     val sliderFill = lerp(panel, text, .5f)
-    val active = role("selection")
-    val headerActive = role("header_selection")
+    val active = if (inGlass) glass("selection") else role("selection")
+    val headerActive = glass("header_selection")
     val button = role("button").copy(alpha = 13 / 255f)
     val thumb = role("thumb")
     val checkerLight = role("checker_light")
@@ -95,6 +108,22 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val settingsBackground = role("settings")
     val settingsCard = role("card")
     val settingsSecondary = role("settings_secondary")
+    val onGlass by lazy { Palette(dark, source, true) }
+}
+
+@Composable internal fun Modifier.glass(shape: Shape, color: Color = Color.Transparent): Modifier {
+    val host = LocalCanvasHost.current
+    val density = LocalDensity.current
+    val key = remember { Any() }
+    DisposableEffect(host, key) { onDispose { host.glassBox(key, null) } }
+    return background(color, shape).onGloballyPositioned { coords ->
+        val origin = coords.positionInRoot() - host.surfaceOrigin
+        val size = coords.size.toSize()
+        val radii = (shape as? CornerBasedShape)?.let { s ->
+            listOf(s.topStart, s.topEnd, s.bottomEnd, s.bottomStart).map { it.toPx(size, density) }
+        } ?: listOf(0f, 0f, 0f, 0f)
+        host.glassBox(key, floatArrayOf(origin.x, origin.y, size.width, size.height) + radii)
+    }
 }
 internal val LocalPalette = staticCompositionLocalOf<Palette> { error("Missing core palette") }
 internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
