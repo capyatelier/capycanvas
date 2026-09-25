@@ -2328,7 +2328,26 @@ fn native_header_compact_switcher_input() {
         "use LAYER_MOTION_VIEWPORT=640x600"
     );
     let manager = d.w.workspaces.manager.as_ref().unwrap().clone();
+    glib::MainContext::default().block_on(async {
+        let wide = manager
+            .create_workspace(
+                "Wide workspace",
+                None,
+                false,
+                crate::workspace::manager::now_ms(),
+            )
+            .await
+            .unwrap();
+        let id = wide.entity.id.clone();
+        d.w.workspaces.adopt(&d.w, Ok(wide)).await;
+        manager
+            .edit_switcher(layer_workspace::SwitcherEdit::Show { id, visible: true })
+            .await
+            .unwrap();
+    });
+    Driver::wait_ready(&d.w);
     let ids = manager.switcher_display_ids();
+    assert_eq!(ids.len(), 4);
     glib::MainContext::default()
         .block_on(manager.edit_switcher(layer_workspace::SwitcherEdit::Move {
             id: ids[2].clone(),
