@@ -38,7 +38,8 @@ import org.json.JSONObject
 @Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject,
     modifier: Modifier = Modifier, enabled: Boolean = true, description: String = "",
     settings: Boolean = false, id: String = label, inline: Boolean = false,
-    toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true,
+    toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true, valueOnly: Boolean = false,
+    limits: ClosedFloatingPointRange<Float>? = null,
     onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
@@ -49,7 +50,7 @@ import org.json.JSONObject
     val displayKey = if (ranged) "edit" else "text"
     fun resolve(value: Float, op: JSONObject): JSONObject {
         val request = obj("control" to control, "value" to value, "operation" to op)
-        return JSONObject(if (toolbar) Native.toolbarUi(obj("type" to "number", "request" to request, "compact" to true, "units" to showUnits).toString()) else Native.number(request.toString()))
+        return JSONObject(if (toolbar && !valueOnly) Native.toolbarUi(obj("type" to "number", "request" to request, "compact" to true, "units" to showUnits).toString()) else Native.number(request.toString()))
     }
     var shown by remember(value, control.toString(), showUnits) { mutableStateOf(resolve(value, obj("type" to "format"))) }
     var editing by remember { mutableStateOf(false) }
@@ -58,16 +59,20 @@ import org.json.JSONObject
     var text by remember { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
     var error by remember { mutableStateOf<String?>(null) }
     val height = if (settings) 48.dp else if (ranged || toolbar) 24.dp else 32.dp
-    val valuePadding = if (settings) 12.dp else if (toolbar && !showUnits) 2.dp else 6.dp
+    val valuePadding = if (settings) 12.dp else if (toolbar && !showUnits && !valueOnly) 2.dp else 6.dp
     val measurer = rememberTextMeasurer()
     val widest = remember(inline, control.toString(), showUnits) {
         if (inline) (if (toolbar) JSONObject(Native.toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to showUnits).toString())).array("samples").let { samples -> (0 until samples.length()).map(samples::getString) }
             else listOf(control.number("min"), control.number("max")).map { resolve(it, obj("type" to "format")).getString("text") })
             .maxBy { it.length }.replace(Regex("[0-9]"), "8") else ""
     }
-    val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 + 2.dp else 0.dp
+    val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(if (valueOnly) shown.getString("text") else widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 + 2.dp else 0.dp
     fun apply(op: JSONObject): Boolean = try {
-        val next = resolve(shown.number("value"), op)
+        var next = resolve(shown.number("value"), op)
+        limits?.let { range ->
+            val bounded = next.number("value").coerceIn(range)
+            if (bounded != next.number("value")) next = resolve(bounded, obj("type" to "format"))
+        }
         val changed = next.number("value") != shown.number("value")
         shown = next; error = null
         if (changed) onChange(next.number("value"))

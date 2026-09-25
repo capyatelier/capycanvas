@@ -80,7 +80,7 @@ put the icon beside the label and value; the other styles stack icon and value.
 Text follows the shared 11 pt typography; form icons stay 16px. Units sit
 beside values on the same baseline and hide when space is tight. Only oversized
 numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
-GTK's tonal interval is one atomic field using the panel's two-ended range
+The tonal interval on GTK, Web and Android is one atomic field using the panel's two-ended range
 component: compact one-decimal low/high values surround a wide track. Units are
 in tooltips. Narrow bars expose the complete interval through existing overflow.
 Floating toolboxes and side toolbars wider than one tile fill rows left-to-right.

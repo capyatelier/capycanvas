@@ -34,6 +34,21 @@ mod tonal_checks {
         .unwrap();
     }
     #[test]
+    fn tonal_controls_and_masks_are_available_on_gtk_web_and_android() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session(); s.set_platform(platform);
+            invoke(&mut s, CommandId::TonalSelect);
+            assert!(s.state.tool_set.subtools.iter().any(|item| item.icon == "tonal-select"));
+            choose(&mut s, 7); reply(&mut s, None, 0xff804020);
+            assert!(s.state.tool_options().iter().any(|o| matches!(o, ToolOption::Range { .. })));
+            invoke(&mut s, CommandId::QuickMask);
+            setting(&mut s, "tonal_upper", 2.); reply(&mut s, None, 0xff806020);
+            assert!(s.selection_masks.quick());
+            assert!(s.renderer_mut().overlay.unwrap().active);
+            assert!(s.engine.document().selection.is_some());
+        }
+    }
+    #[test]
     fn tonal_direct_selection_refines_one_history_entry_with_fixed_baseline() {
         let mut s = start();
         invoke(&mut s, CommandId::SelectAll);

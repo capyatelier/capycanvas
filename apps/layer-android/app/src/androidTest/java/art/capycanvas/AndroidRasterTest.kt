@@ -272,6 +272,45 @@ class AndroidRasterTest {
         println("PASS native selection geometry, polygon completion, undo/redo, feathered GPU masks and disconnected color islands")
     }
 
+    @Test fun tonalHdrCoverageAndSamplingOnDevice() {
+        val job=native { h -> val(id,f)=request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+        try {
+            Native.projectOptions(job,obj("extent" to org.json.JSONArray(listOf(500,200)),"color" to obj("space" to "Srgb","depth" to "F16"),"background" to "White").toString())
+            Native.projectWork(job,-1,500,200);native { Native.projectAdopt(it,job,"null") }
+        } finally { Native.projectFree(job) }
+        compose.runOnUiThread { host.documentChanged() }
+        fun send(value:JSONObject) { native { Native.dispatch(it,value.toString()) }; compose.waitUntil(30_000) { !tick() } }
+        fun invoke(id:String)=send(obj("type" to "invoke","command" to id))
+        fun tone(index:Int)=send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to index)))
+        fun pixel(name:String):Int {
+            val data=png(name);val image=android.graphics.BitmapFactory.decodeByteArray(data,0,data.size)
+            return image.getPixel(image.width/2,image.height/2).also { image.recycle() }
+        }
+        invoke("fit_canvas");invoke("select_all")
+        send(obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1,1,1,1))))
+        send(obj("type" to "color","action" to obj("op" to "hdr_intensity","stops" to 2)))
+        invoke("fill_selection");invoke("deselect");invoke("tonal_select")
+        assertEquals(listOf("tonal-bright-hdr","tonal-custom"),native { state(it).array("tool_extra").getJSONObject(0).getJSONObject("Choice").array("items").objects().takeLast(2).map { item -> item.getString("icon") } })
+        tone(6)
+        send(obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(0,0,1,1))))
+        send(obj("type" to "color","action" to obj("op" to "hdr_intensity","stops" to 0)))
+        invoke("fill_selection")
+        val blue=pixel("tonal-hdr-selected.png")
+        // The SDR export rendition can lift the blue fill's red/green channels.
+        assertTrue("Bright HDR selects +2-stop artwork: ${Integer.toHexString(blue)}",
+            android.graphics.Color.blue(blue)>200 && android.graphics.Color.red(blue)<100 && android.graphics.Color.green(blue)<100)
+        invoke("undo");tone(0);invoke("fill_selection")
+        val white=pixel("tonal-hdr-excluded.png")
+        assertTrue("Shadows excludes +2-stop artwork",android.graphics.Color.red(white)>200 && android.graphics.Color.green(white)>200)
+        invoke("quick_mask")
+        point(1,0.0,0.0);point(3,0.0,0.0)
+        val limits=native { state(it).array("tool_settings").objects().filter { f -> f.getString("id") in listOf("tonal_lower","tonal_upper") }.map { f -> f.number("value") } }
+        assertEquals(2,limits.size)
+        assertTrue("Sampling reads HDR artwork through Quick Mask: $limits",limits[0]<2f && limits[1]>2f && limits[0]>1f)
+        assertTrue(native { state(it).getJSONObject("layer_tools").getBoolean("quick_mask") })
+        println("PASS Huion Vulkan HDR tonal coverage, excluded shadows and artwork sampling through Quick Mask")
+    }
+
     @Test fun paintableSelectionsOnDevice() {
         fun send(value: JSONObject) {
             native { Native.dispatch(it, value.toString()) }

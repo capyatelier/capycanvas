@@ -1797,4 +1797,87 @@ class AndroidInteractionTest {
 
     }
 
+    @Test fun tonalRangePanelsAndToolbarAcrossDevices() {
+        waitFor("document commands ready",120_000) {
+            state().array("commands").objects().any { it.optString("id")=="open_document" && it.optBoolean("enabled") }
+        }
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun values() = listOf("tonal_lower", "tonal_upper").map { id -> state().array("tool_settings").objects().first { it.getString("id")==id }.number("value") }
+        fun number(prefix: String, id: String, text: String) {
+            tool=MotionEvent.TOOL_TYPE_MOUSE
+            tap(bounds("number-value-$prefix-$id").center);settle()
+            instrumentation.sendStringSync(text)
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER);settle()
+        }
+        fun handles(prefix: String) {
+            val beforeWorkspace=workspace()
+            for(device in pointerTools) for(index in 0..1) {
+                tool=device
+                val before=values()
+                val id=listOf("tonal_lower","tonal_upper")[index]
+                val p=bounds("$prefix-range-handle-$id").center+Offset(if(index==0)-4*density else 4*density,0f)
+                event(MotionEvent.ACTION_DOWN,p);SystemClock.sleep(24)
+                event(MotionEvent.ACTION_MOVE,p+Offset(if(index==0)-8*density else 8*density,0f));SystemClock.sleep(80)
+                event(MotionEvent.ACTION_UP);settle()
+                waitFor("$prefix $device endpoint $index") { if(index==0)values()[0]<before[0] else values()[1]>before[1] }
+                assertEquals(before[1-index],values()[1-index])
+                assertEquals("Range contact cannot reorder",beforeWorkspace,workspace())
+            }
+        }
+        switchToolbarWorkspace("photographer")
+        val options=toolbarComponent("tool_options")
+        // Give the complete form a lane on the tablet's 1200dp viewport.
+        val w=JSONObject(workspace())
+        w.getJSONObject("layout").array("panels").objects().first { it.getString("id")==options.first }.getJSONObject("content").let { content ->
+            content.put("tiles",JSONArray(content.array("tiles").objects().filter { it.getJSONObject("control").getString("kind")=="tool_options" }))
+        }
+        action(obj("type" to "restore_workspace","workspace" to w))
+        invoke("tonal_select")
+        assertEquals(6,state().array("tool_extra").getJSONObject(0).getJSONObject("Choice").array("items").length())
+        tap(bounds("toolbar-segment-tonal-tones-4").center)
+        waitFor("immediate highlight selection",30_000) { state().getJSONObject("layer_tools").getBoolean("has_selection") }
+        assertFalse(state().getJSONObject("layer_tools").getBoolean("quick_mask"))
+        assertEquals(24*density,bounds("toolbar-segments-tonal-tones").height,1f)
+        invoke("quick_mask")
+        assertTrue(state().getJSONObject("layer_tools").getBoolean("quick_mask"))
+        captureToolbar("tonal-quick-mask")
+        instrumentation.uiAutomation.takeScreenshot()!!.let { image ->
+            val p=bounds("workspace").center;val origin=IntArray(2);instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+            val color=image.getPixel((p.x+origin[0]).toInt(),(p.y+origin[1]).toInt());image.recycle()
+            assertTrue("GPU highlight mask shades white artwork",android.graphics.Color.red(color)>android.graphics.Color.green(color)+30)
+        }
+        tap(bounds("toolbar-segment-tonal-tones-5").center);settle()
+        waitFor("custom inline interval") { exists("toolbar-range-track") }
+        assertEquals(28*density,bounds("toolbar-range-tonal").height,1f)
+        assertTrue(bounds("toolbar-range-track").width>=180*density)
+        handles("toolbar")
+        val keyboardBefore=values()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);settle()
+        assertEquals(keyboardBefore[0],values()[0]);assertEquals(keyboardBefore[1]+.1f,values()[1],.001f)
+        assertEquals("Keyboard retains the tonal tool", "tonal", state().getJSONObject("layer_tools").getJSONObject("tool").getJSONObject("selection").getString("kind"))
+        number("toolbar","tonal_lower","-20.0");number("toolbar","tonal_upper","12.0")
+        assertEquals(listOf(-20f,12f),values())
+        number("toolbar","tonal_lower","13");assertEquals(listOf(12f,12f),values())
+        number("toolbar","tonal_lower","-7.2");number("toolbar","tonal_upper","2.3")
+        val before=values();val p=bounds("toolbar-range-handle-tonal_lower").center-Offset(4*density,0f)
+        event(MotionEvent.ACTION_DOWN,p);event(MotionEvent.ACTION_MOVE,p-Offset(10*density,0f));settle()
+        event(MotionEvent.ACTION_CANCEL);settle();assertEquals("Cancellation restores endpoint",before,values())
+        for(theme in listOf("light","dark")) { action(obj("type" to "set_theme","theme" to theme));captureToolbar("tonal-toolbar-$theme") }
+        tap(bounds("toolbar-more-${options.second}").center)
+        waitFor("range in complete panel") { exists("tool-range-track") };settle()
+        assertEquals(36*density,bounds("tool-segments-tonal-tones").height,1f)
+        assertEquals(28*density,bounds("tool-range-tonal").height,1f)
+        handles("tool")
+        for(id in listOf("tonal_lower","tonal_upper"))assertTrue("Compact endpoint",bounds("tool-setting-$id").width<=48*density)
+        for(theme in listOf("light","dark")) { action(obj("type" to "set_theme","theme" to theme));captureToolbar("tonal-panel-$theme") }
+        customize(obj("type" to "close_expanded"))
+        invoke("save_selection_layer");action(obj("type" to "layer","action" to obj("op" to "cancel_rename")))
+        assertTrue(state().array("layers").objects().any { it.optBoolean("selection_layer") })
+        tap(bounds("toolbar-segment-tonal-tones-4").center);settle()
+        assertNotNull(state().getJSONObject("layer_tools").objectOrNull("mask_editing"))
+        invoke("return_to_artwork");invoke("undo");invoke("redo")
+        invoke("brush");assertFalse(exists("toolbar-range-track"))
+        println("PASS Huion tonal interval: mouse/finger/stylus, native numbers, cancellation, compact panel/toolbar, GPU Quick Mask and saved masks")
+    }
+
 }

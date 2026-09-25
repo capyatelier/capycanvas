@@ -1,8 +1,8 @@
 # Tonal range selections
 
-GTK exposes **Tonal range** in the Select family. It writes ordinary byte-coverage
+GTK, Web and Android expose **Tonal range** in the Select family. It writes ordinary byte-coverage
 selections and saved selection masks. The shared Rust model supplies the same
-choice, numeric and selection-mode controls to the GTK panel and Tool Options bar.
+choice, numeric and selection-mode controls to each host's panel and Tool Options bar.
 The panel presents five SDR tones (Shadows through Highlights, with Midtones in
 the middle) and Custom in one horizontal segmented radio-button bar. Floating-point
 HDR documents add Bright HDR before Custom; SDR wide-gamut documents do not.
@@ -12,7 +12,7 @@ name and exact full-strength range in stops relative to reference white. Tool
 Options uses the same segmented choice and icons, including in its overflow panel.
 If the complete group cannot fit in a narrow toolbar, that existing overflow
 exposes the horizontal bar without splitting or hiding individual presets.
-GTK uses a reusable numeric row with the label, slider and editable value on one
+Each host uses a reusable numeric row with the label, slider and editable value on one
 line. The Tool settings panel has a minimum width of six small tiles and their
 gaps inside the content insets (242 logical pixels total). The Select command
 list also uses compact rows so it does not force the adjacent panel to be taller.
@@ -20,7 +20,7 @@ The shared `tonal-select` icon shows tonal bands inside a dashed selection borde
 
 Selection mode comes first. Choose one tone, or click/drag on the canvas to sample
 a custom interval. The result applies immediately. **Softness** and **Feather**
-refine it. In the GTK panel, horizontal Tool Options and its overflow, **Custom** adds one interval slider
+refine it. In the panel, horizontal Tool Options and its overflow, **Custom** adds one interval slider
 with two movable ends, an editable low value on the left and high value on the
 right. There are no visible bound labels or unit suffixes; tooltips specify stops
 relative to reference white (0). Endpoint boxes fit their one-decimal readouts,
@@ -30,7 +30,7 @@ and accessible adjustment. Escape during a drag restores that endpoint.
 The track normally spans −12 to +6 stops and expands to include typed or sampled
 values outside that interval, staying fixed during capture. Both ends remain
 separately reachable when the interval is zero. The shared Tool Options schema
-groups the bounds into one field, rendered by the same GTK range component.
+groups the bounds into one field, rendered by each host's reusable range component.
 Its horizontal toolbar row reserves 280 pixels for the compact values and track;
 the entire field moves into overflow when it cannot fit. The existing toolbar
 slider-visibility preference hides the track while retaining both editable values.
@@ -127,6 +127,21 @@ cannot activate the removed editor.
   the injected Wayland pen fixture; numeric editing uses the unproxied journey.
 - `native_tonal_selection_pen_input --tablet` checks injected Wayland pen sampling
   in Quick Mask; this is not a physical-device test.
+- `apps/layer-web/device.test.mjs --tonal-selection` runs against an isolated
+  browser origin through `LAYER_DEVICE_CDP` and `LAYER_WEB_URL`. It checks both
+  presentations, mouse/touch/pen endpoints, compact numeric edits, cancellation,
+  Quick Mask pixels, saved masks, sampling and the HDR preset. The desktop Web
+  harness accepts the same flag.
+- Android `AndroidInteractionTest#tonalRangePanelsAndToolbarAcrossDevices`
+  checks compact panel/toolbar geometry, both endpoints with mouse, finger and
+  stylus, keyboard/numeric edits, cancellation, Quick Mask pixels and saved masks.
+  Pass `-e systemInput true` to replay through Android's OS input dispatcher.
+  `AndroidRasterTest#tonalHdrCoverageAndSamplingOnDevice` checks actual Vulkan
+  mask coverage above reference white and sampling through the overlay.
+  Build/install with a separate `capyApplicationId` to isolate device tests.
+
+Host tests replay input events on the device; they do not verify physical pen
+pressure or the feel of moving the attached pen by hand.
 
 Use the isolated harness, not the user's desktop. Screenshots and machine-specific
 logs belong in ignored `artifacts/` or `/tmp`.

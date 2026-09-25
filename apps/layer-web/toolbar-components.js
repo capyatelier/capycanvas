@@ -1,4 +1,5 @@
 import { createNumberField } from './numeric.js';
+import { createRangeControl } from './range-control.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
 
 // Retained DOM controls. Rust owns the field schema, edit context, numeric math,
@@ -254,6 +255,13 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       row.classList.toggle('labeled', style.labeled); row.classList.toggle('stacked', vertical && extent[0] < style.size[0] * buttons.length);
     } };
   }
+  function range(spec, context) {
+    const row = element('div', 'toolbar-option toolbar-range'); row.dataset.toolbarField = '';
+    const control = createRangeControl({app, ...spec, icon, prefix:'toolbar', showSlider:preferences.sliders,
+      onChange:(index,value)=>send(context,{type:'set_tool_setting',id:spec.bounds[index].id,value})});
+    row.style.minWidth = preferences.sliders ? '280px' : '0'; row.append(control);
+    return {row, interval:true, update:option=>control.update(option.Range.bounds.map(f=>f.value)), dispose:()=>control.dispose()};
+  }
   function action(spec, context) {
     const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
     const b = button('', () => send(context, { type: 'invoke', command: spec.state.id }));
@@ -268,7 +276,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const fieldHeight = 24;
     const sizes = fields.map(f => {
       if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, fieldHeight];
-      if (vertical || f.action) return style.size;
+      if (!f.interval && (vertical || f.action)) return style.size;
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
       return [f.row.scrollWidth, Math.max(fieldHeight, f.row.scrollHeight)];
     });
@@ -283,14 +291,14 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   }
   root.updateComponent = next => {
     const value = next.component;
-    const nextSchema = key([value.context, value.numeric && { ...value.numeric, value: 0 }, value.options.map(o => o.Numeric ? { Numeric: { ...o.Numeric, value: 0 } } : o.Choice ? { Choice: { ...o.Choice, items: o.Choice.items.map(i => ({ ...i, selected: false })) } } : { Action: { ...o.Action, state: { ...o.Action.state, selected: false, enabled: true } } })]);
+    const nextSchema = key([value.context, value.numeric && { ...value.numeric, value: 0 }, value.options.map(o => o.Range ? {Range:{...o.Range,bounds:o.Range.bounds.map(f=>({...f,value:0}))}} : o.Numeric ? { Numeric: { ...o.Numeric, value: 0 } } : o.Choice ? { Choice: { ...o.Choice, items: o.Choice.items.map(i => ({ ...i, selected: false })) } } : { Action: { ...o.Action, state: { ...o.Action.state, selected: false, enabled: true } } })]);
     model = value;
     if (nextSchema !== schema) {
       closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
       if (standalone) {
         const field = model.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'opacity', label: tile.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
         fields.push(brushSlider(field, value.context));
-      } else fields = value.options.map(o => o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
+      } else fields = value.options.map(o => o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
     }
     if (standalone) { if (value.numeric) fields[0].update(value.numeric); }

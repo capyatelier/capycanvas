@@ -43,7 +43,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
   const modes = ['selection_new','selection_add','selection_subtract','selection_intersect'];
   const tools = ['rectangle_select','ellipse_select','lasso','polygon_select','auto_select','color_select','selection_brush'];
   try {
-    await invoke('select'); await contact(header('select'));
+    await invoke('rectangle_select'); await contact(header('select'));
     if(!await evaluate('!!layerApp.state().customization.drawer'))await contact(header('select'));
     assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
     await contact('.content-drawer .selection-menu-button');
@@ -56,7 +56,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     assert.ok(!menuRows.some(r=>r.label==='Modify'));
     await evaluate(`document.querySelector('.panel-context-menu:popover-open').hidePopover()`);await settle();
     const choices = await evaluate('layerApp.state().tool_set.subtools');
-    assert.equal(choices.length,7);
+    assert.equal(choices.length,8);
     await evaluate('window.selectionDrawer=document.querySelector(".content-drawer")');
     for (const [i, choice] of choices.entries()) {
       const selector = `.content-drawer [data-tool-choice="${choice.label}"]`;
@@ -71,8 +71,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(mode(id))}).textContent.trim()`),'');
       }
       assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${brush?'selection_brush_size':'selection_feather'}]')`));
-      if(!brush)assert.ok(await evaluate('!!document.querySelector("[data-tool-action=selection_antialias]")'));
-      const tops=await evaluate('[...document.querySelectorAll(".selection-modes button")].map(n=>n.getBoundingClientRect().top)');
+      if(!brush && choice.icon!=='tonal-select')assert.ok(await evaluate('!!document.querySelector("[data-tool-action=selection_antialias]")'));
+      const tops=await evaluate('[...document.querySelectorAll(".selection-modes:not(.tonal-tones) button")].map(n=>n.getBoundingClientRect().top)');
       assert.ok(tops.every(y=>Math.abs(y-tops[0])<1),'Modes fit one row');
     }
     await invoke('rectangle_select'); await contact(mode('selection_new')); await contact(mode('selection_fixed_size'));
@@ -120,7 +120,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     assert.ok(tools.every(id=>commands.some(c=>c.id===id)));
     const layout=await evaluate('JSON.stringify(layerApp.state().workspace.layout)');
     for(const id of tools.filter(id=>id!=='selection_brush')) assert.ok(layout.includes(`"${id}"`),`Photo toolbar ${id}`);
-    console.log('PASS selection drawers, seven tools/options, mode icons, mouse/touch/pen, remembered icon, GPU gestures, undo/redo, Photo defaults');
+    console.log('PASS selection drawers, eight tools/options, mode icons, mouse/touch/pen, remembered icon, GPU gestures, undo/redo, Photo defaults');
   } catch(error) {
     await mkdir('artifacts/selection-web',{recursive:true});
     const shot=await call('Page.captureScreenshot',{format:'png'});

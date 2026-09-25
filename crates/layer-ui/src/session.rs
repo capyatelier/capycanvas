@@ -6738,7 +6738,7 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), if platform==Platform::Gtk {8} else {7});
+            assert_eq!(s.state.tool_set.subtools.len(), 8);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
             assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);

@@ -138,6 +138,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val textStyle = LocalTextStyle.current
             fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
             val measureKey = options.map { option -> when {
+                option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
                 option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.array("items").length()) }
                 else -> "action"
@@ -145,6 +146,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
                 options.map { option ->
                     when {
+                        option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
                         option.has("Choice") && option.getJSONObject("Choice").getBoolean("segmented") -> {
                             val count = option.getJSONObject("Choice").array("items").length()
                             if (vertical) listOf(width, tileHeight * if (width < tileWidth * count) count else 1)
@@ -175,6 +177,12 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     layout.array("fields").optJSONObject(index)?.let { rect ->
                         Box(Modifier.placed(rect, density), contentAlignment = Alignment.Center) {
                             when {
+                                option.has("Range") -> option.getJSONObject("Range").let { range ->
+                                    val fields = range.array("bounds").objects()
+                                    RangeControl(fields, range.getString("label"), Modifier.fillMaxWidth(), prefix="toolbar", showSlider=preferences.getBoolean("sliders")) { index, value ->
+                                        edit(obj("type" to "set_tool_setting", "id" to fields[index].getString("id"), "value" to value))
+                                    }
+                                }
                                 option.has("Numeric") -> ToolbarNumber(option.getJSONObject("Numeric"), vertical, style, labeled, preferences, ::edit)
                                 option.has("Choice") -> ToolbarChoice(option.getJSONObject("Choice"), vertical, labeled, rect.number("width") < tileWidth * option.getJSONObject("Choice").array("items").length(), panel.getInt("tile_icon_size"), ::edit)
                                 else -> {
@@ -251,20 +259,22 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     }
 }
 
-@Composable private fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
-    iconSize: Int, edit: (JSONObject) -> Unit) {
+@Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
+    iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f) {
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
     if (choice.getBoolean("segmented")) {
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
-            Box(modifier.testTag("toolbar-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
+            HoverTip(item.getString("label"), modifier) {
+            Box(Modifier.fillMaxSize().testTag(if(prefix=="tool" && id=="selection-mode") "tool-action-${item.getJSONObject("action").getString("command")}" else "$prefix-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) }, contentAlignment = Alignment.Center) {
-                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical) iconSize.dp else 16.dp))
+                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
+            }
             }
         }
-        val modifier = (if (vertical) Modifier.fillMaxSize().clip(TileShape) else Modifier.fillMaxWidth().height(24.dp).clip(ControlShape))
-            .selectableGroup().testTag("toolbar-segments-$id")
+        val modifier = (if (vertical) Modifier.fillMaxSize().clip(TileShape) else Modifier.fillMaxWidth().height(height.dp).clip(ControlShape))
+            .selectableGroup().testTag(if(prefix=="tool" && id=="selection-mode") "selection-mode-row" else "$prefix-segments-$id")
         if (vertical && stacked) Column(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxWidth().weight(1f)) } }
         else Row(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxHeight().weight(1f)) } }
         return
