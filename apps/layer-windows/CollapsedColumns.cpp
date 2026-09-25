@@ -21,6 +21,7 @@ struct Column:std::enable_shared_from_this<Column>{
     std::map<std::wstring,Connection> connections;
     double reported=0;
     bool applying=false;
+    std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
     void init(){
         auto weak=weak_from_this();
         background.Background(clear());background.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});background.Child(frame);
@@ -51,7 +52,13 @@ struct Column:std::enable_shared_from_this<Column>{
     void apply(J const& next){
         applying=true;geometry=next;
         auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
-        surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius}));
+        J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
+            if(str(anchor,L"kind")==L"column"&&num(anchor,L"column",-1)==id)source=value.GetObject();}
+        corners={SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+        if(source.Size()){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+        auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
+        surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),corners));
+        background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
@@ -98,9 +105,9 @@ struct Column:std::enable_shared_from_this<Column>{
                 }
                 auto pick=found->second;place(pick,local(object(tile,L"bounds"),content,offset));
                 AutomationProperties::SetName(pick,str(panel,L"title"));ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
-                bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId;
+                bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId||(!facing.empty()&&joined==panelId);
                 pick.Background(active?selected(data):clear());
-                pick.CornerRadius(active&&open.Size()?(str(open,L"direction")==L"left"?CornerRadius{0,6,6,0}:CornerRadius{6,0,0,6}):CornerRadius{6,6,6,6});
+                pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,!facing.empty()&&joined==panelId?facing:hstring{}));
                 AutomationProperties::SetItemStatus(pick,active?L"Selected":L"");
             }
         }
@@ -132,7 +139,7 @@ struct Column:std::enable_shared_from_this<Column>{
         applying=false;
     }
     void collectGlass(A& regions,A& links,UIElement const& reference)const{
-        if(!appendGlass(regions,background,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true))return;
+        if(!appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true))return;
         for(auto value:array(object(geometry,L"open"),L"connections"))appendConnection(links,value.GetArray().GetObjectAt(1),workspace,reference);
     }
     void remove(){

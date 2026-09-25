@@ -78,6 +78,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         std::vector<AutomaticTab> automatic;
         ScrollViewer tabScroll{nullptr};
         Microsoft::UI::Xaml::Shapes::Path background,strip;
+        std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         Border footer{nullptr};
         std::wstring key;
         J geometry,presented;
@@ -665,6 +666,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
+            group.corners=tabbed&&!expanded?std::array<float,4>{SurfaceRadius,SurfaceRadius,corners[2],corners[3]}:corners;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
             float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
             auto outline=expanded?expansionShape(group.presented):tabbed?squircleRectangle(width,std::max(0.f,height-36),{0,0,corners[2],corners[3]}):squircleRectangle(width,height,corners);
@@ -744,7 +746,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(sources.Stringify()!=data->drawerSources.Stringify()){
                 data->drawerSources=sources;
                 for(auto& [id,group]:groups){group.backgroundKey=L"";if(group.body)group.body->Apply(!group.hidden);}
-                backgrounds();
+                backgrounds();collapsed->Apply();
             }
         }
         auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
@@ -754,7 +756,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     A glass(UIElement const& reference,A& connections)const{
         A regions;if(flag(data->model,L"chrome_hidden"))return regions;
-        for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true);
+        for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{group.corners[0],group.corners[1],group.corners[2],group.corners[3]},true);
         collapsed->AppendGlass(regions,connections,reference);drawers->AppendGlass(regions,connections,reference);
         appendGlass(regions,cameraSurface,reference,cornerRadii(cameraSurface.CornerRadius()));
         return regions;
