@@ -316,7 +316,17 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"menu_labels")return menuGroup;if(kind==L"workspaces")return workspaceGroup;if(kind==L"document_title")return document;
         if(kind==L"clock")return systemStatus->Clock();if(kind==L"battery")return systemStatus->Battery();
         if(kind==L"space"){Border space;space.Background(clear());return space;}
-        auto pick=button(data,L"",[weak=weak_from_this(),id]{if(auto self=weak.lock())self->activate(id);});style(pick,data,false);pick.Padding({0});
+        auto presses=kind==L"tool"&&pickerControl(object(item,L"control"))?std::make_shared<DoublePress>():nullptr;
+        auto pick=button(data,L"",[weak=weak_from_this(),id,presses]{if(auto self=weak.lock()){
+            if(presses&&!self->editing&&presses->second()){
+                self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
+                    {L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}})}}));
+                return;
+            }
+            if(presses&&self->editing)presses->reset();
+            self->activate(id);
+        }});style(pick,data,false);pick.Padding({0});
+        if(presses)presses->listen(pick);
         return pick;
     }
     void activate(uint32_t id,FrameworkElement anchor=nullptr){
@@ -364,7 +374,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             }
             native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label");
             input->Source(native.frame,O({{L"kind",S(L"item")},{L"value",N(id)}}),label);
-            AutomationProperties::SetName(native.editor,label);ToolTipService::SetToolTip(native.frame,box_value(label));
+            AutomationProperties::SetName(native.editor,label);
+            ToolTipService::SetToolTip(native.frame,box_value(kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label));
             native.content.ColumnDefinitions().GetAt(0).Width({editing?20.:0.,GridUnitType::Pixel});
             native.grip.Visibility(editing?Visibility::Visible:Visibility::Collapsed);native.editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);
             native.view.IsHitTestVisible(!editing);native.editor.IsTabStop(editing);

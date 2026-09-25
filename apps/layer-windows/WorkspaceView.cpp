@@ -233,6 +233,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             popup.ShowAt(anchor);
         }else for(auto const& bind:popupBindings)bind();
     }
+    void previewColors(){
+        if(std::exchange(data->colorQueued,true))return;
+        root.DispatcherQueue().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
+            self->data->colorQueued=false;auto views=self->data->colorViews;
+            for(auto const& [id,refresh]:views)refresh();
+            self->tracePresentation();
+        }});
+    }
     static uint64_t revision(J const& update,wchar_t const* field){
         double value=num(update,field,-1);
         if(!std::isfinite(value)||value<0||value>9007199254740991.||std::floor(value)!=value)
@@ -249,6 +257,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             workspaceUpdate=update;
         }
         if(!full){
+            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");previewColors();}
+            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};previewColors();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
@@ -264,7 +274,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             data->thumbnails=CreateLayerThumbnailCache(data->query);
             data->previews=CreateFilterPreviewCache(data->query);
         }
-        data->model=snapshot;data->state=object(snapshot,L"state");
+        data->model=snapshot;data->state=object(snapshot,L"state");data->colorPreview=object(snapshot,L"color_preview");
         // Adoption and layout restoration discard transient host measurements.
         // Reconcile the new model even when retained controls have identical sizes.
         lastMeasurements=L"";
@@ -428,6 +438,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
+            {L"color_fields",N(double(data->colorFields))},
+            {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
@@ -503,11 +515,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto key=std::wstring(panelStructure(panel).Stringify())+L"@"+std::to_wstring(width);
                 if(copy.key!=key){
                     if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
-                    copy.key=key;copy.body=std::make_unique<PanelBody>(data,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
+                    auto inert=std::make_shared<WorkspaceData>(*data);
+                    inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
+                    inert->popupChanged=nullptr;inert->transients.clear();inert->colorViews.clear();
+                    copy.key=key;copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
                     copy.body->Root().Width(width);measureHost.Children().Append(copy.body->Root());copy.body->Apply(true);
                 }
                 double height=copy.body->ContentHeight();
-                if(std::isfinite(height)&&height>=0&&measurements.contains(name))measurements[name].content=stable(height);
+                if(std::isfinite(height)&&height>=0&&measurements.contains(name)){
+                    measurements[name].content=stable(height);measurements[name].scroll=copy.body->ScrollMetrics();
+                }
             }
         }
         for(auto it=offscreen.begin();it!=offscreen.end();){

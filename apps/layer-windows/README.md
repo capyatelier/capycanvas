@@ -552,7 +552,8 @@ Navigator presentation paths.
 ~~~
 
 The isolated fixture checks all six property kinds, reset draft guards, retained
-curve controls, resize, category/search/insertion, actual preview pixels after a
+curve controls, the curve reset icon, double-tap removal and drag-off/drag-back
+restoration with mouse, pen and touch, resize, category/search/insertion, actual preview pixels after a
 controlled stroke and exact Undo, both themes, document replacement and zero exit.
 Guarded OS mouse, pen and touch contacts check curve preview, one-step Undo/Redo,
 unchanged clicks, Escape, source hiding and canceled insertions. Pen device removal

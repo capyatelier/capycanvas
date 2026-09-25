@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 #include <type_traits>
 
@@ -119,6 +120,12 @@ struct WorkspaceData {
         for(auto& [id,close]:current)closed=close()||closed;
         return closed;
     }
+    J colorPreview;
+    std::map<uint64_t,std::function<void()>> colorViews;uint64_t nextColorView=0,colorFields=0;bool colorQueued=false;
+    uint64_t colorView(std::function<void()> refresh){colorViews.emplace(++nextColorView,std::move(refresh));return nextColorView;}
+    static bool previewing(J const& preview){
+        return object(preview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null;
+    }
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
     void refreshPalette(){
@@ -177,6 +184,26 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }
+inline bool pickerControl(J const& control){
+    auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");
+}
+inline hstring pickerTooltip(hstring const& tooltip){return tooltip+L" · Double-press for options";}
+struct DoublePress : std::enable_shared_from_this<DoublePress> {
+    using Press=std::pair<uint64_t,Microsoft::UI::Input::PointerDeviceType>;
+    std::optional<Press> pressed,last;
+    void listen(UIElement const& target){
+        target.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+            if(auto self=weak.lock())self->pressed=Press{e.GetCurrentPoint(nullptr).Timestamp(),e.Pointer().PointerDeviceType()};
+        })),true);
+    }
+    bool second(){
+        auto now=std::exchange(pressed,std::nullopt);auto previous=std::exchange(last,now);
+        bool twice=now&&previous&&now->second==previous->second&&now->first-previous->first<=uint64_t(GetDoubleClickTime())*1000;
+        if(twice)last.reset();
+        return twice;
+    }
+    void reset(){pressed.reset();last.reset();}
+};
 struct NumberPresentation {
     bool preference=false;hstring description;std::function<hstring()> identity;
     std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;

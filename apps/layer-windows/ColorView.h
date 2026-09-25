@@ -4,3 +4,4 @@
 // Retained native projection of Rust's ColorPanelView.
 winrt::Microsoft::UI::Xaml::FrameworkElement ColorPanel(
     std::shared_ptr<CapyUi::WorkspaceData> const& data, CapyUi::Bindings& bindings, bool fitHeight=false);
+double ColorPanelNaturalHeight(std::shared_ptr<CapyUi::WorkspaceData> const& data, double width, double scale);

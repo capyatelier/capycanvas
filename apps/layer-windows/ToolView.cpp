@@ -129,7 +129,60 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     Bindings fields;
     hstring key;
     explicit SettingsView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){root.Spacing(6);}
+    static bool picking(J const& state){
+        auto tool=str(object(state,L"layer_tools"),L"tool");return tool==L"pick_visible"||tool==L"pick_layer";
+    }
+    void pickerChoice(hstring const& title,hstring const& id,std::vector<hstring> const& names,
+        std::function<int(J const&)> current,std::function<void(int)> select){
+        Grid row;row.ColumnSpacing(8);row.MinHeight(36);
+        ColumnDefinition caption;caption.Width({68,GridUnitType::Pixel});row.ColumnDefinitions().Append(caption);
+        ColumnDefinition value;value.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(value);
+        auto text=label(data,title);text.FontSize(13);text.VerticalAlignment(VerticalAlignment::Center);
+        text.TextWrapping(TextWrapping::NoWrap);row.Children().Append(text);
+        ComboBox choices;choices.MinWidth(0);choices.MinHeight(32);choices.FontSize(13);choices.Padding({8,6,0,6});
+        choices.HorizontalAlignment(HorizontalAlignment::Stretch);choices.VerticalAlignment(VerticalAlignment::Center);
+        choices.Background(data->brush(L"input"));choices.BorderThickness({0,0,0,0});choices.CornerRadius({6,6,6,6});
+        for(auto const& name:names)choices.Items().Append(box_value(name));
+        AutomationProperties::SetName(choices,title);AutomationProperties::SetAutomationId(choices,id);
+        auto syncing=std::make_shared<bool>(false);
+        choices.SelectionChanged([select,syncing,weak=make_weak(choices)](auto&&,auto&&){
+            if(auto c=weak.get();c&&!*syncing&&c.SelectedIndex()>=0)select(c.SelectedIndex());
+        });
+        auto open=std::make_shared<bool>(false);
+        choices.DropDownOpened([data=data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
+        choices.DropDownClosed([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
+        choices.Unloaded([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
+        fields.emplace_back([weak=weak_from_this(),choices,syncing,current]{if(auto self=weak.lock()){
+            auto index=current(object(self->data->state,L"color_picker"));
+            if(choices.SelectedIndex()!=index){*syncing=true;choices.SelectedIndex(index);*syncing=false;}
+        }});
+        Grid::SetColumn(choices,1);row.Children().Append(choices);root.Children().Append(row);
+    }
+    void refreshPicker(){
+        auto picker=object(data->state,L"color_picker");auto sizes=array(picker,L"sample_sizes");
+        bool layers=flag(picker,L"can_sample_layer");
+        auto next=O({{L"picker",B(true)},{L"layers",B(layers)},{L"sizes",sizes}}).Stringify();
+        if(next!=key){
+            key=next;fields.clear();root.Children().Clear();
+            auto weak=weak_from_this();
+            std::vector<hstring> sources{L"Visible color"};if(layers)sources.push_back(L"Selected layer");
+            pickerChoice(L"Source",L"picker-setting-source",sources,
+                [](J const& value){return flag(value,L"layer")?1:0;},
+                [weak](int index){if(auto self=weak.lock();self&&picking(self->data->state)&&flag(object(self->data->state,L"color_picker"),L"layer")!=(index==1))
+                    self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"source")},{L"layer",B(index==1)}})}}));});
+            std::vector<hstring> names;std::vector<double> widths;
+            for(auto value:sizes){auto width=value.GetNumber();widths.push_back(width);
+                names.push_back(width==1?hstring(L"Single pixel"):to_hstring(int(width))+L" px circle");}
+            pickerChoice(L"Sample size",L"picker-setting-size",names,
+                [widths](J const& value){auto at=std::find(widths.begin(),widths.end(),num(value,L"sample_width"));return at==widths.end()?-1:int(at-widths.begin());},
+                [weak,widths](int index){if(auto self=weak.lock();self&&picking(self->data->state)&&size_t(index)<widths.size()
+                    &&num(object(self->data->state,L"color_picker"),L"sample_width")!=widths[index])
+                    self->data->dispatch(O({{L"type",S(L"set_color_sample_size")},{L"width",N(widths[index])}}));});
+        }
+        for(auto const& bind:fields)bind();
+    }
     void refresh(){
+        if(picking(data->state))return refreshPicker();
         auto context=settingsContext(data->state);A schema;
         for(auto value:array(data->state,L"tool_settings")){
             auto item=value.GetObject();schema.Append(O({{L"id",S(str(item,L"id"))},{L"label",S(str(item,L"label"))},

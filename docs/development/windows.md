@@ -201,6 +201,10 @@ New Window creates independent native windows with shared preferences and storag
 shared store, preview and ownership policy, with a configurable scrolling titlebar switcher.
 Project transport handles background work, save checkpoints and replacement of
 local files; export does not mark the editable project as saved.
+Panel measurements follow Web: inactive tabs of fitted groups are measured from
+offscreen copies that cannot dispatch, every non-toolbar panel except Color
+reports scroll metrics so the shared fitter can shrink it to four rows, and a
+fitted Color panel reports its natural height at the column width.
 
 ## Validate
 
@@ -221,6 +225,7 @@ pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -
 ./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-toolbar-components.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
 
 The document journey checks native import/save/export pickers, Unicode paths,
