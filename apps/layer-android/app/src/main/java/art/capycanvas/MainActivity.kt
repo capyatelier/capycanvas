@@ -63,7 +63,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         host.filterPreviewCache.resume()
-        host.workspaceInput(obj("type" to "resume"))
+        if (!host.restartingWindow) host.workspaceInput(obj("type" to "resume"))
+        host.restartingWindow = false
     }
     override fun onPause() {
         host.input(obj("type" to "blur"))
@@ -72,7 +73,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         host.filterPreviewCache.pause()
         host.recovery.capture()
-        host.workspaceInput(obj("type" to "suspend"))
+        host.restartingWindow = isChangingConfigurations
+        if (!host.restartingWindow) host.workspaceInput(obj("type" to "suspend"))
         super.onStop()
     }
     override fun onDestroy() {

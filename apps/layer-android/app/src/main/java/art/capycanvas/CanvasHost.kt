@@ -226,6 +226,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     /** Focused interval handles own their native adjustment keys. */
     internal var rangeControlFocus: Any? = null
     internal var pickerPopupOpen = false
+    internal var restartingWindow = false
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
     private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
