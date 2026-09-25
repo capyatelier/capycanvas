@@ -126,7 +126,8 @@ GTK `DropTarget` receivers are destinations, not additional pickup surfaces.
 
 Drawing tabs added on 2026-09-20 use [`DrawingTabs.swift`](../../apps/layer-apple/Shared/Editor/DrawingTabs.swift)
 with the retained native reorder adapter. Horizontal tab bodies and selector
-grips pick up immediately after movement slop; vertical selector row bodies
+grips pick up immediately after movement slop and slide live through the shared
+`DocumentTabDrag` preview, as on GTK, Web and Android; vertical selector row bodies
 require a touch/pen hold and remain immediate for mouse. Shared Rust validates
 drop positions and maintains separate tab-order undo/redo. Native Mac and
 physical-iPad UI tests cover row reorder, one-step undo/redo, selection and close.

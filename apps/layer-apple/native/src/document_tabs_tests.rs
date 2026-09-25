@@ -269,3 +269,32 @@ fn apple_float32_exr_and_gainmaps_use_actual_delivery_and_decoded_previews() {
         }
     }
 }
+
+#[test]
+fn apple_tab_slides_follow_the_contact_and_cancel_off_the_strip() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        new_drawing(&app, SampleDepth::U8);
+        new_drawing(&app, SampleDepth::U8);
+        let ids: Vec<u64> = tabs(&app)["tabs"].as_array().unwrap().iter().map(|t| t["id"].as_u64().unwrap()).collect();
+        assert_eq!(ids.len(), 3);
+        let hits: Vec<Value> = ids.iter().enumerate()
+            .map(|(i, id)| json!({"id":id,"bounds":{"x":i as f32 * 146.,"y":1.,"width":140.,"height":34.}})).collect();
+        let slide = |point: [f32; 2]| app.request(2, json!({"type":"document_tabs","op":"slide","id":ids[0],"hits":hits,
+            "clip":{"x":0.,"y":1.,"width":432.,"height":34.},"press":[70.,18.],"point":point})).unwrap();
+        let past_one = slide([220., 18.]);
+        assert_eq!(past_one["attached"], true);
+        assert_eq!(past_one["bounds"]["x"].as_f64().unwrap(), 150.);
+        assert_eq!(past_one["before"], json!(ids[2]));
+        assert_eq!(past_one["offsets"], json!([0., -146., 0.]), "Neighbors slide aside by the source pitch");
+        let to_end = slide([300., 18.]);
+        assert_eq!(to_end["before"], Value::Null);
+        assert_eq!(to_end["offsets"], json!([0., -146., -146.]));
+        let away = slide([300., 90.]);
+        assert_eq!(away["attached"], false);
+        assert!(away["offsets"].as_array().unwrap().iter().all(|o| o.as_f64() == Some(0.)));
+        assert_eq!(slide([70., 18.])["attached"], true);
+    }
+}
