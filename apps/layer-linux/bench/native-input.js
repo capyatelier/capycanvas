@@ -63,7 +63,8 @@ const workspaceEdges = ARGV.includes('--workspace-edges');
 const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnStacks || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
 // A captured executable lets correctness runs identify their exact build and
 // avoids an unrelated release rebuild. The ordinary cargo route remains usable.
-const testExecutable = GLib.getenv('LAYER_NATIVE_TEST_EXECUTABLE');
+const capturedExecutable = GLib.getenv('LAYER_NATIVE_TEST_EXECUTABLE');
+const testExecutable = capturedExecutable && GLib.canonicalize_filename(capturedExecutable, null);
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Column stacks include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
@@ -91,6 +92,7 @@ if (nativeTest) {
 }
 if (testExecutable && !workspaceWeb) {
     launch.splice(0, 7, testExecutable, launch[5]);
+    launcher.set_cwd('apps/layer-linux');
 }
 let tabletProxy;
 if (ARGV.includes('--tablet')) {
