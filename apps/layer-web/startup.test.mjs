@@ -91,7 +91,8 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     const early = result.pipelines.filter(p => p.time < result.times.canvas).map(p => p.label);
     assert.ok(!early.some(label => /brush|watercolor|export/i.test(label)),
       `Only general compositing is compiled before paper: ${early}`);
-    assert.equal(early.length, 4, `Only the four paper/presentation pipelines precede canvas: ${early}`);
+    assert.deepEqual(early.toSorted(), ["backdrop blur down", "backdrop blur regions", "backdrop blur up", "backdrop glass interiors", "display-only cursor", "layer background", "layer composition", "viewport presentation"],
+      `Only paper, presentation and default panel glass pipelines precede canvas: ${early}`);
     assert.ok(result.pipelines.filter(p => p.time > result.times.canvas).some(p => p.method === 'createComputePipelineAsync' && p.label === 'native SDR tile writeback'));
     assert.ok(result.pipelines.filter(p => /brush|pointwise effect/.test(p.label)).every(p => p.method === 'createRenderPipelineAsync'), 'Startup brushes and effects use real async pipeline creation');
     console.log("Staged startup: visible paper before brush, GPU validation gates readiness, painting and camera input during optional compilation passed", result.times);
