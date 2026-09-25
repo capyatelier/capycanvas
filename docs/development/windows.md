@@ -38,6 +38,12 @@ and C++ parts. Packages go into ignored `artifacts/windows/packages`; use
 `artifacts/windows/Debug` or `artifacts/windows/Release`. Launch the generated
 `CapyCanvas.exe` from the chosen output directory.
 
+The build copies `dxcompiler.dll` from the pinned `Microsoft.Direct3D.DXC` package
+beside the executable. D3D12 shaders compile with that app-local DXC, which uses
+its internal validator and needs no `dxil.dll`. Without it the host falls back to
+the system FXC compiler, which takes about five times longer for the startup
+shader set. Set `WGPU_DX12_COMPILER=fxc` to compare the two compilers.
+
 The Windows App SDK runtime is copied beside the executable. No UWP application
 package or generated application XAML is needed for this development build.
 

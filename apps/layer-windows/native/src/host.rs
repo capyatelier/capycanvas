@@ -109,6 +109,8 @@ impl CapyHost {
         native.resize(width, height, scale)?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
+        descriptor.backend_options.dx12.shader_compiler =
+            wgpu::Dx12Compiler::from_env().unwrap_or_else(bundled_shader_compiler);
         if std::env::var_os("CAPY_LATENCY_TRACE").is_some()
             && std::env::var_os("CAPY_WINDOWS_NO_VSYNC_WAIT").is_some() {
             descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
@@ -1167,6 +1169,17 @@ fn set_composition_scale(surface: &wgpu::Surface<'_>, scale: f32) -> Result<(), 
         ..Default::default()
     };
     unsafe { swapchain.SetMatrixTransform(&transform) }.map_err(err)
+}
+
+fn bundled_shader_compiler() -> wgpu::Dx12Compiler {
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name("dxcompiler.dll"))
+        .filter(|path| path.is_file())
+        .and_then(|path| path.to_str().map(str::to_owned))
+        .map_or(wgpu::Dx12Compiler::Fxc, |dxc_path| {
+            wgpu::Dx12Compiler::DynamicDxc { dxc_path }
+        })
 }
 
 /// # Safety

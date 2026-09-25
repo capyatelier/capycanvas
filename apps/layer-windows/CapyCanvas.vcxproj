@@ -93,4 +93,7 @@
   <Target Name="CopyRustRuntime" AfterTargets="Build">
     <Copy SourceFiles="$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll" DestinationFolder="$(OutDir)" />
   </Target>
+  <Target Name="CopyShaderCompiler" AfterTargets="Build">
+    <Copy SourceFiles="$(CapyPackages)\Microsoft.Direct3D.DXC.1.9.2607.13\build\native\bin\x64\dxcompiler.dll" DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>
