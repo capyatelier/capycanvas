@@ -533,7 +533,7 @@ class AndroidRasterTest {
     }
 
     @Test fun portablePhotoGainmapDelivery() {
-        val root=requireNotNull(InstrumentationRegistry.getArguments().getString("photoDirectory")){"Supply -e photoDirectory with the portable photo fixtures"}
+        val root=InstrumentationRegistry.getArguments().getString("photoDirectory") ?: throw AssumptionViolatedException("Supply -e photoDirectory with the portable photo fixtures")
         require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         val automation=instrumentation.uiAutomation
@@ -663,7 +663,7 @@ class AndroidRasterTest {
 
     @Test fun portablePhotoLargeDelivery() {
         val arguments=InstrumentationRegistry.getArguments()
-        val path=requireNotNull(arguments.getString("photoFile")){"Supply -e photoFile with an HDR photo"}
+        val path=arguments.getString("photoFile") ?: throw AssumptionViolatedException("Supply -e photoFile with an HDR photo")
         require(Regex("/data/local/tmp/[A-Za-z0-9_./-]+").matches(path))
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
         val input=File(files,"large-photo.avif").apply {
@@ -725,8 +725,7 @@ class AndroidRasterTest {
     }
 
     @Test fun hdrBlackIntensityMarkerVisible() {
-        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
-        requireNotNull(sourcePath){"Supply -e hdrFile"}
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile")
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
         val input=File(files,"hdr-marker.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
         open(input)
@@ -930,8 +929,7 @@ class AndroidRasterTest {
     }
 
     @Test fun hdrDisplayNegotiation() {
-        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
-        requireNotNull(sourcePath){"Supply -e hdrFile for the display regression"}
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile for the display regression")
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
         fun shell(command:String)=ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use{it.readBytes()}
         val output=File(activity.getExternalFilesDir(null),"display").apply{mkdirs()}
@@ -1052,7 +1050,7 @@ class AndroidRasterTest {
     }
 
     @Test fun hdrLargeDocumentMeasurements() {
-        val names=InstrumentationRegistry.getArguments().getString("hdrWorkloads")?.split(',') ?: listOf("sparse4k","hdr24.png","hdr45.png","hdr60.png")
+        val names=(InstrumentationRegistry.getArguments().getString("hdrWorkloads") ?: throw AssumptionViolatedException("Supply -e hdrWorkloads, such as sparse4k or hdr24.png,hdr45.png,hdr60.png in the app files directory")).split(',')
         val report=obj("device" to android.os.Build.MODEL,"sdk" to android.os.Build.VERSION.SDK_INT,"runs" to org.json.JSONArray())
         val destination=File(activity.getExternalFilesDir(null),"hdr-performance.json")
         fun persist(){destination.writeText(report.toString(2))}
@@ -2128,6 +2126,7 @@ class AndroidRasterTest {
             assertEquals(epoch, native { state(it).getJSONObject("document_file").getLong("epoch") })
             Native.projectAssumeProfile(pending, obj("Builtin" to "AdobeRgb").toString())
             Native.projectWork(pending, -1, 0, 0)
+            compose.waitUntil(120_000) { tick(); native { Native.projectParkReady(it, pending) } }
             native { Native.projectAdopt(it, pending, "null") }
         } finally { Native.projectFree(pending) }
         val assumed = manifest(save("assumed16.capy"))
