@@ -151,6 +151,16 @@ public static class CapyRowPointer {
    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
   }
  }
+ public static void RightDrag(int x0,int y0,int x1,int y1) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var start=new Point{x=x0,y=y0};Guard(start);MouseMove(start);last=start;
+   MouseButton(8);
+   try{
+    for(int i=1;i<=12;i++){var point=new Point{x=x0+(x1-x0)*i/12,y=y0+(y1-y0)*i/12};Guard(point);MouseMove(point);last=point;Thread.Sleep(10);}
+   }finally{MouseButton(16);}
+  }
+ }
  public static void RightClick(int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");

@@ -59,6 +59,7 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
+    std::atomic<bool> panCursor{false};
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
     winrt::Microsoft::UI::Input::GestureRecognizer pickerHold{nullptr};
     std::optional<uint32_t> holdContact;

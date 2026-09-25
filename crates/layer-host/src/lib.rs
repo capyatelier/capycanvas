@@ -19,6 +19,7 @@ struct SnapshotKey {
     chrome_hidden: bool,
     hide_floating_panels: bool,
     keep_zen_button: bool,
+    pan_cursor: bool,
     gpu_ready: bool,
     startup: layer_render_wgpu::StartupProgress,
     error: Option<String>,
@@ -46,6 +47,7 @@ pub struct NativeHost {
     pub chrome_hidden: bool,
     hide_floating_panels: bool,
     keep_zen_button: bool,
+    pan_cursor: bool,
     pub error: Option<String>,
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
@@ -104,6 +106,7 @@ impl NativeHost {
             chrome_hidden: false,
             hide_floating_panels: false,
             keep_zen_button: false,
+            pan_cursor: false,
             error: None,
             sequence: 0,
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
@@ -320,6 +323,7 @@ impl NativeHost {
         self.chrome_hidden = reply.chrome_hidden;
         self.hide_floating_panels = reply.hide_floating_panels;
         self.keep_zen_button = reply.keep_zen_button;
+        self.pan_cursor = reply.pan_cursor;
         self.apply_change(previous, reply.change);
         if reply.cancel_paint {
             self.cancel_pen()?;
@@ -1506,7 +1510,10 @@ mod tests {
         app.hide_floating_panels = true;
         assert_eq!(app.take_snapshot().unwrap()["hide_floating_panels"], true);
         app.keep_zen_button = true;
-        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], true);
+        app.pan_cursor = true;
+        let snapshot = app.take_snapshot().unwrap();
+        assert_eq!(snapshot["keep_zen_button"], true);
+        assert_eq!(snapshot["pan_cursor"], true);
         assert!(app.take_snapshot().is_none());
         app.error = Some("test surface error".into());
         assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");

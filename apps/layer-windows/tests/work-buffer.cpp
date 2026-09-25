@@ -14,7 +14,9 @@ int main() {
     }
     assert(CanvasPointerButton(1,false,false)==0);
     assert(CanvasPointerButton(1,true,false)==1);
-    assert(CanvasPointerButton(1,false,true)==2);
+    assert(CanvasPointerButton(1,false,true)==1);
+    assert(CanvasPointerButton(1,false,false,true)==2);
+    for(bool right:{false,true})assert(CanvasPointerButton(0,false,right,true)==0);
     std::cout<<"Canvas pen/eraser side buttons ignored; mouse pan buttons preserved\n";
     CapyPointer actual{};actual.pressure=0.37f;actual.x=42.25f;actual.timestamp_ns=12345;
     auto real=actual;

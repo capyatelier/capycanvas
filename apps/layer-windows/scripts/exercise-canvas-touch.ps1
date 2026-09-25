@@ -74,6 +74,10 @@ try{
  [CapyRowPointer]::Down('mouse',($cx-60),($cy-50))
  try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-50+[int](10*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
  Wait-Until {(Model).state.document_file.modified} 'Visible mouse seed stroke did not finish'
+ $seeded=Signature;$unpanned=Camera
+ [CapyRowPointer]::RightDrag(($cx+40),($cy+40),($cx+100),($cy+70))
+ Wait-Until {[Math]::Abs((Camera).translation[0]-$unpanned.translation[0]) -gt 20} 'Mouse right-drag did not pan'
+ if((Signature) -ne $seeded){throw 'Mouse right-drag painted'}
  [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
  $drawing=Signature;Capture 'before-touch'
  [CapyCanvasTouch]::Initialize([uint32]$app.Id)

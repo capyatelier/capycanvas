@@ -5,8 +5,8 @@
 
 // Native pen contact/eraser identity owns drawing. Barrel button properties
 // can also report right/middle pressed, but only a mouse uses those for pan.
-inline uint32_t CanvasPointerButton(uint32_t tool, bool middle, bool right) {
-    return tool==1?(middle?1:right?2:0):0;
+inline uint32_t CanvasPointerButton(uint32_t tool, bool middle, bool right, bool extra=false) {
+    return tool==1?(middle||right?1:extra?2:0):0;
 }
 
 // Windows' predictor extrapolates axes: pressure can exceed the sensor's [0,1]

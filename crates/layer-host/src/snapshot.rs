@@ -79,6 +79,7 @@ impl NativeHost {
             chrome_hidden: self.chrome_hidden,
             hide_floating_panels: self.hide_floating_panels,
             keep_zen_button: self.keep_zen_button,
+            pan_cursor: self.pan_cursor,
             gpu_ready: self.session.engine().backend().0.is_some(),
             startup: self.startup,
             error: self.error.clone(),
@@ -299,6 +300,7 @@ impl NativeHost {
         map.serialize_entry("gpu_ready", &gpu_ready)?;
         map.serialize_entry("hide_floating_panels", &self.hide_floating_panels)?;
         map.serialize_entry("keep_zen_button", &self.keep_zen_button)?;
+        map.serialize_entry("pan_cursor", &self.pan_cursor)?;
         map.serialize_entry("canvas_ready", &(gpu_ready && self.startup.canvas_ready))?;
         map.serialize_entry("brush_ready", &(gpu_ready && self.startup.brush_ready))?;
         map.serialize_entry("shaders_ready", &(gpu_ready && self.startup.complete))?;

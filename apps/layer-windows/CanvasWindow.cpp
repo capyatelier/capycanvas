@@ -433,7 +433,7 @@ void CanvasWindow::Replay(ReplayKind kind) {
             CapyPointer p{};
             p.id=77;p.sequence=++self->sequence;p.timestamp_ns=start+i*1000000ULL;
             p.view_revision=view;p.tool=pen?0:1;p.button=pan?1:0;p.flags=2;
-            p.pressure=pen?0.2f+0.7f*float(i)/float(count-1):0.5f;
+            p.pressure=pen?0.2f+0.7f*float(i)/float(count-1):1.0f;
             if(pen){p.tilt_x=0.4f*std::sin(float(i)/7);p.tilt_y=0.2f*std::cos(float(i)/7);p.twist=float(i)/42;}
             p.phase=i==0?1:i==count-1?3:2;
             p.x=size.width*0.4f+(pan?0.0f:float(backlog?i%42:i)*5);
@@ -567,10 +567,10 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         CapyPointer p{};
         p.id=point.PointerId();p.timestamp_ns=point.Timestamp()*1000;
         p.sequence=++sequence;p.view_revision=view;p.x=pos.X*scale;p.y=pos.Y*scale;
-        p.pressure=tool==1?(point.IsInContact()?0.5f:0.0f):props.Pressure();
+        p.pressure=tool==1?(point.IsInContact()?1.0f:0.0f):props.Pressure();
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());
         p.phase=phase;p.tool=tool;
-        p.button=CanvasPointerButton(tool,props.IsMiddleButtonPressed(),props.IsRightButtonPressed());
+        p.button=CanvasPointerButton(tool,props.IsMiddleButtonPressed(),props.IsRightButtonPressed(),props.IsXButton1Pressed()||props.IsXButton2Pressed());
         p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
         if(!PrepareCanvasPrediction(p))return true;
         latencyTrace.Input(p,arrival);
@@ -1100,6 +1100,13 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
         if(full)TraceState("ui-state",identity+",\"model\":"+snapshot+"}");
         auto view=full?CapyUi::object(CapyUi::object(model,L"state"),L"camera"):CapyUi::object(model,L"camera");
         if(view.Size())TraceState("camera-state",identity+",\"camera\":"+to_string(view.Stringify())+"}");
+    }
+    if(full){
+        bool pan=model.GetNamedBoolean(L"pan_cursor",false);
+        if(panCursor.exchange(pan)!=pan&&inputDispatcher)inputDispatcher.TryEnqueue([weak=weak_from_this(),pan]{
+            using namespace Microsoft::UI::Input;
+            if(auto self=weak.lock();self&&self->inputSource)self->inputSource.Cursor(pan?InputCursor(InputSystemCursor::Create(InputSystemCursorShape::SizeAll)):InputCursor(nullptr));
+        });
     }
     bool post;
     {
