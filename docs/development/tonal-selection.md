@@ -103,6 +103,9 @@ cannot activate the removed editor.
 
 ## Checks
 
+See [photographic-size performance](tonal-performance.md) for memory bounds,
+61 MP Huion measurements and the recovery regression.
+
 - `cargo test --locked -p layer-core refinement_` checks original Undo/final Redo,
   current and saved masks, checkpoint identity and stale-history rejection.
 - `cargo test --locked -p layer-ui tonal_` covers direct edits, baseline

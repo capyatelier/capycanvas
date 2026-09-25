@@ -306,7 +306,7 @@ impl SelectionRefiner {
                 pass.set_pipeline(&self.pipelines[0]);
                 let scratch_rows =
                     (end + feather_radius).min(h) - start.saturating_sub(feather_radius);
-                pass.dispatch_workgroups(w.div_ceil(128), scratch_rows, 1);
+                pass.dispatch_workgroups(w.div_ceil(256), scratch_rows, 1);
             }
             pass.set_pipeline(&self.pipelines[1]);
             pass.dispatch_workgroups(w.div_ceil(256), end - start, 1);

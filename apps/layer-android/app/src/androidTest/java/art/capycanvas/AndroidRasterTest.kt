@@ -309,7 +309,7 @@ class AndroidRasterTest {
         }
         fun invoke(id:String)=send(obj("type" to "invoke","command" to id))
         invoke("fit_canvas")
-        val cold=invoke("tonal_select")
+        invoke("tonal_select")
         val timings=(1..4).map {index -> send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to index)))}
         assertTrue("61 MP selection was published",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         // Exercise the real recovery worker/atomic publication that reported the
@@ -348,7 +348,7 @@ class AndroidRasterTest {
         compose.waitUntil(60_000) {!tick()}
         assertTrue("Recovery restores the 61 MP mask",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         assertNull(host.actionError);assertNull(host.failure)
-        val report="PASS native Android 61 MP RGB: cold=${cold}ms; warm=${timings}ms; quick_mask=${quick}ms; recovery=${saveMs}ms; archive=${recovery.length()} bytes; metadata=${index.toString().length} bytes"
+        val report="PASS native Android 61 MP RGB: first_mask=${timings.first()}ms; warm=${timings.drop(1)}ms; quick_mask=${quick}ms; recovery=${saveMs}ms; archive=${recovery.length()} bytes; metadata=${index.toString().length} bytes"
         println(report)
         File(activity.getExternalFilesDir(null),"tonal-61mp-result.txt").writeText(report)
         assertTrue("Warm 61 MP adjustments should finish within one second: $timings",timings.drop(1).all {it<1000})

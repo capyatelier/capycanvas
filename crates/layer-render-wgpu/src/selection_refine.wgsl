@@ -104,22 +104,25 @@ fn resize_at(p: vec2<i32>) -> f32 {
     return value;
 }
 // Each neighborhood is decoded once for the whole workgroup, including halo.
-var<workgroup> feather_row: array<f32,428>;
-@compute @workgroup_size(128)
+var<workgroup> feather_row: array<f32,556>;
+@compute @workgroup_size(64)
 fn feather_h(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) lane:u32) {
     let radius = i32(ceil(params.offset_radius.z*1.5));
     let y=id.y+params.resize_level.w;
-    for(var i=lane;i<128u+2u*u32(radius);i+=128u) {
+    for(var i=lane;i<256u+2u*u32(radius);i+=64u) {
         // Extend edge pixels at document boundaries, so selecting the entire
         // image doesn't introduce an unwanted fade at its outer border.
-        let x=clamp(i32(id.x-lane+i)-radius,0,i32(params.extent.x)-1);
+        let x=clamp(i32((id.x-lane)*4u+i)-radius,0,i32(params.extent.x)-1);
         feather_row[i]=sample_incoming(vec2<f32>(f32(x)+.5,f32(y)+.5));
     }
     workgroupBarrier();
-    if id.x>=params.extent.x {return;}
-    var value=0.;
-    for(var d=-radius;d<=radius;d++) {value+=weight(d)*feather_row[u32(i32(lane)+d+radius)];}
-    horizontal[id.y*params.extent.x+id.x] = bitcast<u32>(value);
+    if id.x*4u>=params.extent.x {return;}
+    var value=vec4<f32>(0.);
+    for(var d=-radius;d<=radius;d++) {
+        let at=u32(i32(lane*4u)+d+radius);
+        value+=weight(d)*vec4<f32>(feather_row[at],feather_row[at+1u],feather_row[at+2u],feather_row[at+3u]);
+    }
+    for(var i=0u;i<4u && id.x*4u+i<params.extent.x;i++) {horizontal[id.y*params.extent.x+id.x*4u+i]=bitcast<u32>(value[i]);}
 }
 @compute @workgroup_size(64)
 fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -127,6 +130,14 @@ fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
     let y=id.y+params.resize_level.y;
     if id.x >= stride || y >= params.resize_level.z { return; }
     let radius = i32(ceil(params.offset_radius.z*1.5));
+    // Share tap/weight calculations across a packed word's four neighboring
+    // pixels; keep float precision until the final byte coverage is published.
+    var blurred=vec4<f32>(0.);
+    for(var d=-radius;radius>0 && d<=radius;d++) {
+        let row=u32(clamp(i32(y)+d,0,i32(params.extent.y)-1))-params.resize_level.w;
+        let at=row*params.extent.x+id.x*4u;
+        blurred+=weight(d)*bitcast<vec4<f32>>(vec4<u32>(horizontal[at],horizontal[at+1u],horizontal[at+2u],horizontal[at+3u]));
+    }
     var packed = 0u;
     for(var i = 0u; i < 4u; i++) {
         let x = id.x*4u+i;
@@ -137,11 +148,7 @@ fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
         } else if radius == 0 {
             value = sample_incoming(vec2<f32>(f32(x)+.5,f32(y)+.5));
         } else {
-            for(var d = -radius; d <= radius; d++) {
-                let w = weight(d);
-                let row = u32(clamp(i32(y)+d,0,i32(params.extent.y)-1))-params.resize_level.w;
-                value += w*bitcast<f32>(horizontal[row*params.extent.x+x]);
-            }
+            value=blurred[i];
         }
         let old = previous_at(vec2<f32>(f32(x)+.5,f32(y)+.5));
         switch params.mode {
