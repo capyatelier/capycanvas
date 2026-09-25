@@ -81,7 +81,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
             auto title=label(data,tab.text.Text());title.TextTrimming(TextTrimming::CharacterEllipsis);title.Margin({8,0,2,0});title.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(title);
             auto mark=label(data,L"×");mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(mark,1);content.Children().Append(mark);
             SlideCopy copy;copy.id=id;copy.copy.Child(content);copy.copy.CornerRadius({17,17,17,17});
-            copy.copy.Background(id==source?data->brush(id==selectedId?L"panel":L"tabbar"):id==selectedId?data->brush(L"panel"):clear());
+            copy.copy.Background(id==selectedId?data->glass(L"document_tab"):id==source?data->tint(L"text",18):clear());
             copy.copy.Width(num(b,L"width"));copy.copy.Height(num(b,L"height"));
             Canvas::SetLeft(copy.copy,num(b,L"x")-bounds.X);Canvas::SetTop(copy.copy,num(b,L"y")-bounds.Y);Canvas::SetZIndex(copy.copy,id==source?2:0);
             overlay.Children().Append(copy.copy);copies.push_back(copy);tab.box.Opacity(0);
@@ -131,7 +131,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
             part.Resources().Insert(box_value(L"ButtonBackgroundPressed"),data->tint(L"text",41));
         }
     }
-    void paintTab(Tab& t,bool chosen){t.box.Background(chosen?data->brush(L"panel"):clear());}
+    void paintTab(Tab& t,bool chosen){t.box.Background(chosen?data->glass(L"document_tab"):clear());}
     void layout(){auto count=array(model(),L"tabs").Size();bool one=count<2,compact=!one&&capy_document_tabs_compact(float(root.ActualWidth()),count);
         plain.Visibility(one?Visibility::Visible:Visibility::Collapsed);
         strip.Visibility(one||compact?Visibility::Collapsed:Visibility::Visible);selector.Visibility(!one&&compact?Visibility::Visible:Visibility::Collapsed);

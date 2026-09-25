@@ -114,13 +114,13 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         target.Children().Append(toggle);cells.push_back(toggle);
     }
     void expand(bool open){
-        chooser.Visibility(Visibility::Collapsed);expanded.Visibility(open?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!open);
+        chooser.Visibility(Visibility::Collapsed);expanded.Visibility(open?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!open);normal.Opacity(open?0:1);
         arrange();if(open&&!expandedCells.empty())expandedCells.back().as<Control>().Focus(FocusState::Programmatic);
         else if(!open&&!historyCells.empty())if(auto c=historyCells.back().try_as<Control>())c.Focus(FocusState::Programmatic);
     }
     void browse(bool show,bool typing=true){
         if(show&&editing){commitName();if(editing)return;}
-        expanded.Visibility(Visibility::Collapsed);chooser.Visibility(show?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!show);
+        expanded.Visibility(Visibility::Collapsed);chooser.Visibility(show?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!show);normal.Opacity(show?0:1);
         if(!show){selector.Focus(FocusState::Programmatic);return;}
         filter();
         Control target=search;
@@ -485,8 +485,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
         scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);scroll.Content(grid);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,L"Saved colors");
         normal.Children().Append(scroll);body.Children().Append(normal);body.Children().Append(overlays);
-        expanded.Background(data->brush(L"panel"));expanded.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(expanded,L"palette-history-expanded");overlays.Children().Append(expanded);
-        chooser.Background(data->brush(L"panel"));chooser.RowSpacing(6);chooser.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(chooser,L"palette-chooser");
+        expanded.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(expanded,L"palette-history-expanded");overlays.Children().Append(expanded);
+        chooser.RowSpacing(6);chooser.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(chooser,L"palette-chooser");
         for(auto star:{false,true}){RowDefinition row;row.Height(star?GridLength{1,GridUnitType::Star}:GridLength{1,GridUnitType::Auto});chooser.RowDefinitions().Append(row);}
         Grid searchRow;searchRow.ColumnSpacing(4);ColumnDefinition field;field.Width({1,GridUnitType::Star});searchRow.ColumnDefinitions().Append(field);
         ColumnDefinition square;square.Width({24,GridUnitType::Pixel});searchRow.ColumnDefinitions().Append(square);

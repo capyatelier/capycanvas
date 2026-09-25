@@ -1,18 +1,59 @@
 #include "pch.h"
 #include "WorkspaceShadow.h"
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
+#include <winrt/Windows.Graphics.h>
+#include <d2d1.h>
+#include <windows.graphics.interop.h>
+#include <optional>
 
 namespace CapyUi {
 using namespace Microsoft::UI::Composition;
 using Microsoft::UI::Xaml::Hosting::ElementCompositionPreview;
-namespace {constexpr float padding=48;}
+namespace {
+constexpr float padding=48;
+struct GeometrySource:winrt::implements<GeometrySource,winrt::Windows::Graphics::IGeometrySource2D,ABI::Windows::Graphics::IGeometrySource2DInterop>{
+    winrt::com_ptr<ID2D1Geometry> geometry;
+    explicit GeometrySource(winrt::com_ptr<ID2D1Geometry> value):geometry(std::move(value)){}
+    HRESULT __stdcall GetGeometry(ID2D1Geometry** value)noexcept final{geometry.copy_to(value);return S_OK;}
+    HRESULT __stdcall TryGetGeometryUsingFactory(ID2D1Factory*,ID2D1Geometry** value)noexcept final{*value=nullptr;return E_NOTIMPL;}
+};
+ID2D1Factory* factory(){
+    static winrt::com_ptr<ID2D1Factory> value=[]{winrt::com_ptr<ID2D1Factory> created;winrt::check_hresult(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED,created.put()));return created;}();
+    return value.get();
+}
+struct ShadowCut{std::array<float,4> radii{};std::vector<winrt::Windows::Foundation::Rect> extra;};
+winrt::com_ptr<ID2D1Geometry> outside(float width,float height,ShadowCut const& cut){
+    winrt::com_ptr<ID2D1PathGeometry> path;winrt::check_hresult(factory()->CreatePathGeometry(path.put()));
+    winrt::com_ptr<ID2D1GeometrySink> sink;winrt::check_hresult(path->Open(sink.put()));sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+    auto rectangle=[&](float x,float y,float w,float h){
+        sink->BeginFigure({x,y},D2D1_FIGURE_BEGIN_FILLED);sink->AddLine({x+w,y});sink->AddLine({x+w,y+h});sink->AddLine({x,y+h});sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    };
+    rectangle(-padding,-padding,width+2*padding,height+2*padding);
+    auto [tl,tr,br,bl]=cut.radii;
+    auto arc=[&](D2D1_POINT_2F to,float radius){
+        if(radius<=0){sink->AddLine(to);return;}
+        sink->AddArc(D2D1::ArcSegment(to,{radius,radius},0,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+    };
+    sink->BeginFigure({tl,0},D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine({width-tr,0});arc({width,tr},tr);sink->AddLine({width,height-br});arc({width-br,height},br);
+    sink->AddLine({bl,height});arc({0,height-bl},bl);sink->AddLine({0,tl});arc({tl,0},tl);
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    for(auto const& r:cut.extra)rectangle(r.X,r.Y,r.Width,r.Height);
+    winrt::check_hresult(sink->Close());return path;
+}
+}
 struct WorkspaceShadow::State {
     SpriteVisual visual{nullptr};
     DropShadow shadow{nullptr};
     float width=0,height=0,blur=8,offset=2,opacity=.16f;
+    std::optional<ShadowCut> cut;
     void apply(){
         if(!visual)return;
         visual.Size({width,height});visual.Offset({padding,padding,0});
+        if(cut&&width>0&&height>0){
+            auto compositor=visual.Compositor();
+            visual.Clip(compositor.CreateGeometricClip(compositor.CreatePathGeometry(CompositionPath(winrt::make<GeometrySource>(outside(width,height,*cut))))));
+        }else visual.Clip(nullptr);
         shadow.BlurRadius(blur);shadow.Offset({0,offset,0});shadow.Opacity(opacity);
     }
 };
@@ -37,6 +78,10 @@ void WorkspaceShadow::Layout(Windows::Foundation::Rect bounds,int order,bool vis
     Canvas::SetLeft(root,bounds.X-padding);Canvas::SetTop(root,bounds.Y-padding);
     Canvas::SetZIndex(root,order);root.Visibility(visible?Visibility::Visible:Visibility::Collapsed);
 }
+void WorkspaceShadow::Cut(std::array<float,4> radii,std::vector<Windows::Foundation::Rect> extra){
+    state->cut=ShadowCut{radii,std::move(extra)};state->apply();
+}
+void WorkspaceShadow::Uncut(){state->cut.reset();state->apply();}
 void WorkspaceShadow::Shape(Geometry const& geometry,float width,float height,float blur,float offset,float opacity){
     mask.Data(geometry);mask.Width(width);mask.Height(height);
     state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();

@@ -41,7 +41,7 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn transparency_preference(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
     }
 }
 
@@ -1779,7 +1779,7 @@ mod copy_tests {
             }
         }
         assert!(Platform::Mac.transparency_preference() && Platform::Ios.transparency_preference());
-        assert!(!Platform::Windows.transparency_preference());
+        assert!(Platform::Windows.transparency_preference());
     }
 
     #[test]

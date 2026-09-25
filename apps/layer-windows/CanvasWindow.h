@@ -78,6 +78,7 @@ private:
     std::unique_ptr<WorkspaceStorageView> workspaceStorage;
     std::unique_ptr<WorkspaceManagerView> workspaceManager;
     winrt::Windows::Data::Json::JsonObject lastModel;
+    std::string lastGlass;
     std::wstring workspaceOwnerProperty;
     HWND workspaceOwnerWindow=nullptr;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
@@ -119,6 +120,7 @@ private:
     uint64_t sequence=0;
     void Start();
     void Resize();
+    void PublishGlass();
     void ApplyResize();
     bool RecoverGpu();
     void SaveAfterGpuFailure(std::string const& reason);

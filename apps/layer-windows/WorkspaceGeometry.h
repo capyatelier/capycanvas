@@ -40,6 +40,21 @@ inline J panelStructure(J const& panel){
     for(auto value:array(panel,L"tiles")){auto tile=value.GetObject();keys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));}
     return O({{L"id",S(str(panel,L"id"))},{L"controls",array(panel,L"controls")},{L"style",S(str(panel,L"tile_style"))},{L"tiles",keys}});
 }
+inline bool appendGlass(A& regions,FrameworkElement const& element,UIElement const& reference,std::array<double,4> radii){
+    if(!element||!element.IsLoaded()||element.ActualWidth()<=0||element.ActualHeight()<=0)return false;
+    for(auto node=element.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))
+        if(auto item=node.try_as<UIElement>();item&&(item.Visibility()!=Visibility::Visible||item.Opacity()<=0))return false;
+    auto box=element.TransformToVisual(reference).TransformBounds({0,0,float(element.ActualWidth()),float(element.ActualHeight())});
+    A region;for(double v:{double(box.X),double(box.Y),double(box.Width),double(box.Height),radii[0],radii[1],radii[2],radii[3]})region.Append(N(v));
+    regions.Append(region);return true;
+}
+inline std::array<double,4> cornerRadii(CornerRadius const& r){return {r.TopLeft,r.TopRight,r.BottomRight,r.BottomLeft};}
+inline void appendConnection(A& connections,J const& connection,UIElement const& workspace,UIElement const& reference){
+    if(!connection.Size())return;auto origin=workspace.TransformToVisual(reference).TransformPoint({0,0});
+    auto moved=J::Parse(connection.Stringify());auto bounds=object(moved,L"bounds");
+    bounds.Insert(L"x",N(num(bounds,L"x")+origin.X));bounds.Insert(L"y",N(num(bounds,L"y")+origin.Y));
+    moved.Insert(L"bounds",bounds);connections.Append(moved);
+}
 inline PathGeometry roundedRectangle(float width,float height,std::array<float,4> radii){
     for(auto& radius:radii)radius=std::min(radius,std::max(0.f,std::min(width,height)*.5f));
     auto [tl,tr,br,bl]=radii;
@@ -69,11 +84,11 @@ inline PathGeometry panelTabShape(float width,float height){
     line(r,r);curve(r,0,2*r,0);
     PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
 }
-inline Grid panelTabShell(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& content,bool active){
-    Grid shell;shell.Tag(box_value(active?L"active-panel-tab-shell":L"panel-tab-shell"));
+inline Grid panelTabShell(FrameworkElement const& content,Brush const& fill){
+    Grid shell;shell.Tag(box_value(fill?L"active-panel-tab-shell":L"panel-tab-shell"));
     Canvas background;shell.Children().Append(background);
-    if(active){
-        Microsoft::UI::Xaml::Shapes::Path shape;shape.Fill(data->brush(L"panel"));shape.IsHitTestVisible(false);
+    if(fill){
+        Microsoft::UI::Xaml::Shapes::Path shape;shape.Fill(fill);shape.IsHitTestVisible(false);
         shape.Stretch(Stretch::Fill);Canvas::SetLeft(shape,-6);background.Children().Append(shape);
         content.SizeChanged([weak=make_weak(shape)](auto&&,SizeChangedEventArgs const& event){
             auto size=event.NewSize();if(auto shape=weak.get();shape&&size.Width>0&&size.Height>0){

@@ -106,7 +106,7 @@ struct WorkspaceData {
     std::shared_ptr<FilterPreviewCache> previews;
     std::shared_ptr<LayerThumbnailCache> thumbnails;
     PreviewTransport query;
-    uint64_t windowId=0;
+    uint64_t windowId=0;bool glassSurfaces=false;
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
@@ -129,9 +129,17 @@ struct WorkspaceData {
     }
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
+    mutable std::map<std::wstring,SolidColorBrush> glassBrushes;
+    Windows::UI::Color glassColor(wchar_t const* role)const{
+        auto value=array(object(object(state,L"palette"),L"glass"),role);
+        if(value.Size()!=4)return color(str(object(state,L"palette"),role,L"#414141"));
+        auto channel=[&](uint32_t i){return uint8_t(std::lround(std::clamp(value.GetNumberAt(i),0.,1.)*255));};
+        return Windows::UI::Color{channel(3),channel(0),channel(1),channel(2)};
+    }
     void refreshPalette(){
         auto palette=object(state,L"palette");
         for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
+        for(auto const& [role,brush]:glassBrushes)brush.Color(glassColor(role.c_str()));
         for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
     }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
@@ -143,6 +151,11 @@ struct WorkspaceData {
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
         return paletteBrushes.emplace(role,fill(color(str(object(state,L"palette"),role,L"#414141")))).first->second;
     }
+    SolidColorBrush glass(wchar_t const* role)const{
+        auto found=glassBrushes.find(role);if(found!=glassBrushes.end())return found->second;
+        return glassBrushes.emplace(role,fill(glassColor(role))).first->second;
+    }
+    bool transparent()const{return str(object(object(state,L"palette"),L"glass"),L"transparency",L"off")!=L"off";}
     SolidColorBrush tint(wchar_t const* role,uint8_t alpha)const{
         auto key=std::make_pair(std::wstring(role),alpha);
         if(auto found=tintBrushes.find(key);found!=tintBrushes.end())return found->second;
@@ -152,8 +165,8 @@ struct WorkspaceData {
     double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
 };
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
-inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"bg",191);}
-inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"selection");}
+inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->glass(L"chip");}
+inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->glassSurfaces?data->glass(L"selection"):data->brush(L"selection");}
 inline J displayColors(J const& state){
     auto masked=object(object(object(state,L"layer_tools"),L"mask_editing"),L"colors");
     return masked.Size()?masked:object(state,L"colors");

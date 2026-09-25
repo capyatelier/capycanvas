@@ -97,14 +97,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     TextBlock camera;
     Grid cameraSlot;
-    Button fitCamera{nullptr};
+    Button fitCamera{nullptr};Border cameraSurface;std::function<void()> glassChanged;
     Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
         data->popupChanged=std::move(popupChanged);
         data->thumbnails=CreateLayerThumbnailCache(previews);
         data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
-        data->send=std::move(send);data->catalog=catalog;
+        data->send=std::move(send);data->catalog=catalog;data->glassSurfaces=true;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
         camera.FontWeight(Windows::UI::Text::FontWeights::Normal());
@@ -116,7 +116,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
         ToolTipService::SetToolTip(fitCamera,box_value(L"Fit canvas"));
-        Border surface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
+        auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
@@ -126,16 +126,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();group.footer=nullptr;group.tabs.clear();
+        group.body.reset();group.footer=nullptr;group.tabs.clear();group.backgroundKey=L"";
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
-        group.border.Background(data->brush(L"panel"));group.border.CornerRadius(CornerRadius{8,8,8,8});
+        group.border.Background(clear());group.border.CornerRadius(CornerRadius{8,8,8,8});
         if(!group.layout){
             group.layout=Grid();
             group.layout.RowDefinitions().Append(RowDefinition());
             RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});group.layout.RowDefinitions().Append(bodyRow);
             group.border.Child(group.layout);
             group.tabLabels=StackPanel();group.tabLabels.Orientation(Orientation::Horizontal);
-            group.tabLabels.Background(data->brush(L"tabbar"));
+            group.tabLabels.Background(clear());
         }
         auto frame=group.layout;
         frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
@@ -159,14 +159,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                     O({{L"group",N(num(geometry,L"id"))},{L"index",N(index++)},{L"panel",S(id)}}));
                 AutomationProperties::SetAutomationId(tab,L"panel-tab-"+id);
-                group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(panelTabShell(data,tab,active));
+                group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(panelTabShell(tab,active?Brush(data->glass(L"tab")):Brush(nullptr)));
             }
             if(!group.tabScroll){
                 group.tabScroll=ScrollViewer();auto tabScroll=group.tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
                 tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
-                tabScroll.Background(data->brush(L"tabbar"));
+                tabScroll.Background(clear());
                 gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
-                group.header=Grid();auto header=group.header;header.Background(data->brush(L"tabbar"));
+                group.header=Grid();auto header=group.header;header.Background(data->glass(L"strip"));header.CornerRadius({8,8,0,0});
                 ColumnDefinition labels;labels.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(labels);
                 ColumnDefinition trailing;trailing.Width({28,GridUnitType::Pixel});header.ColumnDefinitions().Append(trailing);
                 header.Children().Append(tabScroll);
@@ -183,7 +183,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
         auto body=group.body->Root();Grid::SetRow(body,1);frame.Children().Append(body);
-        if(group.body->navigator)group.border.Background(clear());
         auto grip=object(geometry,L"footer_grip");
         if(grip.Size()){
             Canvas overlay;Grid::SetRow(overlay,1);
@@ -629,18 +628,28 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(!group.frame.IsLoaded()||group.hidden)continue;
             A slots;appendGroupOverviews(slots,group);
             auto bounds=rectangle(placement(group));
-            auto key=O({{L"expansion",group.presented},{L"bounds",bounds},{L"slots",slots},
+            bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
+            auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
-            auto outline=group.presented.Size()?expansionShape(group.presented):
-                roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8});
+            float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
+            auto outline=expanded?expansionShape(group.presented):tabbed?roundedRectangle(width,std::max(0.f,height-36),{0,0,8,8}):roundedRectangle(width,height,{8,8,8,8});
+            if(tabbed&&!expanded){TranslateTransform body;body.Y(36);outline.Transform(body);}
+            group.background.Fill(expanded?data->brush(L"panel"):data->glass(L"panel"));
+            if(group.header){
+                group.header.Background(expanded?data->brush(L"tabbar"):data->glass(L"strip"));
+                for(auto child:group.tabLabels.Children())if(auto shell=child.try_as<Grid>();shell&&unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell")
+                    for(auto layer:shell.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
+                        path.Fill(expanded?data->brush(L"panel"):data->glass(L"tab"));
+            }
             auto shadowKey=O({{L"expansion",group.presented},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
             if(shadowKey!=group.shadowKey){
-                group.shadowKey=shadowKey;bool expanded=group.presented.Size()!=0;
+                group.shadowKey=shadowKey;
                 // WinUI geometries have one owner; retain a separate mask outline.
                 auto mask=expanded?expansionShape(group.presented):roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8});
                 group.shadow.Shape(mask,float(num(bounds,L"width")),float(num(bounds,L"height")),expanded?36.f:12.f,expanded?8.f:2.f,expanded?.4f:.16f);
+                if(expanded)group.shadow.Uncut();else group.shadow.Cut({8,8,8,8});
             }
             shape.Children().Append(outline);
             for(auto value:slots){
@@ -678,6 +687,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
         auto json=slots.Stringify();
         if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}
+        if(glassChanged)glassChanged();
+    }
+    A glass(UIElement const& reference,A& connections)const{
+        A regions;if(flag(data->model,L"chrome_hidden"))return regions;
+        for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{8,8,8,8});
+        collapsed->AppendGlass(regions,connections,reference);drawers->AppendGlass(regions,connections,reference);
+        appendGlass(regions,cameraSurface,reference,cornerRadii(cameraSurface.CornerRadius()));
+        return regions;
     }
     void updateCamera(J const& view){
         if(view.Size())camera.Text(to_hstring(int(std::round(num(view,L"zoom",1)*100)))+L"% · "+
@@ -694,6 +711,8 @@ bool WorkspaceView::CancelGesture(){
     return impl->gestures->Cancel()||closed;
 }
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
+void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
+JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections)const{return impl->glass(reference,connections);}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};
     if(value!=impl->titlebar){impl->titlebar=value;impl->lastTitlebar=L"";impl->reportTitlebar();}

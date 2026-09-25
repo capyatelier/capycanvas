@@ -22,7 +22,7 @@ struct Column:std::enable_shared_from_this<Column>{
     bool applying=false;
     void init(){
         auto weak=weak_from_this();
-        background.Background(data->brush(L"panel"));background.CornerRadius({8,8,8,8});background.Child(frame);
+        background.Background(data->glass(L"panel"));background.CornerRadius({8,8,8,8});background.Child(frame);
         Canvas::SetZIndex(background,160);
         AutomationProperties::SetAutomationId(background,L"collapsed-column-"+to_hstring(id));
         scroll.Content(icons);scroll.HorizontalScrollMode(ScrollMode::Disabled);
@@ -49,7 +49,7 @@ struct Column:std::enable_shared_from_this<Column>{
     void apply(J const& next){
         applying=true;geometry=next;
         auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
-        background.Background(data->brush(L"panel"));background.CornerRadius({8,8,8,8});
+        background.Background(data->glass(L"panel"));background.CornerRadius({8,8,8,8});
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
@@ -114,7 +114,7 @@ struct Column:std::enable_shared_from_this<Column>{
             std::wstring key(panel);currentConnections.insert(key);
             auto [it,added]=connections.try_emplace(key);auto& connection=it->second;
             if(added){
-                connection.path.Fill(data->brush(L"panel"));connection.path.IsHitTestVisible(false);
+                connection.path.Fill(data->glass(L"panel"));connection.path.IsHitTestVisible(false);
                 Canvas::SetZIndex(connection.path,159);workspace.Children().Append(connection.path);
                 AutomationProperties::SetAutomationId(connection.path,L"column-connection-"+to_hstring(id)+L"-"+panel);
             }
@@ -128,6 +128,10 @@ struct Column:std::enable_shared_from_this<Column>{
         reported=offset;
         if(std::abs(scroll.VerticalOffset()-offset)>.25)scroll.ChangeView(nullptr,offset,nullptr,true);
         applying=false;
+    }
+    void collectGlass(A& regions,A& links,UIElement const& reference)const{
+        if(!appendGlass(regions,background,reference,cornerRadii(background.CornerRadius())))return;
+        for(auto value:array(object(geometry,L"open"),L"connections"))appendConnection(links,value.GetArray().GetObjectAt(1),workspace,reference);
     }
     void remove(){
         uint32_t index;if(workspace.Children().IndexOf(background,index))workspace.Children().RemoveAt(index);
@@ -157,3 +161,4 @@ CollapsedColumns::CollapsedColumns(std::shared_ptr<WorkspaceData> data,Canvas ro
 CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
 void CollapsedColumns::Reset(){impl->reset();}
+void CollapsedColumns::AppendGlass(A& regions,A& connections,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,connections,reference);}

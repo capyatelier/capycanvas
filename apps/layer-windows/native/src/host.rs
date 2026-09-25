@@ -61,6 +61,7 @@ pub struct CapyHost {
     cursor: CanvasCursor,
     chrome_facts: layer_ui::ChromeFacts,
     navigator: crate::navigator::Navigator,
+    glass: crate::glass::Glass,
     scale: f32,
     blank_presented: bool,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
@@ -142,6 +143,7 @@ impl CapyHost {
             cursor: CanvasCursor::default(),
             chrome_facts: layer_ui::ChromeFacts::default(),
             navigator: Default::default(),
+            glass: Default::default(),
             scale,
             blank_presented: false,
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
@@ -397,6 +399,12 @@ impl CapyHost {
         presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
         presenter.set_color_picker(gpu, picker);
+        let glass = self.native.session.state().palette.glass;
+        presenter.set_backdrop(
+            gpu,
+            if glass.transparency.enabled() { self.glass.regions(self.scale) } else { &[] },
+            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+        );
         presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
             gpu,
@@ -989,6 +997,10 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
             windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
+            windows_glass: serde_json::json!({
+                "regions": host.glass.count(),
+                "frames": host.presenter.as_ref().map_or([0; 2], |p| p.backdrop_frames()),
+            }),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
             windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
             windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),
@@ -1234,6 +1246,25 @@ pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
         }
         host.native.invalidate_snapshot();
         Ok(0)
+    })
+}
+
+/// # Safety
+/// `host` must be null or a live exclusively accessed host. `json` must be null
+/// or a readable, unchanged NUL-terminated buffer throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_glass(host: *mut CapyHost, json: *const c_char) -> i32 {
+    guard(host, |host| {
+        match host.glass.set(unsafe { read_json(json) }?) {
+            Ok(changed) => {
+                host.native.dirty |= changed;
+                Ok(0)
+            }
+            Err(error) => {
+                fail(error);
+                Ok(1)
+            }
+        }
     })
 }
 

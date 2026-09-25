@@ -51,8 +51,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void init(){
         auto weak=weak_from_this();
         frame.Background(clear());frame.Child(content);
-        background.Fill(data->brush(L"panel"));background.IsHitTestVisible(false);content.Children().Append(background);
-        bridge.Fill(data->brush(L"panel"));bridge.Visibility(Visibility::Collapsed);
+        background.Fill(data->glass(L"panel"));background.IsHitTestVisible(false);content.Children().Append(background);
+        bridge.Fill(data->glass(L"panel"));bridge.Visibility(Visibility::Collapsed);
         Canvas::SetZIndex(frame,order());Canvas::SetZIndex(bridge,order());
         AutomationProperties::SetAutomationId(frame,id==L"tool"?L"tool-drawer":hstring(L"column-drawer-"+id));
         AutomationProperties::SetName(frame,id==L"tool"?L"Tool drawer":L"Column drawer");
@@ -168,14 +168,14 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             if(tabs.Size()){
                 auto group=num(tabs,L"group");
                 auto groupItem=O({{L"kind",S(L"group")},{L"group",N(group)}});
-                Grid header;header.Background(data->brush(L"tabbar"));
+                Grid header;header.Background(clear());
                 ColumnDefinition tabColumn;tabColumn.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(tabColumn);
                 ColumnDefinition gripColumn;gripColumn.Width({28,GridUnitType::Pixel});header.ColumnDefinitions().Append(gripColumn);
-                StackPanel row;row.Orientation(Orientation::Horizontal);row.Background(data->brush(L"tabbar"));
+                StackPanel row;row.Orientation(Orientation::Horizontal);row.Background(clear());
                 uint32_t index=0;
                 for(auto value:array(tabs,L"panels")){
                     auto panelId=value.GetString();auto found=panels.find(std::wstring(panelId));if(found==panels.end())continue;
-                    auto panel=found->second;bool selected=panelId==str(tabs,L"active");
+                    auto panel=found->second;
                     auto pick=button(data,str(panel,L"title"),[data=data,group=num(tabs,L"group"),panelId]{
                         data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(group)},{L"panel",S(panelId)}}));
                     });
@@ -189,9 +189,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                         O({{L"group",N(group)},{L"index",N(index++)},{L"panel",S(panelId)}}));
-                    row.Children().Append(panelTabShell(data,pick,selected));
+                    row.Children().Append(panelTabShell(pick,nullptr));
                 }
-                ScrollViewer strip;strip.Content(row);strip.Background(data->brush(L"tabbar"));
+                ScrollViewer strip;strip.Content(row);strip.Background(clear());
                 strip.HorizontalScrollMode(ScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
                 strip.VerticalScrollMode(ScrollMode::Disabled);header.Children().Append(strip);
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
@@ -300,11 +300,21 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(uint32_t i=0;i<std::min(4u,corners.Size());++i)if(corners.GetBooleanAt(i))radii[i]=0;
         frame.CornerRadius({radii[0],radii[1],radii[2],radii[3]});
         auto outline=roundedRectangle(width,height,radii);
-        auto silhouette=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners}}).Stringify();
-        if(silhouette!=shadowKey){shadowKey=silhouette;shadow.Shape(roundedRectangle(width,height,radii),width,height,21,5,1.f/3);}
+        auto link=object(object(geometry,L"connection"),L"bounds");
+        auto silhouette=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners},{L"link",link},{L"origin",bounds}}).Stringify();
+        if(silhouette!=shadowKey){
+            shadowKey=silhouette;shadow.Shape(roundedRectangle(width,height,radii),width,height,21,5,1.f/3);
+            std::vector<Rect> bridgeArea;
+            if(link.Size())bridgeArea.push_back({float(num(link,L"x")-num(bounds,L"x")),float(num(link,L"y")-num(bounds,L"y")),float(num(link,L"width")),float(num(link,L"height"))});
+            shadow.Cut(radii,std::move(bridgeArea));
+        }
         GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);shape.Children().Append(outline);
         for(auto hole:holes){RectangleGeometry region;region.Rect(rectangle(hole.GetObject()));shape.Children().Append(region);}
         background.Data(shape);
+    }
+    void collectGlass(A& regions,A& links,UIElement const& reference)const{
+        if(disposed||!appendGlass(regions,frame,reference,cornerRadii(frame.CornerRadius())))return;
+        appendConnection(links,object(geometry,L"connection"),workspace,reference);
     }
     void appendOverviews(A& slots)const{
         if(disposed||!frame.IsLoaded())return;
@@ -397,6 +407,7 @@ WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
 void WorkspaceDrawers::Apply(){impl->apply();}
 void WorkspaceDrawers::Reset(){impl->reset();}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
+void WorkspaceDrawers::AppendGlass(A& regions,A& connections,UIElement const& reference)const{for(auto const& [id,drawer]:impl->drawers)drawer->collectGlass(regions,connections,reference);}
 FrameworkElement WorkspaceDrawers::Anchor(std::wstring const& control)const{
     for(auto const& [id,drawer]:impl->drawers)if(!drawer->closing)for(auto const& column:drawer->columns)for(auto const& panel:column.panels){
         auto const& body=drawer->bodies.at(panel).view;if(!body)continue;

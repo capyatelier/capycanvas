@@ -29,6 +29,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
         case CanvasCommandKind::Document:return capy_document_action(host,json);
         case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
         case CanvasCommandKind::Overviews:return capy_overviews(host,json);
+        case CanvasCommandKind::Glass:return capy_glass(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
         case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
         case CanvasCommandKind::DeviceLoss:return capy_test_device_loss(host);
@@ -284,6 +285,15 @@ void CanvasWindow::Resize() {
         desired=next;if(host&&!closing&&changed)resize=true;
     }
     wake.notify_one();
+    PublishGlass();
+}
+void CanvasWindow::PublishGlass(){
+    if(closing||closed||!panel||!workspace)return;
+    Windows::Data::Json::JsonArray connections;auto regions=workspace->Glass(panel,connections);
+    if(header)header->AppendGlass(regions,panel);
+    Windows::Data::Json::JsonObject request;request.Insert(L"regions",regions);request.Insert(L"connections",connections);
+    auto json=to_string(request.Stringify());
+    if(json==lastGlass)return;lastGlass=json;Send(json,CanvasCommandKind::Glass);
 }
 void CanvasWindow::Start() {
     if(host||closing) return;
@@ -317,6 +327,7 @@ void CanvasWindow::Start() {
         self->Send(std::move(json),CanvasCommandKind::Document);
     }},[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
     workspace->SetWindowId(windowId);
+    workspace->SetGlassChanged([weak=weak_from_this()]{if(auto self=weak.lock())self->PublishGlass();});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));

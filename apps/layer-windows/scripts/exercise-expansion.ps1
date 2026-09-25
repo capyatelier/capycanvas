@@ -161,7 +161,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1500 -Height 1000
     Start-Sleep -Milliseconds 400
     Dismiss 'sizes'
-    $configuration=Configure 'layers'
+    $configuration=Configure 'layers' $(if(Find 'panel-tab-layers'){'panel-tab-layers'}else{'column-icon-layers'})
     $original=(Model).state.layer_tools.editing_layer.id
     Invoke (((Model).state.commands|Where-Object id -eq 'add_layer').label) -Name -Within $configuration
     Wait-Until {(Model).state.layer_tools.editing_layer.id -ne $original} 'Configuration layer action did not create a layer'

@@ -8,6 +8,7 @@ public:
     ~CollapsedColumns();
     void Apply();
     void Reset();
+    void AppendGlass(CapyUi::A& regions,CapyUi::A& connections,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

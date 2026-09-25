@@ -130,7 +130,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto values=array(storage,L"switcher_display");auto active=str(storage,L"id");
         auto previousFirst=workspaces.empty()?hstring{}:workspaces.front().second;
         std::vector<std::pair<Primitives::ToggleButton,hstring>> next;
-        auto chosen=data->brush(L"header_selection"),hover=data->brush(L"header_selection_hover");
+        auto chosen=data->glass(L"switcher_selection"),hover=data->brush(L"header_selection_hover");
         for(auto value:values){
             auto choice=value.GetObject();auto id=str(choice,L"id");
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
@@ -265,7 +265,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
         switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});switcher.BorderThickness({0});
-        switcher.Background(data->tint(L"tabbar",191));
+        switcher.Background(data->glass(L"switcher"));
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,L"Task workspaces");
         workspaceOverflow=button(data,L"Workspaces",[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
         AutomationProperties::SetAutomationId(workspaceOverflow,L"header-workspace-menu");
@@ -406,7 +406,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
                 auto anchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
                 bool open=str(anchor,L"kind")==L"header"&&num(anchor,L"id")==id;
-                pick.Background(flag(spec,L"selected")?data->brush(L"header_selection"):open?data->brush(L"panel"):clear());
+                pick.Background(flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear());
                 pick.CornerRadius(open?CornerRadius{6,6,0,0}:CornerRadius{6,6,6,6});
                 AutomationProperties::SetItemStatus(pick,open?L"Open":flag(spec,L"selected")?L"On":L"Off");
                 AutomationProperties::SetName(pick,label);
@@ -557,8 +557,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto kind=str(object(native.entry,L"item"),L"kind");
             if(kind==L"menu_labels"){menuCapsule.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             bool inBar=joined.contains(id);
+            auto drawerAnchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
+            bool open=str(drawerAnchor,L"kind")==L"header"&&num(drawerAnchor,L"id")==id&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
-            native.frame.Background(inBar||ownSurface?clear():headerSurface(data));
+            native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));
             if(auto pick=native.view.try_as<Button>())pick.BorderThickness(inBar?Thickness{0,1,0,1}:Thickness{});
             if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             native.outline.BorderThickness(editing?Thickness{1,1,1,1}:Thickness{});
@@ -615,6 +617,16 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto item:{menuOverflow,workspaceOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
         applyItems();reflow();requests();
     }
+    void glass(A& regions,DependencyObject const& node,UIElement const& reference)const{
+        auto element=node.try_as<FrameworkElement>();if(!element||element.Visibility()!=Visibility::Visible)return;
+        Brush surface{nullptr};CornerRadius corners{};
+        if(auto border=node.try_as<Border>()){surface=border.Background();corners=border.CornerRadius();}
+        else if(auto grid=node.try_as<Grid>()){surface=grid.Background();corners=grid.CornerRadius();}
+        else if(auto stack=node.try_as<StackPanel>()){surface=stack.Background();corners=stack.CornerRadius();}
+        else if(auto control=node.try_as<Control>()){surface=control.Background();corners=control.CornerRadius();}
+        if(surface)for(auto role:{L"chip",L"switcher",L"panel"})if(surface==data->glass(role)){appendGlass(regions,element,reference,cornerRadii(corners));return;}
+        for(int i=0,count=VisualTreeHelper::GetChildrenCount(node);i<count;++i)glass(regions,VisualTreeHelper::GetChild(node,i),reference);
+    }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const{
         if(editing)return {};
         std::vector<std::pair<float,float>> controls;
@@ -663,6 +675,7 @@ bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
     }
     return impl->input->Key(e,pressed);
 }
+void HeaderView::AppendGlass(A& regions,UIElement const& reference)const{if(impl->built&&!impl->hidden&&!impl->editing)impl->glass(regions,impl->root,reference);}
 std::vector<Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<Windows::Graphics::RectInt32>{};}
 
 std::vector<Windows::Graphics::RectInt32> HeaderView::InputRegions(float scale,uint32_t width)const{

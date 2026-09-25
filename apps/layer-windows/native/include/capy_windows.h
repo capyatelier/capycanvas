@@ -57,6 +57,7 @@ __declspec(dllimport) int32_t capy_workspace_action(CapyHost*, const char* json)
 __declspec(dllimport) int32_t capy_load_filter_directory(CapyHost*, const char* json);
 /* Logical native overview slots; call only on the canvas owner. */
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
+__declspec(dllimport) int32_t capy_glass(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */
 __declspec(dllimport) bool capy_navigator_image(float width, float height, uint32_t document_width, uint32_t document_height, float* output);
 __declspec(dllimport) float capy_navigator_aspect(uint32_t document_width, uint32_t document_height);

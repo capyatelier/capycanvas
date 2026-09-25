@@ -4,9 +4,9 @@
 
 **Appearance → Panel transparency** offers Off, Low (the default), Medium and
 High. It is a shared setting (`Settings::transparency`) presented by GTK, Web,
-Android, macOS and iPadOS. The other levels show a blurred copy of the artwork behind panels, tab
-strips, drawers, their connectors and title-bar controls. Controls inside
-panels, such as inputs, lists and sliders, stay opaque.
+Android, macOS, iPadOS and Windows. The other levels show a blurred copy of the
+artwork behind panels, tab strips, drawers, their connectors and title-bar
+controls. Controls inside panels, such as inputs, lists and sliders, stay opaque.
 
 Off keeps the opaque theme. Title-bar controls, the zoom readout and the Zen
 button are opaque too, rather than the earlier translucent fill with no blur.
@@ -32,6 +32,8 @@ No host can blur the canvas with its toolkit:
 - On macOS and iPadOS a SwiftUI material over the continuously presenting
   `CAMetalLayer` would also re-blur in the compositor every canvas frame, with
   system tints instead of the calibrated palette.
+- On Windows the canvas is a D3D12 swap chain beneath the WinUI tree, drawn by
+  the same presenter.
 
 Instead, hosts draw translucent fills and publish each fill's bounds and corner
 radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
@@ -54,6 +56,11 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
   editor-workspace space. One `GlassRegistry` per window sends them, once per
   run-loop turn, through `capy_apple_glass_regions`; the render owner scales
   them to surface pixels each frame, so display changes need no republication.
+- Windows: `WorkspaceView` measures panel groups, collapsed columns, drawers
+  and the zoom readout. `HeaderView` walks its tree for backgrounds painted
+  with a glass brush and skips their contents. After each workspace or header
+  layout pass, `CanvasWindow` sends the regions and drawer connections through
+  `capy_glass`, and the host scales them to physical pixels.
 - Drawer and column connectors add their rectangle and concave feet from the
   shared `DrawerConnection::glass` geometry.
 
@@ -104,7 +111,9 @@ looks unchanged over an empty canvas, and only artwork behind it shows through.
   because the chip itself lightens toward the selection color. In light High the
   document tab reaches about 42% over white.
 - Drop shadows are cut away beneath drawer and column connectors, so a
-  translucent bridge matches the surfaces it joins.
+  translucent bridge matches the surfaces it joins. Windows Composition shadows
+  would also fill beneath their own surface, so Windows clips panel and drawer
+  shadows to the outside of the surface with a Direct2D geometry.
 
 Measured alphas:
 
@@ -211,6 +220,8 @@ every pass carries a fixed cost.
   surface never shows its own shadow; drawer and column shadows are also cut
   beneath their connectors. Neither platform's Reduce Transparency setting is
   applied yet; Off is the opaque mode, as on the other hosts.
+- Windows sends glass after XAML layout, so a moving panel's blur can trail
+  the panel by a frame, as on GTK.
 
 ## Validation
 
@@ -224,6 +235,8 @@ LAYER_PACING_TRANSPARENCY=medium \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_frame_pacing
 LAYER_MOTION_TRANSPARENCY=medium bash tools/performance/workspace-motion.sh gtk --workspace-motion
 bash tools/performance/workspace-motion.sh web --preferences
+cargo test --locked -p layer-windows --lib glass
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-transparency.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
 
 The capture test paints bands across the window and captures the Paint, Sketch

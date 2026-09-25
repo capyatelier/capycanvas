@@ -19,7 +19,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     std::function<void()> layoutChanged;
     Grid root,content,actions;
     Canvas overview;
-    Shapes::Path background,surround;
+    Shapes::Path surround;
     Bindings bindings;
     std::optional<uint32_t> pointer;
     hstring geometryKey;
@@ -37,14 +37,11 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     void init(){
         auto weak=weak_from_this();
         AutomationProperties::SetName(root,L"Navigator panel");
-        background.Fill(data->brush(L"panel"));background.IsHitTestVisible(false);
         surround.Fill(data->brush(L"bg"));surround.IsHitTestVisible(false);
-        root.Children().Append(background);root.Children().Append(surround);
+        root.Children().Append(surround);
         content.Margin({8,8,8,8});content.RowSpacing(4);content.VerticalAlignment(VerticalAlignment::Top);
         RowDefinition imageRow;imageRow.Height({1,GridUnitType::Auto});content.RowDefinitions().Append(imageRow);
         RowDefinition buttonsRow;buttonsRow.Height({32,GridUnitType::Pixel});content.RowDefinitions().Append(buttonsRow);
-        // The path behind the controls leaves only the shared image bounds clear.
-        // Transparent children alone cannot reveal a surface through an opaque panel.
         overview.Background(clear());overview.Height(220);
         overview.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetName(overview,L"Navigator overview");
@@ -106,7 +103,6 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             return geometry;
         };
         RectangleGeometry clip;clip.Rect({0,0,float(width),float(height)});root.Clip(clip);
-        background.Data(shape({0,0,float(width),float(height)}));
         surround.Data(shape({origin.X,origin.Y,float(overview.ActualWidth()),float(overview.ActualHeight())}));
     }
     double naturalImage(double width)const{

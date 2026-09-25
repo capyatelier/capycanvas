@@ -1,7 +1,10 @@
 #include "pch.h"
 #include "SettingsView.h"
 #include "UiControls.h"
+#include "Checker.h"
 #include <map>
+#include <tuple>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 using namespace winrt;
@@ -174,6 +177,40 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 });
             }
             text.Spacing(10);text.Children().Append(choices);Grid::SetColumnSpan(text,2);
+        }else if(type==L"choice"&&str(object(kind,L"presentation"),L"type")==L"circles"){
+            StackPanel strip;strip.Orientation(Orientation::Horizontal);strip.Spacing(8);
+            auto options=array(kind,L"options");auto alphas=array(object(kind,L"presentation"),L"alphas");
+            for(uint32_t i=0;i<options.Size();++i){
+                Button choice;choice.Width(28);choice.Height(28);choice.MinWidth(0);choice.MinHeight(0);choice.Padding({0});
+                choice.CornerRadius({14,14,14,14});choice.BorderThickness({0});choice.Background(clear());
+                AutomationProperties::SetName(choice,options.GetStringAt(i));ToolTipService::SetToolTip(choice,box_value(options.GetStringAt(i)));
+                AutomationProperties::SetAutomationId(choice,L"preference-"+id+L"-"+to_hstring(i));
+                choice.Click([data=data,id,i](auto&&,auto&&){if(!data->updating)edit(data,id,N(i));});
+                auto paint=[data=data,id,i,choice,alphas]{
+                    bool dark=data->theme()==L"dark";auto pair=i<alphas.Size()?alphas.GetArrayAt(i):A{};
+                    double alpha=pair.Size()==2?pair.GetNumberAt(dark?1:0):1;
+                    bool checked=num(object(rowFor(data,id),L"kind"),L"selected")==i;
+                    auto grey=[](double value,double opacity=1){auto c=uint8_t(std::lround(value*255));return winrt::Windows::UI::Color{uint8_t(std::lround(opacity*255)),c,c,c};};
+                    Grid disc;disc.Width(28);disc.Height(28);disc.IsHitTestVisible(false);
+                    auto circle=[&](Brush const& brush){Shapes::Ellipse shape;shape.Fill(brush);disc.Children().Append(shape);};
+                    if(alpha<1){Media::ImageBrush checks;checks.ImageSource(checkerBitmap(28,2,grey(.94),grey(.28),7));checks.Stretch(Stretch::Fill);circle(checks);}
+                    circle(fill(grey(dark?.55:.8,alpha)));
+                    if(alpha<1){
+                        Media::RadialGradientBrush sheen;sheen.Center({.32f,.26f});sheen.GradientOrigin({.32f,.26f});sheen.RadiusX(.5);sheen.RadiusY(.5);
+                        GradientStop from;from.Color(grey(1,std::min(1.,.25+1.2*(1-alpha))));GradientStop to;to.Color(grey(1,0));to.Offset(1);
+                        sheen.GradientStops().Append(from);sheen.GradientStops().Append(to);circle(sheen);
+                    }
+                    Shapes::Ellipse ring;ring.Stroke(fill(grey(.5,.45)));ring.StrokeThickness(1);disc.Children().Append(ring);
+                    if(checked)for(auto [width,value,opacity]:{std::tuple{4.,dark?0.:1.,.45},std::tuple{2.,dark?1.:.18,1.}}){
+                        Shapes::Polyline mark;for(auto [x,y]:{std::pair{.3,.52},std::pair{.44,.66},std::pair{.71,.36}})mark.Points().Append({float(x*28),float(y*28)});
+                        mark.Stroke(fill(grey(value,opacity)));mark.StrokeThickness(width);mark.StrokeStartLineCap(PenLineCap::Round);mark.StrokeEndLineCap(PenLineCap::Round);
+                        mark.StrokeLineJoin(PenLineJoin::Round);disc.Children().Append(mark);
+                    }
+                    choice.Content(disc);AutomationProperties::SetItemStatus(choice,checked?L"Selected":L"");
+                };
+                bindings.emplace_back(paint);themeBindings.emplace_back(paint);strip.Children().Append(choice);
+            }
+            widget=strip;
         }else if(type==L"choice"){
             ComboBox control;control.MinWidth(132);control.MaxWidth(220);
             auto options=array(kind,L"options"),icons=array(kind,L"icons");
@@ -205,7 +242,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             };
             commits.push_back(commit);
             control.LostFocus([commit](auto&&,auto&&){commit();});
-            control.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
+            control.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
             widget=control;
             bindings.emplace_back([data=data,id,control,draft]{
                 if(!draft->changed&&control.FocusState()==FocusState::Unfocused)control.Text(str(object(rowFor(data,id),L"kind"),L"value"));
@@ -225,7 +262,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             auto commit=[data=data,id,draft]{if(draft->changed){draft->changed=false;edit(data,id,S(draft->text));}};
             commits.push_back(commit);
             entry.LostFocus([commit](auto&&,auto&&){commit();});
-            entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
+            entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
             auto refresh=[data=data,id,side,circles,entry,draft]{
                 auto current=object(rowFor(data,id),L"kind");auto swatches=array(current,L"swatches");auto chosen=uint32_t(num(current,L"selected"));
                 auto key=swatches.Stringify()+to_hstring(chosen)+data->theme();
@@ -265,7 +302,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             if(inlineRow){host.Orientation(Orientation::Horizontal);widget=host;}
             else{host.HorizontalAlignment(HorizontalAlignment::Center);text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
         }else if(type==L"link"){
-            HyperlinkButton control;control.Content(box_value(str(kind,L"label")));control.NavigateUri(Windows::Foundation::Uri(str(kind,L"url")));
+            HyperlinkButton control;control.Content(box_value(str(kind,L"label")));control.NavigateUri(winrt::Windows::Foundation::Uri(str(kind,L"url")));
             widget=control;
         }else {
             auto control=label(data,str(kind,L"value"));control.TextWrapping(TextWrapping::Wrap);control.MaxWidth(240);widget=control;
@@ -275,7 +312,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetName(widget,titleText);line.Children().Append(widget);
         }
         MenuFlyout reset;
-        reset.Opening([data=data,id](Windows::Foundation::IInspectable const& sender,auto&&){
+        reset.Opening([data=data,id](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto menu=sender.as<MenuFlyout>();menu.Items().Clear();auto spec=object(rowFor(data,id),L"reset");
             if(!spec.Size())return;
             MenuFlyoutItem item;item.Text(str(spec,L"label"));item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));item.IsEnabled(flag(spec,L"enabled"));
