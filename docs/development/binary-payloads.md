@@ -49,12 +49,20 @@ run encoded/decoded it in about 1.2 ms each; device and profile validation costs
 are separate from this codec measurement.
 
 Huion KP1202 Chrome qualification of the generated 61 MP fixture retained one
-mask for three targets, with 5,915 bytes of worker metadata and 62,324,736 binary
-payload bytes (including the 2 MiB ICC). File-worker read/handoff took 1.53 s;
-the test's main-heap unpack/archive-write took 696 ms, and file-worker write
-took 607 ms. Production archive writes run in the file worker. These are full
+mask for three targets, with 6,328 bytes of worker metadata and 62,325,779 binary
+payload bytes (including one 2 MiB ICC shared by proof and an original source).
+File-worker read/handoff took 1.73 s; the test's main-heap unpack/archive-write
+took 685 ms, and file-worker write took 646 ms. Every mask byte and the complete
+reopened archive matched exactly. Production archive writes run in the file worker. These are full
 transport/archive timings, separate from tonal classification latency. The
 fixture's compressibility determines its roughly 4.83 MB archive size.
+
+Native Huion Android qualification also retained the previous 61 MP targets:
+warm tonal adjustments 815–890 ms, Quick Mask adjustment 977 ms and recovery
+publication 153 ms, with successful recovery reopening. The preset/profile
+ownership tests passed on native Android and GTK. Shared core/UI/workspace tests,
+50 Huion IndexedDB/SQLite contract cases, Web/Android builds and Android lint pass.
+Apple/Windows Rust hosts compile; their native UIs were not exercised here.
 
 ## Reproducible checks
 
