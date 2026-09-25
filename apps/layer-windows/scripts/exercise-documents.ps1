@@ -434,6 +434,12 @@ $script:scope=$root
 & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
 (Control 'Preferences' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+$custom=@{item=$null};Wait-Until {
+    $custom.item=@($scope.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like 'setting-dark_base-swatch-*'})[0]
+    $null -ne $custom.item
+} 'Missing custom dark base swatch'
+$custom.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#223344')
 Request-Close -WithPreferences

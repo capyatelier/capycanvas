@@ -43,7 +43,9 @@ function Invoke([string]$Value,[switch]$Id){(Control $Value -Id:$Id).GetCurrentP
 function Navigator {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $menuCondition=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Navigator panel'),
+        [System.Windows.Automation.OrCondition]::new(
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Navigator panel'),
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Navigator')),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
     Wait-Until {$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$menuCondition)} 'Navigator menu item is missing'
     $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$menuCondition).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
@@ -103,7 +105,7 @@ try {
     if(!(Model).windows_isolated_settings){throw 'Navigator fixture requires an isolated profile'}
     [CapyNavigatorCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    Navigator
+    try{Wait-Until {Find 'navigator-overview' -Id} 'Navigator is hidden by default' 3}catch{Navigator}
     $overview=Control 'navigator-overview' -Id
     $identity=$overview.GetRuntimeId() -join ':'
     $scale=[CapyNavigatorCapture]::GetDpiForWindow($review.MainWindowHandle)/96.
@@ -143,7 +145,10 @@ try {
         $undo=Capture 'undo'
         try {if((Different $blank $undo $area) -ne 0){throw 'Undo did not restore the GPU overview pixels'}}finally{$undo.Dispose()}
     }finally{$blank.Dispose()}
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document' -Id
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'new_document').enabled} 'New drawing stayed unavailable'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+    Wait-Until {$item=Find 'new_document' -Id;$item -and $item.Current.IsEnabled} 'New drawing menu item stayed disabled'
+    Invoke 'new_document' -Id
     (Control 'document-width' -Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('128')
     (Control 'document-height' -Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
     Invoke 'Create'
@@ -165,12 +170,15 @@ try {
     Navigator
     $null=Control 'navigator-overview' -Id
     $theme=(Model).state.theme
-    Invoke 'Preferences'
+    Invoke 'settings-button' -Id
     (Control 'Color theme' -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
-    Invoke 'Close'
+    $dialog=Control 'Preferences' -Type ([System.Windows.Automation.ControlType]::Window)
+    $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     $null=Control 'navigator-overview' -Id
     $light=Capture 'alternate-theme'

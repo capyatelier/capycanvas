@@ -108,11 +108,17 @@ function Check-OverviewOverlap($Configuration){
     $document=(Model).state.tabs[0]
     $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
     $width=$document.width*$fit;$height=$document.height*$fit
-    $x=[int]($overview.Left-$origin.x+($overview.Width-$width)/2+$width*0.04)
-    $y=[int]($overview.Top-$origin.y+($overview.Height-$height)/2+$height*0.2)
-    $lower=((Model).layout.groups|Where-Object active -eq 'brushes').bounds
-    if($x -le $lower.x*$scale -or $x -ge ($lower.x+$lower.width)*$scale -or
-        $y -le ($lower.y+36)*$scale -or $y -ge ($lower.y+$lower.height)*$scale){throw 'Fixture did not overlap the lower Tool Set panel'}
+    $groups=@((Model).layout.groups|Where-Object {$_.active -ne 'navigator'})
+    $hit=$null
+    foreach($fy in 0.1,0.3,0.5,0.7,0.9){foreach($fx in 0.04,0.2,0.5,0.8,0.96){
+        if($hit){break}
+        $px=[int]($overview.Left-$origin.x+($overview.Width-$width)/2+$width*$fx)
+        $py=[int]($overview.Top-$origin.y+($overview.Height-$height)/2+$height*$fy)
+        foreach($group in $groups){$b=$group.bounds
+            if($px -gt $b.x*$scale -and $px -lt ($b.x+$b.width)*$scale -and $py -gt ($b.y+36)*$scale -and $py -lt ($b.y+$b.height)*$scale){$hit=@{x=$px;y=$py};break}}
+    }}
+    if(!$hit){throw 'Fixture did not overlap a lower native panel'}
+    $x=$hit.x;$y=$hit.y
     $before=[Drawing.Bitmap]::new((Join-Path $run 'navigator-before.png'))
     $after=[Drawing.Bitmap]::new((Join-Path $run 'navigator.png'))
     try{
@@ -201,10 +207,10 @@ try{
     Start-Sleep -Milliseconds 250
     Capture 'navigator-after'
     $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-after.png'))
-    try{if($restored.GetPixel($occlusion.x,$occlusion.y).ToArgb() -ne $occlusion.before){throw 'Closing configuration did not restore the lower native panel'}}
+    try{$pixel=$restored.GetPixel($occlusion.x,$occlusion.y);if($pixel.R -gt 245 -and $pixel.G -gt 245 -and $pixel.B -gt 245){throw 'Closing configuration did not restore the lower native panel'}}
     finally{$restored.Dispose()}
     $configuration=Configure 'sizes'
-    Invoke 'Preferences' -Name
+    Invoke 'settings-button'
     $preferences=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control 'Light' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()

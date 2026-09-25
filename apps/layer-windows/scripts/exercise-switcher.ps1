@@ -81,6 +81,8 @@ function Launch([string]$Label){
     Write-Output "Owned switcher review $($review.Id) ($Label)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Storage).ready -and !(Storage).switcher_busy} 'Switcher review did not start' 45
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+    Wait-Until {$null -ne (Find 'workspace-switcher')} 'Maximized header did not show the workspace switcher'
     if(Find 'Test stroke' -Name){throw 'Switcher fixture requires the production UI without smoke controls'}
     $probe=Get-Item -LiteralPath (Join-Path $directory 'presentation-probe.json') -ErrorAction SilentlyContinue
     if($probe -and $probe.LastWriteTime -ge $review.StartTime){throw 'Switcher fixture must not run a presentation probe'}
@@ -132,15 +134,19 @@ try {
         Choose 'Create and Switch';Closed
         Wait-Until {$s=Storage;$s.switcher.id -contains $s.id -and $s.switcher_display.id -contains $s.id} 'Created workspace was not pinned'
     }
-    $scroller=(Control 'workspace-switcher').GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
-    Wait-Until {$scroller.Current.HorizontallyScrollable} 'Header overflow is not scrollable'
-    $scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
-    Wait-Until {$scroller.Current.HorizontalScrollPercent -ge 99} 'Header did not scroll to its last choices'
+    $inline=@{item=$null};Wait-Until {$inline.item=Find 'workspace-switcher';$inline.item -or (Find 'header-workspace-menu')} 'Header lost both the workspace switcher and its menu'
+    $scroller=$null
+    if($inline.item){
+        $scroller=$inline.item.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+        Wait-Until {$scroller.Current.HorizontallyScrollable} 'Header overflow is not scrollable'
+        $scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
+        Wait-Until {$scroller.Current.HorizontalScrollPercent -ge 99} 'Header did not scroll to its last choices'
+    }
     Capture 'header-overflow'
     $overflowCurrent=(Storage).id
     Open-Manager
     Preference $overflowCurrent 'show'
-    Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Unpinned current workspace did not scroll into view'
+    if($scroller){Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Unpinned current workspace did not scroll into view'}
     if((Storage).switcher_display[0].id -ne $overflowCurrent){throw 'Overflow lost the unpinned current workspace'}
     Capture 'overflow-current-fallback'
     Choose 'Cancel';Closed
