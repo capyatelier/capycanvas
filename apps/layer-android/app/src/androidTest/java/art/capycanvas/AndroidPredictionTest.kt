@@ -29,15 +29,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Exercise native capability, disabled Compose controls and persisted selection.
- * Use a private workspace store and restore the user's exact settings afterward. */
+ * Use private workspace and settings stores. */
 class AndroidPredictionTest {
     @get:Rule val compose = createEmptyComposeRule()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
-    private val preferences get() = context.getSharedPreferences("capy-canvas", 0)
+    private val preferences get() = context.getSharedPreferences(CanvasHost.preferencesName, 0)
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
     private lateinit var original: JSONObject
-    private var savedSettings: String? = null
     private var actualSupport = false
     private val tag = "preference-platform_prediction"
     private fun settings() = host.snapshot!!.getJSONObject("state").getJSONObject("settings")
@@ -78,7 +77,6 @@ class AndroidPredictionTest {
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
     @Before fun ready() {
-        savedSettings = preferences.getString("settings", null)
         CanvasHost.workspaceDirectoryForTest = File(context.filesDir, "prediction-tests/${UUID.randomUUID()}").absolutePath
         RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -117,9 +115,6 @@ class AndroidPredictionTest {
             finally {
                 CanvasHost.workspaceDirectoryForTest = null
                 RecoveryController.directoryForTest = null
-                preferences.edit().apply {
-                    if (savedSettings == null) remove("settings") else putString("settings", savedSettings)
-                }.commit()
             }
         }
     }

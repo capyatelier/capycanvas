@@ -43,6 +43,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
         @Volatile internal var workspaceDirectoryForTest: String? = null
+        internal val preferencesName get() = workspaceDirectoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas"
     }
     internal val strokeRecording = StrokeRecording(this)
     var snapshot by mutableStateOf<JSONObject?>(null)
@@ -185,7 +186,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val drawingTabs = DrawingTabsController(this)
     internal val documents = DocumentController(this, application)
     internal val recovery = RecoveryController(this, application)
-    private val saved = application.getSharedPreferences(workspaceDirectoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas", 0)
+    private val saved = application.getSharedPreferences(preferencesName, 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache(this)
     private var choreographer: Choreographer? = null
