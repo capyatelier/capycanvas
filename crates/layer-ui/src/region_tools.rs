@@ -20,6 +20,7 @@ struct Target {
     revision: u64,
     layer: LayerId,
     operation: Option<layer_core::LayerOperationKind>,
+    color: Option<layer_core::color::RgbColor>,
     basis: layer_core::Affine,
 }
 impl Default for RegionTools {
@@ -202,6 +203,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     revision: doc.revision,
                     layer: doc.active_layer,
                     operation: fill.then(|| self.fill_operation()),
+                    color: (fill
+                        && !self.state.colors.transparent()
+                        && self.state.brush.opacity > 0.)
+                        .then(|| self.state.colors.definition()),
                     basis: if !fill && self.selection_refinement(basis).is_some() { layer_core::Affine::IDENTITY } else { basis },
                 });
             }
@@ -218,8 +223,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             position: [0,0], tolerance: 0., refinement: Default::default(), limit: None,
         });
         self.region_tools.target = Some(Target {
-            generation: self.region_tools.generation, revision: doc.revision, layer: doc.active_layer,
-            operation: None, basis: layer_core::Affine::IDENTITY,
+            generation: self.region_tools.generation,
+            revision: doc.revision,
+            layer: doc.active_layer,
+            operation: None,
+            color: None,
+            basis: layer_core::Affine::IDENTITY,
         });
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
@@ -245,7 +254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     let selection = Selection::pixels(result.pixels).transformed(target.basis).map_err(error)?;
                     if let Some(operation) = target.operation {
-                        self.paint_operation(Some(selection), operation)?;
+                        self.paint_operation(Some(selection), operation, target.color.as_slice())?;
                     } else {
                         self.layer_edit(Edit::SetSelection(Some(selection)))?;
                     }

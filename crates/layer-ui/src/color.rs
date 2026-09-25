@@ -19,7 +19,8 @@ pub use editor::{ColorEditor, ColorInputModel};
 mod form;
 pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui};
 mod library;
-pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor};
+mod palette_file;
+pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
