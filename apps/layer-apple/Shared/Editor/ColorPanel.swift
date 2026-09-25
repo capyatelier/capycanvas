@@ -7,7 +7,7 @@ struct ColorPanel: View {
     private var model: JSON { store.snapshot["color_panel"] }
     private var hdr: Bool { model["hdr"].bool }
     private var context: String {
-        "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.state["colors"]["paint_slot"].string)"
+        "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.displayColors["paint_slot"].string)"
     }
     private var captureState: String? {
         #if DEBUG
@@ -39,7 +39,7 @@ struct ColorPanel: View {
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {
                         Group {
-                            if hdr { HDRColorSwatch(color: slot == "transparent" ? JSON(["space": "Srgb", "rgba": [0, 0, 0, 0]]) : store.state["colors"][slot], viewing: store.colorViewing).clipShape(Circle()) }
+                            if hdr { HDRColorSwatch(color: slot == "transparent" ? JSON(["space": "Srgb", "rgba": [0, 0, 0, 0]]) : store.displayColors[slot], viewing: store.colorViewing).clipShape(Circle()) }
                             else { ColorPaintPreview(rgba: swatch["rgba"]) }
                         }.modifier(ColorPanelMeasurement(id: "paint-" + slot))
                             .padding(slot == "foreground" ? 3 : 1)
@@ -87,11 +87,14 @@ struct ColorPanel: View {
                     .colorPlaced(layout["readout"], id: "readout")
             }.frame(width: side, height: height, alignment: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.aspectRatio(hdr ? 226 / max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) : 1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
+        }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
+    static func aspect(hdr: Bool) -> CGFloat {
+        hdr ? max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) / 226 : 1
+    }
 }
 
 /// Native buttons retain press/cancel and keyboard behavior. Only the shared

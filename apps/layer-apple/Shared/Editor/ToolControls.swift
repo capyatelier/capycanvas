@@ -48,12 +48,14 @@ struct ToolSetControls: View {
                                 SharedIcon(name: item["icon"].string)
                                 Text(item["label"].string).fontWeight(.bold)
                                     .lineLimit(1).truncationMode(.tail)
-                                    .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .trailing)
+                                    .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66,
+                                        alignment: item["preview"].isNull ? .leading : .trailing)
                             }
                         }
                     }
                 }.padding(.horizontal, group ? 0 : 6).padding(.vertical, group ? 4 : 3)
-                    .frame(maxWidth: .infinity, minHeight: group ? nil : store.catalog["text_size_pt"].number * 4 / 3 * 1.66 + 8)
+                    .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? 44
+                        : store.catalog["text_size_pt"].number * 4 / 3 * 1.66 + 8)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
                 .disabled(!command.isNull && !command["enabled"].bool)
@@ -112,7 +114,10 @@ struct ToolSettingsControls: View {
     }
     var body: some View {
         let editingContext = context
+        let actions = store.state["tool_actions"].array
+        let modes = actions.filter { SelectionModes.commands.contains($0["command"].string) }
         VStack(alignment: .leading, spacing: 8) {
+            if !modes.isEmpty { SelectionModeGroup(store: store, actions: modes) }
             ForEach(settings, id: \.settingID) { item in
                 let index = settings.firstIndex { $0.settingID == item.settingID } ?? 0
                 if !item["group"].string.isEmpty && (index == 0 || settings[index - 1]["group"].string != item["group"].string) {
@@ -124,14 +129,17 @@ struct ToolSettingsControls: View {
                     store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
                 }.id(context + item.settingID + item["label"].string + item["numeric"].stableKey)
             }
-            ForEach(store.state["tool_actions"].array.indices, id: \.self) { index in
-                let action = store.state["tool_actions"][index]
-                let command = store.command(action["command"].string)
-                ToolActionControl(command: command, checkable: action["checkable"].bool,
-                    textSize: store.catalog["text_size_pt"].number * 4 / 3) {
-                    store.invoke(command["id"].string)
+            ForEach(actions.indices, id: \.self) { index in
+                let action = actions[index]
+                if !SelectionModes.commands.contains(action["command"].string) {
+                    let command = store.command(action["command"].string)
+                    ToolActionControl(command: command, checkable: action["checkable"].bool,
+                        textSize: store.catalog["text_size_pt"].number * 4 / 3) {
+                        store.invoke(command["id"].string)
+                    }
                 }
             }
+            if !modes.isEmpty { SelectionMenuButton(store: store, label: "Selection Actions…", kind: "selection") }
         }
     }
 }

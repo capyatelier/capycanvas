@@ -59,6 +59,16 @@ pub struct ToolSetting {
     pub value: f32,
 }
 
+impl ToolSetting {
+    pub fn tooltip(&self) -> &'static str {
+        match self.id {
+            "tonal_lower" => "From — lower bound in stops relative to reference white (0)",
+            "tonal_upper" => "To — upper bound in stops relative to reference white (0)",
+            _ => self.label,
+        }
+    }
+}
+
 struct Definition {
     id: &'static str,
     label: &'static str,

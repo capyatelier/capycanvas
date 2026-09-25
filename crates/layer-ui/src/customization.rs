@@ -14,6 +14,24 @@ pub enum TabStyle {
     Icon,
 }
 impl TabStyle {
+    /// Native hosts supply complete and icon-only widths at the current font
+    /// size. Reserve every icon, then spend the remaining width left to right.
+    /// Selection never changes Automatic's label priority.
+    pub fn automatic_names(available: f32, widths: &[[f32; 2]]) -> Vec<bool> {
+        let mut spare = (available - widths.iter().map(|w| w[1]).sum::<f32>()).max(0.);
+        widths
+            .iter()
+            .map(|[full, icon]| {
+                let extra = (full - icon).max(0.);
+                if extra <= spare {
+                    spare -= extra;
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
     pub const ALL: [Self; 5] = [
         Self::Automatic,
         Self::ActiveName,
@@ -30,6 +48,8 @@ impl TabStyle {
             Self::Icon => "Icons only",
         }
     }
+    // Unmeasured fallback for hosts awaiting the allocation-aware projection.
+    // GTK refines Automatic with automatic_names and native measurements.
     fn presentation(self, active: bool, tab_count: usize) -> TabPresentation {
         TabPresentation {
             show_icon: self != Self::Name,
@@ -38,6 +58,20 @@ impl TabStyle {
                 || (self == Self::ActiveName && active),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn automatic_tab_names_follow_measured_space_and_left_priority() {
+    let widths = [[80., 32.], [100., 32.], [60., 32.], [70., 32.]];
+    assert_eq!(TabStyle::automatic_names(310., &widths), [true; 4]);
+    assert_eq!(
+        TabStyle::automatic_names(220., &widths),
+        [true, false, true, false]
+    );
+    assert_eq!(TabStyle::automatic_names(128., &widths), [false; 4]);
+    assert_eq!(TabStyle::automatic_names(40., &widths[..1]), [false]);
+    assert_eq!(TabStyle::automatic_names(180., &widths[..2]), [true; 2]);
 }
 
 /// Resolved in Rust from the group's style and selection; hosts only render it.
@@ -965,6 +999,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Select => "Choose a selection tool",
                 CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
+                CommandId::TonalSelect | CommandId::TonalDetails | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => command.label(),
                 CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
                 CommandId::SelectionBrushPressure => "Use pen pressure to vary Paint selection size",
                 CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",
@@ -1073,7 +1108,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Color => (
             "Brush color".into(),
             "Choose the current paint color".into(),
-            "color",
+            "colors",
         ),
         ToolbarControl::ColorPicker => (
             "Color Picker".into(),
@@ -1120,36 +1155,12 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain(platform.color_picker().then_some(ToolbarControl::ColorPicker))
-        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS]
-            .into_iter().filter(move |_| ToolbarControl::components_available(platform)))
-        .chain(
-            matches!(
-                platform,
-                Platform::Gtk
-                    | Platform::Generic
-                    | Platform::Android
-                    | Platform::Web
-                    | Platform::Ios
-                    | Platform::Mac
-            )
-            .then_some(ToolbarControl::Divider),
-        )
+        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])
+        .chain([ToolbarControl::Divider])
         .chain(
             Panel::ALL
                 .into_iter()
-                .filter(move |p| {
-                    p.kind() == PanelKind::Content
-                        && p.available_on(platform)
-                        && matches!(
-                            platform,
-                            Platform::Gtk
-                                | Platform::Generic
-                                | Platform::Android
-                                | Platform::Web
-                                | Platform::Ios
-                                | Platform::Mac
-                        )
-                })
+                .filter(move |p| p.kind() == PanelKind::Content && p.available_on(platform))
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
         .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
@@ -1274,16 +1285,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                     (state.brush.diameter - pixels as f32).abs() < 0.01
                 }
                 ToolbarControl::Panel { panel } => {
-                    enabled = panel.available_on(state.platform)
-                        && matches!(
-                            state.platform,
-                            Platform::Gtk
-                                | Platform::Generic
-                                | Platform::Android
-                                | Platform::Web
-                                | Platform::Ios
-                                | Platform::Mac
-                        );
+                    enabled = panel.available_on(state.platform);
                     false
                 }
                 _ => false,
@@ -1878,6 +1880,9 @@ impl CustomizationState {
                     _ => unreachable!(),
                 };
                 drawer.configure_picker(layout, platform);
+                if platform == Platform::Gtk && drawer.columns == [vec![Panel::Color]] {
+                    drawer.columns[0].push(Panel::Palettes);
+                }
                 if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {
                     drawer.columns = vec![vec![Panel::Adjustments]];
                 }

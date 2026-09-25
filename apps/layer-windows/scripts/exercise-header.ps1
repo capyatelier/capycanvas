@@ -110,7 +110,8 @@ function Start-Review([string]$Phase) {
             $toggle.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
             Wait-Until {(Model).windows_workspace.id -eq $choice.id -and !(Model).windows_workspace.busy} 'Requested workspace did not open'
         }
-        if($Workspace -eq 'sketch' -and ((Header).size -ne 'medium' -or (Model).state.workspace.layout.bands.Count -or (Model).state.workspace.layout.canvas_info.visible)){
+        $bands=@((Model).state.workspace.layout.bands)
+        if($Workspace -eq 'sketch' -and ((Header).size -ne 'medium' -or $bands.Count -ne 1 -or $bands[0].edge -ne 'left' -or $bands[0].alignment -ne 'center' -or (Model).state.workspace.layout.canvas_info.visible)){
             throw 'Sketch did not open the shared minimal titlebar layout'
         }
     }

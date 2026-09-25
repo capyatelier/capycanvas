@@ -8,6 +8,7 @@ use serde::Deserialize;
 pub enum ToolbarUiRequest {
     SliderPreview {
         control: ToolbarControl,
+        style: TileStyle,
         value: f32,
         length: f32,
         extent: f32,
@@ -55,10 +56,13 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
     Ok(match request {
         ToolbarUiRequest::SliderPreview {
             control,
+            style,
             value,
             length,
             extent,
-        } => json!(slider_preview_layout(control, value, length, extent)?),
+        } => json!(slider_preview_layout(
+            control, style, value, length, extent
+        )?),
         ToolbarUiRequest::SliderBookmarkValue {
             control,
             values,

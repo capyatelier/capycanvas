@@ -15,9 +15,10 @@ pub enum SelectionTool {
     Wand,
     Color,
     Brush,
+    Tonal,
 }
 impl SelectionTool {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Rectangle,
         Self::Ellipse,
         Self::Lasso,
@@ -25,6 +26,7 @@ impl SelectionTool {
         Self::Wand,
         Self::Color,
         Self::Brush,
+        Self::Tonal,
     ];
     pub fn command(self) -> CommandId {
         match self {
@@ -35,6 +37,7 @@ impl SelectionTool {
             Self::Wand => CommandId::AutoSelect,
             Self::Color => CommandId::ColorSelect,
             Self::Brush => CommandId::SelectionBrush,
+            Self::Tonal => CommandId::TonalSelect,
         }
     }
     pub fn canvas_tool(self, source: RegionSource) -> LayerCanvasTool {
@@ -65,6 +68,7 @@ pub enum SelectionConstraint {
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionOptions {
     pub tool: SelectionTool,
+    pub tonal: super::tonal_selection::TonalOptions,
     pub brush: super::painted_selections::SelectionBrushOptions,
     pub display: SelectionDisplayOptions,
     pub constraint: SelectionConstraint,
@@ -80,6 +84,7 @@ impl Default for SelectionOptions {
     fn default() -> Self {
         Self {
             tool: SelectionTool::Lasso,
+            tonal: Default::default(),
             brush: Default::default(),
             display: Default::default(),
             constraint: SelectionConstraint::Free,
@@ -95,6 +100,7 @@ impl Default for SelectionOptions {
 }
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), String> {
+        self.tonal.validate()?;
         self.brush.validate()?;
         self.display.validate()?;
         NumericControl::number(
@@ -293,6 +299,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let [start, end] = points.as_slice() else {
             return Vec::new();
         };
+        if kind==SelectionTool::Tonal {return FigureShape::Rectangle.guide(*start,*end,1.);}
         let (start, end) =
             self.selection_tools
                 .options

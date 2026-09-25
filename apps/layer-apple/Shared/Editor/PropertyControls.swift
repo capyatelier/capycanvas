@@ -93,7 +93,7 @@ private struct PropertyField: View {
                     documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) { change($0.raw, revision: revision) }
                 if !control["color_action"].isNull {
                     IconTile(icon: "fill", label: "Use selected color") { store.dispatch(control["color_action"]) }
-                        .frame(width: 40, height: 36).accessibilityIdentifier("paper-color-bucket")
+                        .frame(width: 40, height: 36).accessibilityIdentifier(key == "paper_color" ? "paper-color-bucket" : "property-\(key)-bucket")
                 }
             }
         case "gradient":

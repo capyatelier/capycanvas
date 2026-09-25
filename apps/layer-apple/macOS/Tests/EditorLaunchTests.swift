@@ -105,6 +105,10 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testNativeRegionRefinement() throws { try checkNativeRegionRefinement(in: editorCaptureApplication()) }
 
+    @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
+
+    @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
+
     @MainActor func testSelectionInversion() { checkSelectionInversion(in: editorCaptureApplication()) }
 
     @MainActor func testRulerWorkflow() {

@@ -15,8 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -124,7 +126,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
                 }
                 if (preview && field != null) stamp?.let { brush ->
-                    BrushSliderPreview(brush, control, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
+                    BrushSliderPreview(brush, control, style, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
                         dismiss = { preview = false }, bookmark = { edit(obj("type" to "toggle_slider_bookmark", "control" to control)) })
                 }
             }
@@ -136,6 +138,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val textStyle = LocalTextStyle.current
             fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
             val measureKey = options.map { option -> when {
+                option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
                 option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.array("items").length()) }
                 else -> "action"
@@ -143,6 +146,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
             val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
                 options.map { option ->
                     when {
+                        option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
                         option.has("Choice") && option.getJSONObject("Choice").getBoolean("segmented") -> {
                             val count = option.getJSONObject("Choice").array("items").length()
                             if (vertical) listOf(width, tileHeight * if (width < tileWidth * count) count else 1)
@@ -173,6 +177,12 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     layout.array("fields").optJSONObject(index)?.let { rect ->
                         Box(Modifier.placed(rect, density), contentAlignment = Alignment.Center) {
                             when {
+                                option.has("Range") -> option.getJSONObject("Range").let { range ->
+                                    val fields = range.array("bounds").objects()
+                                    RangeControl(fields, range.getString("label"), Modifier.fillMaxWidth(), prefix="toolbar", showSlider=preferences.getBoolean("sliders")) { index, value ->
+                                        edit(obj("type" to "set_tool_setting", "id" to fields[index].getString("id"), "value" to value))
+                                    }
+                                }
                                 option.has("Numeric") -> ToolbarNumber(option.getJSONObject("Numeric"), vertical, style, labeled, preferences, ::edit)
                                 option.has("Choice") -> ToolbarChoice(option.getJSONObject("Choice"), vertical, labeled, rect.number("width") < tileWidth * option.getJSONObject("Choice").array("items").length(), panel.getInt("tile_icon_size"), ::edit)
                                 else -> {
@@ -249,20 +259,22 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     }
 }
 
-@Composable private fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
-    iconSize: Int, edit: (JSONObject) -> Unit) {
+@Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
+    iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f) {
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
     if (choice.getBoolean("segmented")) {
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
-            Box(modifier.testTag("toolbar-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
+            HoverTip(item.getString("label"), modifier) {
+            Box(Modifier.fillMaxSize().testTag(if(prefix=="tool" && id=="selection-mode") "tool-action-${item.getJSONObject("action").getString("command")}" else "$prefix-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) }, contentAlignment = Alignment.Center) {
-                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical) iconSize.dp else 16.dp))
+                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
+            }
             }
         }
-        val modifier = (if (vertical) Modifier.fillMaxSize().clip(TileShape) else Modifier.fillMaxWidth().height(24.dp).clip(ControlShape))
-            .selectableGroup().testTag("toolbar-segments-$id")
+        val modifier = (if (vertical) Modifier.fillMaxSize().clip(TileShape) else Modifier.fillMaxWidth().height(height.dp).clip(ControlShape))
+            .selectableGroup().testTag(if(prefix=="tool" && id=="selection-mode") "selection-mode-row" else "$prefix-segments-$id")
         if (vertical && stacked) Column(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxWidth().weight(1f)) } }
         else Row(modifier) { items.forEachIndexed { i, item -> segment(item, i, Modifier.fillMaxHeight().weight(1f)) } }
         return
@@ -300,7 +312,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 val down = awaitFirstDown(); down.consume()
                 var moved = false; var finished = false
                 fun pick(p: Offset, snap: Boolean) {
-                    val half = 5.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
+                    val half = 6.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
                     if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, length / density)
                 }
                 onContact(true, false); pick(down.position, true)
@@ -315,40 +327,53 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
 
             }
         }) {
-        val thick = 20.dp.toPx().coerceAtMost(if (vertical) size.width else size.height)
-        val x = (size.width - thick) / 2; val y = (size.height - thick) / 2
-        val track = Path().apply {
-            if (vertical) { moveTo(x, 0f); lineTo(x + thick, 0f); lineTo(size.width / 2 + if (opacity) thick / 2 else 1f, size.height); lineTo(size.width / 2 - if (opacity) thick / 2 else 1f, size.height) }
-            else { moveTo(0f, size.height / 2 - if (opacity) thick / 2 else 1f); lineTo(size.width, y); lineTo(size.width, y + thick); lineTo(0f, size.height / 2 + if (opacity) thick / 2 else 1f) }; close()
+        val unit = 1.dp.toPx()
+        val extent = if (vertical) size.height else size.width
+        val length = extent - 12 * unit
+        if (length >= 4 * unit) withTransform({
+            if (vertical) { translate(size.width / 2, size.height - 6 * unit); rotate(-90f, Offset.Zero) }
+            else translate(6 * unit, size.height / 2)
+        }) {
+            val wide = 8 * unit; val narrow = if (opacity) wide else 2.5f * unit
+            val track = Path().apply {
+                moveTo(0f, -narrow); lineTo(length - 3 * unit, -wide)
+                cubicTo(length + unit, -wide, length + unit, wide, length - 3 * unit, wide)
+                lineTo(0f, narrow); cubicTo(-3 * unit, narrow, -3 * unit, -narrow, 0f, -narrow); close()
+            }
+            clipPath(track) {
+                val bounds = Rect(-3 * unit, -wide, length + unit, wide)
+                if (opacity) {
+                    drawRect(colors.text.copy(alpha = .08f), bounds.topLeft, bounds.size)
+                    val cell = 4 * unit
+                    for (col in -1..(length / cell).toInt() + 1) for (row in -2..1) if ((col + row) % 2 == 0)
+                        drawRect(colors.text.copy(alpha = .2f), Offset(col * cell, row * cell), Size(cell, cell))
+                    drawRect(Brush.horizontalGradient(listOf(colors.text.copy(alpha = 0f), colors.text.copy(alpha = .65f)), 0f, length),
+                        bounds.topLeft, bounds.size)
+                } else drawRect(colors.text.copy(alpha = .22f), bounds.topLeft, bounds.size)
+            }
         }
-        clipPath(track) {
-            if (opacity) {
-                val cell = 4.dp.toPx()
-                for (row in 0..(size.height / cell).toInt()) for (col in 0..(size.width / cell).toInt())
-                    drawRect(if ((row + col) % 2 == 0) Color(0xffdddddd) else Color(0xff888888), Offset(col * cell, row * cell), Size(cell, cell))
-                drawRect(if (vertical) Brush.verticalGradient(listOf(Color(0xff222222), Color.Transparent)) else Brush.horizontalGradient(listOf(Color.Transparent, Color(0xff222222))))
-            } else drawRect(colors.text.copy(alpha = .4f))
-        }
-        val marker = 10.dp.toPx()
-        if (vertical) drawRoundRect(colors.thumb, Offset(x - 4.dp.toPx(), (size.height - marker) * (1f - fill)), Size(thick + 8.dp.toPx(), marker), CornerRadius(marker / 2))
-        else drawRoundRect(colors.thumb, Offset((size.width - marker) * fill, y - 4.dp.toPx()), Size(marker, thick + 8.dp.toPx()), CornerRadius(marker / 2))
+        val along = 12 * unit; val across = 28 * unit
+        val thumb = if (vertical) Rect(Offset((size.width - across) / 2, (size.height - along) * (1f - fill)), Size(across, along))
+            else Rect(Offset((size.width - along) * fill, (size.height - across) / 2), Size(along, across))
+        drawPath(Path().apply { addSquircle(thumb, 6 * unit, 6 * unit, 6 * unit, 6 * unit) }, colors.thumb)
+        val edge = thumb.deflate(unit / 2); val corner = 5.5f * unit
+        drawPath(Path().apply { addSquircle(edge, corner, corner, corner, corner) }, colors.text.copy(alpha = .6f), style = Stroke(unit))
         for (mark in marks) {
             val position = if (mark.getBoolean("selected")) fill else mark.number("fill")
-            val center = if (vertical) Offset(size.width / 2, marker / 2 + (size.height-marker)*(1f-position))
-                else Offset(marker / 2 + (size.width-marker)*position, size.height / 2)
-            val delta = if (vertical) Offset(7.dp.toPx(), 0f) else Offset(0f, 7.dp.toPx())
-            drawLine(if (mark.getBoolean("selected")) colors.panel else colors.text, center-delta, center+delta, 2.dp.toPx())
+            val center = if (vertical) Offset(size.width / 2, along / 2 + (size.height - along) * (1f - position))
+                else Offset(along / 2 + (size.width - along) * position, size.height / 2)
+            val delta = if (vertical) Offset(7 * unit, 0f) else Offset(0f, 7 * unit)
+            drawLine(if (mark.getBoolean("selected")) colors.panel else colors.text, center - delta, center + delta, 2 * unit)
         }
-
     }
 }
 
 
-@Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, value: Float, length: Float,
+@Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, style: String, value: Float, length: Float,
     vertical: Boolean, selected: Boolean, dismiss: () -> Unit, bookmark: () -> Unit) {
     val density = LocalDensity.current.density
     val colors = LocalPalette.current
-    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "value" to value, "length" to length, "extent" to stamp.number("extent")))
+    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "style" to style, "value" to value, "length" to length, "extent" to stamp.number("extent")))
     val bitmap = remember(stamp) {
         val alpha = stamp.array("alpha"); val size = stamp.getInt("size")
         android.graphics.Bitmap.createBitmap(IntArray(alpha.length()) { (alpha.getInt(it) shl 24) or 0x00ffffff }, size, size, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
@@ -362,8 +387,8 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         }
     } }
     Popup(provider, onDismissRequest = dismiss, properties = PopupProperties(focusable = false)) {
-        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = SurfaceShape,
-            color = colors.panel, shadowElevation = 6.dp, border = androidx.compose.foundation.BorderStroke(1.dp, colors.divider)) {
+        Surface(Modifier.size(layout.number("side").dp).testTag("brush-slider-preview"), shape = SquircleShape(layout.number("radius").dp),
+            color = colors.panel, shadowElevation = 6.dp) {
             Box {
                 Canvas(Modifier.fillMaxSize()) {
                     val b = layout.getJSONObject("stamp")
@@ -375,14 +400,14 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                             alpha = layout.number("opacity"), colorFilter = ColorFilter.tint(colors.text))
                     }
                     val fade = layout.number("header_fade")*density
-                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=.65f),
+                    if (fade > 0f) drawRect(Brush.verticalGradient(0f to colors.panel.copy(alpha=layout.number("header_fade_opacity")),
                         1f to colors.panel.copy(alpha=0f), endY=fade), size=Size(size.width,fade))
                 }
-                Row(Modifier.fillMaxWidth().padding(start=12.dp,end=5.dp,top=4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(layout.getString("text"), Modifier.weight(1f), maxLines=1)
-                    Box(Modifier.size(28.dp).clip(ControlShape).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
-                        SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(16.dp))
-                    }
+                Box(Modifier.placed(layout.getJSONObject("caption"), density), contentAlignment = Alignment.CenterStart) {
+                    Text(layout.getString("text"), maxLines = 1, softWrap = false)
+                }
+                Box(Modifier.placed(layout.getJSONObject("bookmark"), density).clip(TileShape).clickable(onClick=bookmark).testTag("slider-bookmark"), contentAlignment=Alignment.Center) {
+                    SharedIcon(if(selected) "minus" else "plus", if(selected) "Remove bookmark" else "Bookmark this value", Modifier.size(layout.number("icon").dp))
                 }
             }
         }

@@ -8,12 +8,14 @@ struct NumberState {
     double value=0;bool editing=false,dragging=false,formatting=false;
     hstring identity;
     hstring measuredText;double measuredWidth=-1;
+    std::function<J(J const&,double,J const&)> resolve;
 };
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation){
     auto local=std::make_shared<NumberState>();local->value=get();
     if(presentation.identity)local->identity=presentation.identity();
+    local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)(numeric);
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
     double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
@@ -120,9 +122,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto track=fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),
         uint8_t((int(panelColor.G)+textColor.G)/2),uint8_t((int(panelColor.B)+textColor.B)/2)});
     for(auto key:{L"SliderTrackValueFill",L"SliderTrackValueFillPointerOver",L"SliderTrackValueFillPressed",L"SliderTrackValueFillDisabled"})
-        slider.Resources().Insert(box_value(key),preference?fill({255,53,132,228}):track);
+        slider.Resources().Insert(box_value(key),preference?accent(data):track);
     for(auto key:{L"SliderThumbBackground",L"SliderThumbBackgroundPointerOver",L"SliderThumbBackgroundPressed"})
-        slider.Resources().Insert(box_value(key),preference?fill({255,53,132,228}):data->brush(L"thumb"));
+        slider.Resources().Insert(box_value(key),preference?accent(data):data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
     auto commit=[data,local,spec,get,set,setText,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
@@ -131,7 +133,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             local->identity=identity();local->value=get();cancel=true;
         }
         try{
-            auto next=numeric(spec,local->value,cancel?O({{L"type",S(L"format")}}):
+            auto next=local->resolve(spec,local->value,cancel?O({{L"type",S(L"format")}}):
                 O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
             bool changed=local->value!=num(next,L"value");
             local->value=num(next,L"value");local->editing=false;
@@ -146,14 +148,14 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     if(commits)commits->emplace_back([commit]{commit(false);});
     entry.GotFocus([data,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
-        if(!local->editing){setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));}
+        if(!local->editing){setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));}
     });
     // LosingFocus is synchronous; close and target-change commands must follow
     // the draft commit, rather than race the later LostFocus notification.
     entry.LosingFocus([commit](auto&&,auto&&){commit(false);});
     entry.LostFocus([commit,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
-        if(!local->editing)setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
+        if(!local->editing)setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
     });
     entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){
         if(e.Key()==Windows::System::VirtualKey::Enter){commit(false);e.Handled(true);}
@@ -164,7 +166,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     if(!ranged)entry.PreviewKeyDown([commit,local,spec,set](auto&&,KeyRoutedEventArgs const& e){
         if(e.Key()!=Windows::System::VirtualKey::Up&&e.Key()!=Windows::System::VirtualKey::Down)return;
         e.Handled(true);commit(false);if(local->editing)return;
-        auto next=numeric(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(e.Key()==Windows::System::VirtualKey::Up?1:-1)}}));
+        auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(e.Key()==Windows::System::VirtualKey::Up?1:-1)}}));
         local->value=num(next,L"value");set(local->value);
     });
     slider.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
@@ -174,7 +176,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     slider.PointerCaptureLost([local](auto&&,auto&&){local->dragging=false;});
     slider.ValueChanged([data,local,spec,set,setText,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
         if(data->updating)return;
-        auto next=numeric(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
+        auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
         local->value=num(next,L"value");local->editing=false;
         if(auto entry=weak.get()){
             entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
@@ -193,7 +195,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
         }
         if(local->editing||local->dragging)return;
-        local->value=get();auto shown=numeric(spec,local->value,O({{L"type",S(L"format")}}));
+        local->value=get();auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
         setText(str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
         slider.Value(num(shown,L"fill"));
@@ -203,9 +205,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         // and target guards as full numeric controls.
         header.Children().RemoveAt(0);header.Children().InsertAt(0,slider);
         header.ColumnSpacing(4);header.Height(24);
-        auto low=str(numeric(spec,num(spec,L"min"),O({{L"type",S(L"format")}})),L"text");
-        auto high=str(numeric(spec,num(spec,L"max"),O({{L"type",S(L"format")}})),L"text");
+        auto low=str(local->resolve(spec,num(spec,L"min"),O({{L"type",S(L"format")}})),L"text");
+        auto high=str(local->resolve(spec,num(spec,L"max"),O({{L"type",S(L"format")}})),L"text");
         std::wstring measure(low.size()>high.size()?low.c_str():high.c_str());
+        for(auto const& sample:presentation.widthSamples)if(sample.size()>measure.size())measure=sample.c_str();
         for(auto& ch:measure)if(ch>=L'0'&&ch<=L'9')ch=L'8';
         entry.Width(measureText(hstring(measure))+12);entry.MinWidth(0);
         slider.MinWidth(0);root.Children().Append(header);return root;
@@ -226,7 +229,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     for(int direction:{-1,1}){
         auto step=button(data,(direction<0?L"Decrease ":L"Increase ")+title,[local,spec,set,commit,direction]{
             commit(false);if(local->editing)return;
-            auto next=numeric(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(direction)}}));
+            auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(direction)}}));
             local->value=num(next,L"value");set(local->value);
         });
         step.Width(stepSize);step.Height(stepSize);step.Content(icon(direction<0?L"minus":L"plus",data->theme()));

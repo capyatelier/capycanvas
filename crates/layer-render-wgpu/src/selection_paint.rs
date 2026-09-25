@@ -427,7 +427,7 @@ impl SelectionPainter {
                 true,
                 update.id,
                 self.tx.clone(),
-                |result, changed| SelectionPaintResult {
+                |result, changed, _| SelectionPaintResult {
                     request_id: result.request_id,
                     pixels: result.pixels,
                     changed,

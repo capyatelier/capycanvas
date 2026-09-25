@@ -25,6 +25,9 @@ struct PanelControls: View {
     var measureForWorkspace = true
     var splitFilters = false
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var fitsColorWheel: Bool {
+        panel["id"].string == "color" && panel["controls"].array.filter { $0["visible_in_panel"].bool }.map { $0["control"].string } == ["color_wheel"]
+    }
     private var padding: CGFloat { panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8 }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
@@ -53,7 +56,7 @@ struct PanelControls: View {
         Group {
             if scrollable {
                 GeometryReader { viewport in
-                    EditorScrollView {
+                    EditorScrollView(showsIndicators: panel["id"].string != "color") {
                         controlBody(maximumHeight: max(128, viewport.size.height - padding * 2))
                     }
                     // Workspace layout already reserves space above the keyboard.
@@ -71,7 +74,9 @@ struct PanelControls: View {
         }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .modifier(PanelBodyMeasurement(panel: panel["id"].string,
-                kind: scrollable && panel["id"].string != "color" ? .scroll : .fixed))
+                kind: scrollable && panel["id"].string != "color" ? .scroll : .fixed,
+                naturalHeight: fitsColorWheel ? { [padding, ratio = ColorPanel.aspect(hdr: store.snapshot["color_panel"]["hdr"].bool)] width in
+                    max(128, width - padding * 2) * ratio + padding * 2 } : nil))
     }
     @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {

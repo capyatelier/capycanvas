@@ -3,12 +3,12 @@
 [Workspace and UI](README.md) · [Panel contract](panel-customization.md) ·
 [Numeric controls](numeric-controls.md) · [Drag convention](drag-and-reorder.md)
 
-GTK, Web and Android toolbars support **Brush size slider**, **Brush opacity slider**, and
+GTK, Web, Android, macOS, iPadOS and Windows toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
 Toolbars can also use [compact edge regions](compact-toolbar-edges.md).
-They are not title-bar items. Other hosts do not yet offer these components.
+They are not title-bar items.
 
 ## Included workspaces
 
@@ -25,11 +25,18 @@ They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s size and opacity settings and disable when unavailable.
 Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values; opacity tracks show transparency over
-a checkerboard. Both orientations use equal end padding. The tracks have no
+a checkerboard. Both orientations use equal end padding. Every host draws
+GTK's track: 6px end insets, rounded tapered ends, fills from the theme text
+color (22% for size; 8% base, 20% checker cells and a 0–65% gradient for
+opacity) and a 12×28px squircle thumb with a 60% text border. The tracks have no
 persistent numeric readout. Dragging opens a rounded floating stamp preview
 beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
-outside tap or context change. Its header shows the value and units. Size uses
+outside tap or context change. The preview has the toolbar's tile radius and
+no border. Its header is one row of that toolbar's tiles: the bookmark button
+is a full tile with the tile's icon size in the top-end corner, and the value
+and units are vertically centered beside it. The header fade scales with the
+tile (65px on medium tiles) from 50% panel color to transparent. Size uses
 the current tip at its document-pixel diameter, filling the popup to its rounded
 edges for oversized tips. A background fade keeps the header legible;
 opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,
@@ -48,9 +55,15 @@ bookmarks do not create workspace-layout history entries.
 
 Rust derives the ordered form from existing tool settings, subtools and actions:
 completion actions first, tool/variant choices, independent eyedropper sample
-size, selection combination and sampling-source choices, numeric fields, then
+size, tool-specific fields (including tonal presets and intervals), selection
+combination and sampling-source choices, numeric fields, then
 remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
+GTK also presents shared list (single or multiple choice), text, and information
+fields. Narrow bars use menu faces with native popover contents; their complete
+form remains available through overflow. Within one tool context, adding or
+removing fields retains compatible editors and open lists. A context change
+discards old editors and their action bindings.
 
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;
@@ -67,6 +80,9 @@ put the icon beside the label and value; the other styles stack icon and value.
 Text follows the shared 11 pt typography; form icons stay 16px. Units sit
 beside values on the same baseline and hide when space is tight. Only oversized
 numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
+The tonal interval on GTK, Web and Android is one atomic field using the panel's two-ended range
+component: compact one-decimal low/high values surround a wide track. Units are
+in tooltips. Narrow bars expose the complete interval through existing overflow.
 Floating toolboxes and side toolbars wider than one tile fill rows left-to-right.
 Dividers span the full width; the options component occupies its own full-width
 row and packs its compact controls in the same order. Drawer height measurement
@@ -101,10 +117,11 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   pointer capture and native dropdowns. Both normal toolbars and nested drawer toolbars
   use the same typed `TileWidget` builder and refresh path. The existing numeric
   editor supplies parsing and keyboard behavior.
-- Web `toolbar-components.js` and Android `ToolbarComponents.kt` render the same
-  owned component projection in ordinary toolbars and retained drawers.
-  `toolbar_transport.rs` exposes stateless fitting, numeric metadata and formatting
-  queries to Wasm/JNI; pointer timing/capture and font measurement stay native.
+- Web `toolbar-components.js`, Android `ToolbarComponents.kt` and Apple
+  `ToolbarComponents.swift` render the same owned component projection in ordinary
+  toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
+  numeric metadata and formatting queries to Wasm, JNI and `capy_apple_toolbar_ui`;
+  pointer timing/capture and font measurement stay native.
   Editors retain their original context token, and measurements are cached across
   value-only updates. The standalone slider uses the same shared cap/track geometry.
 - `toolbar_preview.rs` owns bookmark validation, hit policy, and stamp geometry.
@@ -177,3 +194,12 @@ attached tablet. They use native mouse/finger/stylus MotionEvents and isolated
 workspace stores. Screenshots cover both themes, standalone tracks, horizontal
 options, vertical sizes, numeric popovers and the connected drawer. These are
 injected native input journeys, not a hands-on physical stylus test.
+
+Apple regressions: the `toolbar_component` bridge tests in
+`cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` cover
+both Apple policies: stateless queries, slider edits, bookmarks, stamps, stale
+contexts, Photo options and compact-edge docking with one-step undo/redo. The
+`testToolbarComponents` XCUITest journey (`ToolbarComponentChecks.swift`) runs on
+macOS and a physical iPad: Sketch slider previews, caption updates, bookmarks,
+outside-tap and drag dismissal, quick-drag rejection and hold-to-reorder caps,
+the options display menu, 24px segmented choices and the Photo More drawer.

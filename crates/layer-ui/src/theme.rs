@@ -43,6 +43,8 @@ pub const ACCENTS: [(&str, HexColor); 9] = [
 ];
 pub const DEFAULT_ACCENT: HexColor = ACCENTS[0].1;
 const TINT_CHROMA: f64 = 0.05;
+pub const TRANSPARENCY_CHECKER: [HexColor; 2] = [HexColor([220; 3]), HexColor([170; 3])];
+pub const TRANSPARENCY_CHECKER_CELL: f32 = 5.;
 
 /// Opaque, validated six-digit sRGB. Serialized as a canonical #rrggbb string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +155,8 @@ pub struct ThemePalette {
     pub selection: HexColor,
     pub header_selection: HexColor,
     pub header_selection_hover: HexColor,
+    pub checker_light: HexColor,
+    pub checker_dark: HexColor,
     /// Prepared once when settings/theme change, not converted per frame.
     pub surround_linear: [f32; 4],
     pub glass: crate::GlassPalette,
@@ -202,6 +206,8 @@ impl Settings {
             selection,
             header_selection,
             header_selection_hover: header.tint(accent, if dark { 0.03 } else { -0.03 }),
+            checker_light: TRANSPARENCY_CHECKER[0],
+            checker_dark: TRANSPARENCY_CHECKER[1],
             surround_linear: bg.linear(),
             glass: crate::GlassPalette::new(self.transparency, dark, bg, panel, tabbar, selection, header_selection),
         }

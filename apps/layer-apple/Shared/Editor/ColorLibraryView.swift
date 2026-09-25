@@ -40,7 +40,7 @@ struct ColorLibraryView: View {
                     .accessibilityIdentifier("color-library-remove")
             }
             Button("Save Current Color") {
-                apply(["op": "store", "palette": selected, "name": name, "color": store.state["colors"][slot].raw])
+                apply(["op": "store", "palette": selected, "name": name, "color": store.displayColors[slot].raw])
             }.accessibilityIdentifier("color-library-store")
             if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("color-library-error") }
             EditorScrollView {

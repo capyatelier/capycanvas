@@ -987,7 +987,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
-                if tool.selection_tool().is_some() { self.return_to_artwork()?; }
+                if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
                 if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
                     return Err("Return to artwork to use this tool".into());
                 }
@@ -998,7 +998,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(());
                 }
                 if let LayerCanvasTool::Selection { kind } = tool
-                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush) {
+                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
                     return Err("Invalid geometric selection tool".into());
                 }
                 if tool == LayerCanvasTool::Transform {
@@ -1013,6 +1013,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     self.layer_interaction.figure = (shape, paint);
                 }
+                if tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {return Err("Tonal range is currently available on GTK".into());}
                 self.cancel_layer_gesture()?;
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;
@@ -1747,6 +1748,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
             return Err("Invalid canvas point".into());
         }
+        if self.tonal_active() {return self.tonal_pen(event,p);}
         if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
             return self.selection_pen(event, p, kind);
         }
@@ -1859,6 +1861,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
         if self.cancel_selection_contact() { return Ok(true); }
+        let tonal=self.cancel_tonal();
         let effect = self.cancel_effect_gesture()?;
         let sdr = self.cancel_sdr_gesture()?;
         let transform = self.cancel_transform()?;
@@ -1867,7 +1870,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(selection || region || transform || effect || sdr);
+            return Ok(tonal || selection || region || transform || effect || sdr);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine
@@ -1880,7 +1883,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn fill_selection(&mut self, selection: Selection) -> Result<(), String> {
-        self.paint_operation(Some(selection), self.fill_operation())
+        self.paint_operation(
+            Some(selection),
+            self.fill_operation(),
+            &[self.state.colors.definition()],
+        )
     }
 
     pub(super) fn fill_operation(&self) -> layer_core::LayerOperationKind {
@@ -1942,13 +1949,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layer(target)
                 .is_some_and(|l| l.properties.alpha_locked),
         };
-        self.paint_operation(doc.selection.clone(), kind)
+        self.paint_operation(
+            doc.selection.clone(),
+            kind,
+            &definitions[..if transparent { 1 } else { 2 }],
+        )
     }
 
     pub(super) fn paint_operation(
         &mut self,
         selection: Option<Selection>,
         kind: layer_core::LayerOperationKind,
+        colors: &[layer_core::color::RgbColor],
     ) -> Result<(), String> {
         let id = self.engine.document().drawing_content().ok_or("Select a drawing layer")?;
         let layer = self.editable_layer(id.0)?;
@@ -1963,7 +1975,22 @@ impl<R: CanvasRenderer> UiSession<R> {
             coverage.default_coverage = f32::from(selection.inverted);
             coverage.initial = Some(selection.transformed(inverse).map_err(error)?);
         }
+        let paints = match &kind {
+            layer_core::LayerOperationKind::Fill { color, .. } => color[3] > 0.,
+            layer_core::LayerOperationKind::Gradient { colors, .. } => {
+                colors.iter().any(|c| c[3] > 0.)
+            }
+            layer_core::LayerOperationKind::Figure(figure) => {
+                !figure.erase && figure.colors.iter().any(|c| c[3] > 0.)
+            }
+            _ => false,
+        };
         self.engine.append_layer_operation(id, layer_core::LayerOperation { placement, coverage, kind }).map_err(error)?;
+        if paints {
+            for color in colors.iter().rev() {
+                self.state.colors.library.record_use(*color);
+            }
+        }
         self.layer_interaction.changed = true;
         Ok(())
     }

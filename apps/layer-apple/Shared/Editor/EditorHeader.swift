@@ -290,7 +290,7 @@ private struct HeaderItemControl: View {
             case "tool":
                 if entry["item"]["control"]["kind"].string == "color" {
                     Button { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) } label: {
-                        HeaderPaintIcon(colors: store.state["colors"], size: size["icon"].number)
+                        HeaderPaintIcon(colors: store.displayColors, size: size["icon"].number)
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                     }.buttonStyle(EditorControlButtonStyle(active: hovering, joinedEdge: drawerOpen ? "bottom" : nil,
                         background: palette.headerBackground(light: light), keepsBackground: light, drawerBackground: drawerOpen ? palette["panel"] : nil))

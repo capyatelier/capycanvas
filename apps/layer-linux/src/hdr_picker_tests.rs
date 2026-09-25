@@ -151,7 +151,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
         for alpha in [0., 0.25, 0.5, 1.] {
             let color = RgbColor::from_linear(RgbSpace::Srgb, [8., 8., 8., alpha]).unwrap();
             let textures = crate::display_color::checker_textures(color, w.view_color(), 4.);
-            for (texture, checker) in textures.iter().zip([0.94, 0.80]) {
+            for (texture, checker) in textures.iter().zip(crate::display_color::checker_linear()) {
                 let expected = (4. - 1. / 6.) * alpha + checker * (1. - alpha);
                 assert!((peak(texture) - expected).abs() < 0.005, "HDR alpha {alpha}: {} != {expected}", peak(texture));
             }

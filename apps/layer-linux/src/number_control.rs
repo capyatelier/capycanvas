@@ -76,10 +76,42 @@ impl NumberControl {
     pub fn inline(spec: NumericControl, title: &str) -> Self {
         Self::build(spec, title, "", true, false)
     }
-    /// Compact editable value for grouped components (e.g. a color wheel).
+    /// Panel row with its label, slider and editable value on one line.
+    pub fn labeled_inline(
+        spec: NumericControl,
+        title: &str,
+        tooltip: &str,
+        labels: &gtk::SizeGroup,
+        values: &gtk::SizeGroup,
+    ) -> Self {
+        let control = Self::inline(spec, title);
+        control.set_tooltip_text(Some(tooltip));
+        let label = gtk::Label::new(Some(title));
+        label.set_xalign(0.);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(14);
+        label.set_tooltip_text(Some(tooltip));
+        label.update_property(&[gtk::accessible::Property::Description(tooltip)]);
+        let row=control.first_child().and_downcast::<gtk::Box>().unwrap();
+        labels.add_widget(&label);
+        values.add_widget(&row.last_child().unwrap());
+        row.prepend(&label);
+        control
+    }
+    /// Fit a grouped value to its current readout; the editor shares that width.
     pub fn value_only(spec: NumericControl, title: &str) -> Self {
         let control = Self::inline(spec, title);
         control.set_halign(gtk::Align::Center);
+        let imp = control.imp();
+        if let Some(reserve) = imp.width_reserve.get() { reserve.set_visible(false); }
+        if let Some(label) = imp.value_label.get() {
+            label.set_width_chars(0);
+            label.set_max_width_chars(-1);
+        }
+        if let Some(entry) = imp.entry.get() {
+            entry.set_width_chars(1);
+            entry.set_max_width_chars(1);
+        }
         if let Some(slider) = control.imp().slider.get() {
             slider.set_visible(false);
         }

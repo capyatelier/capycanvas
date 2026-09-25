@@ -8,6 +8,7 @@ struct Output { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 @group(0) @binding(2) var<storage, read> previous: Packed;
 @group(0) @binding(3) var<storage, read_write> horizontal: array<u32>;
 @group(0) @binding(4) var<storage, read_write> output: Output;
+@group(0) @binding(5) var<uniform> weights: array<vec4<f32>,38>;
 
 fn incoming_at(p: vec2<i32>) -> f32 {
     let q = p - vec2<i32>(incoming.rect.xy);
@@ -25,6 +26,10 @@ fn sample_incoming(p: vec2<f32>) -> f32 {
         - bitcast<vec2<f32>>(incoming.info.zw) - .5;
     let base = vec2<i32>(floor(q));
     let f = fract(q);
+    if all(f==vec2<f32>(0.)) {
+        let value=incoming_at(base);
+        return select(select(0.,1.,value>=.5),value,params.antialias!=0u);
+    }
     let value = mix(mix(incoming_at(base),incoming_at(base+vec2<i32>(1,0)),f.x),
         mix(incoming_at(base+vec2<i32>(0,1)),incoming_at(base+vec2<i32>(1,1)),f.x),f.y);
     return select(select(0.,1.,value >= .5),value,params.antialias != 0u);
@@ -42,8 +47,8 @@ fn previous_at(p: vec2<f32>) -> f32 {
     return select(value,1.-value,previous.info.x != 0u);
 }
 fn weight(d: i32) -> f32 {
-    let sigma = max(params.offset_radius.z*.5,.001);
-    return exp(-.5*f32(d*d)/(sigma*sigma));
+    let i=u32(abs(d));
+    return weights[i/4u][i%4u];
 }
 fn mask_at(p: vec2<i32>) -> f32 {
     if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(params.extent)) { return 0.; }
@@ -98,46 +103,54 @@ fn resize_at(p: vec2<i32>) -> f32 {
     }
     return value;
 }
-@compute @workgroup_size(8,8)
-fn feather_h(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= params.extent) { return; }
+// Each neighborhood is decoded once for the whole workgroup, including halo.
+var<workgroup> feather_row: array<f32,556>;
+@compute @workgroup_size(64)
+fn feather_h(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) lane:u32) {
     let radius = i32(ceil(params.offset_radius.z*1.5));
-    var value = 0.; var total = 0.;
-    for(var d = -radius; d <= radius; d++) {
-        let w = weight(d);
+    let y=id.y+params.resize_level.w;
+    for(var i=lane;i<256u+2u*u32(radius);i+=64u) {
         // Extend edge pixels at document boundaries, so selecting the entire
         // image doesn't introduce an unwanted fade at its outer border.
-        let x = clamp(i32(id.x)+d,0,i32(params.extent.x)-1);
-        value += w*sample_incoming(vec2<f32>(f32(x)+.5,f32(id.y)+.5)); total += w;
+        let x=clamp(i32((id.x-lane)*4u+i)-radius,0,i32(params.extent.x)-1);
+        feather_row[i]=sample_incoming(vec2<f32>(f32(x)+.5,f32(y)+.5));
     }
-    horizontal[id.y*params.extent.x+id.x] = bitcast<u32>(value/total);
+    workgroupBarrier();
+    if id.x*4u>=params.extent.x {return;}
+    var value=vec4<f32>(0.);
+    for(var d=-radius;d<=radius;d++) {
+        let at=u32(i32(lane*4u)+d+radius);
+        value+=weight(d)*vec4<f32>(feather_row[at],feather_row[at+1u],feather_row[at+2u],feather_row[at+3u]);
+    }
+    for(var i=0u;i<4u && id.x*4u+i<params.extent.x;i++) {horizontal[id.y*params.extent.x+id.x*4u+i]=bitcast<u32>(value[i]);}
 }
 @compute @workgroup_size(64)
 fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
     let stride = (params.extent.x+3u)/4u;
-    if id.x >= stride || id.y >= params.extent.y { return; }
+    let y=id.y+params.resize_level.y;
+    if id.x >= stride || y >= params.resize_level.z { return; }
     let radius = i32(ceil(params.offset_radius.z*1.5));
-    let bounds = stride*params.extent.y;
+    // Share tap/weight calculations across a packed word's four neighboring
+    // pixels; keep float precision until the final byte coverage is published.
+    var blurred=vec4<f32>(0.);
+    for(var d=-radius;radius>0 && d<=radius;d++) {
+        let row=u32(clamp(i32(y)+d,0,i32(params.extent.y)-1))-params.resize_level.w;
+        let at=row*params.extent.x+id.x*4u;
+        blurred+=weight(d)*bitcast<vec4<f32>>(vec4<u32>(horizontal[at],horizontal[at+1u],horizontal[at+2u],horizontal[at+3u]));
+    }
     var packed = 0u;
-    var low = params.extent; var high = vec2<u32>(0); var nonempty = false;
     for(var i = 0u; i < 4u; i++) {
         let x = id.x*4u+i;
         if x >= params.extent.x { break; }
         var value = 0.;
         if params.offset_radius.w != 0. {
-            value = resize_at(vec2<i32>(i32(x),i32(id.y)));
+            value = resize_at(vec2<i32>(i32(x),i32(y)));
         } else if radius == 0 {
-            value = sample_incoming(vec2<f32>(f32(x)+.5,f32(id.y)+.5));
+            value = sample_incoming(vec2<f32>(f32(x)+.5,f32(y)+.5));
         } else {
-            var total = 0.;
-            for(var d = -radius; d <= radius; d++) {
-                let w = weight(d);
-                let y = u32(clamp(i32(id.y)+d,0,i32(params.extent.y)-1));
-                value += w*bitcast<f32>(horizontal[y*params.extent.x+x]); total += w;
-            }
-            value /= total;
+            value=blurred[i];
         }
-        let old = previous_at(vec2<f32>(f32(x)+.5,f32(id.y)+.5));
+        let old = previous_at(vec2<f32>(f32(x)+.5,f32(y)+.5));
         switch params.mode {
             case 1u: { value = max(old,value); }
             case 2u: { value = max(0.,old-value); }
@@ -146,12 +159,34 @@ fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         let coverage = u32(round(clamp(value,0.,1.)*255.));
         packed |= coverage << (i*8u);
-        if coverage != 0u { low = min(low,vec2<u32>(x,id.y)); high = max(high,vec2<u32>(x+1u,id.y+1u)); nonempty = true; }
     }
-    atomicStore(&output.values[id.y*stride+id.x],packed);
-    if nonempty {
-        atomicMin(&output.values[bounds],low.x); atomicMin(&output.values[bounds+1u],low.y);
-        atomicMax(&output.values[bounds+2u],high.x); atomicMax(&output.values[bounds+3u],high.y);
-        atomicStore(&output.values[bounds+4u],1u);
+    atomicStore(&output.values[y*stride+id.x],packed);
+}
+// One workgroup scans one row, then publishes one set of global bounds. This
+// reduces contention from millions of word updates to only thousands of rows.
+var<workgroup> row_bounds: array<vec2<u32>,128>;
+@compute @workgroup_size(128)
+fn bounds(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_index) lane:u32) {
+    let stride=(params.extent.x+3u)/4u;
+    let y=group.x;
+    var low=params.extent.x; var high=0u;
+    for(var x=lane;x<stride;x+=128u) {
+        let word=atomicLoad(&output.values[y*stride+x]);
+        if word!=0u {
+            low=min(low,x*4u+countTrailingZeros(word)/8u);
+            high=max(high,x*4u+4u-countLeadingZeros(word)/8u);
+        }
+    }
+    row_bounds[lane]=vec2<u32>(low,high);
+    workgroupBarrier();
+    for(var step=64u;step>0u;step/=2u) {
+        if lane<step {row_bounds[lane]=vec2<u32>(min(row_bounds[lane].x,row_bounds[lane+step].x),max(row_bounds[lane].y,row_bounds[lane+step].y));}
+        workgroupBarrier();
+    }
+    if lane==0u && row_bounds[0].y!=0u {
+        let offset=stride*params.extent.y;
+        atomicMin(&output.values[offset],row_bounds[0].x);atomicMin(&output.values[offset+1u],y);
+        atomicMax(&output.values[offset+2u],row_bounds[0].y);atomicMax(&output.values[offset+3u],y+1u);
+        atomicStore(&output.values[offset+4u],1u);
     }
 }

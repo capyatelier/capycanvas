@@ -40,7 +40,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     HWND owner=nullptr;
     Point origin{},position{};
     bool dragging=false,finishing=false,busy=false,dirty=false,releasing=false;
-    bool needsHold=false,contextOnly=false,startedInZen=false,held=false,recognizing=false,ignoreClick=false,menuOpen=false,menuPending=false;
+    bool needsHold=false,contextOnly=false,held=false,recognizing=false,ignoreClick=false,menuOpen=false,menuPending=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,motion=0,menuGeneration=0;
     double slopX=4,slopY=4;
@@ -70,7 +70,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         AutomationProperties::SetHelpText(root,value.Stringify());
     }
     bool current()const{
-        if(flag(data->model,L"partial_zen")!=startedInZen||data->externalPopup)return false;
+        if(data->externalPopup)return false;
         if(!dragging){
             auto element=source.get();
             if(!element||!element.IsLoaded())return false;
@@ -251,15 +251,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(tab.Size())data->chrome.Insert(L"contact_tab",S(str(tab,L"panel")));
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
         if(!tag.Size())return;
-        // Zen still exposes pen/touch context menus, but never moves its
-        // projected toolbars. Mouse retains ordinary long button presses.
-        bool zen=flag(data->model,L"partial_zen");
-        if(zen&&(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse||!object(tag,L"workspace_context").Size()))return;
         action=object(tag,L"workspace_action");
         // Empty column space offers a menu and double-click, without becoming
         // another drag source. Pen/touch holds retain native scroll arbitration.
         if(!action.Size()&&(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse||!object(tag,L"workspace_context").Size()))return;
-        ++generation;hideMenu();sourceTag=tag;startedInZen=zen;contextOnly=zen||!action.Size();
+        ++generation;hideMenu();sourceTag=tag;contextOnly=!action.Size();
         needsHold=contextOnly||flag(tag,L"workspace_hold");held=false;
         rememberPath(e.OriginalSource());
         for(auto const& weak:pressedPath)if(auto element=weak.get().try_as<FrameworkElement>()){
@@ -312,7 +308,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             // Motion disarms pickup; the native Button still owns a short tap.
             // Tablet jitter inside its bounds must not swallow its Click.
             if(needsHold&&!held){rejectedPointer=pointer;cancel(L"motion_before_hold",false);return;}
-            if(contextOnly){rejectedPointer=pointer;cancel(L"zen_motion");return;}
+            if(contextOnly){rejectedPointer=pointer;cancel(L"context_motion");return;}
             begin();
         }
         if(!dragging)return;
@@ -361,7 +357,6 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             }))menuPending=false;
     }
     void doubleClick(DoubleTappedRoutedEventArgs const& e){
-        if(flag(data->model,L"partial_zen"))return;
         auto tag=target(e.OriginalSource());if(!flag(tag,L"workspace_double"))return;
         auto sourceAction=object(tag,L"workspace_action");
         auto context=object(tag,L"workspace_context");
@@ -393,8 +388,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto bounds=object(value,L"bounds");
         if(!bounds.Size()){hint.Visibility(Visibility::Collapsed);return;}
         bool body=str(object(value,L"target"),L"kind")==L"tab"&&num(bounds,L"width")>3&&num(bounds,L"height")>3;
-        auto accent=selected();auto tint=accent.Color();tint.A=255;accent.Color(tint);tint.A=64;
-        hint.Background(body?fill(tint):accent);hint.BorderBrush(accent);
+        hint.Background(body?data->tint(L"accent",64):accent(data));hint.BorderBrush(accent(data));
         hint.BorderThickness(body?Thickness{2,2,2,2}:Thickness{});
         hint.CornerRadius(body?CornerRadius{}:CornerRadius{2,2,2,2});
         place(hint,bounds);hint.Visibility(Visibility::Visible);

@@ -45,6 +45,31 @@ pub unsafe extern "C" fn capy_proof_texture(edge: u32, output: *mut u8, length: 
     true
 }
 
+/// # Safety
+/// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_toolbar_ui(input: *const c_char) -> *mut c_char {
+    if input.is_null() {
+        return std::ptr::null_mut();
+    }
+    let result = std::panic::catch_unwind(|| -> Result<serde_json::Value, String> {
+        let text = unsafe { CStr::from_ptr(input) }
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        if text.len() > 64 * 1024 {
+            return Err("Toolbar request is too large".into());
+        }
+        layer_ui::toolbar_ui(serde_json::from_str(text).map_err(|e| e.to_string())?)
+    })
+    .unwrap_or_else(|_| Err("Toolbar request failed".into()));
+    CString::new(
+        result
+            .unwrap_or_else(|error| serde_json::json!({"error":error}))
+            .to_string(),
+    )
+    .map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
 /// Native layout projection uses the same compact threshold as other hosts.
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_document_tabs_compact(width: f32, count: usize) -> bool {

@@ -78,7 +78,14 @@ void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     // Preserve the initial window's paths for existing single-window fixtures.
     if(primaryWindow)std::ofstream(std::string(kind)+".json")<<value;
 }
+std::string CanvasWindow::SystemTheme(){
+    using winrt::Windows::UI::ViewManagement::UIColorType;
+    auto ink=uiSettings.GetColorValue(UIColorType::Foreground),accent=uiSettings.GetColorValue(UIColorType::Accent);
+    char hex[8];sprintf_s(hex,"#%02x%02x%02x",accent.R,accent.G,accent.B);
+    return std::string(R"({"type":"system_theme_changed","theme":")")+(ink.R+ink.G+ink.B>384?"dark":"light")+R"(","accent":")"+hex+"\"}";
+}
 CanvasWindow::~CanvasWindow() {
+    if(colorValues)uiSettings.ColorValuesChanged(colorValues);
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
     if (renderer.joinable()) renderer.join();
@@ -274,7 +281,12 @@ void CanvasWindow::Start() {
     if(!host) {status.Text(to_hstring(capy_error()));return;}
     capy_set_window(host,Handle());
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
-    capy_action(host,dark?R"({"type":"system_theme_changed","theme":"dark"})":R"({"type":"system_theme_changed","theme":"light"})");
+    capy_action(host,SystemTheme().c_str());
+    colorValues=uiSettings.ColorValuesChanged([weak=weak_from_this()](auto&&,auto&&){
+        if(auto self=weak.lock())self->dispatcher.TryEnqueue([weak]{
+            if(auto self=weak.lock();self&&!self->closed&&self->host)self->Send(self->SystemTheme());
+        });
+    });
     window.AppWindow().TitleBar().ButtonForegroundColor(dark?
         Windows::UI::Color{255,225,225,229}:Windows::UI::Color{255,32,32,36});
     auto catalog=capy_query(host,R"({"type":"catalog"})");

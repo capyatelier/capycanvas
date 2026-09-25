@@ -101,11 +101,13 @@ struct PanelBodyMeasurement: ViewModifier {
     var intrinsicHeight: CGFloat? = nil
     var kind: PanelSizeKey.Kind = .fixed
     var spacing: CGFloat = 0
+    var naturalHeight: ((CGFloat) -> CGFloat)? = nil
     @Environment(\.measuresWorkspacePanel) private var enabled
     func body(content: Content) -> some View {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: PanelSizeFacts.self, value: enabled
-                ? [PanelSizeKey(panel: panel, part: part, kind: kind): (intrinsicHeight ?? allocation.size.height) + spacing] : [:])
+                ? [PanelSizeKey(panel: panel, part: part, kind: kind):
+                    (naturalHeight?(allocation.size.width) ?? intrinsicHeight ?? allocation.size.height) + spacing] : [:])
         })
     }
 }

@@ -202,6 +202,12 @@ fn native_numeric_colors_and_saved_palettes() {
     };
     let respond = |w: &Rc<Workspace>, label: &str| {
         let dialog = w.window.visible_dialog().unwrap();
+        assert!(
+            find_button(dialog.upcast_ref(), label)
+                .unwrap()
+                .is_sensitive(),
+            "disabled dialog response: {label}"
+        );
         click(&find_button(dialog.upcast_ref(), label).unwrap());
         pump(100);
     };
@@ -248,7 +254,12 @@ fn native_numeric_colors_and_saved_palettes() {
         .unwrap()
         .downcast::<adw::ComboRow>()
         .unwrap();
-    model.set_selected(1);
+    model.set_selected(
+        ColorInputModel::ALL
+            .iter()
+            .position(|m| *m == ColorInputModel::SrgbHex)
+            .unwrap() as u32,
+    );
     pump(10);
     let entry = find_named(dialog.upcast_ref(), "edit-color-value-0")
         .unwrap()
@@ -266,94 +277,42 @@ fn native_numeric_colors_and_saved_palettes() {
     w.dispatch(UiAction::Color {
         action: ColorAction::Definition { color: original },
     });
-    click_named(&w, "color-library-menu");
-    click_named(&w, "color-library-create");
-    let dialog = w.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-name")
+    crate::color_library::show(&w, ColorSlot::Foreground);
+    w.dispatch(UiAction::Color {
+        action: ColorAction::Library {
+            action: layer_ui::ColorLibraryAction::CreatePalette {
+                name: "Photo colors".into(),
+            },
+        },
+    });
+    pump(100);
+    click_named(&w, "palette-add-color");
+    click_named(&w, "palette-color-name");
+    let entry = find_named(w.window.upcast_ref(), "palette-name-editor")
         .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap()
-        .set_text("Photo colors");
-    respond(&w, "Save");
-    click_named(&w, "color-library-store");
-    let dialog = w.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-name")
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap()
-        .set_text("Wide red");
-    respond(&w, "Save");
-    let palette = state(&w).colors.library.palettes.last().unwrap().clone();
-    assert_eq!(palette.name, "Photo colors");
+        .downcast::<gtk::Entry>()
+        .unwrap();
+    entry.set_text("P3 low-alpha red");
+    entry.emit_activate();
+    pump(50);
+    let palette = state(&w).colors.library.active_palette().clone();
     assert_eq!(palette.swatches.len(), 1);
+    assert_eq!(palette.swatches[0].name, "P3 low-alpha red");
     assert_eq!(palette.swatches[0].color, original);
     capture_reference(
         &w,
         output.join("saved-wide-swatch.png").to_str().unwrap(),
         1.,
     );
-    click_named(&w, "color-library-create");
-    let dialog = w.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-name")
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap()
-        .set_text("PHOTO COLORS");
-    pump(10);
-    assert!(
-        !find_button(dialog.upcast_ref(), "Save")
-            .unwrap()
-            .is_sensitive()
-    );
-    respond(&w, "Cancel");
-    assert_eq!(state(&w).colors.library.palettes.len(), 2);
-    click_named(
-        &w,
-        &format!("saved-color-{}-Rename", palette.swatches[0].id),
-    );
-    let dialog = w.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-name")
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap()
-        .set_text("P3 low-alpha red");
-    respond(&w, "Save");
-    assert_eq!(
-        state(&w)
-            .colors
-            .library
-            .swatch(palette.swatches[0].id)
-            .unwrap()
-            .name,
-        "P3 low-alpha red"
-    );
-    respond(&w, "Close");
     w.dispatch(UiAction::Color {
         action: ColorAction::Definition {
             color: RgbColor::WHITE,
         },
     });
-    click_named(&w, "color-library-menu");
-    let dialog = w.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-palette")
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap()
-        .set_selected(1);
-    pump(50);
-    let row = find_named(
-        dialog.upcast_ref(),
-        &format!("saved-color-{}", palette.swatches[0].id),
-    )
-    .unwrap()
-    .downcast::<adw::ActionRow>()
-    .unwrap();
-    adw::prelude::ActionRowExt::activate(&row);
-    pump(100);
+    click_named(&w, &format!("palette-swatch-{}", palette.swatches[0].id));
     assert_eq!(state(&w).colors.definition(), original);
-    assert!(w.window.visible_dialog().is_none());
-    // Workspace serialization carries the actual wide definition. Restore it in
-    // another native document and use the swatch in the other paint slot.
+    // Restore in another document, select the other paint slot, and retain the
+    // exact tagged values through native selection and palette deletion.
     let capture = w
         .gpu
         .borrow_mut()
@@ -378,23 +337,7 @@ fn native_numeric_colors_and_saved_palettes() {
     next.changed(change);
     crate::color_library::show(&next, ColorSlot::Background);
     pump(100);
-    let dialog = next.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-palette")
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap()
-        .set_selected(1);
-    pump(50);
-    adw::prelude::ActionRowExt::activate(
-        &find_named(
-            dialog.upcast_ref(),
-            &format!("saved-color-{}", palette.swatches[0].id),
-        )
-        .unwrap()
-        .downcast::<adw::ActionRow>()
-        .unwrap(),
-    );
-    pump(100);
+    click_named(&next, &format!("palette-swatch-{}", palette.swatches[0].id));
     assert_eq!(state(&next).colors.background, original);
     assert_eq!(state(&next).colors.rgb_space(), RgbSpace::Srgb);
     assert_eq!(
@@ -419,19 +362,13 @@ fn native_numeric_colors_and_saved_palettes() {
             .revision,
         revision
     );
-    crate::color_library::show(&next, ColorSlot::Background);
-    pump(100);
-    let dialog = next.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(), "color-library-palette")
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap()
-        .set_selected(1);
-    pump(50);
-    click_named(
-        &next,
-        &format!("saved-color-{}-Remove", palette.swatches[0].id),
-    );
+    next.dispatch(UiAction::Color {
+        action: ColorAction::Library {
+            action: layer_ui::ColorLibraryAction::Remove {
+                id: palette.swatches[0].id,
+            },
+        },
+    });
     assert!(
         state(&next)
             .colors
@@ -439,18 +376,39 @@ fn native_numeric_colors_and_saved_palettes() {
             .swatch(palette.swatches[0].id)
             .is_none()
     );
-    let dialog = next.window.visible_dialog().unwrap();
-    click(&find_button(dialog.upcast_ref(), "Remove Palette…").unwrap());
+    assert_eq!(state(&next).colors.background, original);
+    assert!(
+        state(&w)
+            .colors
+            .library
+            .swatch(palette.swatches[0].id)
+            .is_some()
+    );
+    click_named(&next, "palette-chooser");
+    let remove_from_menu = || {
+        let row = find_named(
+            next.window.upcast_ref(),
+            &format!("palette-choice-{}", palette.id),
+        )
+        .unwrap();
+        let controllers = row.observe_controllers();
+        let menu = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+            .find(|g| g.button() == 3)
+            .unwrap();
+        menu.emit_by_name::<()>("pressed", &[&1i32, &10f64, &10f64]);
+        let popup = find_named(next.window.upcast_ref(), "palette-context-menu").unwrap();
+        popup.activate_action("palette.item-1-0", None).unwrap();
+    };
+    remove_from_menu();
     pump(100);
     respond(&next, "Cancel");
-    assert_eq!(state(&next).colors.library.palettes.len(), 2);
-    let dialog = next.window.visible_dialog().unwrap();
-    click(&find_button(dialog.upcast_ref(), "Remove Palette…").unwrap());
+    assert_eq!(state(&next).colors.library.palettes.len(), 11);
+    remove_from_menu();
     pump(100);
     respond(&next, "Remove");
-    assert_eq!(state(&next).colors.library.palettes.len(), 1);
+    assert_eq!(state(&next).colors.library.palettes.len(), 10);
     assert_eq!(state(&next).colors.background, original);
-    respond(&next, "Close");
     next.window.destroy();
     w.window.destroy();
     pump(100);

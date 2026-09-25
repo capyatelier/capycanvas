@@ -50,6 +50,9 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::ContentControl canvasFocus;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock status;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
+    winrt::Windows::UI::ViewManagement::UISettings uiSettings;
+    winrt::event_token colorValues{};
+    std::string SystemTheme();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only

@@ -1,6 +1,7 @@
 //! Retained GTK toolbar editors. Binding, context and fitting policy is shared.
 use super::*;
 use crate::number_control::NumberControl;
+use crate::range_control::RangeControl;
 
 /// One retained item for both docked strips and toolbar drawers. The root owns
 /// layout/hit bounds; the opener anchors drawers and popup arrows.
@@ -186,7 +187,7 @@ mod imp {
                             } else {
                                 [tile[0] * count, tile[1]]
                             }
-                        } else if w.has_css_class("option-action") || self.vertical.get() {
+                        } else if !w.has_css_class("option-range") && (w.has_css_class("option-action") || self.vertical.get()) {
                             self.style.get().size()
                         } else {
                             [
@@ -383,6 +384,7 @@ struct BrushPreview {
 
 enum Field {
     Numeric(NumberControl),
+    Range(Rc<RangeControl>),
     Choice(gtk::DropDown),
     Segments(Vec<gtk::ToggleButton>),
     Action(gtk::Button),
@@ -591,18 +593,41 @@ impl Component {
                     .zip(options)
                     .all(|(a, b)| a.same_schema(b));
             if !same {
-                for field in self.fields.borrow().iter() {
-                    if let Field::Numeric(number) = field {
-                        number.cancel_edit();
-                    }
-                }
-                self.fields.borrow_mut().clear();
-                for child in self.root.imp().children.borrow_mut().drain(1..) {
-                    child.unparent();
-                }
+                // A band's bounds can add/remove numeric fields while its list
+                // is open. Retain each compatible editor instead of rebuilding
+                // the entire form and closing its native popover or contact.
+                let fields = std::mem::take(&mut *self.fields.borrow_mut());
+                let rows: Vec<_> = self.root.imp().children.borrow_mut().drain(1..).collect();
+                let mut old: Vec<_> = self.schema.borrow().iter().cloned().zip(fields).zip(rows)
+                    .map(|((schema,field),row)| Some((schema,field,row))).collect();
+                let mut rows = Vec::new();
+                let mut fields = Vec::new();
                 for option in options {
-                    self.add_option(w, option, context);
+                    let retained = (!changed_context).then(|| old.iter_mut().find(|item| {
+                        item.as_ref().is_some_and(|(schema,_,_)| schema.same_schema(option))
+                    }).and_then(Option::take)).flatten();
+                    let (field,row) = if let Some((_,field,row)) = retained { (field,row) }
+                    else {
+                        self.add_option(w, option, context);
+                        (self.fields.borrow_mut().pop().unwrap(), self.root.imp().children.borrow_mut().pop().unwrap())
+                    };
+                    rows.push(row);fields.push(field);
                 }
+                for (_,field,row) in old.into_iter().flatten() {
+                    match field {
+                        Field::Numeric(number) => number.cancel_edit(),
+                        Field::Range(range) => range.retire(),
+                        _ => (),
+                    }
+                    row.unparent();
+                }
+                let mut previous = self.root.imp().children.borrow().first().cloned();
+                for row in &rows {
+                    row.insert_after(&self.root,previous.as_ref());
+                    previous=Some(row.clone());
+                }
+                self.fields.replace(fields);
+                self.root.imp().children.borrow_mut().extend(rows);
                 self.root.update_option_axis();
                 self.root.queue_allocate();
             }
@@ -610,6 +635,9 @@ impl Component {
                 match (field, option) {
                     (Field::Numeric(number), ToolOption::Numeric(f)) => {
                         number.set_value(f.value as f64)
+                    }
+                    (Field::Range(range), ToolOption::Range { bounds, .. }) => {
+                        range.set_values(bounds.each_ref().map(|f| f.value as f64));
                     }
                     (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
                         items
@@ -666,24 +694,20 @@ impl Component {
                 return;
             };
             let area = gtk::DrawingArea::new();
-            let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            header.set_margin_start(12);
-            header.set_margin_end(5);
-            header.set_margin_top(4);
-            header.set_valign(gtk::Align::Start);
             let label = gtk::Label::new(None);
             label.set_widget_name("slider-preview-label");
             label.set_xalign(0.);
-            label.set_hexpand(true);
+            label.set_halign(gtk::Align::Start);
+            label.set_valign(gtk::Align::Start);
             let bookmark = gtk::Button::new();
             bookmark.add_css_class("flat");
-            bookmark.set_size_request(28, 28);
+            bookmark.set_halign(gtk::Align::End);
+            bookmark.set_valign(gtk::Align::Start);
             bookmark.set_widget_name("slider-bookmark");
-            header.append(&label);
-            header.append(&bookmark);
             let overlay = gtk::Overlay::new();
             overlay.set_child(Some(&area));
-            overlay.add_overlay(&header);
+            overlay.add_overlay(&label);
+            overlay.add_overlay(&bookmark);
             let popover: gtk::Popover = crate::squircle::Popover::new().upcast();
             popover.set_has_arrow(false);
             popover.set_autohide(false);
@@ -735,7 +759,7 @@ impl Component {
                     let _ = cr.save();
                     crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(
                         gtk::graphene::Rect::new(0., 0., layout.side, layout.side),
-                        SURFACE_RADIUS,
+                        layout.radius,
                     ));
                     cr.clip();
                     let _ = cr.save();
@@ -769,7 +793,7 @@ impl Component {
                             .map(|c| c as f64 / 255.);
                         let fade =
                             gtk::cairo::LinearGradient::new(0., 0., 0., layout.header_fade as f64);
-                        fade.add_color_stop_rgba(0., r, g, b, 0.65);
+                        fade.add_color_stop_rgba(0., r, g, b, layout.header_fade_opacity as f64);
                         fade.add_color_stop_rgba(1., r, g, b, 0.);
                         let _ = cr.set_source(&fade);
                         cr.rectangle(0., 0., f64::from(layout.side), f64::from(layout.header_fade));
@@ -809,6 +833,7 @@ impl Component {
     fn preview_layout(&self, extent: f32) -> Result<SliderPreviewLayout, String> {
         slider_preview_layout(
             self.control,
+            self.root.imp().style.get(),
             self.value.get(),
             self.root.width().max(self.root.height()) as f32,
             extent,
@@ -825,6 +850,15 @@ impl Component {
         preview.area.set_content_width(layout.side as i32);
         preview.area.set_content_height(layout.side as i32);
         preview.label.set_text(&layout.text);
+        let caption = layout.caption;
+        preview.label.set_margin_start(caption.x as i32);
+        preview
+            .label
+            .set_size_request(caption.width as i32, caption.height as i32);
+        let button = layout.bookmark;
+        preview
+            .bookmark
+            .set_size_request(button.width as i32, button.height as i32);
         let selected = self.bookmarks.borrow().iter().any(|b| b.selected);
         if preview.selected.replace(Some(selected)) != Some(selected) {
             preview
@@ -839,6 +873,9 @@ impl Component {
             } else {
                 "Bookmark this value"
             }));
+        }
+        if let Some(icon) = preview.bookmark.child().and_downcast::<gtk::Image>() {
+            icon.set_pixel_size(layout.icon as i32);
         }
         preview.area.queue_draw();
     }
@@ -1026,10 +1063,36 @@ impl Component {
         row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
         let field = match option {
+            ToolOption::Range { id, label, bounds } => {
+                let ids = bounds.each_ref().map(|f| f.id);
+                let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), glib::clone!(
+                    #[weak(rename_to=component)] self,
+                    #[weak] w,
+                    move |index, value| {
+                        if !component.updating.get() {
+                            w.dispatch(UiAction::ToolbarEdit {
+                                context,
+                                action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }),
+                            });
+                        }
+                    }
+                ));
+                row.add_css_class("option-range");
+                let sliders = self.root.imp().options.get().sliders;
+                range.set_slider_visible(sliders);
+                // Keep a useful track length; fitting moves the complete range
+                // into overflow instead of clipping or separating its ends.
+                if sliders { range.root.set_size_request(280, -1); }
+                for (input, id) in range.inputs.iter().zip(ids) {
+                    input.set_widget_name(&format!("toolbar-setting-{id}"));
+                }
+                row.append(&range.root);
+                Field::Range(range)
+            }
             ToolOption::Numeric(f) => {
                 let label = gtk::Label::new(Some(f.label));
                 label.add_css_class("option-label");
-                row.set_tooltip_text(Some(f.label));
+                row.set_tooltip_text(Some(f.tooltip()));
                 row.append(&label);
                 let icon =
                     crate::icons::image(&format!("layer-{}-symbolic", tool_setting_icon(f.id)));
@@ -1042,7 +1105,7 @@ impl Component {
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));
                 let id = f.id;
                 for target in [label.upcast_ref::<gtk::Widget>(), icon.upcast_ref()] {
-                    target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.label)));
+                    target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.tooltip())));
                     let reset = gtk::GestureClick::new();
                     reset.set_button(1);
                     reset.connect_pressed(glib::clone!(

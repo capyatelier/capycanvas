@@ -142,6 +142,10 @@ impl ToolSet {
         }
         let rebuild = !same(&previous.subtools, &view.subtools);
         if rebuild {
+            // Short selection command rows must not set a tall minimum for
+            // the adjacent settings panel.
+            let selection = view.subtools.iter().any(|i| matches!(i.action,
+                UiAction::Invoke {command: layer_ui::CommandId::TonalSelect}));
             while let Some(child) = self.list.first_child() {
                 self.list.remove(&child);
             }
@@ -165,7 +169,7 @@ impl ToolSet {
                     preview
                 });
                 if preview.is_none() {
-                    button.set_size_request(-1, TOOL_ROW_HEIGHT);
+                    button.set_size_request(-1, if selection {32} else {TOOL_ROW_HEIGHT});
                     if let UiAction::Invoke { command } = item.action {
                         button.set_widget_name(&format!("tool-choice-{command:?}"));
                     }
@@ -220,9 +224,15 @@ use std::{
 pub struct ToolSettings {
     pub root: gtk::Box,
     form: gtk::Box,
+    modes: gtk::Box,
+    mode_container: gtk::Box,
+    extra: gtk::Box,
+    extra_fields: RefCell<Vec<(layer_ui::ToolOption,crate::tool_extra::ExtraField)>>,
+    extra_context: Cell<Option<layer_ui::ToolbarContext>>,
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
-    actions: RefCell<Vec<(ToolSettingAction, gtk::Widget)>>,
+    range: RefCell<Option<Rc<crate::range_control::RangeControl>>>,
+    actions: RefCell<Vec<(ToolSettingAction, &'static str, gtk::Widget)>>,
     updating: Rc<Cell<bool>>,
 }
 impl ToolSettings {
@@ -230,25 +240,62 @@ impl ToolSettings {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let form = body();
         let picker = crate::color_picker::Settings::new();
+        let mode_container=body();
+        let modes=gtk::Box::new(gtk::Orientation::Horizontal,0);
+        modes.set_homogeneous(true);
+        modes.set_widget_name("selection-mode-row");
+        modes.add_css_class("linked");
+        modes.add_css_class("selection-modes");
+        modes.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
+        mode_container.append(&modes);
+        root.append(&mode_container);
+        let extra=body();
+        root.append(&extra);
         root.append(&form);
         root.append(&picker.root);
         Self {
-            root, form, picker,
+            root, form, picker, extra, modes, mode_container, extra_fields:RefCell::default(), extra_context:Cell::new(None),
             fields: RefCell::default(),
+            range: RefCell::default(),
             actions: RefCell::default(),
             updating: Rc::new(Cell::new(false)),
         }
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
         let picking = state.layer_tools.tool.picks_color();
+        let compact = state.layer_tools.tool.selection_tool() == Some(layer_ui::SelectionTool::Tonal);
         self.form.set_visible(!picking);
+        self.extra.set_visible(!picking && !state.tool_extra.is_empty());
+        // Use one outer inset and a small gap between sections, instead of
+        // stacking each section's top and bottom body margins.
+        let inset=layer_ui::PANEL_CONTENT_INSET as i32;
+        self.mode_container.set_margin_bottom(if compact {4} else {inset});
+        self.extra.set_margin_top(if compact {0} else {inset});
+        self.extra.set_margin_bottom(if compact {4} else {inset});
+        self.form.set_margin_top(if compact {0} else {inset});
+        self.form.set_spacing(if compact {2} else {6});
+        self.mode_container.set_visible(state.layer_tools.tool.selection_tool().is_some());
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
+        let context=state.toolbar_context();
+        let context_changed=self.extra_context.get()!=Some(context);
+        let same=self.extra_context.get()==Some(context) && self.extra_fields.borrow().len()==state.tool_extra.len() && self.extra_fields.borrow().iter().zip(&state.tool_extra).all(|((old,_),next)|old.same_schema(next));
+        if !same {
+            self.extra_context.set(Some(context));
+            self.extra_fields.borrow_mut().clear();
+            while let Some(child)=self.extra.first_child() {self.extra.remove(&child);}
+            for option in &state.tool_extra {
+                let field=crate::tool_extra::ExtraField::new(workspace,option,context);
+                self.extra.append(&field.root);self.extra_fields.borrow_mut().push((option.clone(),field));
+            }
+        } else {
+            for ((old,field),next) in self.extra_fields.borrow_mut().iter_mut().zip(&state.tool_extra) {field.refresh(next);*old=next.clone();}
+        }
         let controls = &state.tool_settings;
         self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
         let mut actions = self.actions.borrow_mut();
-        let same_schema = fields.len() == controls.len()
+        let same_schema = !context_changed && fields.len() == controls.len()
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.numeric == next.numeric
@@ -259,24 +306,36 @@ impl ToolSettings {
             && actions
                 .iter()
                 .zip(&state.tool_actions)
-                .all(|((old, _), next)| old == next);
+                .all(|((old, label, _), next)| old == next
+                    && state.commands.iter().any(|c| c.id == next.command && c.label == *label));
         if !same_schema {
+            if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
             }
+            while let Some(child)=self.modes.first_child() {self.modes.remove(&child);}
             fields.clear();
+            self.range.borrow_mut().take();
             actions.clear();
-            let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            mode_row.set_homogeneous(true);
-            mode_row.set_widget_name("selection-mode-row");
-            mode_row.add_css_class("linked");
-            mode_row.add_css_class("selection-modes");
-            mode_row.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
-            if state.layer_tools.tool.selection_tool().is_some() {
-                self.form.append(&mode_row);
-            }
             let mut group = "";
+            let inline_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+            let inline_values=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             for control in controls {
+                if compact && control.id == "tonal_upper" { continue; }
+                if compact && control.id == "tonal_lower" {
+                    let upper = controls.iter().find(|f| f.id == "tonal_upper").unwrap();
+                    let weak = Rc::downgrade(workspace);
+                    let ids = [control.id, upper.id];
+                    let range = crate::range_control::RangeControl::new("tonal", "Range in stops relative to reference white (0)", [control, upper], move |index, value| {
+                        if let Some(w) = weak.upgrade() {
+                            w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }) });
+                        }
+                    });
+                    self.form.append(&range.root);
+                    fields.extend([(control.clone(), range.inputs[0].clone()), (upper.clone(), range.inputs[1].clone())]);
+                    self.range.replace(Some(range));
+                    continue;
+                }
                 if group != control.group {
                     group = control.group;
                     if !group.is_empty() {
@@ -289,7 +348,9 @@ impl ToolSettings {
                         self.form.append(&title);
                     }
                 }
-                let input = NumberControl::new(control.numeric.clone(), control.label, "");
+                let input = if compact {
+                    NumberControl::labeled_inline(control.numeric.clone(), control.label, control.tooltip(), &inline_labels, &inline_values)
+                } else { NumberControl::new(control.numeric.clone(), control.label, "") };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(
@@ -379,20 +440,18 @@ impl ToolSettings {
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
-                if mode { mode_row.append(&widget); }
+                if mode { self.modes.append(&widget); }
                 else { self.form.append(&widget); }
-                actions.push((*action, widget));
-            }
-            if state.layer_tools.tool.selection_tool().is_some() {
-                let menu = crate::selection_masks::menu_button(workspace, "Selection Actions…", crate::selection_masks::Menu::Selection);
-                menu.set_widget_name("selection-actions-menu");
-                self.form.append(&menu);
+                actions.push((*action, command.label, widget));
             }
         }
         for ((_, input), control) in fields.iter().zip(controls) {
             input.set_value(control.value as f64);
         }
-        for (action, widget) in actions.iter() {
+        if let Some(range) = self.range.borrow().as_ref() {
+            range.set_values([fields[0].1.value(), fields[1].1.value()]);
+        }
+        for (action, _, widget) in actions.iter() {
             if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {
                 widget.set_sensitive(command.enabled);
                 widget.set_tooltip_text(Some(&command.tooltip));
@@ -907,7 +966,7 @@ impl ColorPanel {
         menu_edit.set_widget_name("color-edit-menu");
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 4);
         actions.append(&menu_edit);
-        let menu_library = gtk::Button::with_label("Color Swatches…");
+        let menu_library = gtk::Button::with_label("Palettes…");
         menu_library.add_css_class("flat");
         menu_library.set_widget_name("color-library-menu");
         actions.append(&menu_library);

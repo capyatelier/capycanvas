@@ -727,7 +727,7 @@ class AndroidTitleBarTest {
         if (state().getJSONObject("customization").isNull("drawer")) tap(select)
         assertEquals("[[\"tools\"],[\"tool_settings\"]]", state().getJSONObject("customization").getJSONObject("drawer").getJSONArray("columns").toString())
         val choices = state().getJSONObject("tool_set").array("subtools").objects()
-        assertEquals(7, choices.size)
+        assertEquals(8, choices.size)
         val modes = listOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
         for ((i, choice) in choices.withIndex()) {
             tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[i % 3]
@@ -738,7 +738,7 @@ class AndroidTitleBarTest {
             assertFalse(state().getJSONObject("customization").isNull("drawer"))
             val brush = choice.getString("icon") == "selection-brush"
             assertNotNull(node("tool-setting-" + if(brush)"selection_brush_size" else "selection_feather"))
-            if(!brush) assertNotNull(node("tool-action-selection_antialias"))
+            if(!brush && choice.getString("icon")!="tonal-select") assertNotNull(node("tool-action-selection_antialias"))
             val availableModes = if(brush) listOf("selection_add", "selection_subtract") else modes
             val row = bounds("selection-mode-row")
             for (id in availableModes) {

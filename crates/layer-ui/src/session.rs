@@ -19,6 +19,8 @@ pub use document_color_edit::ProofMode;
 pub(crate) mod figures;
 #[path = "operation.rs"]
 pub(crate) mod operation;
+#[path = "tonal_selection.rs"]
+pub(crate) mod tonal_selection;
 #[path = "selection_tools.rs"]
 pub(crate) mod selection_tools;
 pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
@@ -113,6 +115,7 @@ pub struct UiSession<R: CanvasRenderer> {
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     selection_tools: selection_tools::SelectionTools,
+    tonal_tools: tonal_selection::TonalTools,
     painted_selections: painted_selections::PaintedSelections,
     selection_masks: selection_masks::SelectionMasks,
     rulers: rulers::RulerInteraction,
@@ -170,6 +173,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         colors.set_document_depth(engine.document().color.depth)?;
         let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
+        engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
             engine,
@@ -187,6 +191,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             eyedropper: Default::default(),
             region_tools: Default::default(),
             selection_tools: Default::default(),
+            tonal_tools: Default::default(),
             painted_selections: Default::default(),
             selection_masks: Default::default(),
             rulers: Default::default(),
@@ -234,6 +239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 colors,
                 color_picker: Default::default(),
                 tool_settings: Vec::new(),
+                tool_extra: Vec::new(),
                 toolbar_context_generation: 0,
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
@@ -321,6 +327,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.platform_prediction_available = None;
         }
         self.state.platform = platform;
+        if platform == Platform::Gtk {
+            self.state.colors.library.ensure_starters();
+        }
         self.refresh_feedback_config();
         self.state.palette = self
             .state
@@ -1775,10 +1784,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
+        let group_body = self.state.platform != Platform::Generic;
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
-        let compact_edge = (!docks_hidden && crate::ToolbarControl::components_available(self.state.platform))
+        let compact_edge = (!docks_hidden)
             .then(|| self.state.workspace.layout.compact_edge_drop_hint(
                 &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
             )).flatten();
@@ -1856,13 +1865,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// controls use `state.commands`; dispatch always rechecks this live state.
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
-        let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-            "Restore Starting Layout…"
-        } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
-            "Proof"
-        } else {
-            id.label()
-        };
+        let label = self.command_label(id);
         CommandState {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
@@ -1880,6 +1883,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .state
                 .settings
                 .action_shortcut(&UiAction::Invoke { command: id }, self.state.platform),
+        }
+    }
+    fn command_label(&self, id: CommandId) -> &'static str {
+        if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+            "Restore Starting Layout…"
+        } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
+            "Proof"
+        } else {
+            id.label()
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
@@ -1968,8 +1980,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
+            CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff | CommandId::TonalRemoveBand | CommandId::TonalNewBand => false,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
+            CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
+                idle && self.layer_interaction.tool.selection_tool().is_some()
+            }
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
@@ -2730,6 +2746,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.apply_brush()?;
                 (BRUSH, false)
             }
+            UiAction::Color {
+                action: ColorAction::Library { action },
+            } => {
+                let mut affected = BRUSH;
+                if let Some(color) = self.state.colors.library.apply(action)? {
+                    if self.selection_masks.target().is_some() {
+                        self.mask_color_action(ColorAction::Definition { color })?;
+                        affected |= DOCUMENT;
+                    } else {
+                        self.state.colors.set_color(color)?;
+                        self.state.brush.color =
+                            self.state.colors.preview(self.state.colors.definition());
+                        self.apply_brush()?;
+                    }
+                }
+                (affected, false)
+            }
             UiAction::Color { action } => {
                 if self.selection_masks.target().is_some() {
                     self.mask_color_action(action)?;
@@ -2777,6 +2810,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         _ => 0.,
                     };
                     return self.dispatch(UiAction::SetToolSetting { id, value });
+                } else if id.starts_with("tonal_") {
+                    let value=self.selection_tools.options.tonal.reset_value(&id)?;
+                    return self.dispatch(UiAction::SetToolSetting {id,value});
                 } else if id.starts_with("selection_") {
                     let options = SelectionOptions {
                         constraint: self.selection_tools.options.constraint,
@@ -2794,8 +2830,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .ok_or("This setting has no default")?.value;
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
+            UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
+            UiAction::SetToolText { .. } => return Err("Unknown text setting".into()),
             UiAction::SetToolSetting { id, value } => {
-                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                if id.starts_with("tonal_") {
+                    if !self.tonal_active() {return Err("Choose Tonal range first".into());}
+                    self.selection_tools.options.tonal.edit(&id,value)?;self.queue_tonal(None)?;self.refresh_tools();
+                    return Ok(self.changed(BRUSH | COMMANDS,true));
+                } else if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
                 if self.layer_interaction.tool.region().is_some()
@@ -2813,6 +2855,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if id.starts_with("selection_") {
                     self.selection_tools.options.edit(&id, value)?;
                     self.region_tools.cancel();
+                    if self.tonal_active() {self.queue_tonal(None)?;}
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, true));
                 }
@@ -3186,7 +3229,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 else if self.eyedropper.picking.previous.is_some() { self.resample_picker(); }
                 changed |= BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW;
             }
-            self.region_tools.cancel();
+            if !self.tonal_active() {
+                self.region_tools.cancel();
+            } else if tool_before.1 != self.layer_interaction.tool {
+                self.cancel_tonal();
+            } else if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
+                || d.target != self.selection_masks.target().unwrap_or(layer_core::SelectionTarget::Current)) {
+                self.cancel_tonal();
+            }
         }
         if !was_filter_drawer && self.filter_drawer_open() {
             self.open_filter_picker();
@@ -3363,7 +3413,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Err(error) = self.selection_brush_pen(event) { self.state.host_error = Some(error); }
             return Ok(());
         }
-        if self.selection_masks.target().is_some()
+        if self.selection_masks.target().is_some() && !self.tonal_active()
             && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
             if event.phase == PenPhase::Down { self.state.host_error = Some("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing".into()); }
             return Ok(());
@@ -3764,6 +3814,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
+        for color in self.engine.take_used_colors() {
+            self.state.colors.library.record_use(color);
+            changed |= regions::BRUSH;
+        }
         self.input_pending = self.engine.has_pending_input();
         let modified = self.state.document_file.modified;
         self.refresh_file_state();
@@ -3774,6 +3828,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
+        if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
         self.poll_region_tool()?;
         let sample_space = self.engine.document().color.space;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
@@ -3809,12 +3864,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.refresh_document();
             changed |= regions::DOCUMENT;
         }
+        let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
+        if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
         Ok(self.changed(
             changed,
-            self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+            tonal_changed || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
         ))
     }
 
@@ -3957,17 +4014,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
+            CommandId::TonalSelect | CommandId::SelectionBrush | CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
                 let kind = match command {
                     CommandId::RectangleSelect => SelectionTool::Rectangle,
                     CommandId::EllipseSelect => SelectionTool::Ellipse,
                     CommandId::PolygonSelect => SelectionTool::Polygon,
                     CommandId::ColorSelect => SelectionTool::Color,
                     CommandId::SelectionBrush => SelectionTool::Brush,
+                    CommandId::TonalSelect => SelectionTool::Tonal,
                     _ => self.selection_tools.options.tool,
                 };
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::TonalDetails | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
+                return Err("This tonal control is no longer used".into());
             }
             CommandId::SelectionBrushPressure => {
                 self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
@@ -4003,6 +4064,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     CommandId::SelectionAntialias => options.antialias = !options.antialias,
                     _ => options.constrain_angles = !options.constrain_angles,
                 }
+                if self.tonal_active() {self.cancel_tonal();}
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, true))
             }
@@ -4400,6 +4462,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         brush.opacity = state.opacity;
         brush.color_rgba_linear = self.state.colors.definition().linear_in(self.engine.document().color.space)?;
         self.engine.set_brush(brush).map_err(error)?;
+        self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(
             if state.tool == Tool::Eraser || self.state.colors.transparent() {
                 StrokeTool::Eraser
@@ -4414,6 +4477,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
+        self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
         self.state.tool_actions = if self.operation.active() {
             [
                 CommandId::TransformAspect,
@@ -4453,8 +4517,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             && let Some(tool) = self.layer_interaction.tool.selection_tool() {
             selection_tools::tool_set(tool)
         } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
+        self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            let commands: &[CommandId] = if tool.geometric() {
+            let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
+            } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
                 &[CommandId::SelectionConstrainAngles, CommandId::CompleteSelection, CommandId::CancelSelection]
@@ -4466,6 +4532,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|command| ToolSettingAction { command, checkable: true }).collect()
             } else { [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
                 CommandId::SelectionIntersect, CommandId::SelectionAntialias].into_iter().chain(commands.iter().copied())
+                .filter(|c|tool!=SelectionTool::Tonal || *c!=CommandId::SelectionAntialias)
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
@@ -4513,7 +4580,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
+            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls()}
+            else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
             else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
@@ -4539,8 +4607,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
-            self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
+            let mut edges=self.selection_tools.options.edge_controls();
+            for field in &mut edges {
+                field.group="";
+                if self.tonal_active() {field.label="Feather";}
+            }
+            self.state.tool_settings.extend(edges);
         }
+        self.state.tool_extra=self.tonal_extra();
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
     }
@@ -4633,13 +4707,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
-            let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Restore Starting Layout…"
-            } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
-                "Proof"
-            } else {
-                id.label()
-            };
+            let label = self.command_label(id);
             if let Some(previous) = self.state.commands.get_mut(index) {
                 // A canvas contact must not flash disabled styling across the
                 // editor. Keep the published availability until it finishes;
@@ -4923,9 +4991,11 @@ mod tests {
         region_requests: Vec<layer_render::RegionRequest>,
         region_reply: Option<layer_render::RegionResult>,
         transform: Option<layer_render::TransformPreview>,
+        overlay: Option<layer_render::SelectionOverlay>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}
         fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
         fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
             if self.prepared_color != Some(color) { return Ok(false); }
@@ -5077,9 +5147,11 @@ mod tests {
     }
 
     include!("session_color_tests.rs");
+    include!("palette_tests.rs");
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
 
@@ -6693,7 +6765,7 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 7);
+            assert_eq!(s.state.tool_set.subtools.len(), 8);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
             assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);
@@ -6739,6 +6811,7 @@ mod tests {
             assert_eq!(request.source, RegionSource::Composite);
             assert!(request.limit.is_none());
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6785,6 +6858,7 @@ mod tests {
                 layer_core::Affine::translation(Point { x: -8., y: -12. })
             );
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6821,6 +6895,7 @@ mod tests {
             let before = s.engine.document().selection.clone();
             invoke(&mut s, CommandId::Hand);
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6855,6 +6930,7 @@ mod tests {
                 [id]
             );
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -6881,6 +6957,7 @@ mod tests {
             })
             .unwrap();
             s.renderer_mut().region_reply = Some(RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: coverage.clone(),
             });
@@ -15517,7 +15594,7 @@ mod tests {
                             &vec![400.; previous.columns.len()],
                         )
                         .unwrap();
-                    let next = ContentDrawer::for_tile(
+                    let mut next = ContentDrawer::for_tile(
                         &s.state.workspace.layout,
                         TileAnchor {
                             panel: Panel::Toolbar,
@@ -15551,6 +15628,9 @@ mod tests {
                         "Press retains the drawer until activation"
                     );
                     let change = activate(&mut s, tile);
+                    if platform == Platform::Gtk && next.columns == [vec![Panel::Color]] {
+                        next.columns[0].push(Panel::Palettes);
+                    }
                     assert_eq!(s.state.customization.drawer.as_ref().unwrap(), &next);
                     assert_ne!(change.regions & regions::CUSTOMIZATION, 0);
                     if tile != color {
@@ -15602,7 +15682,7 @@ mod tests {
     }
 
     #[test]
-    fn sketch_color_and_layers_drawers_survive_canvas_contacts_and_replace_each_other() {
+    fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session(); s.set_platform(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
@@ -15611,11 +15691,10 @@ mod tests {
                     e.item == HeaderItem::Tool { control }).unwrap().id;
                 s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }] }).unwrap();
                 s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
-                let drawer = s.state.customization.drawer.clone().unwrap();
-                assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
+                assert_eq!(s.state.customization.drawer.as_ref().unwrap().dismissal, DrawerDismissal::OutsideContact);
                 let reply = chrome(&mut s, ChromeEvent::Contact { position: [700., 500.], canvas: true }, ChromeFacts::default());
-                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
-                assert!(!reply.handled, "canvas input continues with the drawer open");
+                assert!(s.state.customization.drawer.is_none());
+                assert!(reply.handled && !reply.paint, "the dismissing contact does not paint");
             }
         }
     }
@@ -15768,7 +15847,7 @@ mod tests {
         assert_eq!(s.state.brush.tool, tool);
         assert_eq!(
             s.state.customization.drawer.as_ref().unwrap().columns,
-            [vec![Panel::Color]]
+            [vec![Panel::Color, Panel::Palettes]]
         );
         s.dispatch(UiAction::Customize {
             action: CustomizationAction::ShowAllControls {
@@ -15787,9 +15866,12 @@ mod tests {
             },
             ChromeFacts::default(),
         );
-        assert!(!reply.handled);
-        assert!(s.state.customization.drawer.is_some());
-        // Color remains open until toggled or replaced.
+        assert!(reply.handled && !reply.paint);
+        assert!(s.state.customization.drawer.is_none());
+        // Explicit policy is for persistent column drawers: outside does not
+        // dismiss, without a per-platform special case.
+        activate(&mut s, 6);
+        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
         chrome(
             &mut s,
             ChromeEvent::Contact {

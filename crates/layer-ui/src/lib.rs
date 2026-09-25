@@ -35,6 +35,7 @@ pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
+pub use session::tonal_selection::{TonalAction, TonalOptions};
 pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
@@ -47,7 +48,7 @@ pub use toolbar_preview::*;
 mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
-    ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor,
+    ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
 };
@@ -115,7 +116,7 @@ pub use layout::{
 pub use layout::{
     DropHint, BRUSH_SETS_MIN_WIDTH, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, SURFACE_RADIUS, TAB_BAR_HEIGHT,
     TILE_SIZE,
-    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_content_height,
+    TOOL_PANEL_MIN_WIDTH, TOOL_SETTINGS_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_content_height,
     toolbar_tile_layout,
 };
 pub use numeric::{
@@ -133,7 +134,10 @@ pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
-pub use theme::{ACCENTS, DEFAULT_ACCENT, HexColor, Theme, ThemePalette};
+pub use theme::{
+    ACCENTS, DEFAULT_ACCENT, HexColor, TRANSPARENCY_CHECKER, TRANSPARENCY_CHECKER_CELL, Theme,
+    ThemePalette,
+};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     durable_layout, layout_change_description,
@@ -391,6 +395,14 @@ pub fn ui_catalog() -> UiCatalog {
             "ellipse-select",
             "polygon-select",
             "color-select",
+            "tonal-select",
+            "tonal-shadows",
+            "tonal-mid-shadows",
+            "tonal-midtones",
+            "tonal-mid-highlights",
+            "tonal-highlights",
+            "tonal-bright-hdr",
+            "tonal-custom",
             "selection-brush",
             "selection-new",
             "selection-add",
@@ -420,6 +432,7 @@ pub fn ui_catalog() -> UiCatalog {
             "up",
             "down",
             "color",
+            "colors",
             "swap",
             "color-swap",
             "color-circle",
@@ -541,6 +554,18 @@ pub enum CommandId {
     PolygonSelect,
     ColorSelect,
     SelectionBrush,
+    TonalSelect,
+    TonalDetails,
+    ApplyTonalSelection,
+    CancelTonalSelection,
+    TonalNewBand,
+    TonalRemoveBand,
+    TonalSaveBand,
+    TonalInvert,
+    TonalLowerOpen,
+    TonalUpperOpen,
+    TonalLinkFalloff,
+
     QuickMask,
     ReturnToArtwork,
     NewSelectionLayer,
@@ -625,7 +650,11 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::TonalSelect => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            // Decode saved shortcuts/layouts from the original tonal editor.
+            // These controls are retired and must not be offered or dispatched.
+            Self::TonalDetails | Self::ApplyTonalSelection | Self::CancelTonalSelection | Self::TonalNewBand | Self::TonalRemoveBand | Self::TonalSaveBand | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff => false,
+            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
@@ -692,7 +721,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::TonalDetails | Self::TonalInvert | Self::TonalLowerOpen | Self::TonalUpperOpen | Self::TonalLinkFalloff | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::ZenMode
@@ -737,6 +766,18 @@ impl CommandId {
             Self::PolygonSelect => "polygon-select",
             Self::ColorSelect => "color-select",
             Self::SelectionBrush => "selection-brush",
+            Self::TonalSelect => "tonal-select",
+            Self::TonalDetails => "settings",
+            Self::ApplyTonalSelection => "check",
+            Self::CancelTonalSelection => "deselect",
+            Self::TonalNewBand => "plus",
+            Self::TonalRemoveBand => "delete",
+            Self::TonalSaveBand => "save-document",
+            Self::TonalInvert => "invert-selection",
+            Self::TonalLowerOpen => "select",
+            Self::TonalUpperOpen => "select",
+            Self::TonalLinkFalloff => "link",
+
             Self::QuickMask => "mask",
             Self::ReturnToArtwork => "brush",
             Self::NewSelectionLayer => "add-layer",
@@ -813,7 +854,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 114] = [
+    pub const ALL: [Self; 125] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -851,6 +892,18 @@ impl CommandId {
         Self::PolygonSelect,
         Self::ColorSelect,
         Self::SelectionBrush,
+        Self::TonalSelect,
+        Self::TonalDetails,
+        Self::ApplyTonalSelection,
+        Self::CancelTonalSelection,
+        Self::TonalNewBand,
+        Self::TonalRemoveBand,
+        Self::TonalSaveBand,
+        Self::TonalInvert,
+        Self::TonalLowerOpen,
+        Self::TonalUpperOpen,
+        Self::TonalLinkFalloff,
+
         Self::QuickMask,
         Self::ReturnToArtwork,
         Self::NewSelectionLayer,
@@ -1002,6 +1055,18 @@ impl CommandId {
             Self::PolygonSelect => "Polygonal lasso",
             Self::ColorSelect => "Select by color",
             Self::SelectionBrush => "Paint selection",
+            Self::TonalSelect => "Tonal range",
+            Self::TonalDetails => "Edit range",
+            Self::ApplyTonalSelection => "Apply selection",
+            Self::CancelTonalSelection => "Cancel",
+            Self::TonalNewBand => "New range",
+            Self::TonalRemoveBand => "Remove range",
+            Self::TonalSaveBand => "Save range",
+            Self::TonalInvert => "Invert",
+            Self::TonalLowerOpen => "Include darker tones",
+            Self::TonalUpperOpen => "Include brighter tones",
+            Self::TonalLinkFalloff => "Link falloff",
+
             Self::QuickMask => "Quick Mask",
             Self::ReturnToArtwork => "Return to Artwork",
             Self::NewSelectionLayer => "New Selection Layer",
@@ -1176,6 +1241,7 @@ pub struct UiState {
     pub colors: ColorState,
     pub color_picker: ColorPickerState,
     pub tool_settings: Vec<ToolSetting>,
+    pub tool_extra: Vec<ToolOption>,
     pub toolbar_context_generation: u64,
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
@@ -1212,6 +1278,8 @@ pub struct UiState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
     Selection { action: SelectionAction },
+    Tonal { action: TonalAction },
+    SetToolText { id: String, value: String },
     ActivateHeaderItem {
         id: u32,
     },

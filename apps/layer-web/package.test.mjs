@@ -91,7 +91,7 @@ function runtimeFixture(t, changes = {}) {
     "app.js": 'import {storage} from "./document-storage.js"; import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-preload.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createSelectionUi} from "./selection-masks.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nimport {installPenScrolling} from "./pen-scroll.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
     "header.js": "import {switcher} from './workspace-switcher.js'; import {pickerButtonAction} from './color-controls.js'; export const header = true;",
-    "editor-panels.js": "import {createRasterWorker} from './raster-worker-client.js'; import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
+    "editor-panels.js": "import {createRasterWorker} from './raster-worker-client.js'; import {chooseColor} from './color-controls.js'; import {createRangeControl} from './range-control.js'; export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
     "image-import.js": "export function createImageImport() {}",
     "selection-masks.js": "export function createSelectionUi() {}",
@@ -109,7 +109,8 @@ function runtimeFixture(t, changes = {}) {
     "pen-scroll.js": "export function installPenScrolling() {}",
     "preferences.js": "import {chooseProfileLibrary} from './export-controls.js'; export function createPreferences() {}",
     "gpu.js": "export function showGpuNotice() {}",
-    "toolbar-components.js": "import {createNumberField} from './numeric.js';",
+    "toolbar-components.js": "import {createNumberField} from './numeric.js'; import {createRangeControl} from './range-control.js';",
+    "range-control.js": "import {createNumberField} from './numeric.js'; export function createRangeControl() {}",
     "customization.js": 'import {createToolbarComponent} from "./toolbar-components.js";' + "import {colorButton} from './color-controls.js'; export function createCustomization() {}",
     "pkg/layer_web.js": "export default new URL('layer_web_bg.wasm', import.meta.url);",
     "pkg/layer_web_bg.wasm": Buffer.from([0, 97, 115, 109]),
@@ -165,7 +166,7 @@ test("production module imports and worker URLs resolve to packaged files", (t) 
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
+  for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "range-control.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);

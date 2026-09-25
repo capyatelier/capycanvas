@@ -14,6 +14,37 @@ pub(super) struct Frame {
     pub preview_records: Vec<usize>,
 }
 impl Frame {
+    /// Selection overlays, navigation and layer labels do not alter raw artwork.
+    /// Source identity and raster publication catch edits without scanning pixels.
+    pub fn same_artwork(&self, packet: FramePacket<'_>, background: [f32; 4]) -> bool {
+        let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
+        self.background == background
+            && self.previews.is_empty()
+            && packet.dab_batches.is_empty()
+            && self.layers.iter().filter(artwork).count()
+                == packet.layers.iter().filter(artwork).count()
+            && self
+                .layers
+                .iter()
+                .filter(artwork)
+                .zip(packet.layers.iter().filter(artwork))
+                .all(|(a, b)| {
+                    a.id == b.id
+                        && a.kind == b.kind
+                        && a.visible == b.visible
+                        && a.opacity == b.opacity
+                        && a.raster == b.raster
+                        && a.asset == b.asset
+                        && a.properties == b.properties
+                        && a.mask == b.mask
+                        && a.effect == b.effect
+                        && match (&a.source, &b.source) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                            (None, None) => true,
+                            _ => false,
+                        }
+                })
+    }
     pub fn new(packet: FramePacket<'_>, background: [f32; 4]) -> Self {
         Self {
             layers: packet
@@ -62,6 +93,17 @@ pub(super) struct Capture {
     pub image_limit: Option<u64>,
 }
 impl Capture {
+    pub fn source_tile(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        source: &Arc<layer_core::color::source::SourceImage>,
+        coordinate: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<source_access::RawTile, GpuRasterError> {
+        self.scene
+            .get_or_insert_with(|| query_scene(r))
+            .source_tile_for_query(r, source, coordinate, encoder)
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, |(t, _)| texture_bytes(t))
             + self.scene.as_ref().map_or(0, scene::Scene::scratch_bytes)
@@ -112,7 +154,7 @@ impl Capture {
             ));
         }
         r.complete_preview_pages(encoder);
-        let scene = self.scene.get_or_insert_with(|| scene::Scene::new(r));
+        let scene = self.scene.get_or_insert_with(|| query_scene(r));
         let (texture, view) = self.target.as_ref().unwrap();
         scene.capture_region(r, packet, texture, region, None, encoder)?;
         // The lightweight frontmost preview has no paint page. Replay its
@@ -174,6 +216,14 @@ impl Capture {
             view: view.clone(),
         })
     }
+}
+
+fn query_scene(r: &WgpuRasterizer) -> scene::Scene {
+    let mut scene = scene::Scene::new(r);
+    // An exact query sweeps independent tiles once. Its decoded scratch needs
+    // only the bounded upload neighborhood, not the live display's admission.
+    scene.admit_native_sources(0);
+    scene
 }
 
 impl WgpuRasterizer {

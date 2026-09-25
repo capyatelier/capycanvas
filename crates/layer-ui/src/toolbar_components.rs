@@ -19,9 +19,6 @@ impl Default for ToolOptionsStyle {
 }
 
 impl ToolbarControl {
-    pub fn components_available(platform: Platform) -> bool {
-        matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Generic)
-    }
     pub const TOOL_OPTIONS: Self = Self::ToolOptions {
         style: ToolOptionsStyle {
             text: true,
@@ -119,6 +116,12 @@ impl ToolbarNumericBinding {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ToolOption {
     Numeric(ToolSetting),
+    /// One atomic interval field; endpoint edits use the existing setting IDs.
+    Range {
+        id: &'static str,
+        label: &'static str,
+        bounds: [ToolSetting; 2],
+    },
     Choice {
         id: &'static str,
         label: &'static str,
@@ -130,12 +133,18 @@ pub enum ToolOption {
         checkable: bool,
     },
 }
+
 impl ToolOption {
     /// Values and selection do not invalidate retained native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Numeric(a), Self::Numeric(b)) => {
                 a.id == b.id && a.label == b.label && a.numeric == b.numeric
+            }
+            (Self::Range { id: a, label: x, bounds: p }, Self::Range { id: b, label: y, bounds: q }) => {
+                a == b && x == y && p.iter().zip(q).all(|(a, b)| {
+                    a.id == b.id && a.label == b.label && a.numeric == b.numeric
+                })
             }
             (
                 Self::Choice {
@@ -167,7 +176,7 @@ impl ToolOption {
                     state: b,
                     checkable: y,
                 },
-            ) => a.id == b.id && x == y,
+            ) => a.id == b.id && a.label == b.label && x == y,
             _ => false,
         }
     }
@@ -210,6 +219,8 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
+            UiAction::SetToolText { .. } => false,
+            UiAction::Tonal { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Choice {items,..} if items.iter().any(|i| i.action==*action))),
             UiAction::ToggleSliderBookmark { control } => control.slider()
                 .is_some_and(|binding| binding.field(self).is_some()),
             UiAction::SetBrushSize { .. } => {
@@ -323,7 +334,19 @@ impl UiState {
                 .collect();
             options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }
-        options.extend(self.tool_settings.iter().cloned().map(ToolOption::Numeric));
+        options.extend(self.tool_extra.iter().cloned());
+        let mut fields = self.tool_settings.iter().peekable();
+        while let Some(field) = fields.next() {
+            if field.id == "tonal_lower" && fields.peek().is_some_and(|f| f.id == "tonal_upper") {
+                options.push(ToolOption::Range {
+                    id: "tonal",
+                    label: "Range in stops relative to reference white (0)",
+                    bounds: [field.clone(), fields.next().unwrap().clone()],
+                });
+            } else {
+                options.push(ToolOption::Numeric(field.clone()));
+            }
+        }
         options.extend(
             self.tool_actions
                 .iter()

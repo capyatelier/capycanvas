@@ -1,6 +1,6 @@
 # Paintable selection specification
 
-Date: 2026-09-23. Status: Core implementation complete on GTK, Web, and Android.
+Date: 2026-09-23. Status: Core implementation complete on GTK, Web, Android, macOS and iPadOS.
 Paint selection, Quick Mask with a temporary Layers row, and persistent
 Selection Layers are in scope.
 
@@ -414,9 +414,8 @@ necessary menu integration. Its **Next** and **Later** entries are recommendatio
 not implicit release requirements. Automatic subject detection and additional
 material simulators remain separate work.
 
-GTK, Web, and Android currently share the documented Select drawer. macOS,
-iPadOS, and Windows need explicit native projection through their existing entry
-points. Shared Rust owns behavior, validation, command availability, settings,
+GTK, Web, Android, macOS and iPadOS share the documented Select drawer. Windows
+needs explicit native projection through its existing entry points. Shared Rust owns behavior, validation, command availability, settings,
 and history; hosts own native input capture, widgets, focus, and accessibility.
 Preserve customized workspaces and the existing included-layout migration policy.
 

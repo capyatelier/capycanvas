@@ -161,6 +161,7 @@ mod allocation {
         pub(super) owner: RefCell<std::rc::Weak<Workspace>>,
         pub(super) transition: Cell<Option<(u32, Bounds, f32)>>,
         pub(super) animation: RefCell<Option<adw::TimedAnimation>>,
+        pub(super) drag_overlay: RefCell<Option<(gtk::gsk::RenderNode, gtk::graphene::Point)>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for DockSurface {
@@ -455,6 +456,16 @@ mod allocation {
                     self.obj().scale_factor() as f32,
                 );
             }
+            if let Some((node, point)) = self.drag_overlay.borrow().as_ref() {
+                snapshot.push_clip(&gtk::graphene::Rect::new(
+                    0., 0., self.obj().width() as f32, self.obj().height() as f32,
+                ));
+                snapshot.save();
+                snapshot.translate(point);
+                snapshot.append_node(node);
+                snapshot.restore();
+                snapshot.pop();
+            }
         }
     }
 }
@@ -538,6 +549,17 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl DockSurface {
+    /// A retained, input-transparent drag image above docked and drawer content.
+    fn set_drag_overlay(&self, overlay: Option<(gtk::gsk::RenderNode, gtk::graphene::Point)>) {
+        *self.imp().drag_overlay.borrow_mut() = overlay;
+        self.queue_draw();
+    }
+
+    #[cfg(test)]
+    pub fn drag_overlay_position(&self) -> Option<gtk::graphene::Point> {
+        self.imp().drag_overlay.borrow().as_ref().map(|(_, point)| *point)
+    }
+
     fn raise_drawer(&self, id: u32) {
         let source = self.imp().owner.borrow().upgrade().and_then(|w| {
             w.drawers()
@@ -743,6 +765,7 @@ struct GroupView {
     tabs_visible: bool,
     stack: gtk::Stack,
     tabs: Vec<(Panel, gtk::Button)>,
+    tab_strip: crate::panel_tabs::PanelTabs,
     tab_joins: gtk::DrawingArea,
 }
 pub(crate) fn native_accelerator(chord: &KeyChord) -> String {
@@ -789,7 +812,7 @@ pub(crate) fn native_accelerator(chord: &KeyChord) -> String {
 
 // GTK CSS has no pseudo-elements. This non-interactive native overlay paints
 // only the selected tab's two concave feet; native buttons still own all input.
-fn tab_joins(header: &gtk::Box) -> gtk::DrawingArea {
+fn tab_joins(header: &crate::panel_tabs::PanelTabs) -> gtk::DrawingArea {
     let joins = gtk::DrawingArea::new();
     joins.add_css_class("tab-joins");
     joins.set_can_target(false);
@@ -882,6 +905,7 @@ pub struct Workspace {
     placement_actions: crate::tool_panels::PlacementActions,
     selection_resize: crate::selection_masks::ResizeDialog,
     color_panel: crate::tool_panels::ColorPanel,
+    palette_panel: Rc<crate::color_library::PalettePanel>,
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
     glass: RefCell<Vec<layer_render_wgpu::BackdropRegion>>,
@@ -1020,6 +1044,7 @@ impl Workspace {
         margins(&subtools.root, layer_ui::PANEL_CONTENT_INSET as i32);
         let tool_settings = crate::tool_panels::ToolSettings::new();
         let color_panel = crate::tool_panels::ColorPanel::new();
+        let palette_panel = crate::color_library::PalettePanel::new();
         let navigator_overviews = Rc::new(crate::navigator::Overviews::default());
         let navigator = crate::navigator::Navigator::new(&navigator_overviews);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -1115,6 +1140,7 @@ impl Workspace {
                 (Panel::Tools, scroll(&subtools.root)),
                 (Panel::ToolSettings, scroll(&tool_settings.root)),
                 (Panel::Color, scroll(&color_panel.root)),
+                (Panel::Palettes, scroll(&palette_panel.root)),
                 (Panel::Sizes, scroll(&sizes)),
                 (Panel::Layers, layer_panel.root.clone().upcast()),
                 (Panel::Adjustments, effects.adjustments.clone().upcast()),
@@ -1138,6 +1164,7 @@ impl Workspace {
             placement_actions,
             selection_resize: crate::selection_masks::ResizeDialog::new(),
             color_panel,
+            palette_panel,
             proof_panel,
             navigator,
             navigator_overviews,
@@ -1173,6 +1200,7 @@ impl Workspace {
         this.placement_actions.bind(&this);
         this.selection_resize.bind(&this);
         this.color_panel.bind(&this);
+        this.palette_panel.bind(&this);
         this.navigator.bind(&this);
         this.navigator_overviews.bind(&this);
         this.customization.bind(&this);
@@ -1305,6 +1333,11 @@ impl Workspace {
                     return glib::Propagation::Proceed;
                 }
                 if this.documents.key(&this, key, modifiers) { return glib::Propagation::Stop; }
+                if gtk::prelude::GtkWindowExt::focus(&this.window)
+                    .is_some_and(|focus| crate::color_library::owns_native_key(&focus, key))
+                {
+                    return glib::Propagation::Proceed;
+                }
                 // Space also pans the canvas, but focused color buttons own
                 // native Space / Enter activation, including in retained drawers.
                 if matches!(key, gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter)
@@ -1542,6 +1575,43 @@ impl Workspace {
                 popover.present();
             }
         }
+    }
+
+    pub(crate) fn popup_at(
+        self: &Rc<Self>,
+        popover: &gtk::Popover,
+        widget: &impl IsA<gtk::Widget>,
+        point: [f32; 2],
+    ) {
+        let Some(point) = widget.compute_point(
+            &self.surface,
+            &gtk::graphene::Point::new(point[0], point[1]),
+        ) else {
+            return;
+        };
+        if popover.parent().is_none() {
+            popover.set_parent(&self.surface);
+            self.watch_popover(popover);
+        }
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+            point.x() as i32,
+            point.y() as i32,
+            1,
+            1,
+        )));
+        popover.popup();
+        popover.present();
+    }
+
+    pub(crate) fn drag_overlay_at(
+        &self,
+        node: Option<&gtk::gsk::RenderNode>,
+        widget: &impl IsA<gtk::Widget>,
+        point: gtk::graphene::Point,
+    ) {
+        self.surface.set_drag_overlay(node.and_then(|node| {
+            widget.compute_point(&self.surface, &point).map(|point| (node.clone(), point))
+        }));
     }
 
     fn update_zen(&self) {
@@ -2409,6 +2479,8 @@ impl Workspace {
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
             self.color_panel.refresh(&state.preview_colors(), self.view_color(), self.picker_headroom());
+            self.palette_panel
+                .refresh(&state, self.view_color(), self.picker_headroom());
             crate::color_editor::refresh_display(self);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
@@ -2657,7 +2729,7 @@ impl Workspace {
                     }
                     _ => (
                         content.measure(gtk::Orientation::Vertical, width).1 as f32,
-                        (config.id != Panel::Color
+                        (!matches!(config.id, Panel::Color | Panel::Palettes)
                             && self.panel_widget(config.id).is::<gtk::ScrolledWindow>())
                         .then_some(layer_ui::PanelScrollMeasurement {
                             fixed_height: 0.0,
@@ -2729,7 +2801,8 @@ impl Workspace {
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 header.add_css_class("dock-tabs");
                 header.set_height_request(layer_ui::TAB_BAR_HEIGHT as i32);
-                let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                let labels =
+                    crate::panel_tabs::PanelTabs::new(layout.group_tab_style(group.id).unwrap());
                 let tab_joins = tab_joins(&labels);
                 let mut tabs = Vec::new();
                 if group.tabs_visible {
@@ -2748,9 +2821,6 @@ impl Workspace {
                         content.set_valign(gtk::Align::Center);
                         content.append(&gtk::Image::new());
                         let title = gtk::Label::new(None);
-                        if group.panels.len() == 1 {
-                            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        }
                         content.append(&title);
                         tab.set_child(Some(&content));
                         self.install_panel_drag(&tab, DockItem::Panel { panel });
@@ -2811,6 +2881,7 @@ impl Workspace {
                     tabs_visible: group.tabs_visible,
                     stack,
                     tabs,
+                    tab_strip: labels,
                     tab_joins,
                 });
             }
@@ -2950,6 +3021,9 @@ impl Workspace {
                 button.update_property(&[gtk::accessible::Property::Label(config.title())]);
                 selected(button, *panel == group.active);
             }
+            view.tab_strip
+                .set_style(layout.group_tab_style(group.id).unwrap());
+            view.tab_strip.queue_resize();
             view.tab_joins.queue_draw();
         }
         self.columns.reconcile(self, layout, &resolved);

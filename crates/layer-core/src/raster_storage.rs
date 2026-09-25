@@ -202,10 +202,12 @@ impl Editor {
     pub fn retained_tiles(&self) -> RetainedTiles {
         let mut rasters = Vec::new();
         let mut sources = Vec::new();
+        let mut selections: Vec<_> = self.document.selection.iter().collect();
         for layer in &self.document.layers {
             rasters.push(&layer.raster);
             rasters.extend(layer.masks().map(|m| &m.raster));
             sources.extend(layer.source.iter());
+            layer.selection_roots(&mut selections);
         }
         let mut metadata_bytes = 0usize;
         if let Some(proof) = &self.document.proof {
@@ -217,6 +219,7 @@ impl Editor {
         for entry in self.undo.iter().chain(&self.redo) {
             entry.edit.raster_roots(&mut rasters);
             entry.edit.source_roots(&mut sources);
+            entry.edit.selection_roots(&mut selections);
             metadata_bytes = metadata_bytes.saturating_add(entry.metadata_bytes);
         }
         let mut seen = HashSet::new();
@@ -251,6 +254,17 @@ impl Editor {
             .filter(|t| seen.insert(Arc::as_ptr(t) as usize as u64))
             .cloned()
             .collect();
+        // Coverage is unspillable but shared, and its binary allocation is not
+        // proportional to JSON text. Never serialize millions of mask words on
+        // the interaction thread just to estimate resident memory.
+        let mut accounting = crate::history_budget::Accounting::default();
+        for selection in selections { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_selection(selection)); }
+        let mut document = self.document.clone();
+        document.selection = None;
+        for layer in &mut document.layers {
+            layer.selection = None;
+            if let Some(mask) = &mut layer.mask { mask.initial = None; }
+        }
         // Metadata excludes payloads (sources/rasters are independently stored).
         struct Counter(usize);
         impl std::io::Write for Counter {
@@ -263,7 +277,7 @@ impl Editor {
             }
         }
         let mut count = Counter(0);
-        let _ = serde_json::to_writer(&mut count, &self.document);
+        let _ = serde_json::to_writer(&mut count, &document);
         metadata_bytes = metadata_bytes.saturating_add(count.0.saturating_mul(4));
         RetainedTiles {
             rasters,

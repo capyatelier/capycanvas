@@ -617,3 +617,44 @@ mod selection_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod refinement_tests {
+    use super::*;
+    fn mask(word:u32)->Selection {
+        Selection::pixels(Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![word]).unwrap()))
+    }
+    #[test]
+    fn refined_selections_keep_original_undo_and_final_redo() {
+        for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
+            let mut doc=Document::new("refine",4,1);
+            doc.layers.push(Layer::selection(LayerId(3),"Mask",Selection::empty()));
+            let original=doc.clone();let mut editor=Editor::new(doc);
+            editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();
+            let checkpoint=editor.checkpoint();
+            for word in [0xff800000,0xff808000] {
+                editor.refine_selection(target,mask(word),editor.document().revision).unwrap();
+            }
+            assert_eq!(editor.checkpoint()==checkpoint,target==SelectionTarget::Current);
+            editor.undo().unwrap();
+            assert_eq!(editor.document().selection,original.selection);
+            assert_eq!(editor.document().saved_selection(LayerId(3)).unwrap(),Selection::empty());
+            assert!(!editor.can_undo());
+            editor.redo().unwrap();
+            let coverage=match target {SelectionTarget::Current=>editor.document().selection.clone().unwrap(),SelectionTarget::Saved(id)=>editor.document().saved_selection(id).unwrap()};
+            assert_eq!(coverage,mask(0xff808000));
+        }
+    }
+    #[test]
+    fn refinement_rejects_stale_revision_and_undo_branches() {
+        let mut editor=Editor::new(Document::new("refine",4,1));
+        editor.perform(Edit::SetSelection(Some(mask(0xff)))).unwrap();
+        let revision=editor.document().revision;
+        editor.perform(Edit::SetSelection(None)).unwrap();
+        assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),revision).is_err());
+        assert!(editor.document().selection.is_none());
+        editor.undo().unwrap();
+        assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),editor.document().revision).is_err());
+        assert!(editor.can_redo());
+    }
+}

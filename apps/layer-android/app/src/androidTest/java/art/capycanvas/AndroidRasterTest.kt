@@ -200,7 +200,7 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() == 6 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 7 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
@@ -270,6 +270,127 @@ class AndroidRasterTest {
             invoke("undo"); invoke("deselect")
         }
         println("PASS native selection geometry, polygon completion, undo/redo, feathered GPU masks and disconnected color islands")
+    }
+
+    @Test fun tonal61MpRecoveryAndInteraction() {
+        // Stream a generated RGB photo; never read an artist's image or workspace.
+        val width=9504; val height=6336
+        val compressed=java.io.ByteArrayOutputStream()
+        val deflater=java.util.zip.Deflater(1)
+        try {
+            java.util.zip.DeflaterOutputStream(compressed,deflater).use { output ->
+                val row=ByteArray(1+width*3)
+                for(y in 0 until height) {
+                    for(x in 0 until width) {
+                        val value=((x*13+y*7+((x xor y) and 31)) and 255).toByte()
+                        val at=1+x*3;row[at]=value;row[at+1]=value;row[at+2]=value
+                    }
+                    output.write(row)
+                }
+            }
+        } finally {deflater.end()}
+        val photo=File(files,"generated-61mp.png")
+        java.io.DataOutputStream(photo.outputStream().buffered()).use { output ->
+            output.write(byteArrayOf(137.toByte(),80,78,71,13,10,26,10))
+            fun chunk(type:String,data:ByteArray) {
+                val name=type.toByteArray(Charsets.US_ASCII);val crc=java.util.zip.CRC32()
+                crc.update(name);crc.update(data);output.writeInt(data.size);output.write(name);output.write(data);output.writeInt(crc.value.toInt())
+            }
+            val header=ByteBuffer.allocate(13).order(ByteOrder.BIG_ENDIAN).putInt(width).putInt(height).put(8).put(2).put(0).put(0).put(0).array()
+            chunk("IHDR",header);chunk("IDAT",compressed.toByteArray());chunk("IEND",byteArrayOf())
+        }
+        open(photo)
+        fun send(value:JSONObject):Long {
+            val start=SystemClock.elapsedRealtimeNanos()
+            native {Native.dispatch(it,value.toString())}
+            compose.waitUntil(60_000) {!tick()}
+            assertNull(host.failure)
+            return (SystemClock.elapsedRealtimeNanos()-start)/1_000_000
+        }
+        fun invoke(id:String)=send(obj("type" to "invoke","command" to id))
+        invoke("fit_canvas")
+        invoke("tonal_select")
+        val timings=(1..4).map {index -> send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to index)))}
+        assertTrue("61 MP selection was published",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
+        // Exercise the real recovery worker/atomic publication that reported the
+        // metadata-limit error, and parse its candidate before any adoption.
+        val recovery=File(files,"tonal-61mp-recovery.capy")
+        val saveStart=SystemClock.elapsedRealtimeNanos()
+        val capture=native {Native.projectRecoveryTask(it,false)}
+        try {Native.projectPublish(capture,recovery.absolutePath)} finally {Native.projectFree(capture)}
+        val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
+        val index=manifest(recovery.readBytes())
+        assertTrue(index.getJSONObject("selections").getJSONArray("pixels").length()>0)
+        assertTrue("Selection metadata stays small",index.toString().length<512*1024)
+        invoke("quick_mask")
+        val quick=send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to 2)))
+        assertTrue(native {state(it).getJSONObject("layer_tools").getBoolean("quick_mask")})
+        invoke("undo");invoke("redo")
+        // Reopening a second 61 MP copy alongside all undo masks is a separate
+        // workspace admission request. Close this generated tab before recovery.
+        invoke("close_document")
+        native {h ->
+            val close=state(h).array("requests").objects().firstOrNull {it.getJSONObject("kind").optString("type")=="document"}
+            if(close!=null) Native.documentClose(h,close.getInt("id"),"\"discard\"")
+        }
+        runBlocking {
+            val id=JSONObject(host.drawingTabs.query(obj("op" to "view"))).getLong("selected")
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.retire(id,closedTab=true)?.join()}
+        }
+        val activation=native {Native.documentSwitch(it,0,true)}
+        if(activation!=0L) try {Native.documentResumeWork(activation);native {Native.documentResume(it,activation)}} finally {Native.documentResumeFree(activation)}
+        val restore=native {Native.projectRecoveryTask(it,true)}
+        try {
+            Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
+            compose.waitUntil(120_000) {tick();native {Native.projectParkReady(it,restore)}}
+            native {Native.projectAdopt(it,restore,"null")}
+        } finally {Native.projectFree(restore)}
+        compose.waitUntil(60_000) {!tick()}
+        assertTrue("Recovery restores the 61 MP mask",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
+        assertNull(host.actionError);assertNull(host.failure)
+        val report="PASS native Android 61 MP RGB: first_mask=${timings.first()}ms; warm=${timings.drop(1)}ms; quick_mask=${quick}ms; recovery=${saveMs}ms; archive=${recovery.length()} bytes; metadata=${index.toString().length} bytes"
+        println(report)
+        File(activity.getExternalFilesDir(null),"tonal-61mp-result.txt").writeText(report)
+        assertTrue("Warm 61 MP adjustments should finish within one second: $timings",timings.drop(1).all {it<1000})
+    }
+
+    @Test fun tonalHdrCoverageAndSamplingOnDevice() {
+        val job=native { h -> val(id,f)=request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+        try {
+            Native.projectOptions(job,obj("extent" to org.json.JSONArray(listOf(500,200)),"color" to obj("space" to "Srgb","depth" to "F16"),"background" to "White").toString())
+            Native.projectWork(job,-1,500,200);native { Native.projectAdopt(it,job,"null") }
+        } finally { Native.projectFree(job) }
+        compose.runOnUiThread { host.documentChanged() }
+        fun send(value:JSONObject) { native { Native.dispatch(it,value.toString()) }; compose.waitUntil(30_000) { !tick() } }
+        fun invoke(id:String)=send(obj("type" to "invoke","command" to id))
+        fun tone(index:Int)=send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to index)))
+        fun pixel(name:String):Int {
+            val data=png(name);val image=android.graphics.BitmapFactory.decodeByteArray(data,0,data.size)
+            return image.getPixel(image.width/2,image.height/2).also { image.recycle() }
+        }
+        invoke("fit_canvas");invoke("select_all")
+        send(obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1,1,1,1))))
+        send(obj("type" to "color","action" to obj("op" to "hdr_intensity","stops" to 2)))
+        invoke("fill_selection");invoke("deselect");invoke("tonal_select")
+        assertEquals(listOf("tonal-bright-hdr","tonal-custom"),native { state(it).array("tool_extra").getJSONObject(0).getJSONObject("Choice").array("items").objects().takeLast(2).map { item -> item.getString("icon") } })
+        tone(6)
+        send(obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(0,0,1,1))))
+        send(obj("type" to "color","action" to obj("op" to "hdr_intensity","stops" to 0)))
+        invoke("fill_selection")
+        val blue=pixel("tonal-hdr-selected.png")
+        // The SDR export rendition can lift the blue fill's red/green channels.
+        assertTrue("Bright HDR selects +2-stop artwork: ${Integer.toHexString(blue)}",
+            android.graphics.Color.blue(blue)>200 && android.graphics.Color.red(blue)<100 && android.graphics.Color.green(blue)<100)
+        invoke("undo");tone(0);invoke("fill_selection")
+        val white=pixel("tonal-hdr-excluded.png")
+        assertTrue("Shadows excludes +2-stop artwork",android.graphics.Color.red(white)>200 && android.graphics.Color.green(white)>200)
+        invoke("quick_mask")
+        point(1,0.0,0.0);point(3,0.0,0.0)
+        val limits=native { state(it).array("tool_settings").objects().filter { f -> f.getString("id") in listOf("tonal_lower","tonal_upper") }.map { f -> f.number("value") } }
+        assertEquals(2,limits.size)
+        assertTrue("Sampling reads HDR artwork through Quick Mask: $limits",limits[0]<2f && limits[1]>2f && limits[0]>1f)
+        assertTrue(native { state(it).getJSONObject("layer_tools").getBoolean("quick_mask") })
+        println("PASS Huion Vulkan HDR tonal coverage, excluded shadows and artwork sampling through Quick Mask")
     }
 
     @Test fun paintableSelectionsOnDevice() {
@@ -2098,7 +2219,8 @@ class AndroidRasterTest {
         val saved=store(obj("type" to "save","name" to "Tablet test delivery","recipe" to recipe))
         val index=saved.getInt("index");assertEquals(4,index)
         assertEquals(canonical(recipe),canonical(store(obj("type" to "get","index" to index)).getJSONObject("recipe")))
-        assertTrue(File(ColorPreferencesStore.directoryForTest!!,"color-export-presets.json").length()>0)
+        val persisted=File(ColorPreferencesStore.directoryForTest!!,"color-export-presets.json").readBytes()
+        assertArrayEquals("CAPYPRESETS".toByteArray(Charsets.US_ASCII),persisted.copyOfRange(0,11))
         val updated=JSONObject(recipe.toString()).put("background","White")
         store(obj("type" to "update","index" to index,"recipe" to updated))
         store(obj("type" to "remember","index" to 3,"recipe" to updated))

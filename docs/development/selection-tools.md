@@ -1,10 +1,11 @@
 # Selection tools
 
-GTK, Web, and Android provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
+GTK, Web, Android, macOS and iPadOS provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
 Photo places these alongside Lasso and Auto select in its Tools toolbar. Sketch
 uses a Select title-bar command and a two-panel Tools → Tool drawer, matching
 the Eraser drawer. The Select command remembers the last chosen selection tool
-in the workspace. Other hosts retain their existing selection entry points.
+in the workspace. Windows retains its existing selection entry points.
+GTK also provides [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
 
 Preview-less tool rows match brush categories: at least 44 px on GTK/Web and
 48 dp on Android.
@@ -49,7 +50,7 @@ and affine transforms consume the same cached mask. Pooled coverage uses alpha
 to preserve its precision through color-managed rendering. No selection
 classification or feathering runs per brush dab.
 
-The defaults apply to GTK, Web, and Android. Shared migration recognizes only untouched
+The defaults apply to GTK, Web, Android, macOS and iPadOS. Shared migration recognizes only untouched
 included layouts and preserves working settings; customized history is retained.
 The new icons use the existing SVG bank, and native tool/header/toolbar buttons
 retain the application drag and reorder convention.
@@ -69,6 +70,12 @@ retain the application drag and reorder convention.
 - Android: run `AndroidTitleBarTest#selectionDrawerToolsModesAndRememberedIcons`
   and `AndroidRasterTest#selectionToolsRenderAndCombineOnDevice`. They cover
   native mouse/touch/stylus UI contacts and actual Vulkan selection/fill pixels.
+- macOS and iPadOS: `cargo test --locked -p layer-apple --target aarch64-apple-darwin
+  --lib selection -- --test-threads=1` drives both Apple policies through the
+  pointer ABI and Metal (modifier latching, Grow/Shrink, Quick Mask rows, mask
+  colors, thumbnails and saved layers). `EditorLaunchTests/testSelectionMasks`
+  runs the native journey on each target. Command-click a layer thumbnail to load
+  it (Shift adds, Option subtracts); Control-click stays the context menu.
 - `native_selection_options_input` exercises mode controls on every tool,
   feather-radius entry, selection combinations, and single-step undo/redo.
 - `native_selection_tools_input` exercises GTK mouse/touch tool selection,
@@ -212,8 +219,8 @@ Additional reproducible checks:
   80 ms on first use and 28–30 ms for 32/128-pixel Grow/Shrink. These measure a
   completed operation, not brush latency; tablet timings depend on its GPU.
 
-Layers and Color drawers stay open during canvas input. Opening another header
-or toolbar drawer replaces them; their existing close/toggle actions still work.
+Layers and Color drawers close on an outside contact like other tool drawers;
+a canvas contact that dismisses them does not paint.
 Photo's secondary panel strip opens individual panels by default. Default
 upgrades preserve customized workspace layouts.
 
@@ -235,8 +242,12 @@ readout clear of both shortcuts. Web caches the fitted geometry across color
 changes.
 
 The transparency circle matches the secondary color's diameter, with its top
-aligned to the primary color at the opposite edge. Equally sized, smaller black and white
-circles overlap along the wheel's curve with the same edge clearance as
-transparency. White stays above the opposite footer's bottom edge, allowing
-about one pixel of clearance variation at compact widths. HDR
-places its exposure readout below the circles so the compact overlap stays clear.
+aligned to the primary color at the opposite edge. Black is about 80% of its
+diameter and white about 64%, keeping 20px tap targets. Each overlaps the
+previous circle with its inner edge at transparency's distance from the ring,
+so their centers follow an arc that curves inward more than the wheel. White
+stays above the footer's bottom edge; below about 200px its 20px minimum can
+bring it up to 1.5px closer to the ring. Every host paints these swatches as a
+panel-colored disc with the paint inset 1px (3px for the primary color) and a
+25% text-colored outline. HDR places its exposure readout below the circles so
+the compact overlap stays clear.

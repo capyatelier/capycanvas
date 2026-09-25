@@ -10,6 +10,7 @@ mod atomic_file;
 pub use atomic_file::{atomic_write, atomic_write_checked};
 
 pub mod color;
+pub mod binary_payload;
 mod image_metadata;
 pub use image_metadata::{ImageResolution, ResolutionUnit};
 mod contact;
@@ -23,6 +24,7 @@ pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
 mod selection;
+pub mod tonal;
 pub use selection::*;
 pub use effects::*;
 mod presets;
@@ -35,6 +37,7 @@ mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
 mod project;
 mod project_storage;
+pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;
 mod color_edit;
 mod color_history;
@@ -196,6 +199,13 @@ pub struct Layer {
 }
 
 impl Layer {
+    fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
+        out.extend(self.selection.iter());
+        for mask in self.mask.iter().chain(self.pending_operations.iter().map(|op| &op.coverage)) {
+            out.extend(mask.initial.iter());
+            for op in mask.pending_operations.iter() { out.extend(op.coverage.initial.iter()); }
+        }
+    }
     /// Composition metadata without copying immutable paint history.
     pub fn composite_snapshot(&self) -> Self {
         Self {
@@ -1721,9 +1731,9 @@ impl Edit {
         match self {
             Self::SetSelection(selection) => out.extend(selection.iter()),
             Self::SetSavedSelection { selection, .. } => out.push(selection),
-            Self::ReplaceLayer(layer) => out.extend(layer.selection.iter()),
-            Self::InsertLayer { layer, .. } => out.extend(layer.selection.iter()),
-            Self::SetColor { layers, .. } => out.extend(layers.iter().filter_map(|l| l.selection.as_ref())),
+            Self::ReplaceLayer(layer) => layer.selection_roots(out),
+            Self::InsertLayer { layer, .. } => layer.selection_roots(out),
+            Self::SetColor { layers, .. } => layers.iter().for_each(|l| l.selection_roots(out)),
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.selection_roots(out)),
             _ => (),
         }
@@ -1808,6 +1818,7 @@ impl HistoryEntry {
         fn layer_metadata(layer: &Layer) -> usize {
             let mut metadata = layer.clone();
             metadata.selection = None; // Shared coverage is charged by identity.
+            if let Some(mask) = &mut metadata.mask { mask.initial = None; }
             serialized(&metadata)
         }
         fn size(edit: &Edit) -> usize {
@@ -1906,6 +1917,33 @@ impl Editor {
     /// Admit a worker-prepared edit without changing document or history.
     pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
         self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET).map(|_| ())
+    }
+
+    /// Refine the last selection operation without accumulating slider steps.
+    /// The exact document revision and target guard against unrelated edits,
+    /// navigation, and Undo/Redo. Retain the original inverse and admit both
+    /// directions before publishing the replacement.
+    pub fn refine_selection(&mut self, target: SelectionTarget, coverage: Selection, revision: u64) -> Result<(), DocumentError> {
+        let previous = self.undo.last().filter(|entry| match (&entry.edit, target) {
+            (Edit::SetSelection(_), SelectionTarget::Current) => true,
+            (Edit::SetSavedSelection { id, .. }, SelectionTarget::Saved(target)) => *id == target,
+            _ => false,
+        }).ok_or(DocumentError::InvalidLayerOperation("The selection operation has changed"))?;
+        if self.document.revision != revision || !self.redo.is_empty() {
+            return Err(DocumentError::InvalidLayerOperation("The selection operation has changed"));
+        }
+        let edit = self.document.selection_edit(target, coverage)?;
+        let (candidate, _) = self.prepare_history_edit(edit, history_budget::BYTE_BUDGET)?;
+        if history_budget::Accounting::new(&candidate).charge(previous) > history_budget::BYTE_BUDGET {
+            return Err(DocumentError::InvalidLayerOperation("This edit exceeds the Undo/Redo memory limit"));
+        }
+        self.document = candidate;
+        if matches!(target, SelectionTarget::Saved(_)) {
+            self.checkpoint = self.next_checkpoint;
+            self.next_checkpoint = self.next_checkpoint.checked_add(1).expect("document history exhausted");
+        }
+        self.trim_history(history_budget::BYTE_BUDGET);
+        Ok(())
     }
 
     fn prepare_history_edit(&self, edit: Edit, budget: usize) -> Result<(Document, HistoryEntry), DocumentError> {

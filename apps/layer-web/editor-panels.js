@@ -1,5 +1,6 @@
 import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
+import { createRangeControl } from './range-control.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
@@ -19,13 +20,14 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     else if (kind === "navigator") refresh = navigatorPanel(root);
     else return null;
     updates.set(root, refresh); refresh();
-    root.disposeEditor = () => { updates.delete(root); root.navigatorDispose?.(); };
+    root.disposeEditor = () => { updates.delete(root); root.navigatorDispose?.(); root.disposeSettings?.(); };
     return root;
   };
   function toolSet(root, panel) {
     let key = "", rows = [];
     return () => {
       const view = state().tool_panels[panel] || state().tool_set;
+      root.classList.toggle('tonal-tool-list', state().tool_extra.some(o=>o.Choice?.id==='tonal-tones'));
       const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({selected, ...item}) => item))) + state().theme;
       if (next !== key) {
         key = next; rows = []; root.replaceChildren();
@@ -54,14 +56,17 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     };
   }
   function toolSettings(root) {
-    let key = "", numbers = [], actions = [];
+    let key = "", numbers = [], actions = [], range, choices = [];
+    root.disposeSettings = () => { range?.dispose(); numbers.forEach(([,n])=>n.cancelEditing()); };
     return () => {
       const s = state();
       const picking = ['pick_visible','pick_layer'].includes(s.layer_tools.tool);
+      const compact = s.tool_extra.some(o=>o.Choice?.id==='tonal-tones');
+      root.classList.toggle('tonal-settings', compact);
       if (picking) {
         const picker=s.color_picker;
         const next=JSON.stringify([picker.layer,picker.can_sample_layer,picker.sample_width,picker.sample_sizes]);
-        if(key===next)return;key=next;root.replaceChildren();
+        if(key===next)return;key=next;root.disposeSettings();range=null;numbers=[];root.replaceChildren();
         const choice=(label,values,selected,select)=>{
           const row=element('label','picker-setting'),input=element('select');row.append(element('span','',label),input);
           input.setAttribute('aria-label',label);input.dataset.pickerSetting=label;
@@ -74,26 +79,46 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
           value=>dispatch({type:'set_color_sample_size',width:Number(value)}));
         contentChanged('tool_settings');return;
       }
-      const next = JSON.stringify([s.tool_settings.map(({value,...field})=>field),s.tool_actions]);
+      const next = JSON.stringify([String(s.toolbar_context_generation),String(s.document_file.epoch),s.layer_tools.editing_layer,s.tool_settings.map(({value,...field})=>field),s.tool_actions,s.tool_extra.map(o=>({...o,Choice:{...o.Choice,items:o.Choice.items.map(i=>({...i,selected:false}))}}))],(_,v)=>typeof v==='bigint'?String(v):v);
       if (next !== key) {
-        key = next; root.replaceChildren(); numbers=[]; actions=[]; let group="";
+        key = next; root.disposeSettings(); range=null; root.replaceChildren(); numbers=[]; actions=[]; choices=[]; let group="";
         const modes = element("div", "selection-modes");
         modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Selection mode");
         if (s.tool_actions.some(spec => selectionModes.has(spec.command))) root.append(modes);
+        for (const {Choice:spec} of s.tool_extra) {
+          const bar=element('div','selection-modes tonal-tones'); bar.dataset.toolChoiceBar=spec.id;
+          bar.setAttribute('role','radiogroup');bar.setAttribute('aria-label',spec.label);
+          spec.items.forEach((item,index)=>{
+            const node=button('',()=>dispatch(item.action));node.append(icon(item.icon));node.title=item.label;
+            node.dataset.toolChoiceTone=String(index);node.setAttribute('role','radio');node.setAttribute('aria-label',item.label);
+            bar.append(node);choices.push([spec.id,index,node]);
+          });root.append(bar);
+        }
         for (const field of s.tool_settings) {
+          if (compact && field.id==='tonal_upper') continue;
+          if (compact && field.id==='tonal_lower') {
+            const bounds=[field,s.tool_settings.find(f=>f.id==='tonal_upper')];
+            range=createRangeControl({app,bounds,label:'Range in stops relative to reference white (0)',icon,
+              onChange:(index,value)=>dispatch({type:'set_tool_setting',id:bounds[index].id,value})});
+            root.append(range);continue;
+          }
           if (field.group && field.group !== group) root.append(element("h3", "", field.group)); group=field.group;
-          const node=numberField(field.numeric,field.label,value=>dispatch({type:"set_tool_setting",id:field.id,value}));
-          node.dataset.toolSetting=field.id; root.append(node); numbers.push([field.id,node]);
+          const node=numberField(field.numeric,field.label,value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact);
+          node.dataset.toolSetting=field.id;
+          if(compact){const row=element('label','tonal-numeric-row');row.append(element('span','',field.label),node);root.append(row);}else root.append(node);
+          numbers.push([field.id,node]);
         }
         for (const spec of s.tool_actions) {
           const node=button("",()=>dispatch({type:"invoke",command:spec.command}),"tool-setting-action");
           node.dataset.toolAction=spec.command;
           (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node]);
         }
-        if(s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton("Selection Actions…","selection"));
+        if(!compact && s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton("Selection Actions…","selection"));
         contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
+      if(range) range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));
+      for(const [id,index,node] of choices) {const selected=s.tool_extra.find(o=>o.Choice.id===id).Choice.items[index].selected;node.setAttribute('aria-checked',selected);node.setAttribute('aria-pressed',selected);}
       for (const [spec,node] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);
         if(!node.firstChild) {
@@ -290,7 +315,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}
         const pressed=String(swatch.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
-        paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;
+        paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 0 0 / 10px 10px`;
       });
       shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":shape==="circle"?"Okhsv":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
       readout.setAttribute("aria-label",view.readout_description);queuePaint();

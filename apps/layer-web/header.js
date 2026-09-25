@@ -4,7 +4,6 @@ import { pickerButtonAction } from './color-controls.js';
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
-  const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
   const title = documents.title;
@@ -22,7 +21,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
-  let buttonContact, colorKey, measurementTheme, refreshKey;
+  let buttonContact, measurementTheme, refreshKey;
   function clearButtonPress(e) {
     if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
     buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
@@ -157,7 +156,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function refresh() {
     view=app.header_view();
-    const nextKey=JSON.stringify([view,state().theme,state().commands,displayColors().foreground,displayColors().background,state().workspace.layout.canvas_info.visible]);
+    const nextKey=JSON.stringify([view,state().theme,state().commands,state().workspace.layout.canvas_info.visible]);
     if(nextKey===refreshKey)return;
     refreshKey=nextKey;
     size=view.sizes.find(s=>s.id===view.model.size);
@@ -182,12 +181,6 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(!editing&&wasEditing)document.querySelector('#canvas').focus({preventScroll:true});
     }
     root.dataset.size=size.id;
-    const cssColor=rgba=>`rgb(${rgba.slice(0,3).map(v=>Math.round(v*255)).join(' ')} / ${rgba[3]})`;
-    const colors=[displayColors().foreground,displayColors().background], nextColors=JSON.stringify(colors);
-    if(nextColors!==colorKey){colorKey=nextColors;const previews=app.color_ui({type:"preview",colors});
-      root.style.setProperty('--header-foreground',cssColor(previews[0].rgba));
-      root.style.setProperty('--header-background',cssColor(previews[1].rgba));
-    }
     for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon})) {
       root.style.setProperty(`--header-${name}`,`${value}px`);
       bank.style.setProperty(`--header-${name}`,`${value}px`);
@@ -199,7 +192,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       r.root.tabIndex=editing?0:-1; r.content.inert=editing; r.grip.hidden=!editing;
       if(r.button) {
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
-        const glyph=r.entry.item.control?.kind==='color'?'colors':command?.icon||spec.icon;
+        const glyph=command?.icon||spec.icon;
         if(glyph && r.button.firstChild?.dataset.asset!==glyph)r.button.replaceChildren(icon(glyph));
         r.button.title=command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));

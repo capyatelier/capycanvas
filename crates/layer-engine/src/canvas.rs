@@ -81,6 +81,7 @@ pub struct EngineMetrics {
 
 #[derive(Clone, Debug)]
 struct ActiveStroke {
+    paint_color: Option<layer_core::color::RgbColor>,
     before: layer_core::raster::RasterRevision,
     id: StrokeId,
     layer_id: LayerId,
@@ -96,6 +97,8 @@ struct ActiveStroke {
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
+    paint_color: Option<layer_core::color::RgbColor>,
+    used_colors: Vec<layer_core::color::RgbColor>,
     pub recording: crate::recording::Recording,
     backend: B,
     editor: Editor,
@@ -175,6 +178,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transforms.push_back(input_transform);
         let dab_generator = DabGenerator::new(document.color.space);
         Ok(Self {
+            paint_color: None,
+            used_colors: Vec::new(),
             recording: Default::default(),
             backend,
             editor: Editor::new(document),
@@ -315,6 +320,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.active_stroke
             .as_ref()
             .map_or(&self.brush, |active| &active.brush)
+    }
+
+    /// Optional source definition, captured alongside the brush at contact down.
+    /// It is metadata for completed artwork, never a display RGB approximation.
+    pub fn set_paint_color(&mut self, color: layer_core::color::RgbColor) {
+        self.paint_color = Some(color);
+    }
+    pub fn take_used_colors(&mut self) -> impl Iterator<Item = layer_core::color::RgbColor> + '_ {
+        self.used_colors.drain(..)
     }
 
     /// Editable configuration for the next stroke, independent of an active
@@ -735,6 +749,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
         self.editor.validate_edit(edit)
+    }
+
+    pub fn refine_selection(&mut self, target: layer_core::SelectionTarget, coverage: layer_core::Selection, revision: u64) -> Result<(), DocumentError> {
+        self.flush_pending_edits()?;
+        self.editor.refine_selection(target, coverage, revision)
     }
 
     fn require_renderer_color(&self, color: layer_core::color::DocumentColor) -> Result<(), DocumentError> {
@@ -1315,6 +1334,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     ).expect("invertible selection placement"))
                 });
                 let active = ActiveStroke {
+                    paint_color: (!is_mask
+                        && tool == StrokeTool::Brush
+                        && !matches!(
+                            brush.execution,
+                            BrushExecution::Smudge | BrushExecution::Liquify
+                        )
+                        && brush.opacity > 0.
+                        && brush.flow > 0.
+                        && brush.color_rgba_linear[3] > 0.)
+                        .then_some(self.paint_color)
+                        .flatten(),
                     before: self.document().target_raster(layer_id).unwrap().clone(),
                     id,
                     layer_id,
@@ -1443,6 +1473,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         revision: layer_core::raster::RasterRevision::pending(),
                     })
                     .map_err(EngineError::Document)?;
+                if active.persistent_started
+                    && let Some(color) = active.paint_color
+                {
+                    self.used_colors.retain(|c| *c != color);
+                    if self.used_colors.len() == 64 {
+                        self.used_colors.remove(0);
+                    }
+                    self.used_colors.push(color);
+                }
                 if has_end_taper {
                     // End taper depends on final stroke length. Replay after
                     // pen-up so the stored stroke and visible result agree.

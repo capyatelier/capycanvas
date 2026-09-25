@@ -353,6 +353,48 @@ pub enum RegionSource {
     Layers(Vec<Layer>),
     /// Rasterize selection geometry without color classification.
     Selection(std::sync::Arc<layer_core::Selection>),
+    /// Continuous luminance classification of a raw layer or artwork composite.
+    Tonal(Box<TonalRequest>),
+}
+impl RegionSource {
+    pub fn raw_source(&self) -> &Self {
+        if let Self::Tonal(t) = self { &t.source } else { self }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct TonalRequest {
+    pub source: RegionSource,
+    pub bands: Vec<layer_core::tonal::TonalBand>,
+    pub invert: bool,
+    pub probe: Option<TonalProbe>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TonalProbe {
+    /// Half-open rectangle in source pixels. Point probes are at most 5×5.
+    pub bounds: [u32; 4],
+    pub point: bool,
+    /// Optional convex sampling footprint, in perimeter order in source pixels.
+    /// Only limits probe statistics, never the generated mask.
+    pub quad: Option<[Point; 4]>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TonalSample {
+    /// Point: alpha-weighted linear average in stops. Area: central 90% range.
+    pub stops: [f32; 2],
+    pub count: u32,
+}
+impl TonalRequest {
+    pub fn valid(&self, extent: [u32; 2]) -> bool {
+        matches!(self.source, RegionSource::Composite | RegionSource::Layer(_) | RegionSource::Layers(_))
+            && self.bands.len() <= layer_core::tonal::MAX_BANDS
+            && self.bands.iter().all(|b| b.validate().is_ok())
+            && self.probe.is_none_or(|p| {
+                let [x,y,r,b] = p.bounds;
+                x < r && y < b && r <= extent[0] && b <= extent[1]
+                    && (!p.point || (r-x <= 5 && b-y <= 5 && p.quad.is_none()))
+                    && p.quad.is_none_or(|q| q.iter().all(|v| v.x.is_finite() && v.y.is_finite()))
+            })
+    }
 }
 pub use layer_core::SelectionMode;
 #[derive(Clone, Debug)]
@@ -415,6 +457,7 @@ impl RegionRefinement {
 #[derive(Clone, Debug)]
 pub struct RegionResult {
     pub request_id: u64,
+    pub tonal_sample: Option<TonalSample>,
     /// Immutable, GPU-generated mask in the source's coordinates.
     pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
 }

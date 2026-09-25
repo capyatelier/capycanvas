@@ -822,9 +822,17 @@ pub unsafe extern "C" fn capy_workspace_library_request(
             let source = unsafe { CStr::from_ptr(request) }.to_bytes();
             if source.len() > MAX_PACKAGE_BYTES { return Err(StoreError::invalid("Workspace request exceeds the supported size.")); }
             let request = serde_json::from_slice(source)?;
-            // Dispatch workers have smaller stacks than Rust test threads.
-            // Keep the manager's asynchronous state on the heap at the ABI.
-            pollster::block_on(Box::pin(library.request(request)))
+            // Dispatch workers have smaller stacks than Rust test threads, and
+            // debug builds nest large manager futures. Run on a sized worker.
+            std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .name("capy-workspace-library".into())
+                    .stack_size(8 * 1024 * 1024)
+                    .spawn_scoped(scope, || pollster::block_on(Box::pin(library.request(request))))
+                    .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?
+                    .join()
+                    .map_err(|_| StoreError::new(ErrorKind::Unavailable, "Workspace operation failed."))?
+            })
         })();
         match result {
             Ok(value) => json!({"value":value,"status":library.status()}),

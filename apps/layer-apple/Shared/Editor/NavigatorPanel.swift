@@ -3,6 +3,14 @@ import SwiftUI
 struct NavigatorPanel: View {
     @ObservedObject var store: EditorStore
     private let commands = ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"]
+    private var aspect: CGFloat {
+        let document = store.state["tabs"][0]
+        guard !store.camera.value.isNull,
+            let source = try? JSON([store.camera.value.raw, [document["width"].uint, document["height"].uint], [100, 100]]).encoded(),
+            let pointer = source.withCString({ capy_apple_navigator_geometry($0) }) else { return 1 }
+        defer { capy_apple_string_free(pointer) }
+        return (try? JSON.decode(String(cString: pointer)))?["overview_aspect"].number ?? 1
+    }
     var body: some View {
         VStack(spacing: 2) {
             NavigatorDrawing(store: store)
@@ -16,7 +24,8 @@ struct NavigatorPanel: View {
                 }
             }
         }.padding(8)
-            .modifier(PanelBodyMeasurement(panel: "navigator", intrinsicHeight: 164 + 2 + 32 + 16, kind: .scroll))
+            .modifier(PanelBodyMeasurement(panel: "navigator", kind: .scroll,
+                naturalHeight: { [aspect] width in max(0, width - 16) * aspect + 2 + 32 + 16 }))
     }
 }
 

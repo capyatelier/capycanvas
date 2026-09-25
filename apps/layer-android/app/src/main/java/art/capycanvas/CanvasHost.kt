@@ -197,6 +197,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     /** Focused native color buttons own Space/Enter instead of canvas shortcuts. */
     internal var colorControlFocus: Any? = null
+    /** Focused interval handles own their native adjustment keys. */
+    internal var rangeControlFocus: Any? = null
     internal var pickerPopupOpen = false
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.

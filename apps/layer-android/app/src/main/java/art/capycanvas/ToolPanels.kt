@@ -29,30 +29,32 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
+import org.json.JSONArray
 
 /** The selected tool determines groups, subtools and settings in Rust. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject, panel: String = "brushes") {
     val view = state.getJSONObject("tool_panels").optJSONObject(panel) ?: state.getJSONObject("tool_set")
+    val compact = state.array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "tonal-tones" }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (panel == "brush_sets" || panel == "sculpt_sets") Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, "set", Modifier.fillMaxWidth().testTag("$panel-${item.getString("label")}"))
+                ToolChoice(host, item, "set", Modifier.fillMaxWidth().testTag("$panel-${item.getString("label")}"), compact)
             }
         } else FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, "group", (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"))
+                ToolChoice(host, item, "group", (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"), compact)
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("subtools").objects().forEach { item ->
-                ToolChoice(host, item, "subtool", Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"))
+                ToolChoice(host, item, "subtool", Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"), compact)
             }
         }
     }
 }
 
-@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, kind: String, modifier: Modifier) {
+@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, kind: String, modifier: Modifier, compact: Boolean = false) {
     val colors = LocalPalette.current
     val context = LocalContext.current
     val label = item.getString("label")
@@ -72,7 +74,7 @@ import org.json.JSONObject
                     SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                     Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
                 }
-            } else Row(Modifier.heightIn(min = 42.dp), verticalAlignment = Alignment.CenterVertically,
+            } else Row(Modifier.heightIn(min = if (compact) 30.dp else 42.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                 Text(label, fontWeight = FontWeight.Bold, maxLines = if (kind == "set") 1 else 2, overflow = TextOverflow.Ellipsis)
@@ -82,6 +84,12 @@ import org.json.JSONObject
 }
 
 @Composable internal fun ToolSettingsControls(host: CanvasHost, state: JSONObject) {
+    if (state.array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "tonal-tones" }) {
+        key(state.optLong("toolbar_context_generation"), state.getJSONObject("document_file").optLong("epoch"), state.getJSONObject("layer_tools").optJSONObject("editing_layer")?.toString()) {
+            TonalSettingsControls(host, state)
+        }
+        return
+    }
     if (state.getJSONObject("layer_tools").optString("tool") in listOf("pick_visible", "pick_layer")) {
         val picker=state.getJSONObject("color_picker")
         ProvideTextStyle(LocalTextStyle.current.copy(fontSize=13.sp)) {
@@ -147,6 +155,38 @@ import org.json.JSONObject
                     SharedIcon(command.getString("icon"), null)
                     Spacer(Modifier.width(6.dp))
                     Text(command.getString("label"))
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun TonalSettingsControls(host: CanvasHost, state: JSONObject) {
+    val commands = state.array("commands").objects().associateBy { it.getString("id") }
+    val actions = state.array("tool_actions").objects()
+    val modes = obj("id" to "selection-mode", "label" to "Selection mode", "segmented" to true, "items" to JSONArray(actions.map { action ->
+        val command = commands.getValue(action.getString("command"))
+        obj("icon" to command.getString("icon"), "label" to command.getString("label"), "selected" to command.getBoolean("selected"),
+            "action" to obj("type" to "invoke", "command" to action.getString("command")))
+    }))
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        ToolbarChoice(modes, false, false, false, 20, host::dispatch, prefix="tool", height=36f)
+        state.array("tool_extra").objects().forEach { option ->
+            ToolbarChoice(option.getJSONObject("Choice"), false, false, false, 20, host::dispatch, prefix="tool", height=36f)
+        }
+        val fields = state.array("tool_settings").objects()
+        if (fields.any { it.getString("id") == "tonal_lower" }) {
+            val bounds = listOf("tonal_lower", "tonal_upper").map { id -> fields.first { it.getString("id") == id } }
+            RangeControl(bounds, "Range in stops relative to reference white (0)", Modifier.fillMaxWidth()) { index, value ->
+                host.dispatch(obj("type" to "set_tool_setting", "id" to bounds[index].getString("id"), "value" to value))
+            }
+        }
+        fields.filter { it.getString("id") !in listOf("tonal_lower", "tonal_upper") }.forEach { field ->
+            val id = field.getString("id")
+            Row(Modifier.fillMaxWidth().height(28.dp).testTag("tool-setting-$id"), verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                Text(field.getString("label"), Modifier.width(62.dp), maxLines=1)
+                NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), Modifier.weight(1f), id=id, inline=true) {
+                    host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
                 }
             }
         }

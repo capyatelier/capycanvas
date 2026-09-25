@@ -97,7 +97,7 @@ struct Column:std::enable_shared_from_this<Column>{
                 auto pick=found->second;place(pick,local(object(tile,L"bounds"),content,offset));
                 AutomationProperties::SetName(pick,str(panel,L"title"));ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
                 bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId;
-                pick.Background(active?selected():clear());
+                pick.Background(active?selected(data):clear());
                 pick.CornerRadius(active&&open.Size()?(str(open,L"direction")==L"left"?CornerRadius{0,6,6,0}:CornerRadius{6,0,0,6}):CornerRadius{6,6,6,6});
                 AutomationProperties::SetItemStatus(pick,active?L"Selected":L"");
             }

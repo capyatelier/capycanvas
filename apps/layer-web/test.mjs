@@ -1,3 +1,4 @@
+import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
@@ -390,6 +391,8 @@ try {
   } else if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--tonal-selection")) {
+    await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--toolbar-components")) {
     await checkToolbarComponents({call,evaluate,settle});
   } else if (process.argv.includes("--selection-tools")) {

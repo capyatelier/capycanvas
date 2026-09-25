@@ -34,7 +34,7 @@ import kotlin.math.roundToInt
                 val control = tile.getJSONObject("control")
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
-                    ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
+                    ?: when (kind) { "color" -> "colors"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
                 val placement = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}")
                 if (tile.has("component")) {
                     ToolbarComponent(host, panel, tile, bounds, dock, vertical, placement)
@@ -46,9 +46,6 @@ import kotlin.math.roundToInt
                     ToolbarDivider(modifier, horizontal = vertical)
                     return@forEachIndexed
                 }
-                val fill = if (kind == "color") host.panelContent?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
-                        Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
-                    } else null
                 val colors = LocalPalette.current
                 val drawerAnchor = host.snapshot?.getJSONObject("state")?.getJSONObject("customization")
                     ?.objectOrNull("drawer")?.getJSONObject("anchor")
@@ -69,7 +66,9 @@ import kotlin.math.roundToInt
                         onClick = activate),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
-                        SharedIcon(icon, tile.getString("label"), Modifier.size(panel.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}"), fill = fill)
+                        val glyph = Modifier.size(panel.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
+                        if (kind == "color") PaintPairIcon(host.panelContent?.getJSONObject("state"), tile.getString("label"), glyph)
+                        else SharedIcon(icon, tile.getString("label"), glyph)
                     }
                     if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
                         fontWeight = if (panel.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,

@@ -12,6 +12,7 @@ mod package;
 mod protocol;
 pub use package::*;
 mod browser;
+mod component_text;
 mod retention;
 pub use browser::BrowserDatabase;
 mod controller;

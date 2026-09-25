@@ -239,7 +239,7 @@ fn native_selection_tools_input() {
         );
         assert_eq!(d.named("drawer-panel-Tools"), tools);
         assert_eq!(d.named("drawer-panel-ToolSettings"), settings);
-        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 7);
+        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 8);
         assert_shared_icons(&d.named("tool-drawer"));
     }
     for theme in [Theme::Dark, Theme::Light] {
@@ -508,7 +508,7 @@ fn native_selection_options_input() {
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&opener);
     }
-    for tool in SelectionTool::ALL.into_iter().filter(|t| *t != SelectionTool::Brush) {
+    for tool in SelectionTool::ALL.into_iter().filter(|t| !matches!(t, SelectionTool::Brush | SelectionTool::Tonal)) {
         d.click_name(&format!("tool-choice-{:?}", tool.command()));
         assert!(d.named("tool-setting-selection_feather").is_visible());
         let settings = d.named("drawer-panel-ToolSettings");
@@ -610,4 +610,222 @@ fn native_selection_options_input() {
             .save_to_png(output.join(format!("selection-options-{theme:?}.png")))
             .unwrap();
     }
+}
+
+fn wait_tonal(d:&Driver) {
+    let deadline=Instant::now()+Duration::from_secs(25);
+    loop {pump(20);if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() {return;}
+        assert!(Instant::now()<deadline,"tonal update timed out: {:?}",state(&d.w).host_error);}
+}
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tonal_selection_input"]
+fn native_tonal_selection_input() {
+    let mut d=Driver::new("art.capycanvas.TonalSelection");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.dir.to_string_lossy().into()));
+    std::fs::create_dir_all(&output).unwrap();
+    d.w.dispatch(UiAction::SetColor {rgba:[0.08,0.08,0.08,1.]});
+    d.w.dispatch(UiAction::SetBrushOpacity {value:1.});
+    for (a,b) in [([600.,600.],[850.,850.]),([1150.,600.],[1400.,850.])] {
+        d.w.dispatch(UiAction::Invoke {command:CommandId::RectangleSelect});canvas_drag(&mut d,a,b,false);wait_selection(&d);
+        d.w.dispatch(UiAction::Invoke {command:CommandId::FillSelection});pump(500);
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect});
+    }
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    d.click_name("tool-choice-TonalSelect");wait_tonal(&d);
+    assert!(selection(&d).is_none(),"opening the tool does not change the selection");
+    let panel=d.named("drawer-panel-ToolSettings");
+    for absent in ["tool-action-ApplyTonalSelection","tool-action-CancelTonalSelection","tool-action-TonalInvert","tool-action-TonalDetails","tool-list-tonal-source","tool-info-tonal-status","selection-actions-menu"] {
+        assert!(find_named(&panel,absent).is_none(),"obsolete control: {absent}");
+    }
+    assert!(panel.width() >= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    assert!(panel.measure(gtk::Orientation::Horizontal, -1).0 <= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
+    let tones=d.named("tool-choice-tonal-tones-0").compute_bounds(&panel).unwrap();
+    assert!(modes.y()<tones.y(),"selection mode comes first");
+    let bar=d.named("tool-choice-bar-tonal-tones");
+    assert!(bar.height()<=36,"all tones occupy one compact bar");
+    let mut right=0.;
+    for index in 0..6 {
+        let button=d.named(&format!("tool-choice-tonal-tones-{index}"));
+        assert!(button.is::<gtk::ToggleButton>());
+        let bounds=button.compute_bounds(&bar).unwrap();
+        assert_eq!(bounds.y(),0.,"tone choices must not wrap into rows");
+        assert!(bounds.x()>=right && bounds.width()>=24.);
+        right=bounds.x()+bounds.width();
+        assert!(button.tooltip_text().unwrap().contains("stop"));
+    }
+    let p=d.point(&d.named("tool-choice-tonal-tones-0"));
+    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));wait_tonal(&d);
+    let first=wait_selection(&d);
+    assert!(byte_pixel(&first,700,700)>240 && byte_pixel(&first,1250,700)>240);
+    assert_eq!(byte_pixel(&first,1000,700),0);
+    let image=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    let m=state(&d.w).camera.document_to_surface();
+    let [x,y]=[(m[0]*1250.+m[2]*700.+m[4]) as usize,(m[1]*1250.+m[3]*700.+m[5]) as usize];
+    let pixel=&image.bytes[y*image.stride as usize+x*4..][..4];
+    assert!(pixel[0].abs_diff(pixel[1])<4 && pixel[1].abs_diff(pixel[2])<4,"ordinary selection has no tint: {pixel:?}");
+    d.number(&d.named("tool-setting-tonal_softness"),"50");wait_tonal(&d);
+    d.number(&d.named("tool-setting-selection_feather"),"2");wait_tonal(&d);
+    let refined=selection(&d).unwrap();
+    let settings_height=|d:&Driver| {
+        let panel=d.named("drawer-panel-ToolSettings");
+        let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
+        let feather=d.named("tool-setting-selection_feather").compute_bounds(&panel).unwrap();
+        feather.y()+feather.height()-modes.y()
+    };
+    let preset_height=settings_height(&d);
+    assert!(preset_height<=150.,"preset controls use {preset_height}px");
+    eprintln!("Tonal preset: controls {preset_height}px; drawer {}px",d.named("tool-drawer").height());
+    assert_shared_icons(&d.named("tool-drawer"));
+    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-presets.png")).unwrap();
+    d.click_name(&opener);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert!(selection(&d).is_none(),"one undo includes slider refinements");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),Some(refined.clone()));
+    canvas_click(&mut d,[700.,700.]);wait_tonal(&d);
+    let sampled=selection(&d).unwrap();assert!(byte_pixel(&sampled,1250,700)>240);
+    d.click_name(&opener);
+    assert_eq!(state(&d.w).tool_settings.len(),4,"Custom adds just two bounds");
+    assert!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value < -5.);
+    assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
+    for id in ["tonal_lower", "tonal_upper"] {
+        let number=d.named(&format!("tool-setting-{id}"));
+        assert!(number.tooltip_text().unwrap().contains("stops relative to reference white"));
+        let readout=find_css(&number,"number-readout").unwrap().downcast::<gtk::Label>().unwrap();
+        assert!(!readout.text().contains("stop"),"units stay in label tooltips");
+        assert_eq!(readout.text().split('.').last().unwrap().len(),1,"one decimal in the endpoint readout");
+    }
+    let custom_height=settings_height(&d);
+    assert!(custom_height<=170.,"custom controls use {custom_height}px");
+    let range=d.named("tool-range-tonal");
+    assert!(range.height()<=28);
+    assert!(d.named("drawer-panel-ToolSettings").measure(gtk::Orientation::Horizontal,-1).0<=layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    let low=d.named("tool-setting-tonal_lower").compute_bounds(&range).unwrap();
+    let track=d.named("range-track-tonal").compute_bounds(&range).unwrap();
+    let high=d.named("tool-setting-tonal_upper").compute_bounds(&range).unwrap();
+    assert!(low.x()+low.width()<=track.x() && track.x()+track.width()<=high.x());
+    assert!(low.width()<=48. && high.width()<=48.,"endpoint boxes fit the displayed numbers: {} / {}",low.width(),high.width());
+    assert!(track.width()>=range.width() as f32*0.7,"track uses the space released by the endpoint boxes");
+    eprintln!("Tonal range widths: low {}px, track {}px, high {}px",low.width(),track.width(),high.width());
+    eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
+    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
+    d.key(b'q' as u32);wait_tonal(&d);
+    assert!(state(&d.w).layer_tools.quick_mask);
+    assert_eq!(selection(&d),Some(sampled.clone()));
+    if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-quick-mask.png")).unwrap();
+    let image=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    assert!(image.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30)).count()>100);
+    d.click_name(&opener);
+    // The red overlay is excluded from both point and rectangle sampling.
+    canvas_click(&mut d,[700.,700.]);wait_tonal(&d);
+    assert!(byte_pixel(&selection(&d).unwrap(),1250,700)>240);
+    assert!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_lower").unwrap().value < -5.,"sampling ignores the red overlay");
+    canvas_drag(&mut d,[930.,650.],[1050.,800.],false);wait_tonal(&d);
+    let quick=selection(&d).unwrap();assert!(byte_pixel(&quick,1000,700)>240);assert_eq!(byte_pixel(&quick,700,700),0);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
+    assert_eq!(selection(&d),Some(sampled.clone()));
+    d.key(b'q' as u32);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::NewSelectionLayer});wait_tonal(&d);
+    let id=state(&d.w).layer_tools.mask_editing.unwrap().layer.unwrap();
+    let saved=|d:&Driver| d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let before=saved(&d);assert_eq!(before,layer_core::Selection::empty());
+    d.click_name(&opener);d.click_name("tool-choice-tonal-tones-0");wait_tonal(&d);
+    let mask=saved(&d);assert!(byte_pixel(&mask,700,700)>240 && byte_pixel(&mask,1250,700)>240);
+    assert_eq!(byte_pixel(&mask,1000,700),0);assert_eq!(selection(&d),Some(sampled.clone()));
+    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-selection-layer.png")).unwrap();
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert_eq!(saved(&d),before);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(saved(&d),mask);
+    assert_eq!(selection(&d),Some(sampled));
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.w.window.destroy();pump(80);
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tonal_selection_pen_input --tablet"]
+fn native_tonal_selection_pen_input() {
+    let mut d=Driver::new("art.capycanvas.TonalSelectionPen");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
+    d.key(b'q' as u32);assert!(state(&d.w).layer_tools.quick_mask);
+    canvas_drag(&mut d,[600.,600.],[850.,800.],true);wait_tonal(&d);
+    let first=wait_selection(&d);
+    assert!(byte_pixel(&first,1500,1000)>240,"pen range selects matching tones throughout the image");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert!(selection(&d).is_none());
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),Some(first.clone()));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Brush});assert_eq!(selection(&d),Some(first));
+    d.w.window.destroy();pump(80);
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_range_input"]
+fn native_tonal_range_input() {
+    tonal_range_input(false);
+}
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_range_pen_input --tablet"]
+fn native_tonal_range_pen_input() {
+    tonal_range_input(true);
+}
+fn tonal_range_input(pen: bool) {
+    let mut d=Driver::new("art.capycanvas.TonalRange");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});
+    let baseline=selection(&d);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    d.click_name("tool-choice-tonal-tones-5");wait_tonal(&d);
+    let bounds=|d:&Driver| {
+        ["tonal_lower","tonal_upper"].map(|id|state(&d.w).tool_settings.iter().find(|f|f.id==id).unwrap().value)
+    };
+    let handle_point=|d:&Driver,index:usize| {
+        let name=["tonal_lower","tonal_upper"][index];
+        let handle=d.named(&format!("range-handle-{name}")).downcast::<crate::range_control::RangeHandle>().unwrap();
+        let mut p=d.point(handle.upcast_ref());
+        p[0]+=handle.position(handle.value()) as f32-handle.width() as f32/2.+if index==0 {-4.} else {4.};p
+    };
+    let move_handle=|d:&mut Driver,index,device:&str,delta| {
+        let a=handle_point(d,index);let b=[a[0]+delta,a[1]];
+        let events=match device {
+            "touch"=>serde_json::json!([{"touch":"down","point":a},{"touch":"move","point":b},{"touch":"up"}]),
+            "pen"=>serde_json::json!([{"pen":"move","point":a},{"pen":"down"},{"pen":"move","point":b},{"pen":"up"},{"pen":"leave"}]),
+            _=>serde_json::json!([{"point":a,"down":true},{"point":b},{"down":false}]),
+        };
+        d.perform(events);wait_tonal(d);
+    };
+    for device in if pen { &["pen"][..] } else { &["mouse","touch"][..] } {
+        let before=bounds(&d);
+        move_handle(&mut d,0,device,-8.);
+        let low=bounds(&d);assert!(low[0]<before[0],"{device}: lower handle moves");assert_eq!(low[1],before[1]);
+        move_handle(&mut d,1,device,8.);
+        let high=bounds(&d);assert!(high[1]>low[1],"{device}: upper handle moves");assert_eq!(high[0],low[0]);
+    }
+    // The synthetic tablet proxy is for contacts. Numeric text focus runs
+    // through the compositor directly in the mouse/touch journey.
+    if pen { assert!(state(&d.w).host_error.is_none()); d.finish(); return; }
+    // Keyboard continues on the focused native handle.
+    let before=bounds(&d);d.key(0xff53);wait_tonal(&d);
+    assert!(bounds(&d)[1]>before[1]);
+    // As with other focused GtkRanges, ordinary shortcuts belong to the
+    // control. Exercise the mask action without changing native key ownership.
+    d.w.dispatch(UiAction::Invoke {command:CommandId::QuickMask});wait_tonal(&d);
+    assert!(state(&d.w).layer_tools.quick_mask);
+    let before=bounds(&d);move_handle(&mut d,0,"mouse",-5.);
+    assert!(bounds(&d)[0]<before[0],"range remains live when Quick Mask changes the tool context");
+    // Escape cancels the current drag and returns just that endpoint.
+    let before=bounds(&d);let a=handle_point(&d,0);let b=[a[0]+15.,a[1]];
+    d.perform(serde_json::json!([{"point":a,"down":true},{"point":b}]));pump(200);
+    assert_ne!(bounds(&d),before);
+    d.key(0xff1b);d.perform(serde_json::json!([{"down":false}]));wait_tonal(&d);
+    assert_eq!(bounds(&d),before);
+    if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
+    let lower=d.named("tool-setting-tonal_lower");let upper=d.named("tool-setting-tonal_upper");
+    d.number(&lower,"-20");wait_tonal(&d);d.number(&upper,"12");wait_tonal(&d);
+    assert_eq!(bounds(&d),[-20.,12.],"typed values extend beyond the normal track domain");
+    d.number(&lower,"13");wait_tonal(&d);assert_eq!(bounds(&d),[12.,12.]);
+    move_handle(&mut d,0,"mouse",-12.);assert!(bounds(&d)[0]<12.,"coincident handles separate again");
+    let result=selection(&d);
+    d.click_name(&opener);d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert_eq!(selection(&d),baseline);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),result);
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.finish();
 }

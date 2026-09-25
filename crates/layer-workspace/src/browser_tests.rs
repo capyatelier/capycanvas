@@ -562,9 +562,17 @@ fn browser_schema_two_upgrade_preserves_existing_records_and_defaults_switcher()
     old.execute(StoreRequest::Commit { batch }, 1000).unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&old.encoded().unwrap()).unwrap();
     value["schema"] = serde_json::json!(2);
+    for bytes in value["components"].as_object_mut().unwrap().values_mut() {
+        *bytes = serde_json::to_value(bytes.as_str().unwrap().as_bytes()).unwrap();
+    }
+    let legacy_size = value.to_string().len();
     value.as_object_mut().unwrap().remove("switcher");
     value.as_object_mut().unwrap().remove("workspace_order");
     let mut upgraded = BrowserDatabase::decode(&value.to_string()).unwrap();
+    let compact = upgraded.encoded().unwrap();
+    assert!(compact.len() < legacy_size);
+    assert!(serde_json::from_str::<serde_json::Value>(&compact).unwrap()["components"]
+        .as_object().unwrap().values().all(serde_json::Value::is_string));
     assert!(
         matches!(upgraded.execute(StoreRequest::Load { id: entity.id.clone() }, 1000).unwrap(), StoreResponse::Entity(stored) if stored.entity == entity)
     );

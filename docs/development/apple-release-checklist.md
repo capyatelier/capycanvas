@@ -275,7 +275,10 @@ are still unqualified; this does not close the pending Pencil acceptance.
 ### Commands and controls
 
 The source catalog is [command-coverage.json](../../apps/layer-apple/command-coverage.json).
-The current Metal-backed enumeration at `37f81472` has **76 commands in 19 groups**, **11 panels**,
+The 2026-09-24 selection and mask port brings the catalog to **114 commands in 20
+groups**, 97 resolved tool choices, 32 setting IDs and 18 panel control types per
+Apple policy; the strict auditor passes on both, with only iPad full-screen
+unavailable. The earlier enumeration at `37f81472` had **76 commands in 19 groups**, **11 panels**,
 **six Settings pages with 21 rows**, and **43 layer/filter property scenarios**
 per Apple policy. Original Size joins the already-qualified photo-placement
 group. The current proof milestone enables all three print-proofing commands

@@ -753,6 +753,7 @@ impl WebApp {
             colors,
             color_picker,
             tool_settings,
+            tool_extra,
             tool_actions,
             tool_set,
             tool_panels,
@@ -777,7 +778,7 @@ impl WebApp {
             requests,
             host_error,
             camera,
-            toolbar_context_generation: _,
+            toolbar_context_generation,
         } = state;
         let result = js_sys::Object::new();
         macro_rules! field {
@@ -801,6 +802,8 @@ impl WebApp {
         field!(colors);
         field!(color_picker);
         field!(tool_settings);
+        field!(tool_extra);
+        field!(toolbar_context_generation);
         field!(tool_actions);
         field!(tool_set);
         field!(tool_panels);

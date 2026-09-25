@@ -59,11 +59,17 @@ impl SourceChannels {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SourceInterpretation {
+pub struct SourceInterpretation<P = ColorProfile> {
     pub channels: SourceChannels,
     pub depth: SampleDepth,
-    pub profile: ColorProfile,
+    pub profile: P,
     pub profile_assumed: bool,
+}
+impl<P> SourceInterpretation<P> {
+    pub fn with_profile<Q>(self, profile: Q) -> SourceInterpretation<Q> {
+        SourceInterpretation { channels: self.channels, depth: self.depth,
+            profile, profile_assumed: self.profile_assumed }
+    }
 }
 impl SourceInterpretation {
     pub fn descriptor(&self) -> PixelDescriptor {

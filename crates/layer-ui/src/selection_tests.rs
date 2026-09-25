@@ -37,7 +37,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn geometric_selection_constraints_history_cancel_and_workspace_memory() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
             for command in [CommandId::RectangleSelect, CommandId::EllipseSelect] {
                 let mut s = session();
                 s.set_platform(platform);
@@ -166,7 +166,7 @@ mod selection_tools_checks {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         invoke(&mut s, CommandId::ColorSelect);
-        assert_eq!(s.state.tool_set.subtools.len(), 7);
+        assert_eq!(s.state.tool_set.subtools.len(), 8);
         assert!(!s.state.tool_settings.iter().any(|c| c.id == "gap_closing"));
         s.region_tools.refinement.gap_closing = 5;
         for command in [
@@ -188,6 +188,7 @@ mod selection_tools_checks {
             assert!(s.command(command).selected);
             invoke(&mut s, CommandId::Lasso);
             s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: std::sync::Arc::new(
                     layer_core::SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444])
@@ -212,6 +213,22 @@ mod selection_tools_checks {
         );
     }
     #[test]
+    fn sampling_sources_require_a_selection_tool() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+            let mut s = session();
+            s.set_platform(platform);
+            for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                assert!(!s.command(command).enabled);
+            }
+            invoke(&mut s, CommandId::ColorSelect);
+            for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                assert!(s.command(command).enabled);
+                invoke(&mut s, command);
+                assert!(s.command(command).selected);
+            }
+        }
+    }
+    #[test]
     fn selection_defaults_and_tools_follow_platform_rollout() {
         for platform in [
             Platform::Gtk,
@@ -229,7 +246,7 @@ mod selection_tools_checks {
                             command: CommandId::Select
                         }
                     }),
-                matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                platform != Platform::Windows
             );
             let photo = WorkspacePreset::Photographer.layout(platform);
             for command in [
@@ -240,7 +257,7 @@ mod selection_tools_checks {
             ] {
                 assert_eq!(
                     command.available_on(platform),
-                    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                    platform != Platform::Windows
                 );
                 assert_eq!(
                     photo
@@ -249,7 +266,7 @@ mod selection_tools_checks {
                         .tiles()
                         .iter()
                         .any(|t| t.control == ToolbarControl::Command { command }),
-                    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+                    platform != Platform::Windows
                 );
             }
         }
@@ -257,7 +274,7 @@ mod selection_tools_checks {
     #[test]
     fn all_selection_tools_share_options_with_atomic_history_and_persistence() {
         use std::sync::Arc;
-        for tool in SelectionTool::ALL.into_iter().filter(|t| *t != SelectionTool::Brush) {
+        for tool in SelectionTool::ALL.into_iter().filter(|t| !matches!(t, SelectionTool::Brush | SelectionTool::Tonal)) {
             let mut s = session();
             s.set_platform(Platform::Gtk);
             invoke(&mut s, tool.command());
@@ -335,6 +352,7 @@ mod selection_tools_checks {
                 "no partial history entry"
             );
             s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
                 request_id: request.request_id,
                 pixels: Arc::new(
                     layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff804020])
@@ -383,6 +401,7 @@ mod selection_tools_checks {
         let id = s.renderer_mut().region_requests.last().unwrap().request_id;
         invoke(&mut s, CommandId::SelectionSubtract);
         s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None,
             request_id: id,
             pixels: std::sync::Arc::new(
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xffffffff]).unwrap(),

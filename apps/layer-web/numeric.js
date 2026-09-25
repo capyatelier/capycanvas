@@ -1,6 +1,6 @@
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, resolve, onChange, icon, inline = false, widthSamples }) {
+export function createNumberField({ control, label, resolve, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");
@@ -22,6 +22,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   };
   const minus = step(-1, "minus", "Decrease"), plus = step(1, "plus", "Increase");
   const ranged = control.kind === "slider";
+  const buttonValue = ranged || valueOnly;
   if (ranged) { track.append(minus, slider, plus); root.append(track); }
   else { valueBox.classList.add("number-spin"); valueBox.append(minus, plus); }
   if (inline) {
@@ -32,10 +33,12 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     measure.textContent = (widthSamples || [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text))
       .sort((a, b) => b.length - a.length)[0].replace(/\d/g, "8");
     valueBox.append(measure);
+    if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
   let value = control.min, display, editing = false, disabled = false;
   function show(next) {
     value = next.value; display = next; valueButton.textContent = next.text;
+    if (valueOnly) valueBox.querySelector('.number-measure').textContent = next.text;
     if (!editing) entry.value = ranged ? next.edit : next.text;
     entry.setAttribute("aria-valuenow", value * control.scale);
     slider.value = next.fill; slider.style.setProperty("--fill", `${next.fill * 100}%`);
@@ -52,7 +55,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   }
   function begin() {
     if (disabled) return;
-    editing = true; entry.value = display.edit; entry.size = Math.min(10, Math.max(3, display.edit.length));
+    editing = true; entry.value = display.edit; entry.size = valueOnly ? 1 : Math.min(10, Math.max(3, display.edit.length));
     valueButton.hidden = true; entry.hidden = false; entry.focus(); entry.select();
   }
   function finish(cancel = false) {
@@ -60,7 +63,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     if (!cancel && !apply({ type: "expression", text: entry.value })) return false;
     editing = false; root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
     entry.value = ranged ? display.edit : display.text;
-    if (ranged) { entry.hidden = true; valueButton.hidden = false; }
+    if (buttonValue) { entry.hidden = true; valueButton.hidden = false; }
     return true;
   }
   valueButton.addEventListener("click", begin);
@@ -71,7 +74,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     if (e.isComposing) return;
     if (e.key === "Enter" || e.key === "Escape") {
       e.preventDefault(); e.stopPropagation();
-      if (finish(e.key === "Escape")) { entry.blur(); if (ranged) valueButton.focus(); }
+      if (finish(e.key === "Escape")) { entry.blur(); if (buttonValue) valueButton.focus(); }
     } else if (e.key === "Tab" && !finish()) e.preventDefault();
     else if (!ranged && ["ArrowUp", "ArrowDown"].includes(e.key)) {
       e.preventDefault(); if (finish()) apply({ type: "step", steps: e.key === "ArrowUp" ? 1 : -1 });
@@ -90,7 +93,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   root.format = () => show(resolve({ control, value, operation: { type: "format" } }));
   root.apply = apply;
   root.cancelEditing = () => finish(true);
-  entry.hidden = ranged; valueButton.hidden = !ranged;
+  entry.hidden = buttonValue; valueButton.hidden = !buttonValue;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
   root.update(value);
   return root;

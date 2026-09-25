@@ -12,6 +12,7 @@ floating, collapsed-column, and drawer presentations. The convention was set on
 | Surface under the contact | Mouse | Touch | Pen |
 | --- | --- | --- | --- |
 | Reorderable button or tile body | Hold, then drag | Hold, then drag | Hold, then drag |
+| Saved palette color tiles | Drag without a hold | Drag without a hold | Drag without a hold |
 | Customize Title Bar: entire editable item or component-bank chip | Drag without a hold | Drag without a hold | Drag without a hold |
 | Grab handle, including a handle inside a tile or list row | Drag without a hold | Drag without a hold | Drag without a hold |
 | Title bar, panel/tab strip, individual workspace tab, unused draggable header space | Drag without a hold | Drag without a hold | Drag without a hold |
@@ -22,6 +23,14 @@ distinguish a click from a drag. “Hold, then drag” requires a stationary hol
 arm reordering before subsequent movement starts the drag. Waiting alone does
 not move anything or create an undo entry. Use native long-press timing and slop
 where available; a larger distance threshold is not a substitute for a hold.
+
+Saved palette color tiles are an explicit exception: they reorder immediately
+after native movement slop with every device. A short tap selects the color;
+a stationary touch/pen hold opens its context menu. Scroll long palettes from
+the gaps, scrollbar, wheel or trackpad; dragging near an edge scrolls during
+reordering. The lifted color follows the grab point, and neighboring colors slide
+around its proposed slot. Hovering previews order without editing the palette;
+a valid release commits one move. Other interactive tiles keep the hold rule.
 
 An explicit handle takes precedence over its enclosing row or tile. Other child
 controls retain ordinary click/edit behavior until a recognized reorder gesture
@@ -42,7 +51,7 @@ Pen includes stylus contacts such as Apple Pencil. Do not infer mouse behavior
 from “not touch,” the absence of a touch sequence, or synthesized mouse events
 when the native API provides the original device type.
 
-GTK and Web mouse/pen feedback on reorderable tiles (including toolbar/drawer
+GTK and Web mouse/pen feedback on hold-to-reorder tiles (including toolbar/drawer
 tiles and collapsed-column panel icons) is the regular pointer before pickup,
 `grab` after the hold arms pickup, and `grabbing` during dragging. Release, cancellation,
 focus loss, or source invalidation restores the cursor. This feedback does not
@@ -53,8 +62,9 @@ change the immediate pickup rule for handles and title/tab bars.
 - Before a touch/pen list-row hold wins, motion remains available to normal list
   scrolling and cancels the pending reorder hold. Lifting, cancellation, capture
   loss, focus loss, or invalidating the source also retires pending holds.
-- A plain drag on a tile must not reorder it before the hold. Preserve scrolling
-  when its container scrolls; this convention does not add scrolling to toolbars
+- A plain drag on a tile must not reorder it before the hold, except on saved
+  palette color tiles and the explicit title-bar customization surface. Preserve
+  scrolling when its container scrolls; this convention does not add scrolling to toolbars
   whose existing layout deliberately clips overflow.
 - Only touch and pen holds open context menus. Mouse holds never open menus,
   including on tiles, list rows, tabs, and handles; mouse tile holds only arm

@@ -242,11 +242,10 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
                 rows.read(y, &mut row).unwrap();
                 decoder.decode_pixels(&row, &mut pixels).unwrap();
                 for (x, pixel) in pixels.iter().enumerate() {
-                    let checker = if (x / 8 + y as usize / 8) % 2 == 0 {
-                        0.94
-                    } else {
-                        0.80
-                    };
+                    let cell = layer_ui::TRANSPARENCY_CHECKER_CELL as usize;
+                    let checker = f64::from(
+                        crate::display_color::checker_linear()[(x / cell + y as usize / cell) % 2],
+                    );
                     let actual = &preview_bytes[y as usize * preview_stride + x * 4..][..4];
                     assert_eq!(actual[3], 255);
                     for c in 0..3 {

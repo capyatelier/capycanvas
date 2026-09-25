@@ -1,3 +1,5 @@
+import {checkTonalSelections} from './tonal-selection.test.mjs';
+import {checkBinaryTransfer} from './binary-transfer.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkToolbarComponents} from './toolbar-components.test.mjs';
@@ -85,7 +87,7 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (process.argv.some(flag=>['--selection-tools','--color-panel','--color-picker','--paint-columns'].includes(flag))) {
+  if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
@@ -103,7 +105,11 @@ try {
     workspaceIsolation={original,created,capture,theme};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--toolbar-components")) {
+  if (process.argv.includes("--binary-transfer")) {
+    await checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL); assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--tonal-selection")) {
+    await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--toolbar-components")) {
     await checkToolbarComponents({call,evaluate,settle}); assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});assert.deepEqual(errors,[]);

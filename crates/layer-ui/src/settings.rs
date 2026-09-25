@@ -35,10 +35,10 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn system_accent(self) -> bool {
-        matches!(self, Self::Gtk | Self::Android)
+        matches!(self, Self::Gtk | Self::Android | Self::Windows)
     }
     pub fn swatch_preferences(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows)
     }
     pub fn transparency_preference(self) -> bool {
         matches!(self, Self::Gtk)
@@ -111,6 +111,8 @@ pub struct Settings {
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
+    /// Retained when reading/writing settings from the original tonal band editor.
+    pub tonal_bands: Vec<layer_core::tonal::TonalBand>,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_gamma: f32,
@@ -146,6 +148,7 @@ impl Default for Settings {
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
+            tonal_bands: Vec::new(),
             selection_painting: Default::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
@@ -190,6 +193,8 @@ impl Settings {
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self.tonal_bands.len() > 64 { return Err("At most 64 saved tonal bands are supported".into()); }
+        for band in &self.tonal_bands { band.validate().map_err(str::to_string)?; }
         for marks in self.slider_bookmarks.values() {
             marks.validate()?;
         }
@@ -1693,7 +1698,7 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Windows).is_err());
+        assert!(settings.field(PreferenceId::Accent, Platform::Mac).is_err());
         let PreferenceKind::Swatches { swatches, selected, .. } =
             settings.field(PreferenceId::Accent, Platform::Web).unwrap().kind
         else {
@@ -1745,7 +1750,7 @@ mod copy_tests {
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
             assert!(matches!(
-                rows(&settings, Platform::Windows).into_iter().find(|r| r.id == id).unwrap().kind,
+                rows(&settings, Platform::Mac).into_iter().find(|r| r.id == id).unwrap().kind,
                 PreferenceKind::Text { .. }
             ));
         }

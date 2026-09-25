@@ -136,6 +136,15 @@ pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char
         layer_ui::color_ui(serde_json::from_str(source).map_err(|e| e.to_string())?)
     }) }
 }
+/// # Safety
+/// `json` is a NUL-terminated UTF-8 toolbar presentation request, valid for this call.
+/// This stateless operation has no session, GPU or file access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_toolbar_ui(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing toolbar request", |source| {
+        layer_ui::toolbar_ui(serde_json::from_str(source).map_err(|e| e.to_string())?)
+    }) }
+}
 unsafe fn stateless_json(json: *const c_char, missing: &str,
     resolve: impl FnOnce(&str) -> Result<serde_json::Value, String> + std::panic::UnwindSafe) -> *mut c_char {
     catch_unwind(|| {

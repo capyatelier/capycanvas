@@ -34,9 +34,117 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_without_palettes_layout(platform);
+        if platform == crate::Platform::Gtk && self != Self::Painter {
+            for (panel, anchor) in [
+                (Panel::Palettes, Panel::Color),
+                (Panel::Proof, Panel::Navigator),
+                (Panel::Stats, Panel::Brushes),
+            ] {
+                if let Some(group) = layout.panel_group(anchor) {
+                    let index = layout
+                        .group_panels(group)
+                        .unwrap()
+                        .iter()
+                        .position(|p| *p == anchor)
+                        .unwrap()
+                        + 1;
+                    layout
+                        .set_panel_visible(panel, true)
+                        .expect("registered default panel");
+                    layout
+                        .move_panel(
+                            [1600., 1000.],
+                            panel,
+                            DockTarget::Tab {
+                                group,
+                                index: Some(index),
+                            },
+                        )
+                        .expect("default tab order");
+                    layout
+                        .select_tab(group, anchor)
+                        .expect("default active tab");
+                }
+            }
+            let color = layout.panel_group(Panel::Color).unwrap();
+            if !layout.fit_height_groups.contains(&color) {
+                layout.fit_height_groups.push(color);
+            }
+        }
+        layout
+    }
+
+    /// First GTK palette review arrangement, before palettes joined Color's tabs.
+    pub fn legacy_separate_palettes_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_without_palettes_layout(platform);
+        if platform == crate::Platform::Gtk
+            && self != Self::Painter
+            && let Some(group) = layout.panel_group(Panel::Color)
+        {
+            layout
+                .set_panel_visible(Panel::Palettes, true)
+                .expect("palette registration");
+            layout
+                .move_panel(
+                    [1600., 1000.],
+                    Panel::Palettes,
+                    DockTarget::Split {
+                        group,
+                        edge: Edge::Bottom,
+                    },
+                )
+                .expect("adjacent palettes");
+            if !layout.fit_height_groups.contains(&group) {
+                layout.fit_height_groups.push(group);
+            }
+            let group = layout.panel_group(Panel::Palettes).unwrap();
+            layout.fit_height_groups.push(group);
+            if self == Self::Photographer {
+                // Give the fitted color pair its own branch. Properties
+                // and Layers share the remaining height in their old ratio.
+                let column = layout.bands.iter_mut().find(|b| b.id == 11).unwrap();
+                let DockNode::Split {
+                    id,
+                    first,
+                    second: layers,
+                    ..
+                } = &column.root
+                else {
+                    unreachable!()
+                };
+                let DockNode::Split {
+                    id: middle,
+                    first: colors,
+                    second: properties,
+                    ..
+                } = first.as_ref()
+                else {
+                    unreachable!()
+                };
+                column.root = DockNode::Split {
+                    id: *id,
+                    axis: Axis::Vertical,
+                    fraction: 0.25,
+                    first: colors.clone(),
+                    second: Box::new(DockNode::Split {
+                        id: *middle,
+                        axis: Axis::Vertical,
+                        fraction: 0.4,
+                        first: properties.clone(),
+                        second: layers.clone(),
+                    }),
+                };
+            }
+        }
+        layout
+    }
+
+    /// Previous shipped layout, retained to migrate untouched workspaces only.
+    pub fn legacy_without_palettes_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_proportional_layout(platform);
         if self == Self::Illustrator
-            && matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+            && platform != crate::Platform::Generic
         {
             fit_paint_columns(&mut layout);
         }
@@ -70,6 +178,14 @@ impl WorkspacePreset {
         layout
     }
 
+    pub fn legacy_drawers_without_selection_layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_selection_layout(platform);
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            layout.column_stack_mut(4).drawers = true;
+        }
+        layout
+    }
+
     /// Exact GTK default before the Sketch picker became a standalone tool.
     pub fn legacy_picker_category_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.legacy_without_picker_history_layout(platform);
@@ -96,7 +212,7 @@ impl WorkspacePreset {
 
     /// Exact default before the GTK Color Picker button, for untouched saves.
     pub fn legacy_without_picker_layout(self, platform: crate::Platform) -> DockLayout {
-        let supported = matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android);
+        let supported = platform != crate::Platform::Generic;
         let mut layout = self.component_layout(platform, supported);
         self.arrange_components(&mut layout, supported);
         if self == Self::Photographer && supported {
@@ -622,6 +738,19 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_saved_before_palettes_restore_the_default_registry() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            for preset in WorkspacePreset::ALL {
+                let layout = preset.legacy_without_palettes_layout(platform);
+                let mut saved = serde_json::to_value(&layout).unwrap();
+                saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+                let restored: DockLayout = serde_json::from_value(saved).unwrap();
+                assert_eq!(restored, layout, "{platform:?} {}", preset.name());
+            }
+        }
+    }
+
+    #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
         assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
@@ -729,15 +858,37 @@ mod tests {
             layout.open_default_columns(platform);
             assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) { [Edge::Top, Edge::Left, Edge::Right, Edge::Right] }
-                else { [Edge::Left, Edge::Right, Edge::Right, Edge::Top] });
+                [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
-                (14, if Panel::Proof.available_on(platform) {vec![Panel::Color, Panel::Proof, Panel::Stats]} else {vec![Panel::Color, Panel::Stats]}),
+                (
+                    14,
+                    if platform == crate::Platform::Gtk {
+                        vec![Panel::Color, Panel::Palettes]
+                    } else if Panel::Proof.available_on(platform) {
+                        vec![Panel::Color, Panel::Proof, Panel::Stats]
+                    } else {
+                        vec![Panel::Color, Panel::Stats]
+                    },
+                ),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
-                (6, vec![Panel::Brushes]),
+                (
+                    6,
+                    if platform == crate::Platform::Gtk {
+                        vec![Panel::Brushes, Panel::Stats]
+                    } else {
+                        vec![Panel::Brushes]
+                    },
+                ),
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
-                (10, vec![Panel::Navigator]),
+                (
+                    10,
+                    if platform == crate::Platform::Gtk {
+                        vec![Panel::Navigator, Panel::Proof]
+                    } else {
+                        vec![Panel::Navigator]
+                    },
+                ),
             ] {
                 let DockNode::Tabs { panels, active, .. } = layout.node(id).unwrap() else {
                     panic!("default tab group");
@@ -751,7 +902,9 @@ mod tests {
                 let color = group(Panel::Color);
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
-                assert_eq!(color, group(Panel::Stats));
+                if platform != crate::Platform::Gtk {
+                    assert_eq!(color, group(Panel::Stats));
+                }
                 assert_eq!(properties, group(Panel::Adjustments));
                 assert_eq!(color.x, properties.x);
                 assert_eq!(properties.x, layers.x);
@@ -813,11 +966,9 @@ mod tests {
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.floating.is_empty());
-            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
-                assert_eq!(layout.bands.len(), 1);
-                assert_eq!(layout.bands[0].edge, Edge::Left);
-                assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
-            } else { assert!(layout.bands.is_empty()); }
+            assert_eq!(layout.bands.len(), 1);
+            assert_eq!(layout.bands[0].edge, Edge::Left);
+            assert_eq!(layout.bands[0].alignment, Some(EdgeAlignment::Center));
             assert_eq!(
                 layout.header,
                 crate::HeaderLayout::painter_for_platform(platform)
@@ -835,12 +986,113 @@ mod tests {
     }
 
     #[test]
+    fn gtk_palette_defaults_are_adjacent_bounded_and_portable() {
+        for preset in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer] {
+            let mut layout = preset.layout(crate::Platform::Gtk);
+            layout.open_default_columns(crate::Platform::Gtk);
+            layout.validate().unwrap();
+            for (panel, anchor) in [
+                (Panel::Palettes, Panel::Color),
+                (Panel::Proof, Panel::Navigator),
+                (Panel::Stats, Panel::Brushes),
+            ] {
+                let group = layout.panel_group(anchor).unwrap();
+                let panels = layout.group_panels(group).unwrap();
+                let index = panels.iter().position(|p| *p == anchor).unwrap();
+                assert_eq!(panels[index + 1], panel);
+                assert_eq!(layout.active_panel(panel), Some(anchor));
+            }
+            let group = layout.panel_group(Panel::Color).unwrap();
+            layout.select_tab(group, Panel::Palettes).unwrap();
+            let colors = layout
+                .resolve(1600., 1000.)
+                .groups
+                .into_iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds;
+            assert!(colors.width >= 280.);
+            let restored: DockLayout =
+                serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap();
+            assert_eq!(
+                crate::durable_layout(&restored),
+                crate::durable_layout(&layout)
+            );
+            for platform in [
+                crate::Platform::Web,
+                crate::Platform::Android,
+                crate::Platform::Ios,
+                crate::Platform::Mac,
+                crate::Platform::Windows,
+            ] {
+                assert!(!Panel::Palettes.available_on(platform));
+                assert!(
+                    preset
+                        .layout(platform)
+                        .panel_group(Panel::Palettes)
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fitted_groups_keep_their_bounds_when_switching_pages() {
+        for preset in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer] {
+            let mut layout = preset.layout(Platform::Gtk);
+            layout.open_default_columns(Platform::Gtk);
+            layout.measurements = [(Panel::Color, 300.), (Panel::Palettes, 200.)]
+                .map(|(panel, content_height)| PanelMeasurement {
+                    panel,
+                    tab_width: 0.,
+                    content_height,
+                    scroll: None,
+                })
+                .to_vec();
+            let group = layout.panel_group(Panel::Color).unwrap();
+            let bounds = |l: &DockLayout| {
+                l.resolve(1400., 1000.)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .bounds
+            };
+            let fitted = bounds(&layout);
+            assert_eq!(fitted.height, 300. + TAB_BAR_HEIGHT);
+            for panel in [Panel::Palettes, Panel::Color, Panel::Palettes] {
+                layout.select_tab(group, panel).unwrap();
+                assert_eq!(bounds(&layout), fitted);
+            }
+            // Height fitting responds to native width/font measurements even
+            // while another page is selected; it needs no remembered tab state.
+            layout.measurements[0].content_height = 340.;
+            assert_eq!(bounds(&layout).height, 340. + TAB_BAR_HEIGHT);
+            layout.add_panel_to_group(Panel::Layers, group).unwrap();
+            layout.measurements.push(PanelMeasurement {
+                panel: Panel::Layers,
+                tab_width: 0.,
+                content_height: 10_000.,
+                scroll: Some(PanelScrollMeasurement {
+                    fixed_height: 40.,
+                    unit_height: 48.,
+                }),
+            });
+            assert_eq!(
+                bounds(&layout).height,
+                340. + TAB_BAR_HEIGHT,
+                "scrolling rows do not inflate the group"
+            );
+        }
+    }
+
+    #[test]
     fn paint_color_and_navigator_fit_their_content_and_share_the_rest() {
         let bounds = |layout: &DockLayout, height, panel| {
             layout.resolve(1400., height).groups.into_iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut layout = WorkspacePreset::Illustrator.layout(platform);
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            let mut layout = WorkspacePreset::Illustrator.legacy_without_palettes_layout(platform);
             assert_eq!(layout.fit_height_groups, [10, 14]);
             for invalid in [vec![10, 10], vec![10, 999]] {
                 let mut invalid_layout = layout.clone();
@@ -854,7 +1106,13 @@ mod tests {
             let restored: DockLayout = serde_json::from_value(saved).unwrap();
             assert!(restored.fit_height_groups.is_empty());
             restored.validate().unwrap();
-            layout.open_default_columns(platform);
+            // Exercise the original fit-height arrangement; its exact shipped
+            // default now includes the separately tested palette group.
+            for stack in &mut layout.column_stacks {
+                if layout.collapsed.iter().any(|c| c.root == stack.column) {
+                    stack.open_column = Some(stack.column);
+                }
+            }
             let column = |layout: &DockLayout, height| {
                 bounds(layout, height, Panel::Brushes).height
                     + bounds(layout, height, Panel::ToolSettings).height
@@ -898,7 +1156,7 @@ mod tests {
             assert_eq!(moved.fit_height_groups, [14]);
             assert!((column(&layout, 1000.) - column(&resized, 1000.)).abs() < 0.01);
         }
-        for platform in [Platform::Windows, Platform::Mac, Platform::Ios, Platform::Generic] {
+        for platform in [Platform::Generic] {
             assert!(WorkspacePreset::Illustrator.layout(platform).fit_height_groups.is_empty());
         }
     }

@@ -261,8 +261,9 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .property-section { margin-left: 6px; }
 .renderer-stats { margin: 6px; }
 /* The swatch pair intentionally overlaps; round hit regions match the paint. */
-.color-panel .color-swatch, .color-panel .color-utility { min-width:0; min-height:0; padding:3px; border-radius:999px; background:var(--window-bg-color); }
-.color-panel .color-swatch { box-shadow:inset 0 0 0 1px alpha(var(--window-fg-color), .25); }
+.color-panel .color-swatch, .color-panel .color-utility { min-width:0; min-height:0; padding:3px; border-radius:999px; }
+.color-panel .color-swatch { padding:1px; background:var(--panel-bg); box-shadow:inset 0 0 0 1px alpha(var(--window-fg-color), .25); }
+.color-panel #color-Foreground { padding:3px; }
 .color-panel .color-swatch.selected-tool, .color-panel .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--window-fg-color); }
 .color-panel .color-utility { background:transparent; }
 .color-panel .color-utility:hover { background:alpha(var(--window-fg-color), .12); }
@@ -287,6 +288,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 
 /* Custom angular input and rendering share coordinates without CSS insets. */
 scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-width: 0; min-height: 0; }
+scale.interval-handle { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 
 /* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
    Keep geometry/input in the retained title bar, including its compact mode. */
@@ -313,8 +315,8 @@ scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-wi
 .selection-modes > button { border-radius: 0; margin: 0; }
 .selection-modes > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .selection-modes > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
-.brush-preview > contents { padding: 0; border-radius: var(--surface-radius); background: var(--panel-bg); }
-.brush-preview button { min-width: 0; min-height: 0; padding: 6px; border-radius: var(--control-radius); }
+.brush-preview > contents { padding: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); background: var(--panel-bg); }
+.brush-preview button { min-width: 0; min-height: 0; padding: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .swatch-selector button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 9999px; background-color: alpha(var(--window-fg-color), .1); box-shadow: inset 0 0 0 1px alpha(var(--window-fg-color), .15); }
 .swatch-selector.inline button { min-width: 28px; min-height: 28px; }
 .swatch-selector button:hover { filter: brightness(1.08); }
@@ -337,3 +339,22 @@ window.capy-workspace.glass .window-bar .header-item.in-bar .header-tool.selecte
 window.capy-workspace.glass .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--glass-panel); }
 window.capy-workspace.glass .workspace-switcher button:checked { background: var(--glass-switcher-selection); }
 window.capy-workspace.glass .document-tab.selected { background-color: var(--glass-document-tab); }
+window.capy-workspace.glass .palette-cover { background: transparent; }
+.palette-panel { padding: 6px 8px; }
+.palette-cover { background: var(--panel-bg); }
+.palette-panel button.palette-tile { padding: 3px; min-width: 0; min-height: 0; border-radius: var(--control-radius); background: transparent; box-shadow: none; }
+.palette-tile > * { border-radius: var(--control-radius); }
+.palette-tile.selected { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.palette-panel button.palette-tile:hover { background: alpha(currentColor, .10); }
+.palette-empty { margin: 3px; border-radius: var(--control-radius); background: alpha(currentColor, .05); }
+.palette-panel button.palette-add { border: 0; border-radius: var(--control-radius); background: var(--input-bg); padding: 0; min-width: 0; min-height: 0; }
+.palette-panel button.palette-selector, .palette-panel button.palette-name { min-width: 0; min-height: 24px; padding: 0 4px; border-radius: var(--control-radius); font-weight: 400; }
+.palette-panel button.palette-name { padding: 0 2px; }
+.palette-panel .palette-detail { font-size: .9em; margin-right: 2px; }
+.palette-panel .palette-entry { min-width: 0; min-height: 20px; padding: 2px 6px; background: var(--input-bg); border: 0; border-radius: var(--control-radius); box-shadow: none; }
+.palette-panel .palette-entry.error { box-shadow: inset 0 0 0 1px #e55; }
+.palette-panel button.palette-icon, .palette-panel menubutton.palette-icon > button { min-width: 24px; min-height: 24px; padding: 0; border-radius: var(--control-radius); }
+.palette-panel .palette-entry text { min-width: 0; padding: 0; }
+.palette-list { background: transparent; }
+.palette-list > row { padding: 4px; border-radius: var(--control-radius); }
+.palette-preview-strip { border-radius: 3px; }

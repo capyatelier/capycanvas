@@ -38,7 +38,7 @@ mod workspace_async;
 #[cfg(any(target_os = "windows", test))]
 mod workspace_service;
 #[cfg(any(target_os = "windows", test))]
-pub use navigator::capy_navigator_image;
+pub use navigator::{capy_navigator_aspect, capy_navigator_image};
 #[cfg(any(target_os = "windows", test))]
 mod settings;
 pub use events::CapyPointer;

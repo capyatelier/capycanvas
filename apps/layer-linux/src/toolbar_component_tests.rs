@@ -1119,6 +1119,13 @@ fn native_toolbar_visual_audit_input() {
                     .unwrap();
                 assert!(caption.text().contains("2048 px"));
                 assert!(caption.layout().pixel_size().0 <= caption.width());
+                capture_popover(
+                    &d.named("brush-slider-preview").downcast().unwrap(),
+                    d.dir
+                        .join(format!("audit-slider-preview-{theme:?}-{edge:?}-{style:?}.png"))
+                        .to_str()
+                        .unwrap(),
+                );
                 d.key(0xff1b);
             }
         }
@@ -1728,4 +1735,177 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
             "{device}: dragging dismisses on lift"
         );
     }
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_toolbar_input"]
+fn native_tonal_toolbar_input() {
+    let mut d=Driver::new("art.capycanvas.TonalToolbar");
+    restore(&d,WorkspacePreset::Photographer);
+    let options=component_id(&d,ToolbarControl::TOOL_OPTIONS);
+    // A horizontal lane fits both mode and tone bars. The six-tone group
+    // exceeds the narrow vertical component's budget and uses its overflow.
+    let mut workspace=state(&d.w).workspace;
+    let removed:Vec<_>=workspace.layout.panel(Panel::Commands).unwrap().tiles().iter()
+        .filter(|t|t.control.options_style().is_none()).map(|t|t.id).collect();
+    for id in removed {
+        if workspace.layout.panel(Panel::Commands).unwrap().tiles().iter().any(|t|t.id==id) {
+            workspace.layout.remove_tool(Panel::Commands,id).unwrap();
+        }
+    }
+    d.w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});pump(200);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
+    let ready=|d:&Driver| {
+        let deadline=Instant::now()+Duration::from_secs(25);
+        loop {pump(20);if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() {break;}
+            assert!(Instant::now()<deadline,"tonal update: {:?}",state(&d.w).host_error);}
+    };
+    for edge in [Edge::Top,Edge::Left] {
+        d.w.dispatch(UiAction::MovePanel {panel:Panel::Commands,target:DockTarget::Edge {edge,outer:true},viewport:[1600.,1000.]});pump(180);
+        let choice=d.named("toolbar-segments-tonal-tones");
+        if edge==Edge::Top {
+            assert!(choice.is_mapped());
+            assert_eq!(choice.height(),24,"horizontal presets retain main's partial-height bars");
+            d.click_name("toolbar-segment-tonal-tones-4");ready(&d);
+            assert_shared_icons(&choice);
+        } else {
+            assert!(!choice.is_mapped(),"complete tone group uses the narrow bar's overflow");
+            d.click_name(&format!("tile-{options}"));pump(150);
+            let bar=d.named("tool-choice-bar-tonal-tones");
+            assert!(bar.is_mapped() && bar.height()<=36);
+            assert_shared_icons(&bar);
+            d.click_name("tool-choice-tonal-tones-0");ready(&d);
+            d.click_name("tool-choice-tonal-tones-4");ready(&d);
+        }
+        assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
+        assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
+        let _=crate::snapshot(&d.w);pump(120);
+        crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
+        if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}
+    }
+    d.click_name(&format!("tile-{options}"));pump(150);
+    let drawer=d.named("drawer-panel-ToolSettings");assert!(drawer.is_mapped());
+    let custom=find_named(&drawer,"tool-choice-tonal-tones-5").unwrap();d.click(&custom);ready(&d);
+    let lower=find_named(&drawer,"tool-setting-tonal_lower").unwrap();d.number(&lower,"1");ready(&d);
+    assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_upper").unwrap().value,-1.5,"crossing bounds stops at the other endpoint");
+    let upper=find_named(&drawer,"tool-setting-tonal_upper").unwrap();d.number(&upper,"3");ready(&d);
+    let softness=find_named(&drawer,"tool-setting-tonal_softness").unwrap();d.number(&softness,"75");ready(&d);
+    assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_softness").unwrap().value,0.75);
+    assert!(state(&d.w).tool_actions.iter().all(|a|a.group().is_some()));
+    let _=crate::snapshot(&d.w);pump(120);
+    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-overflow.png")).unwrap();
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    // A floating-point document adds Bright HDR, with Custom still last.
+    let mut project=new_drawing(2048,1536).unwrap();
+    project.document.color.depth=layer_core::color::SampleDepth::F16;
+    let hdr=Workspace::with_project(&d._app,Some((project,None)));
+    hdr.window.maximize();hdr.window.present();pump(1800);
+    d.w.window.destroy();d.w=hdr;
+    restore(&d,WorkspacePreset::Painter);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});pump(150);
+    let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
+    d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
+    assert!(matches!(state(&d.w).tool_extra.as_slice(),[layer_ui::ToolOption::Choice {items,..}] if items.len()==7 && items[5].icon=="tonal-bright-hdr" && items[6].icon=="tonal-custom"));
+    let bar=d.named("tool-choice-bar-tonal-tones");
+    assert!(bar.height()<=36);
+    d.click_name("tool-choice-tonal-tones-5");ready(&d);
+    assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
+    let _=crate::snapshot(&d.w);pump(120);
+    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-hdr-presets.png")).unwrap();
+    d.click_name("tool-choice-tonal-tones-6");ready(&d);
+    assert!(d.named("tool-setting-tonal_lower").is_mapped());
+    assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_toolbar_range_input"]
+fn native_tonal_toolbar_range_input() {
+    tonal_toolbar_range_input(false);
+}
+#[test]
+#[ignore = "private Mutter: --native-test=native_tonal_toolbar_range_pen_input --tablet"]
+fn native_tonal_toolbar_range_pen_input() {
+    tonal_toolbar_range_input(true);
+}
+fn tonal_toolbar_range_input(pen: bool) {
+    let mut d = Driver::new("art.capycanvas.TonalToolbarRange");
+    restore(&d, WorkspacePreset::Photographer);
+    let options = component_id(&d, ToolbarControl::TOOL_OPTIONS);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::TonalSelect });
+    pump(180);
+    d.click_name("toolbar-segment-tonal-tones-5");
+    let ready = |d: &Driver| {
+        let deadline = Instant::now() + Duration::from_secs(25);
+        loop {
+            pump(20);
+            if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() { break; }
+            assert!(Instant::now() < deadline, "tonal update: {:?}", state(&d.w).host_error);
+        }
+    };
+    ready(&d);
+    let bounds = |d: &Driver| {
+        ["tonal_lower", "tonal_upper"].map(|id| state(&d.w).tool_settings.iter().find(|f| f.id == id).unwrap().value)
+    };
+    let range = d.named("tool-range-toolbar-tonal");
+    assert!(range.is_mapped(), "the standard Photo toolbar fits the custom interval");
+    assert_eq!(range.height(), 28);
+    let track = find_named(&range, "range-track-toolbar-tonal").unwrap();
+    assert!(track.width() >= 180, "wide inline track: {}", track.width());
+    for id in ["tonal_lower", "tonal_upper"] {
+        let input = find_named(&range, &format!("toolbar-setting-{id}")).unwrap();
+        assert!(input.width() <= 48, "compact one-decimal endpoint");
+    }
+    assert_eq!(d.named("toolbar-segments-tonal-tones").height(), 24);
+    let before_workspace = state(&d.w).workspace;
+    for device in if pen { &["pen"][..] } else { &["mouse", "touch"][..] } {
+        for index in 0..2 {
+            let id = ["tonal_lower", "tonal_upper"][index];
+            let handle = find_named(&range, &format!("range-handle-{id}")).unwrap()
+                .downcast::<crate::range_control::RangeHandle>().unwrap();
+            let mut a = d.point(handle.upcast_ref());
+            a[0] += handle.position(handle.value()) as f32 - handle.width() as f32 / 2. + if index == 0 { -4. } else { 4. };
+            let z = [a[0] + if index == 0 { -8. } else { 8. }, a[1]];
+            let before = bounds(&d);
+            drag(&mut d, device, a, z, false);
+            ready(&d);
+            let after = bounds(&d);
+            assert!(if index == 0 { after[0] < before[0] } else { after[1] > before[1] }, "{device}: endpoint moves immediately");
+            assert_eq!(after[1-index], before[1-index]);
+            assert_eq!(d.named("tool-range-toolbar-tonal"), range, "retain the captured range");
+            assert_eq!(state(&d.w).workspace, before_workspace, "range contacts do not reorder the toolbar");
+        }
+    }
+    if pen { assert!(state(&d.w).host_error.is_none()); d.finish(); return; }
+    let before = bounds(&d);
+    d.key(0xff53); ready(&d);
+    assert!(bounds(&d)[1] > before[1], "keyboard edits focused native handle");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::QuickMask }); ready(&d);
+    assert!(state(&d.w).layer_tools.quick_mask);
+    let range = d.named("tool-range-toolbar-tonal");
+    let lower = find_named(&range, "toolbar-setting-tonal_lower").unwrap();
+    let upper = find_named(&range, "toolbar-setting-tonal_upper").unwrap();
+    d.number(&lower, "-7.2"); ready(&d);
+    d.number(&upper, "2.3"); ready(&d);
+    assert_eq!(bounds(&d), [-7.2, 2.3], "new context keeps both endpoints live");
+    let _ = crate::snapshot(&d.w); pump(120);
+    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-custom.png")).unwrap();
+
+    // The complete range is available in the narrow bar's existing overflow.
+    d.w.dispatch(UiAction::MovePanel { panel: Panel::Commands, target: DockTarget::Edge { edge: Edge::Left, outer: true }, viewport: [1600., 1000.] }); pump(180);
+    assert!(!range.is_mapped());
+    d.click_name(&format!("tile-{options}")); pump(150);
+    let drawer = d.named("drawer-panel-ToolSettings");
+    let lower = find_named(&drawer, "tool-setting-tonal_lower").unwrap();
+    d.number(&lower, "-8.5"); ready(&d);
+    assert_eq!(bounds(&d), [-8.5, 2.3]);
+    d.click_name(&format!("tile-{options}")); pump(100);
+    d.w.dispatch(UiAction::MovePanel { panel: Panel::Commands, target: DockTarget::Edge { edge: Edge::Top, outer: true }, viewport: [1600., 1000.] }); pump(180);
+    let old = d.named("toolbar-setting-tonal_lower").downcast::<crate::number_control::NumberControl>().unwrap();
+    assert!(old.is_mapped());
+    assert!((old.value() + 8.5).abs() < 0.001);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Brush }); pump(150);
+    old.set_value(-9.); pump(80);
+    assert!(state(&d.w).host_error.is_none(), "retired range cannot send stale edits");
+    d.finish();
 }

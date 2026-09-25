@@ -197,7 +197,7 @@ private final class TabletEvent: NSEvent {
             // Read the actual saved document's JSON manifest; ruler overlays
             // are intentionally absent from exported artwork.
             let bytes = try Data(contentsOf: project)
-            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{6}\0".utf8), "Expected current indexed raster project")
+            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{7}\0".utf8), "Expected current indexed raster project")
             let count = bytes[12..<20].enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
             try require(count <= bytes.count - 52, "Complete project manifest")
             return JSON(try JSONSerialization.jsonObject(with: bytes.subdata(in: 52..<(52 + Int(count)))))["document"]["rulers"]

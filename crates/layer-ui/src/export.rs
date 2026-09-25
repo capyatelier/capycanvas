@@ -75,10 +75,15 @@ impl ExportBackground {
 
 /// Display names are descriptive only; embedded bytes define the output color.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExportProfile {
-    pub profile: ColorProfile,
+pub struct ExportProfile<P = ColorProfile> {
+    pub profile: P,
     pub channels: ProfileChannels,
     pub name: String,
+}
+impl<P> ExportProfile<P> {
+    pub fn with_profile<Q>(self, profile: Q) -> ExportProfile<Q> {
+        ExportProfile { profile, channels: self.channels, name: self.name }
+    }
 }
 impl ExportProfile {
     pub fn builtin(space: RgbSpace) -> Self {

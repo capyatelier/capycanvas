@@ -85,6 +85,7 @@ mod selection_refine;
 mod selection_paint;
 mod selection_previews;
 mod selection_readback;
+mod tonal;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
@@ -4830,6 +4831,9 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         self.commit_rasters(packet.layers)?;
         if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
+        if (animated || packet.reset_layers || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)))
+            && let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
         self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)));
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();

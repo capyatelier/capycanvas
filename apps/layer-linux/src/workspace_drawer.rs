@@ -64,6 +64,7 @@ enum Body {
     Tools(ToolSet),
     Settings(ToolSettings),
     Color(ColorPanel),
+    Palettes(Rc<crate::color_library::PalettePanel>),
     Sizes(crate::tool_panels::SizePanel),
     Layers(Rc<LayerPanel>),
     Effects(Panel, Rc<EffectPanels>),
@@ -116,6 +117,7 @@ impl Body {
             Self::Tools(v) => v.root.clone().upcast(),
             Self::Settings(v) => v.root.clone().upcast(),
             Self::Color(v) => v.root.clone().upcast(),
+            Self::Palettes(v) => v.root.clone().upcast(),
             Self::Sizes(v) => v.root.clone().upcast(),
             Self::Layers(v) => v.root.clone().upcast(),
             Self::Navigator(v) => v.root.clone().upcast(),
@@ -134,6 +136,9 @@ impl Body {
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
             Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
             Self::Color(_) => regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
+            Self::Palettes(_) => {
+                regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS
+            }
             Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
             Self::Proof(_) => regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT,
@@ -149,6 +154,7 @@ impl Body {
             Self::Tools(v) => v.refresh_state(w, state),
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.preview_colors(), w.view_color(), w.picker_headroom()),
+            Self::Palettes(v) => v.refresh(state, w.view_color(), w.picker_headroom()),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
@@ -235,6 +241,11 @@ impl View {
                         v.bind(w);
                         Body::Color(v)
                     }
+                    Panel::Palettes => {
+                        let v = crate::color_library::PalettePanel::new();
+                        v.bind(w);
+                        Body::Palettes(v)
+                    }
                     Panel::Proof => Body::Proof(w.proof_panel.duplicate(w)),
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
@@ -288,7 +299,14 @@ impl View {
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 header.add_css_class("dock-tabs");
                 header.set_height_request(TAB_BAR_HEIGHT as i32);
-                let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                let labels = crate::panel_tabs::PanelTabs::new(
+                    w.surface
+                        .imp()
+                        .layout
+                        .borrow()
+                        .group_tab_style(tabs.group)
+                        .unwrap(),
+                );
                 w.install_panel_drag(&header, DockItem::Group { group: tabs.group });
                 w.install_context(
                     &header,
@@ -308,17 +326,13 @@ impl View {
                     button.add_css_class("flat");
                     button.set_widget_name(&format!("column-drawer-tab-{panel:?}"));
                     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    if presentation.show_icon {
-                        content.append(&crate::icons::image(&format!(
-                            "layer-{}-symbolic",
-                            config.icon()
-                        )));
-                    }
-                    if presentation.show_name {
-                        let label = gtk::Label::new(Some(config.title()));
-                        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        content.append(&label);
-                    } else {
+                    let icon = crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
+                    icon.set_visible(presentation.show_icon);
+                    content.append(&icon);
+                    let label = gtk::Label::new(Some(config.title()));
+                    label.set_visible(presentation.show_name);
+                    content.append(&label);
+                    if !presentation.show_name {
                         button.add_css_class("icon-only-tab");
                     }
                     button.set_child(Some(&content));

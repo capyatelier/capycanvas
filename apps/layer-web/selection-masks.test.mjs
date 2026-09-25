@@ -23,8 +23,9 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;const poll=()=>{if(document.querySelector('.content-drawer .layer-row[data-layer="0"] canvas')?.dataset.previewRevision)resolve(true);else if(performance.now()>end)reject(Error('Quick Mask thumbnail'));else setTimeout(poll,50);};poll();})`);
 
   await point(at(-45,0));
-  assert.ok(await evaluate('layerApp.state().customization.drawer?.columns.flat().includes("layers")'),'Layers drawer stays open while painting');
-  await toggleLayers();
+  assert.equal(await evaluate('!!layerApp.state().customization.drawer'),false,'Canvas contact dismisses the Layers drawer');
+  // The dismissing contact is consumed; begin painting with a fresh contact.
+  await point(at(-45,0),'pen','mouseReleased');
   await point(at(-45,0));
   const maskPixels=async()=>{
     const shot=await call('Page.captureScreenshot',{format:'png'}), center=at(0,0);

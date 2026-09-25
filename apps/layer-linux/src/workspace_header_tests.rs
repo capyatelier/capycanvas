@@ -7,6 +7,8 @@ mod canvas_pen_buttons;
 mod color_picker_tests;
 #[path = "accent_preferences_tests.rs"]
 mod accent_preferences_tests;
+#[path = "palette_tests.rs"]
+mod palette_tests;
 
 fn assert_shared_icons(widget: &gtk::Widget) {
     if let Some(image) = widget.downcast_ref::<gtk::Image>()

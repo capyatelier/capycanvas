@@ -62,6 +62,9 @@ estimated Pencil samples. Those corrections use the shared stroke model rather
 than creating an Apple-specific brush implementation. macOS and iPadOS also have
 different file services and window lifecycles despite sharing the Metal bridge.
 
+Features usually land on GTK, Web and Android first. Follow the
+[Apple porting guide](../APPLE_PORTING_GUIDE.md) to audit and port them.
+
 ## Validation status
 
 Build success does not establish complete input or UI parity. The

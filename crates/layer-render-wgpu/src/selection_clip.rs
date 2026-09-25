@@ -19,7 +19,8 @@ pub(super) struct SelectionClip {
     extent: Option<[u32; 2]>,
     pub generations: u64,
     pub bytes: u64,
-    pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer)>,
+    pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer, u64)>,
+    pixel_clock: u64,
     pixels_bytes: u64,
 }
 impl SelectionClip {
@@ -102,6 +103,7 @@ impl SelectionClip {
             bytes: 0,
             pixels: BTreeMap::new(),
             pixels_bytes: 0,
+            pixel_clock: 0,
         }
     }
     pub fn compile_all(&self) {
@@ -124,30 +126,46 @@ impl SelectionClip {
     }
     fn prune_pixels(&mut self) {
         self.pixels
-            .retain(|_, (owner, _)| owner.strong_count() != 0);
-        self.pixels_bytes = self.pixels.values().map(|(_, b)| b.size()).sum();
+            .retain(|_, (owner, _, _)| owner.strong_count() != 0);
+        self.pixels_bytes = self.pixels.values().map(|(_, b, _)| b.size()).sum();
+        // Undo owns CPU coverage; keeping every history entry on the GPU can
+        // retain gigabytes at photographic sizes. Recent masks avoid uploads,
+        // while evicted masks are restored losslessly on demand.
+        while self.pixels_bytes > 128 * 1024 * 1024 && self.pixels.len() > 1 {
+            let key = *self
+                .pixels
+                .iter()
+                .min_by_key(|(_, (_, _, used))| used)
+                .unwrap()
+                .0;
+            self.pixels_bytes -= self.pixels.remove(&key).unwrap().1.size();
+        }
     }
-    /// Retain GPU-produced coverage across history and consumers. Only replay
-    /// after renderer recreation needs an upload from the durable core copy.
+
+    /// Share recent GPU coverage with consumers. Older undo masks and renderer
+    /// recreation restore coverage from the durable core copy on demand.
     pub fn remember_pixels(
         &mut self,
         pixels: &Arc<layer_core::SelectionPixels>,
         buffer: wgpu::Buffer,
     ) {
         self.pixels
-            .retain(|_, (owner, _)| owner.strong_count() != 0);
+            .retain(|_, (owner, _, _)| owner.strong_count() != 0);
+        self.pixel_clock += 1;
         self.pixels.insert(
             Arc::as_ptr(pixels) as usize,
-            (Arc::downgrade(pixels), buffer),
+            (Arc::downgrade(pixels), buffer, self.pixel_clock),
         );
-        self.pixels_bytes = self.pixels.values().map(|(_, b)| b.size()).sum();
+        self.prune_pixels();
     }
     pub fn pixel_buffer(
         &mut self,
         device: &wgpu::Device,
         pixels: &Arc<layer_core::SelectionPixels>,
     ) -> wgpu::Buffer {
-        if let Some((_, buffer)) = self.pixels.get(&(Arc::as_ptr(pixels) as usize)) {
+        if let Some((_, buffer, used)) = self.pixels.get_mut(&(Arc::as_ptr(pixels) as usize)) {
+            self.pixel_clock += 1;
+            *used = self.pixel_clock;
             return buffer.clone();
         }
         let [w, h] = pixels.extent();
@@ -185,7 +203,10 @@ impl SelectionClip {
         geometry: &Arc<layer_core::Selection>,
         region: Option<PixelRect>,
     ) -> Result<(), GpuRasterError> {
-        if self.extent == Some(extent) && self.region == region && self.geometry.as_ref().is_some_and(|old| old == geometry) {
+        if self.extent == Some(extent)
+            && self.region == region
+            && self.geometry.as_ref().is_some_and(|old| old == geometry)
+        {
             return Ok(());
         }
         let inverse = geometry
@@ -210,8 +231,14 @@ impl SelectionClip {
                 edges.extend([a.x, a.y, b.x, b.y]);
             }
         }
-        let packing = match &geometry.shape { layer_core::SelectionShape::Pixels(p) => p.pixels_per_word(), _ => 8 };
-        let format = match &geometry.shape { layer_core::SelectionShape::Pixels(p) => p.coverage_format(), _ => 1 };
+        let packing = match &geometry.shape {
+            layer_core::SelectionShape::Pixels(p) => p.pixels_per_word(),
+            _ => 8,
+        };
+        let format = match &geometry.shape {
+            layer_core::SelectionShape::Pixels(p) => p.coverage_format(),
+            _ => 1,
+        };
         let requested = region
             .unwrap_or(PixelRect::full(extent))
             .intersect(PixelRect::full(extent));
@@ -257,7 +284,8 @@ impl SelectionClip {
             layer_core::SelectionShape::Pixels(_) if translation => source_region,
             _ => pixel_rect(geometry.bounds(), extent).intersect(requested),
         };
-        let words = (u64::from(bounds.width().div_ceil(packing)) * u64::from(bounds.height())).max(1);
+        let words =
+            (u64::from(bounds.width().div_ceil(packing)) * u64::from(bounds.height())).max(1);
         let bytes = (32 + words * 4).next_multiple_of(16);
         let source_bytes = match &geometry.shape {
             layer_core::SelectionShape::Pixels(_) => (32

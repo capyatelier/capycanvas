@@ -20,6 +20,32 @@ fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() 
 }
 
 #[test]
+fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks() {
+    let extent=[9504,6336];
+    let bytes=extent[0] as usize*extent[1] as usize;
+    let selection=Selection::pixels(Arc::new(SelectionPixels::bytes(extent,[0,0,extent[0],extent[1]],vec![u32::MAX;bytes/4]).unwrap()));
+    let mut document=Document::new("Photo inventory",extent[0],extent[1]);
+    document.selection=Some(selection.clone());
+    let id=document.allocate_layer_id();
+    document.layers.insert(0,Layer::selection(id,"Saved",selection.clone()));
+    let id=document.allocate_layer_id();
+    let mut mask=LayerMask::reveal_all(id,Point::default());mask.initial=Some(selection.clone());
+    document.layers[1].mask=Some(mask);
+    let mut editor=Editor::new(document);
+    let retained=editor.retained_tiles().metadata_bytes;
+    assert!((bytes..bytes+32*1024).contains(&retained),"Shared 61 MP coverage is one 60 MB allocation: {retained}");
+    editor.perform(Edit::SetSelection(None)).unwrap();
+    let retained=editor.retained_tiles().metadata_bytes;
+    assert!((bytes..bytes+32*1024).contains(&retained));
+    let mut layer=editor.document.layers[1].clone();layer.opacity=0.5;
+    let entry=HistoryEntry::new(Edit::ReplaceLayer(Box::new(layer)),0);
+    assert!(entry.metadata_bytes<16*1024,"Initial mask pixels stay out of history metadata");
+    let mut accounting=Accounting::default();
+    assert_eq!(accounting.charge(&entry),bytes+entry.metadata_bytes);
+    assert_eq!(accounting.charge(&entry),entry.metadata_bytes);
+}
+
+#[test]
 fn admitted_native_output_reservation_is_shared_until_tile_publication() {
     let document = Document::new("pending native output", 256, 256);
     let revision = raster::RasterRevision::pending();

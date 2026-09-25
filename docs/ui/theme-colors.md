@@ -8,10 +8,10 @@ stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.
 System/Light/Dark selection remains independent of both colors.
 
-GTK, Web and Android show each base color inline on its title row as four grey
+GTK, Web, Android and Windows show each base color inline on its title row as four grey
 circles and a Custom circle that reveals a hex entry beside them: dark
 `#1f1f1f`, `#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`,
-`#cccccc`, `#dedede`. Apple and Windows still show hex text fields.
+`#cccccc`, `#dedede`. Apple still shows hex text fields.
 
 ## Inventory and existing relationships
 
@@ -44,6 +44,7 @@ in the table is transformed per channel using the same rule as a grey.
 | GTK/web settings cards | White at 8% in GTK; text at 8% in web, over the settings surface | White | Existing compositing already follows the new surface; white stays white |
 | Android settings cards | `#414141`, same as panel | White | Reuse panel / keep white |
 | Slider thumb | `#d3d3d3` = mix(B,W,160/204) in web/Android | `#fafafa` = mix(B,W,66/71) | Regenerate; GTK numeric slider uses this role too |
+| Transparency checkerboard (`checker_light`, `checker_dark`) | `#dcdcdc` / `#aaaaaa` in 5px cells | Same | Fixed in both modes; GTK composites alpha in linear light, Web/Android in sRGB |
 | Compact grey slider fill | mix(panel,text,50%) | mix(panel,text,50%) | Recomputed from panel; CSS sRGB, native Compose interpolation retained |
 | Main text and monochrome icons | `#fafafb` | `#2e2e32` | Fixed per mode |
 | Secondary text, headings, shortcut hints | Main text at 55–65% opacity | Same | Keep opacity; effective pixel color changes with the surface |
@@ -83,7 +84,7 @@ otherwise.
 
 ## Accent color
 
-Below the base colors, GTK, Web and Android Appearance offer **Accent color**: System, libadwaita's nine accent colors
+Below the base colors, GTK, Web, Android and Windows Appearance offer **Accent color**: System, libadwaita's nine accent colors
 (Blue `#3584e4`, Teal, Green, Yellow, Orange, Red, Pink, Purple, Slate) and a
 Custom circle that reveals a `#RRGGBB` entry prefilled with the current accent.
 The entry commits on Enter or when it loses focus after an edit; invalid hex is
@@ -91,7 +92,8 @@ rejected in Rust like the base colors. Selecting a circle commits immediately.
 Settings store only a chosen color; an absent value follows the system accent
 that the host reports with `SystemThemeChanged`, and hosts without one use Blue.
 GTK reports libadwaita's accent; Android 12 and later report Material You's
-`system_accent1_500`. The web has no System circle, and there choosing Blue
+`system_accent1_500`; Windows reports the personalization accent (`UISettings`
+Accent) and follows its changes. The web has no System circle, and there choosing Blue
 stores nothing, so Reset stays disabled.
 
 The resolved accent is published as `palette.accent`. GTK assigns it to

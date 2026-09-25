@@ -1360,10 +1360,18 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
         let m = &f.manager;
         let bytes = export_package(&m.current().unwrap()).unwrap();
         let before = m.items().len();
+        let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        legacy["version"] = 1.into();
+        for component in legacy["components"].as_object_mut().unwrap().values_mut() {
+            *component = serde_json::to_value(component.as_str().unwrap().as_bytes()).unwrap();
+        }
+        let legacy = serde_json::to_vec(&legacy).unwrap();
+        assert!(bytes.len() < legacy.len());
+        assert!(import_package(&legacy, PackageKind::WorkspaceBackup, 2_000).is_ok());
         let mut corrupt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let components = corrupt["components"].as_object_mut().unwrap();
         let key = components.keys().next().unwrap().clone();
-        components[&key][0] = 0.into();
+        components[&key] = "corrupt component".into();
         assert!(
             m.import_workspace_package(&serde_json::to_vec(&corrupt).unwrap(), 2_000)
                 .await

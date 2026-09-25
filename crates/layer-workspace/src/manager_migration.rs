@@ -3,12 +3,66 @@ use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[test]
+fn gtk_palettes_upgrade_only_untouched_paint_and_photo_defaults() {
+    use layer_ui::{LayoutHistory, Panel, WorkspacePreset};
+    for (index, preset, update) in [
+        (
+            1,
+            WorkspacePreset::Illustrator,
+            updated_illustrator_default as fn(&Entity, Platform) -> Option<ItemContent>,
+        ),
+        (
+            2,
+            WorkspacePreset::Photographer,
+            updated_photographer_default,
+        ),
+    ] {
+        let mut saved = serde_json::to_value(preset.legacy_without_palettes_layout(Platform::Gtk)).unwrap();
+        saved["panels"].as_array_mut().unwrap().retain(|panel| panel["id"] != "palettes");
+        let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
+        let mut entity = Entity::workspace(
+            preset.name(),
+            WorkspaceCapture {
+                history: LayoutHistory::new(&old),
+                working: preset.working_state(),
+            },
+            old.clone(),
+            None,
+            1,
+        );
+        entity.id = DEFAULT_WORKSPACES[index].0.into();
+        entity.metadata.builtin = true;
+        let next = update(&entity, Platform::Gtk).expect("untouched default upgrades");
+        let ItemContent::Workspace { baseline, .. } = &next else {
+            panic!()
+        };
+        assert!(baseline.panel_group(Panel::Palettes).is_some());
+        entity.content = next;
+        assert!(update(&entity, Platform::Gtk).is_none());
+        let mut custom = old;
+        custom.set_panel_visible(Panel::Stats, false).unwrap();
+        if let ItemContent::Workspace {
+            baseline, history, ..
+        } = &mut entity.content
+        {
+            **baseline = custom.clone();
+            *history = LayoutHistory::new(&custom);
+        }
+        assert!(
+            update(&entity, Platform::Gtk).is_none(),
+            "custom layout is preserved"
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn toolbar_components_upgrade_only_untouched_supported_defaults() {
     use layer_ui::{LayoutHistory, Panel, ToolbarControl, WorkspacePreset};
     for (index, preset, platform) in [
         (0, WorkspacePreset::Painter),
         (2, WorkspacePreset::Photographer),
-    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android].map(|platform| (i, p, platform))) {
+    ].into_iter().flat_map(|(i, p)| [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios].map(|platform| (i, p, platform))) {
         let mut previous = vec![preset.legacy_toolbar_components_layout(platform)];
         previous.push(preset.legacy_bottom_brush_controls_layout(platform));
         if preset == WorkspacePreset::Photographer {
@@ -284,13 +338,19 @@ pub(super) fn updated_illustrator_default(
     let previous_collapsed = layer_ui::WorkspacePreset::legacy_illustrator_layout(platform);
     let previous_primary = layer_ui::WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let previous_proportional = layer_ui::WorkspacePreset::Illustrator.legacy_proportional_layout(platform);
+    let previous_palettes =
+        layer_ui::WorkspacePreset::Illustrator.legacy_without_palettes_layout(platform);
+    let previous_separate =
+        layer_ui::WorkspacePreset::Illustrator.legacy_separate_palettes_layout(platform);
     let mut previous = layer_ui::DockLayout::for_platform(platform);
     let without_preferences = previous.clone();
     previous.column_stacks = previous_collapsed.column_stacks.clone();
     if history.revisions.len() != 1 || history.layout() != baseline.as_ref() || baseline.as_ref() == &layout
         || (baseline.as_ref() != &previous && baseline.as_ref() != &without_preferences
             && baseline.as_ref() != &previous_collapsed && baseline.as_ref() != &previous_primary
-            && baseline.as_ref() != &previous_proportional)
+            && baseline.as_ref() != &previous_proportional
+            && baseline.as_ref() != &previous_palettes
+            && baseline.as_ref() != &previous_separate)
     {
         return None;
     }
@@ -325,12 +385,15 @@ pub(super) fn updated_photographer_default(
         return None;
     }
     let layout = WorkspacePreset::Photographer.layout(platform);
+    let previous_palettes = WorkspacePreset::Photographer.legacy_without_palettes_layout(platform);
+    let previous_separate = WorkspacePreset::Photographer.legacy_separate_palettes_layout(platform);
     let previous_components = WorkspacePreset::Photographer.legacy_toolbar_components_layout(platform);
     let previous_inner_bar = WorkspacePreset::Photographer.legacy_bottom_brush_controls_layout(platform);
     let previous_flip = WorkspacePreset::Photographer.legacy_photo_flip_layout(platform);
     let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
     let previous_drawers = WorkspacePreset::Photographer.legacy_without_picker_layout(platform);
     let previous_mask_panels = WorkspacePreset::Photographer.legacy_selection_drawers_layout(platform);
+    let previous_unselected_drawers = WorkspacePreset::Photographer.legacy_drawers_without_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = previous_columns.clone();
@@ -342,8 +405,21 @@ pub(super) fn updated_photographer_default(
             .tile_style = TileStyle::Medium;
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
-    if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection && baseline.as_ref() != &previous_components && baseline.as_ref() != &previous_inner_bar && baseline.as_ref() != &previous_flip && baseline.as_ref() != &previous_drawers && baseline.as_ref() != &previous_mask_panels) {
+    if baseline.as_ref() == &layout
+        || history.layout() != baseline.as_ref()
+        || (baseline.as_ref() != &previous
+            && baseline.as_ref() != &previous_columns
+            && baseline.as_ref() != &previous_primary
+            && baseline.as_ref() != &previous_selection
+            && baseline.as_ref() != &previous_components
+            && baseline.as_ref() != &previous_inner_bar
+            && baseline.as_ref() != &previous_flip
+            && baseline.as_ref() != &previous_drawers
+            && baseline.as_ref() != &previous_mask_panels
+            && baseline.as_ref() != &previous_unselected_drawers
+            && baseline.as_ref() != &previous_palettes
+            && baseline.as_ref() != &previous_separate)
+    {
         return None;
     }
     let mut content = entity.content.clone();
@@ -516,12 +592,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
 #[test]
 fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
     use layer_ui::{WorkspacePreset, LayoutHistory};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         for (preset, id, migrate) in [
             (WorkspacePreset::Painter, DEFAULT_WORKSPACES[0].0, updated_painter_default as fn(&Entity,Platform)->Option<ItemContent>),
             (WorkspacePreset::Photographer, DEFAULT_WORKSPACES[2].0, updated_photographer_default),
         ] {
-            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform)] {
+            for old in [preset.legacy_selection_layout(platform), preset.legacy_without_picker_layout(platform),
+                preset.legacy_drawers_without_selection_layout(platform)] {
             if preset == WorkspacePreset::Painter && old == preset.layout(platform) { continue; }
             let mut working=preset.working_state();
             working.selection.tool=layer_ui::SelectionTool::Ellipse;

@@ -550,7 +550,7 @@ mod painted_selection_checks {
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         assert_eq!(request.selection.unwrap().resize, -7);
         assert_eq!(s.engine.document().selection, before);
-        s.renderer_mut().region_reply = Some(layer_render::RegionResult { request_id: request.request_id, pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes([4,1], [1,0,2,1], vec![0x00808000]).unwrap()) });
+        s.renderer_mut().region_reply = Some(layer_render::RegionResult { tonal_sample: None, request_id: request.request_id, pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes([4,1], [1,0,2,1], vec![0x00808000]).unwrap()) });
         s.frame(2,2).unwrap();
         let result = s.engine.document().selection.clone();
         assert_ne!(result, before);

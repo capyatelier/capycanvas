@@ -5,17 +5,18 @@ use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionRefiner {
     layout: wgpu::BindGroupLayout,
-    pipelines: [Deferred<wgpu::ComputePipeline>; 3],
+    bounds_layout: wgpu::BindGroupLayout,
+    pipelines: [Deferred<wgpu::ComputePipeline>; 4],
     empty: wgpu::Buffer,
 }
 impl SelectionRefiner {
     pub fn new(device: &PipelineDevice) -> Self {
-        let entries: Vec<_> = (0..5)
+        let entries: Vec<_> = (0..6)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: if binding == 0 {
+                    ty: if binding == 0 || binding == 5 {
                         wgpu::BufferBindingType::Uniform
                     } else {
                         wgpu::BufferBindingType::Storage {
@@ -37,13 +38,30 @@ impl SelectionRefiner {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
+        let bounds_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("selection bounds"),
+            entries: &[entries[0], entries[4]],
+        });
+        let bounds_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("selection bounds"),
+                bind_group_layouts: &[Some(&bounds_layout)],
+                immediate_size: 0,
+            });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selection feather and modes"),
             source: wgpu::ShaderSource::Wgsl(include_str!("selection_refine.wgsl").into()),
         });
-        let pipelines = ["feather_h", "combine", "resize_h"].map(|entry| {
-            let (device, layout, shader) =
-                (device.clone(), pipeline_layout.clone(), shader.clone());
+        let pipelines = ["feather_h", "combine", "resize_h", "bounds"].map(|entry| {
+            let (device, layout, shader) = (
+                device.clone(),
+                if entry == "bounds" {
+                    bounds_pipeline_layout.clone()
+                } else {
+                    pipeline_layout.clone()
+                },
+                shader.clone(),
+            );
             Deferred::pipeline(move |mode| {
                 mode.compute(
                     &device,
@@ -66,6 +84,7 @@ impl SelectionRefiner {
         });
         Self {
             layout,
+            bounds_layout,
             pipelines,
             empty,
         }
@@ -80,6 +99,64 @@ impl SelectionRefiner {
             ready &= pipeline.ready();
         }
         ready
+    }
+    /// A tonal mask is already antialiased byte coverage in document space.
+    /// With no feather/combination it needs bounds, not another image allocation
+    /// and a bilinear resampling pass over every pixel.
+    pub fn bounds_only(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut crate::submission::CommandEncoder,
+        extent: [u32; 2],
+        coverage: wgpu::Buffer,
+    ) -> flood::Region {
+        let [w, h] = extent;
+        let bounds_offset = 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4;
+        let bytes: Vec<_> = [w, h, 0, 0, 0, 0, 0, 0]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect();
+        let header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tonal bounds initializer"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::COPY_SRC,
+        });
+        encoder.copy_buffer_to_buffer(&header, 0, &coverage, bounds_offset, 32);
+        let mut data = [0u32; 16];
+        data[..2].copy_from_slice(&extent);
+        let bytes: Vec<_> = data.into_iter().flat_map(u32::to_ne_bytes).collect();
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tonal bounds extent"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let entries = [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: coverage.as_entire_binding(),
+            },
+        ];
+        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("selection bounds"),
+            layout: &self.bounds_layout,
+            entries: &entries,
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("tonal bounds"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipelines[3]);
+        pass.set_bind_group(0, &binding, &[]);
+        pass.dispatch_workgroups(h, 1, 1);
+        drop(pass);
+        flood::Region {
+            coverage,
+            bounds_offset,
+        }
     }
     pub fn encode(
         &self,
@@ -96,10 +173,12 @@ impl SelectionRefiner {
         let [w, h] = extent;
         let bounds_offset = 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4;
         let resize_levels = (options.resize.unsigned_abs() * 2 + 1).ilog2();
+        let feather_radius = (options.feather * 1.5).ceil() as u32;
+        let band_height = if options.feather > 0. { h.min(256) } else { h };
         let scratch_size = if resize_levels > 0 {
             u64::from(w.div_ceil(4)) * u64::from(h) * 4 * u64::from(resize_levels)
         } else if options.feather > 0. {
-            u64::from(w) * u64::from(h) * 4
+            u64::from(w) * u64::from(h.min(band_height + 2 * feather_radius)) * 4
         } else {
             4
         };
@@ -135,28 +214,49 @@ impl SelectionRefiner {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let header: Vec<_> = [0, 0, w, h, 0, 2, 0, 0, w, h, 0, 0, 0, 0, 0, 0]
+        let header: Vec<_> = [0, 0, w, h, 0, 2, 0, 0]
             .into_iter()
             .flat_map(u32::to_ne_bytes)
             .collect();
         let header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("selection bounds initializer"),
+            label: Some("selection coverage header"),
             contents: &header,
             usage: wgpu::BufferUsages::COPY_SRC,
         });
         encoder.copy_buffer_to_buffer(&header, 0, &coverage, 0, 32);
-        encoder.copy_buffer_to_buffer(&header, 32, &coverage, bounds_offset, 32);
         let scratch = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("selection refinement intermediate"),
             size: scratch_size,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let binding = |level| {
+        // Symmetric normalized Gaussian, computed once instead of exp() and
+        // normalization for every tap of every image pixel. MAX_FEATHER=100
+        // needs 151 nonnegative distances, packed into 38 uniform vec4s.
+        let mut weights = [0f32; 152];
+        let sigma = (options.feather * 0.5).max(0.001);
+        for (d, weight) in weights
+            .iter_mut()
+            .enumerate()
+            .take(feather_radius as usize + 1)
+        {
+            *weight = (-0.5 * (d * d) as f32 / (sigma * sigma)).exp();
+        }
+        let total = weights[0] + 2. * weights[1..].iter().sum::<f32>();
+        let bytes: Vec<_> = weights
+            .into_iter()
+            .flat_map(|v| (v / total).to_ne_bytes())
+            .collect();
+        let weights = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("selection Gaussian weights"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let binding = |level, start: u32, end: u32| {
             let data: Vec<_> = data
                 .iter()
                 .copied()
-                .chain([level, 0, 0, 0])
+                .chain([level, start, end, start.saturating_sub(feather_radius)])
                 .flat_map(u32::to_ne_bytes)
                 .collect();
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -170,6 +270,7 @@ impl SelectionRefiner {
                 previous.unwrap_or(&self.empty),
                 &scratch,
                 &coverage,
+                &weights,
             ];
             let entries: Vec<_> = buffers
                 .iter()
@@ -185,28 +286,32 @@ impl SelectionRefiner {
                 entries: &entries,
             })
         };
-        let final_binding = binding(0);
-        let resize_bindings: Vec<_> = (1..=resize_levels).map(binding).collect();
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("feather and combine selection"),
-            timestamp_writes: None,
-        });
-        for binding in &resize_bindings {
-            pass.set_bind_group(0, binding, &[]);
-            pass.set_pipeline(&self.pipelines[2]);
-            pass.dispatch_workgroups(w.div_ceil(256), h, 1);
+        let resize_bindings: Vec<_> = (1..=resize_levels)
+            .map(|level| binding(level, 0, h))
+            .collect();
+        for start in (0..h).step_by(band_height as usize) {
+            let end = (start + band_height).min(h);
+            let final_binding = binding(0, start, end);
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("feather and combine selection"),
+                timestamp_writes: None,
+            });
+            for binding in &resize_bindings {
+                pass.set_bind_group(0, binding, &[]);
+                pass.set_pipeline(&self.pipelines[2]);
+                pass.dispatch_workgroups(w.div_ceil(256), h, 1);
+            }
+            pass.set_bind_group(0, &final_binding, &[]);
+            if options.feather > 0. {
+                pass.set_pipeline(&self.pipelines[0]);
+                let scratch_rows =
+                    (end + feather_radius).min(h) - start.saturating_sub(feather_radius);
+                pass.dispatch_workgroups(w.div_ceil(256), scratch_rows, 1);
+            }
+            pass.set_pipeline(&self.pipelines[1]);
+            pass.dispatch_workgroups(w.div_ceil(256), end - start, 1);
+            drop(pass);
         }
-        pass.set_bind_group(0, &final_binding, &[]);
-        if options.feather > 0. {
-            pass.set_pipeline(&self.pipelines[0]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
-        }
-        pass.set_pipeline(&self.pipelines[1]);
-        pass.dispatch_workgroups(w.div_ceil(256), h, 1);
-        drop(pass);
-        Ok(flood::Region {
-            coverage,
-            bounds_offset,
-        })
+        Ok(self.bounds_only(device, encoder, extent, coverage))
     }
 }

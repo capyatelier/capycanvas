@@ -59,6 +59,7 @@ __declspec(dllimport) int32_t capy_load_filter_directory(CapyHost*, const char* 
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */
 __declspec(dllimport) bool capy_navigator_image(float width, float height, uint32_t document_width, uint32_t document_height, float* output);
+__declspec(dllimport) float capy_navigator_aspect(uint32_t document_width, uint32_t document_height);
 /* Stateless shared color presentation: projection 0 square, 1 triangle, 2 circle.
    Hit result: 0 none, 1 hue, 2 field. Free returned strings with capy_string_free.
    Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
@@ -109,6 +110,7 @@ __declspec(dllimport) char* capy_document_tab_drop(const char* json);
 __declspec(dllimport) char* capy_proof_dial(const char* json);
 __declspec(dllimport) bool capy_proof_texture(uint32_t edge, uint8_t* output, size_t length);
 __declspec(dllimport) char* capy_number(const char* json);
+__declspec(dllimport) char* capy_toolbar_ui(const char* json);
 __declspec(dllimport) void capy_string_free(char*);
 #ifdef __cplusplus
 }

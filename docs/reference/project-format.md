@@ -59,11 +59,11 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x06\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x07\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs, image roles/interpretations and source assets. Payload offsets are relative to the payload start.
-Version 6 fixes the tile encoding to one lossless LZ4 block per tile, without a
+Versions 6 and 7 fix the tile encoding to one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
 and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths.
@@ -80,10 +80,18 @@ streams payload after indexing; it does not build another full archive in RAM.
 Readers reject malformed/unsupported headers, descriptors, references, duplicate
 keys, noncanonical offsets, truncated or trailing data, integrity failures and
 unused blobs before adopting a candidate. The former `CAPYPROJECT` codec is gone;
-old files, including earlier raster-container versions, produce an unsupported-version
-error. There is no migration reader. Version 6 is the only accepted version, including
-for placed artwork; v4/v5 Zstd files are deliberately unsupported. The project
+Version 7 writes binary selection coverage; the reader also accepts version 6
+archives with inline selection words, including existing recovery snapshots.
+Earlier containers, including v4/v5 Zstd files, remain unsupported. The project
 format remains subject to further incompatible changes.
+
+Selection masks use indexed, zero-padded 64 KiB chunks of little-endian packed
+words with the coverage descriptor. The index preserves extent, bounds and byte
+or legacy nibble coverage; affine placement and inversion stay in document
+metadata. Current selections, saved selection layers and initial layer masks
+share one immutable allocation when they reference the same mask. Coverage never
+expands into JSON numeric arrays. Chunk padding, bounds, descriptors, references
+and the decoded selection budget are checked before adoption.
 
 Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
 16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references

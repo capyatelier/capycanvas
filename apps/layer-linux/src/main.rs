@@ -26,7 +26,10 @@ mod swatch_selector;
 mod swipe_row;
 mod navigator;
 mod number_control;
+mod range_control;
+mod palette_grid;
 mod panel_controls;
+mod panel_tabs;
 mod proof_dial;
 mod local_tone_view;
 mod preferences;
@@ -39,6 +42,7 @@ mod tiles;
 #[cfg(test)]
 mod timing;
 mod tool_panels;
+mod tool_extra;
 mod tooltips;
 mod transparency_choice;
 mod wayland;

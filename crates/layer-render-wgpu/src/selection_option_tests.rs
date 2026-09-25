@@ -67,6 +67,59 @@ fn receive_with_resize(
     }
 }
 #[test]
+fn selection_feather_bands_preserve_gaussian_edges_across_row_boundaries() {
+    let extent = [17, 600];
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.submit(FramePacket {
+        view: view(),
+        document_extent: extent,
+        layers: &[Layer::paint(LayerId(1), "Feather bands")],
+        dabs: &[],
+        dab_batches: &[],
+        restore_rasters: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: true,
+    })
+    .unwrap();
+    let mut words = vec![0; 5 * 600];
+    for y in 250..518 {
+        words[y * 5..y * 5 + 4].fill(u32::MAX);
+        words[y * 5 + 4] = 255;
+    }
+    let incoming = Selection::pixels(Arc::new(
+        SelectionPixels::bytes(extent, [0, 250, 17, 518], words).unwrap(),
+    ));
+    for feather in [0.25f32, 12., 100.] {
+        let result = receive(
+            &mut r,
+            incoming.clone(),
+            None,
+            SelectionMode::New,
+            feather,
+            true,
+        );
+        let radius = (feather * 1.5).ceil() as i32;
+        let sigma = f64::from(feather) * 0.5;
+        let weight = |d: i32| (-0.5 * f64::from(d * d) / (sigma * sigma)).exp();
+        let total: f64 = (-radius..=radius).map(weight).sum();
+        for y in 0..600i32 {
+            let sum: f64 = (-radius..=radius)
+                .filter(|d| (250..518).contains(&(y + d)))
+                .map(weight)
+                .sum();
+            let expected = (sum / total * 255.).round() as u8;
+            for x in [0, 8, 16] {
+                assert!(
+                    coverage(&result, x, y as u32).abs_diff(expected) <= 1,
+                    "{x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn selection_options_boolean_modes_antialias_and_gaussian_feather() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     submit(

@@ -1,7 +1,7 @@
 //! Application delivery preferences; hosts own storage and validate ICC support.
 //! Profile bytes are retained once, independent of external profile-library files.
 use crate::{ExportProfile, ExportRecipe};
-use layer_core::color::{ColorProfile, DocumentColor, ProfileChannels};
+use layer_core::{binary_payload, color::{ColorProfile, DocumentColor, ProfileChannels, ProfileReference}};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,8 +13,8 @@ struct Named {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExportPresets {
-    profiles: Vec<ExportProfile>,
+pub struct ExportPresets<P = ColorProfile> {
+    profiles: Vec<ExportProfile<P>>,
     destinations: [Option<ExportRecipe<usize>>; 4],
     named: Vec<Named>,
 }
@@ -231,17 +231,38 @@ impl ExportPresets {
     }
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
-        if bytes.len() > Self::MAX_FILE_BYTES {
-            return Err("Export preset file exceeds 64 MiB".into());
-        }
-        Ok(bytes)
+        let mut payloads = Vec::new();
+        let metadata = ExportPresets {
+            profiles: self.profiles.iter().map(|p| p.clone().with_profile(
+                ProfileReference::detach(&p.profile, &mut payloads))).collect(),
+            destinations: self.destinations.clone(), named: self.named.clone(),
+        };
+        binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &payloads, Self::MAX_FILE_BYTES)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > Self::MAX_FILE_BYTES {
             return Err("Export preset file exceeds 64 MiB".into());
         }
-        let value: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let value: Self = if bytes.starts_with(b"CAPYPRESETS") {
+            let (metadata, blocks): (ExportPresets<ProfileReference>, _) =
+                binary_payload::decode(b"CAPYPRESETS\x01", bytes, Self::MAX_FILE_BYTES)?;
+            if blocks.len() > Self::MAX_NAMES + 4
+                || blocks.iter().map(|b| b.len()).sum::<usize>() > Self::MAX_PROFILE_BYTES {
+                return Err("Export preset profiles exceed 16 MiB".into());
+            }
+            let payloads: Vec<std::sync::Arc<[u8]>> = blocks.into_iter().map(Into::into).collect();
+            let mut used = std::collections::BTreeSet::new();
+            let profiles = metadata.profiles.into_iter().map(|p| {
+                if let ProfileReference::Embedded(id) = &p.profile { used.insert(*id); }
+                let profile = p.profile.resolve(&payloads)?;
+                Ok(p.with_profile(profile))
+            }).collect::<Result<_, String>>()?;
+            if used.len() != payloads.len() { return Err("Unused preset ICC payload".into()); }
+            Self { profiles, destinations: metadata.destinations, named: metadata.named }
+        } else {
+            // Existing installations migrate on their next successful write.
+            serde_json::from_slice(bytes).map_err(|e| e.to_string())?
+        };
         value.validate()?;
         Ok(value)
     }
@@ -251,6 +272,30 @@ impl ExportPresets {
 mod tests {
     use super::*;
     use layer_core::color::{SampleDepth, RgbSpace};
+    #[test]
+    fn binary_profiles_are_compact_lossless_and_migrate_legacy_json() {
+        let mut library = ExportPresets::default();
+        let mut recipe = ExportRecipe::web_share();
+        recipe.profile.profile = ColorProfile::Icc((0..2 * 1024 * 1024).map(|n| n as u8).collect::<Vec<_>>().into());
+        library.save("Embedded", recipe.clone()).unwrap();
+        library.remember(3, recipe).unwrap();
+        let legacy = serde_json::to_vec(&library).unwrap();
+        assert_eq!(ExportPresets::decode(&legacy).unwrap(), library);
+        let start = std::time::Instant::now();
+        let bytes = library.encode().unwrap();
+        let encoded = start.elapsed();
+        let start = std::time::Instant::now();
+        assert_eq!(ExportPresets::decode(&bytes).unwrap(), library);
+        let decoded = start.elapsed();
+        assert!(bytes.len() < 2 * 1024 * 1024 + 4096);
+        assert!(bytes.len() * 3 < legacy.len());
+        eprintln!("2 MiB ICC presets: JSON={} binary={} encode={encoded:?} decode={decoded:?}", legacy.len(), bytes.len());
+        for end in [0, 12, 40, bytes.len() - 1] {
+            assert!(ExportPresets::decode(&bytes[..end]).is_err());
+        }
+        let mut corrupt = bytes; corrupt[100] ^= 1;
+        assert!(ExportPresets::decode(&corrupt).is_err());
+    }
     #[test]
     fn named_and_remembered_recipes_retain_profiles_independently_and_retire_unused_bytes() {
         let mut library = ExportPresets::default();

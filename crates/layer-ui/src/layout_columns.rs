@@ -1423,9 +1423,10 @@ mod tests {
                     .iter()
                     .find(|b| b.root.group_for(panel).is_some())
                     .unwrap();
-                // The editor's paint column also contains Color, whose
-                // four-tile minimum is wider than the tool grids.
-                let minimum = if band.root.group_for(Panel::Color).is_some() {
+                // The editor's paint column also contains Tool settings and Color.
+                let minimum = if band.root.group_for(Panel::ToolSettings).is_some() {
+                    minimum.max(TOOL_SETTINGS_MIN_WIDTH)
+                } else if band.root.group_for(Panel::Color).is_some() {
                     minimum.max(4.0 * TILE_SIZE)
                 } else {
                     minimum

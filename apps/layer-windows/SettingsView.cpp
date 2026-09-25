@@ -161,7 +161,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 Primitives::ToggleButton choice;choice.Width(64);choice.Height(64);choice.Padding({8});choice.CornerRadius({6,6,6,6});
                 choice.BorderThickness({0});AutomationProperties::SetName(choice,options.GetStringAt(i));
                 for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-                    choice.Resources().Insert(box_value(role),selected());
+                    choice.Resources().Insert(box_value(role),selected(data));
                 ToolTipService::SetToolTip(choice,box_value(options.GetStringAt(i)));
                 if(i<icons.Size())themeBindings.emplace_back([data=data,choice,id=icons.GetStringAt(i)]{
                     choice.Content(icon(id,data->theme(),48));
@@ -170,7 +170,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 Grid::SetColumn(choice,i%columns);Grid::SetRow(choice,i/columns);choices.Children().Append(choice);
                 bindings.emplace_back([data=data,id,i,choice]{
                     bool active=num(object(rowFor(data,id),L"kind"),L"selected")==i;
-                    choice.IsChecked(active);choice.Background(active?selected():clear());
+                    choice.IsChecked(active);choice.Background(active?selected(data):clear());
                 });
             }
             text.Spacing(10);text.Children().Append(choices);Grid::SetColumnSpan(text,2);
@@ -210,6 +210,60 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             bindings.emplace_back([data=data,id,control,draft]{
                 if(!draft->changed&&control.FocusState()==FocusState::Unfocused)control.Text(str(object(rowFor(data,id),L"kind"),L"value"));
             });
+        }else if(type==L"swatches"){
+            bool inlineRow=flag(kind,L"inline");double side=inlineRow?28:32;
+            Panel circles{nullptr};
+            if(inlineRow){StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(10);circles=row;}
+            else{VariableSizedWrapGrid grid;grid.Orientation(Orientation::Horizontal);grid.ItemWidth(side+10);grid.ItemHeight(side+10);grid.HorizontalAlignment(HorizontalAlignment::Center);circles=grid;}
+            TextBox entry;entry.Width(96);entry.MaxLength(7);entry.PlaceholderText(str(kind,L"placeholder"));entry.VerticalAlignment(VerticalAlignment::Center);
+            AutomationProperties::SetAutomationId(entry,L"setting-text-"+id);AutomationProperties::SetName(entry,titleText);
+            struct Draft{hstring text,key;bool changed=false;};
+            auto draft=std::make_shared<Draft>();
+            entry.TextChanging([data=data,draft](auto&& sender,auto&&){
+                if(!data->updating){draft->text=sender.template as<TextBox>().Text();draft->changed=true;}
+            });
+            auto commit=[data=data,id,draft]{if(draft->changed){draft->changed=false;edit(data,id,S(draft->text));}};
+            commits.push_back(commit);
+            entry.LostFocus([commit](auto&&,auto&&){commit();});
+            entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
+            auto refresh=[data=data,id,side,circles,entry,draft]{
+                auto current=object(rowFor(data,id),L"kind");auto swatches=array(current,L"swatches");auto chosen=uint32_t(num(current,L"selected"));
+                auto key=swatches.Stringify()+to_hstring(chosen)+data->theme();
+                bool custom=chosen<swatches.Size()&&flag(swatches.GetObjectAt(chosen),L"custom");
+                entry.Visibility(custom?Visibility::Visible:Visibility::Collapsed);
+                if(!draft->changed&&entry.FocusState()==FocusState::Unfocused)entry.Text(str(current,L"custom"));
+                if(key==draft->key)return;
+                draft->key=key;circles.Children().Clear();
+                for(uint32_t i=0;i<swatches.Size();++i){
+                    auto swatch=swatches.GetObjectAt(i);bool active=i==chosen;
+                    Button circle;circle.Width(side);circle.Height(side);circle.Padding({0});circle.MinWidth(0);circle.MinHeight(0);
+                    circle.CornerRadius({side/2,side/2,side/2,side/2});
+                    auto paint=swatch.GetNamedValue(L"color",JsonValue::CreateNullValue());
+                    if(paint.ValueType()==JsonValueType::String){circle.Background(fill(color(paint.GetString())));circle.BorderThickness({0});}
+                    else{circle.Background(clear());circle.BorderThickness({1,1,1,1});circle.BorderBrush(data->tint(L"text",64));}
+                    auto foreground=swatch.GetNamedValue(L"foreground",JsonValue::CreateNullValue());
+                    if(active){
+                        FontIcon check;check.Glyph(L"");check.FontSize(side*.5);
+                        check.Foreground(foreground.ValueType()==JsonValueType::String?fill(color(foreground.GetString())):data->brush(L"text"));
+                        circle.Content(check);
+                    }else if(auto glyph=str(swatch,L"icon");!glyph.empty())circle.Content(icon(glyph,data->theme(),side*.5));
+                    ToolTipService::SetToolTip(circle,box_value(str(swatch,L"label")));
+                    AutomationProperties::SetName(circle,str(swatch,L"label"));AutomationProperties::SetAutomationId(circle,L"setting-"+id+L"-swatch-"+to_hstring(i));
+                    AutomationProperties::SetItemStatus(circle,active?L"Selected":L"");
+                    circle.Click([data,id,swatch,entry](auto&&,auto&&){
+                        if(data->updating)return;
+                        if(flag(swatch,L"custom")){entry.Visibility(Visibility::Visible);entry.Focus(FocusState::Programmatic);return;}
+                        edit(data,id,S(str(swatch,L"value")));
+                    });
+                    Border ring;ring.Padding({2,2,2,2});ring.CornerRadius({side/2+4,side/2+4,side/2+4,side/2+4});
+                    ring.BorderThickness(active?Thickness{2,2,2,2}:Thickness{});ring.BorderBrush(data->brush(L"text"));
+                    ring.Child(circle);circles.Children().Append(ring);
+                }
+            };
+            bindings.emplace_back(refresh);refresh();
+            StackPanel host;host.Spacing(8);host.Children().Append(circles);host.Children().Append(entry);
+            if(inlineRow){host.Orientation(Orientation::Horizontal);widget=host;}
+            else{host.HorizontalAlignment(HorizontalAlignment::Center);text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
         }else if(type==L"link"){
             HyperlinkButton control;control.Content(box_value(str(kind,L"label")));control.NavigateUri(Windows::Foundation::Uri(str(kind,L"url")));
             widget=control;
@@ -310,7 +364,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(search.Text()!=query)search.Text(query);
         for(auto const& [id,node]:pageNodes)node.Visibility(id==page?Visibility::Visible:Visibility::Collapsed);
         for(auto const& [id,item]:tabs){
-            item.Background(id==page?selected():clear());item.Visibility(query.empty()?Visibility::Visible:Visibility::Collapsed);
+            item.Background(id==page?selected(data):clear());item.Visibility(query.empty()?Visibility::Visible:Visibility::Collapsed);
         }
         title.Text(str(find(array(model,L"pages"),L"id",page),L"title"));
         auto message=str(model,L"error");
