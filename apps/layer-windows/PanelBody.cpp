@@ -146,7 +146,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     }
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
-                    pick.Background(flag(current,L"selected")?selected(data):clear());
+                    auto facing=drawerFacing(data,O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
+                    pick.Background(flag(current,L"selected")?selected(data):!facing.empty()?data->glass(L"open_tile"):clear());
+                    pick.CornerRadius(facingCorners(num(currentPanel,L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
                     auto tooltip=str(current,L"tooltip");
                     ToolTipService::SetToolTip(pick,box_value(picker?pickerTooltip(tooltip):tooltip));
                 });

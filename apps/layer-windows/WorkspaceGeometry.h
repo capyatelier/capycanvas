@@ -55,6 +55,29 @@ inline void appendConnection(A& connections,J const& connection,UIElement const&
     bounds.Insert(L"x",N(num(bounds,L"x")+origin.X));bounds.Insert(L"y",N(num(bounds,L"y")+origin.Y));
     moved.Insert(L"bounds",bounds);connections.Append(moved);
 }
+inline hstring drawerFacing(std::shared_ptr<WorkspaceData> const& data,J const& anchor){
+    for(auto value:data->drawerSources){
+        auto source=value.GetObject();auto candidate=object(source,L"anchor");bool same=str(candidate,L"kind")==str(anchor,L"kind");
+        for(auto key:{L"panel"})same=same&&str(candidate,key)==str(anchor,key);
+        for(auto key:{L"tile",L"id",L"column"})same=same&&num(candidate,key,-1)==num(anchor,key,-1);
+        if(same)return str(source,L"direction");
+    }
+    return L"";
+}
+inline CornerRadius facingCorners(double r,hstring const& direction){
+    CornerRadius c{r,r,r,r};
+    if(direction==L"top")c.TopLeft=c.TopRight=0;else if(direction==L"bottom")c.BottomLeft=c.BottomRight=0;
+    else if(direction==L"left")c.TopLeft=c.BottomLeft=0;else if(direction==L"right")c.TopRight=c.BottomRight=0;
+    return c;
+}
+inline std::array<bool,4> sourceCorners(J const& source,J const& container){
+    std::array<bool,4> result{};
+    auto request=O({{L"type",S(L"drawer_source_corners")},{L"anchor",object(source,L"bounds")},{L"direction",S(str(source,L"direction"))},{L"container",container}});
+    std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_toolbar_ui(to_string(request.Stringify()).c_str()),capy_string_free);
+    if(!reply)return result;auto value=JsonValue::Parse(to_hstring(reply.get()));if(value.ValueType()!=JsonValueType::Array)return result;
+    auto list=value.GetArray();for(uint32_t i=0;i<4&&i<list.Size();++i)result[i]=list.GetBooleanAt(i);
+    return result;
+}
 struct AutomaticTab{Button tab{nullptr};TextBlock name{nullptr};std::wstring key;};
 inline bool automaticTabs(std::shared_ptr<WorkspaceData> const& data,double group){
     return str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(group)).c_str())==L"automatic";

@@ -204,6 +204,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             for(uint32_t i=0;i<std::min<uint32_t>(options.Size(),uint32_t(fields.size()));++i)fields[i].update(options.GetObjectAt(i));
         }
         if(!measured){layout();measured=true;}
+        if(more){
+            auto facing=drawerFacing(data,item);
+            more.Background(facing.empty()?clear():data->glass(L"open_tile"));
+            more.CornerRadius(facingCorners(num(find(array(data->model,L"panels"),L"id",panelId),L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
+        }
     }
     void Layout(J const& bounds,bool axisVertical){
         auto key=std::to_wstring(num(bounds,L"width"))+L"x"+std::to_wstring(num(bounds,L"height"))+(axisVertical?L"v":L"h");

@@ -404,8 +404,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                     if(kind==L"capy")pick.Padding({0,0,0,0});
                 }
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
-                auto anchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
-                bool open=str(anchor,L"kind")==L"header"&&num(anchor,L"id")==id;
+                bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty();
                 pick.Background(flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear());
                 double r=corner();pick.CornerRadius(open?CornerRadius{r,r,0,0}:CornerRadius{r,r,r,r});
                 AutomationProperties::SetItemStatus(pick,open?L"Open":flag(spec,L"selected")?L"On":L"Off");
@@ -557,8 +556,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto kind=str(object(native.entry,L"item"),L"kind");
             if(kind==L"menu_labels"){menuCapsule.Visibility(compact?Visibility::Collapsed:Visibility::Visible);menuOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
             bool inBar=joined.contains(id);
-            auto drawerAnchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");
-            bool open=str(drawerAnchor,L"kind")==L"header"&&num(drawerAnchor,L"id")==id&&!flag(findId(array(view,L"items"),id),L"selected");
+            bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty()&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
             native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius({corner(),corner(),corner(),corner()});native.outline.CornerRadius({corner(),corner(),corner(),corner()});
             if(kind==L"workspaces"){switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);}
@@ -674,6 +672,10 @@ bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
         if(key==VirtualKey::A&&shift){e.Handled(true);impl->showDrawings();return true;}
     }
     return impl->input->Key(e,pressed);
+}
+void HeaderView::SetDrawerSources(A const& sources){
+    if(sources.Stringify()==impl->data->drawerSources.Stringify())return;
+    impl->data->drawerSources=A::Parse(sources.Stringify());if(impl->built)impl->applyItems();
 }
 void HeaderView::AppendGlass(A& regions,UIElement const& reference)const{if(impl->built&&!impl->hidden&&!impl->editing)impl->glass(regions,impl->root,reference);}
 std::vector<Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<Windows::Graphics::RectInt32>{};}

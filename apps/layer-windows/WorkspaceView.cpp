@@ -635,15 +635,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             A slots;appendGroupOverviews(slots,group);
             auto bounds=rectangle(placement(group));
             bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
-            auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
+            J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
+                if(str(anchor,L"kind")==L"tile"&&str(anchor,L"panel")==str(group.geometry,L"active"))source=value.GetObject();}
+            std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+            if(source.Size()&&!expanded){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+            auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
             float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
-            auto outline=expanded?expansionShape(group.presented):tabbed?squircleRectangle(width,std::max(0.f,height-36),{0,0,SurfaceRadius,SurfaceRadius}):squircleRectangle(width,height,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius});
+            auto outline=expanded?expansionShape(group.presented):tabbed?squircleRectangle(width,std::max(0.f,height-36),{0,0,corners[2],corners[3]}):squircleRectangle(width,height,corners);
             group.strip.Data(tabbed&&!expanded?squircleRectangle(width,36,{SurfaceRadius,SurfaceRadius,0,0}):PathGeometry());group.strip.Fill(data->glass(L"strip"));
             if(tabbed&&!expanded){TranslateTransform body;body.Y(36);outline.Transform(body);}
-            group.background.Fill(expanded?data->brush(L"panel"):data->glass(L"panel"));
+            group.background.Fill(expanded?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel"));
             if(group.header){
                 group.header.Background(expanded?data->brush(L"tabbar"):clear());
                 for(auto child:group.tabLabels.Children())if(auto shell=child.try_as<Grid>();shell&&unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell")
@@ -692,6 +696,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         A slots;
         for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
         if(drawers)drawers->AppendOverviews(slots);
+        if(drawers){
+            auto sources=drawers->Sources();
+            if(sources.Stringify()!=data->drawerSources.Stringify()){
+                data->drawerSources=sources;
+                for(auto& [id,group]:groups){group.backgroundKey=L"";if(group.body)group.body->Apply(!group.hidden);}
+                backgrounds();
+            }
+        }
         auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
         auto json=slots.Stringify();
         if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}
@@ -720,6 +732,7 @@ bool WorkspaceView::CancelGesture(){
 }
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
+JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections)const{return impl->glass(reference,connections);}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};

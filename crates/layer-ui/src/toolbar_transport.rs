@@ -53,6 +53,11 @@ pub enum ToolbarUiRequest {
         available: f32,
         widths: Vec<[f32; 2]>,
     },
+    DrawerSourceCorners {
+        anchor: Bounds,
+        direction: Edge,
+        container: Bounds,
+    },
 }
 
 pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String> {
@@ -130,7 +135,25 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
         ToolbarUiRequest::AutomaticTabNames { available, widths } => {
             json!(TabStyle::automatic_names(available, &widths))
         }
+        ToolbarUiRequest::DrawerSourceCorners { anchor, direction, container } => json!(
+            DrawerPlacement { bounds: anchor, anchor, direction, columns: Vec::new() }.source_corners(container)
+        ),
     })
+}
+
+#[test]
+fn drawer_source_corners_are_a_stateless_toolbar_query() {
+    let corners = toolbar_ui(
+        serde_json::from_value(serde_json::json!({
+            "type": "drawer_source_corners",
+            "anchor": {"x": 10., "y": 10., "width": 36., "height": 36.},
+            "direction": "bottom",
+            "container": {"x": 0., "y": 4., "width": 60., "height": 42.},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(corners, serde_json::json!([false, false, true, true]));
 }
 
 #[test]

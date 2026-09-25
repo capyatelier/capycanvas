@@ -413,6 +413,15 @@ WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
 void WorkspaceDrawers::Apply(){impl->apply();}
 void WorkspaceDrawers::Reset(){impl->reset();}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
+A WorkspaceDrawers::Sources()const{
+    A result;
+    for(auto const& [id,drawer]:impl->drawers){
+        auto placement=object(drawer->geometry,L"placement");auto anchor=object(drawer->model,L"anchor");
+        if(drawer->disposed||!anchor.Size()||!placement.Size())continue;
+        result.Append(O({{L"anchor",anchor},{L"direction",S(str(placement,L"direction"))},{L"bounds",object(placement,L"anchor")}}));
+    }
+    return result;
+}
 void WorkspaceDrawers::AppendGlass(A& regions,A& connections,UIElement const& reference)const{for(auto const& [id,drawer]:impl->drawers)drawer->collectGlass(regions,connections,reference);}
 FrameworkElement WorkspaceDrawers::Anchor(std::wstring const& control)const{
     for(auto const& [id,drawer]:impl->drawers)if(!drawer->closing)for(auto const& column:drawer->columns)for(auto const& panel:column.panels){

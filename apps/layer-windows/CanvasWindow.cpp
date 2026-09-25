@@ -289,6 +289,7 @@ void CanvasWindow::Resize() {
 }
 void CanvasWindow::PublishGlass(){
     if(closing||closed||!panel||!workspace)return;
+    if(header)header->SetDrawerSources(workspace->DrawerSources());
     Windows::Data::Json::JsonArray connections;auto regions=workspace->Glass(panel,connections);
     if(header)header->AppendGlass(regions,panel);
     Windows::Data::Json::JsonObject request;request.Insert(L"regions",regions);request.Insert(L"connections",connections);

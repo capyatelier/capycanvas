@@ -12,6 +12,7 @@ public:
     void Apply();
     void Reset();
     void AppendOverviews(CapyUi::A& slots)const;
+    CapyUi::A Sources()const;
     void AppendGlass(CapyUi::A& regions,CapyUi::A& connections,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
     CapyUi::A PanelMeasurements()const;
     winrt::Microsoft::UI::Xaml::FrameworkElement Anchor(std::wstring const& control)const;
