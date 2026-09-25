@@ -429,10 +429,14 @@ impl SelectionClip {
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &binding, &[]);
-        pass.set_pipeline(&self.crossings);
-        pass.dispatch_workgroups(edge_count, 1, 1);
-        pass.set_pipeline(&self.fill);
-        pass.dispatch_workgroups(bounds.height(), 1, 1);
+        if edge_count > 0 {
+            pass.set_pipeline(&self.crossings);
+            pass.dispatch_workgroups(edge_count, 1, 1);
+        }
+        if bounds.height() > 0 {
+            pass.set_pipeline(&self.fill);
+            pass.dispatch_workgroups(bounds.height(), 1, 1);
+        }
         self.extent = Some(extent);
         self.geometry = Some(geometry.clone());
         self.region = region;
