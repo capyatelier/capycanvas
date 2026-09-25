@@ -247,8 +247,6 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
-        // SurfaceView artwork is outside Compose's render tree, so these use
-        // the translucent fallback rather than a blur of the foreground text.
         Box(Modifier.weight(1f).then(if (kind == "clock") Modifier.height(36.dp) else Modifier.fillMaxHeight()).clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
                 Modifier.glass(TileShape, colors.headerSurface) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
@@ -311,8 +309,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     HoverTip(label, modifier) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
         .then(if (surface && !inBar) Modifier.glass(shape, colors.headerSurface) else Modifier).background(when {
-        selected && inBar -> colors.headerActive
-        selected -> colors.active
+        selected -> colors.headerActive
         open -> colors.onGlass.panelFill
         enabled && pressed -> colors.text.copy(alpha = .16f)
         enabled && hovered -> colors.text.copy(alpha = .10f)
