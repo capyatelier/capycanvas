@@ -297,6 +297,7 @@ impl Service {
         Ok(())
     }
     fn event(&mut self, session: &mut UiSession<Renderer>, event: RecoveryEvent) -> Result<(), String> {
+        let published = self.status();
         self.update = self.state.event(event)?;
         loop {
             if !self.update.release.is_empty() {
@@ -343,8 +344,9 @@ impl Service {
                 break;
             }
         }
-        self.changed = true;
-        self.drain()
+        let drained = self.drain();
+        self.changed |= self.status() != published;
+        drained
     }
     pub fn poll(&mut self, session: &mut UiSession<Renderer>) -> Result<bool, String> {
         while let Some(completed) = self

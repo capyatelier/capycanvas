@@ -224,12 +224,12 @@ try {
     Hover-Until $paper {$null -ne (Preview)} 'No preview before sweep'
     $quiet=@{full=-1;since=[Diagnostics.Stopwatch]::StartNew()}
     Hover-Until $paper {$f=(Presentation).full_updates;if($f -ne $quiet.full){$quiet.full=$f;$quiet.since.Restart()};$quiet.since.ElapsedMilliseconds -gt 1200} 'Workspace publications did not settle before the sweep'
-    $before=Presentation;$modelBefore=(Model)|ConvertTo-Json -Depth 60
+    $before=Presentation;$modelBefore=Get-Content -LiteralPath $script:statePath -Raw
     for($i=0;$i -lt 45;$i++){[CapyRowPointer]::PenHover(($center.x-90+$i*4),($center.y+[int](30*[Math]::Sin($i/5))));Start-Sleep -Milliseconds 12}
     for($i=0;$i -lt 14;$i++){[CapyRowPointer]::PenHover(($center.x+90+$i%2),$center.y);Start-Sleep -Milliseconds 30}
     $after=Presentation
     if($after.full_updates -ne $before.full_updates){
-        $modelBefore|Set-Content (Join-Path $run 'sweep-before.json');(Model)|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run 'sweep-after.json')
+        $modelBefore|Set-Content (Join-Path $run 'sweep-before.json');Get-Content -LiteralPath $script:statePath -Raw|Set-Content (Join-Path $run 'sweep-after.json')
         throw 'Hover rebuilt the retained workspace'
     }
     if($after.color_fields -ne $before.color_fields){throw 'Hover rasterized the color field on the UI thread'}
