@@ -98,10 +98,17 @@ extension Path {
 struct DrawerSource: Equatable {
     let direction: String
     let bounds: CGRect
-    init(direction: String, bounds: CGRect) { self.direction = direction; self.bounds = bounds }
-    init?(placement: JSON) {
+    var anchor = JSON()
+    init(direction: String, bounds: CGRect, anchor: JSON = JSON()) { self.direction = direction; self.bounds = bounds; self.anchor = anchor }
+    init?(placement: JSON, anchor: JSON) {
         guard !placement.isNull, !placement["anchor"].isNull else { return nil }
-        self.init(direction: placement["direction"].string, bounds: placement["anchor"].rect)
+        self.init(direction: placement["direction"].string, bounds: placement["anchor"].rect, anchor: anchor)
+    }
+    static func == (a: Self, b: Self) -> Bool {
+        a.direction == b.direction && a.bounds == b.bounds && a.anchor.stableKey == b.anchor.stableKey
+    }
+    func opens(tile: JSON, in panel: JSON) -> Bool {
+        anchor["kind"].string == "tile" && anchor["panel"].string == panel["id"].string && anchor["tile"].uint == tile["id"].uint
     }
     static func square(_ container: CGRect, radius: CGFloat, sources: [DrawerSource], joined: JSON = JSON()) -> [Bool] {
         let corners = [CGPoint(x: container.minX, y: container.minY), CGPoint(x: container.maxX, y: container.minY),

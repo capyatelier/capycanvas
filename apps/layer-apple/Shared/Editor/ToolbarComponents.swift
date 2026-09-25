@@ -415,12 +415,9 @@ private struct ToolOptionsMore: View {
     let panel: JSON
     let tile: JSON
     let item: JSON
-    private var anchored: Bool {
-        let anchor = store.state["customization"]["drawer"]["anchor"]
-        return anchor["kind"].string == "tile" && anchor["panel"].string == panel["id"].string && anchor["tile"].uint == tile["id"].uint
-    }
     var body: some View {
-        DrawerSourceReader(drawers: store.contentDrawers) { sources in button(joined: anchored ? sources["tool"]?.direction : nil) }
+        let source = store.contentDrawers.sources["tool"]
+        button(joined: source?.opens(tile: tile, in: panel) == true ? source?.direction : nil)
     }
     private func button(joined: String?) -> some View {
         Button {

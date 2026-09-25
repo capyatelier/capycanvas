@@ -46,12 +46,10 @@ private struct WorkspaceCollapsedColumn: View {
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = store.panel(icon["panel"].string)
-                            let drawer = store.state["customization"]["column_drawers"].array.first {
-                                $0["anchor"]["column"].uint == column["id"].uint && $0["anchor"]["origin"].string == panel["id"].string
-                            }
-                            let selected = !column["open"].isNull ? group["active"].string == panel["id"].string : drawer != nil
-                            let direction = !column["open"].isNull ? column["open"]["direction"].string
-                                : store.contentDrawers.items[String(column["id"].uint)]?.geometry["placement"]["direction"].string
+                            let source = store.contentDrawers.sources[String(column["id"].uint)]
+                            let presented = source?.anchor["origin"].string == panel["id"].string
+                            let selected = !column["open"].isNull ? group["active"].string == panel["id"].string : presented
+                            let direction = !column["open"].isNull ? column["open"]["direction"].string : presented ? source?.direction : nil
                             IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected,
                                 joinedEdge: selected ? direction : nil, corner: .half) {
                                 guard !store.workspace.input.contact.consumeClick() else { return }

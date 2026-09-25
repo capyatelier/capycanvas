@@ -265,8 +265,8 @@ private struct HeaderItemControl: View {
     private var radius: CGFloat { size["tile"].number / 2 }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var drawerOpen: Bool {
-        let anchor = store.state["customization"]["drawer"]["anchor"]
-        return !editing && anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
+        guard !editing, let anchor = store.contentDrawers.sources["tool"]?.anchor else { return false }
+        return anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
     }
     var body: some View {
         Group {
