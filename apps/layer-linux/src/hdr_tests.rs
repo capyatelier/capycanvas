@@ -354,17 +354,17 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     highlight.set_value(0.35);highlight.emit_by_name::<()>("value-changed",&[]);pump(50);
     recipe.highlight_color=0.35;assert_eq!(project(&photo).document.sdr_rendition,recipe);
     // The host eyedropper samples artwork, independent of mapped presentation.
+    photo.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Definition {
+            color: layer_core::color::RgbColor::WHITE,
+        },
+    });
     photo.dispatch(UiAction::Layer {
         action: LayerAction::Tool {
             tool: LayerCanvasTool::PickVisible,
         },
     });
     photo.dispatch(UiAction::SetColorSampleSize { width: 1 });
-    photo.dispatch(UiAction::Color {
-        action: layer_ui::ColorAction::Definition {
-            color: layer_core::color::RgbColor::WHITE,
-        },
-    });
     native_pen_path(&photo, &[[400.5, 200.5], [400.5, 200.5]]);
     let deadline = Instant::now() + Duration::from_secs(10);
     while state(&photo).colors.definition() == layer_core::color::RgbColor::WHITE {

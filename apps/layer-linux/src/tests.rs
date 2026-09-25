@@ -320,14 +320,14 @@ fn native_default_workspace() {
             .compute_bounds(&viewport)
             .unwrap();
         assert!(component.y() + component.height() <= viewport.height() as f32);
-        for id in initial
+        for (tile, id) in initial
             .panel(Panel::Toolbar)
             .unwrap()
             .tiles()
             .iter()
             .filter_map(|tile| {
                 if let ToolbarControl::Command { command } = tile.control {
-                    Some(command)
+                    Some((tile.id, command))
                 } else {
                     None
                 }
@@ -352,10 +352,27 @@ fn native_default_workspace() {
             );
             verify();
             capture_reference(&w, &format!("{output}/{id:?}-{theme:?}.png"), 1.);
-            click(&command(&w, id));
+            let picker = id == CommandId::Eyedropper;
+            if picker {
+                w.dispatch(UiAction::ColorPicker {
+                    action: layer_ui::ColorPickerAction::Settings {
+                        anchor: layer_ui::DrawerAnchor::Tile {
+                            panel: Panel::Toolbar,
+                            tile,
+                        },
+                    },
+                });
+            } else {
+                click(&command(&w, id));
+            }
             pump(250);
             assert!(state(&w).customization.drawer.is_some(), "{id:?} controls");
             assert_drawer_connected(&w);
+            if picker {
+                w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::CloseExpanded,
+                });
+            }
             click(&command(&w, id));
             pump(250);
             assert!(state(&w).customization.drawer.is_none());
@@ -3892,8 +3909,11 @@ fn native_navigation_tools() {
         color[0] > 0.99 && (color[1] - 0.735).abs() < 0.015 && (color[2] - 0.735).abs() < 0.015,
         "visible color {color:?}"
     );
-    let subtool = w.tool_set.buttons.borrow()[1].1.clone();
-    click(&subtool);
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Paint);
+    click(&eye);
+    w.dispatch(UiAction::ColorPicker {
+        action: layer_ui::ColorPickerAction::Source { layer: true },
+    });
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::PickLayer);
     contact(PenPhase::Down);
     contact(PenPhase::Up);

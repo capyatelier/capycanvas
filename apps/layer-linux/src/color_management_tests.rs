@@ -45,11 +45,6 @@ fn native_sdr_sampling_controls() {
     w.refresh(regions::DOCUMENT | regions::COMMANDS);
     w.wake();
     ready(&w);
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::Tool {
-            tool: LayerCanvasTool::PickLayer,
-        },
-    });
     w.dispatch(UiAction::SetBrushOpacity { value: 0.37 });
     let revision = w
         .gpu
@@ -60,28 +55,17 @@ fn native_sdr_sampling_controls() {
         .engine()
         .document()
         .revision;
-    for width in [1, 3, 5] {
-        let button = w
-            .tool_set
-            .buttons
-            .borrow()
-            .iter()
-            .find(|(item, _, _)| item.action == UiAction::SetColorSampleSize { width })
-            .unwrap()
-            .1
-            .clone();
-        button.emit_clicked();
-        pump(20);
-        assert!(
-            state(&w)
-                .tool_set
-                .subtools
-                .iter()
-                .any(|item| item.selected && item.action == UiAction::SetColorSampleSize { width })
-        );
+    for width in layer_ui::COLOR_SAMPLE_WIDTHS {
         w.dispatch(UiAction::SetColor {
             rgba: [0., 0., 1., 1.],
         });
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::PickLayer,
+            },
+        });
+        w.dispatch(UiAction::SetColorSampleSize { width });
+        assert_eq!(state(&w).color_picker.sample_width, width);
         let camera = state(&w).camera;
         let m = camera.document_to_surface();
         for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Up)] {
@@ -110,7 +94,14 @@ fn native_sdr_sampling_controls() {
                 .unwrap();
         }
         w.wake();
-        pump(200);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while state(&w).layer_tools.tool.picks_color() {
+            pump(10);
+            assert!(
+                Instant::now() < deadline,
+                "{width}: sample did not complete"
+            );
+        }
         let expected = if width == 1 {
             [0., 0., 1., 1.]
         } else {
@@ -466,18 +457,18 @@ fn native_sdr_portable_paint_and_sampling() {
         // Eyedropper goes through the host contact route and asynchronous exact
         // sample result. Every averaging size samples the fully covered center.
         for width in [1, 3, 5] {
-            w.dispatch(UiAction::Layer {
-                action: LayerAction::Tool {
-                    tool: LayerCanvasTool::PickLayer,
-                },
-            });
-            w.dispatch(UiAction::SetColorSampleSize { width });
             w.dispatch(UiAction::SetBrushOpacity { value: 0.37 });
             w.dispatch(UiAction::Color {
                 action: layer_ui::ColorAction::Definition {
                     color: RgbColor::WHITE,
                 },
             });
+            w.dispatch(UiAction::Layer {
+                action: LayerAction::Tool {
+                    tool: LayerCanvasTool::PickLayer,
+                },
+            });
+            w.dispatch(UiAction::SetColorSampleSize { width });
             native_pen_path(&w, &[[128., 128.], [128., 128.]]);
             let deadline = Instant::now() + Duration::from_secs(10);
             while state(&w).colors.definition() == RgbColor::WHITE {
