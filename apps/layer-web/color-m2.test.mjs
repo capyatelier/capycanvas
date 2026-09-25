@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/prophoto16.png') {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Missing button '+${JSON.stringify(label)});b.click();})()`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
   await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
   await evaluate(`window.sdrFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){sdrFiles.set(options.suggestedName,bytes)},async abort(){}}}});
@@ -113,7 +113,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
 export async function checkColorEdits({call,evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>120000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled button '+${JSON.stringify(label)});b.click()})()`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');};
   const backing=value=>({blobs:value.blobs,sources:value.tiled_sources,color:value.document.color});
   await invoke('fit_canvas');
@@ -154,7 +154,7 @@ export async function checkColorEdits({call,evaluate,settle}) {
 
 export async function checkSourceImports({call,evaluate}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
@@ -195,7 +195,7 @@ export async function checkSourceImports({call,evaluate}) {
 
 export async function checkSourceEdits({call,evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
@@ -231,7 +231,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
 
 export async function checkExportPresets({evaluate}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async()=>{await wait('layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
+  const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
   const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
   const name='Tablet delivery '+Date.now();
@@ -262,7 +262,7 @@ export async function checkExportPresets({evaluate}) {
 
 export async function checkProfileLibrary({evaluate}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([sdrPhotoBytes],'profile-library.png')}}];`);
@@ -306,7 +306,7 @@ export async function checkProfileLibrary({evaluate}) {
 
 export async function checkFlattenedCopy({evaluate}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const saved=await evaluate('({file:JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v)),color:layerApp.app.document_color(),count:sdrFiles.size})');
@@ -343,7 +343,7 @@ export async function checkFlattenedCopy({evaluate}) {
 
 export async function checkPhotoCorrections({evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
