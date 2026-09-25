@@ -1373,7 +1373,13 @@ fn native_drawer_dismissal_input() {
                     let view = groups.iter().find(|g| g.id == group.id).unwrap();
                     find_css(view.root.upcast_ref(), "panel-grip").unwrap()
                 };
-                tap(&mut d, &handle, touch);
+                let grip = handle.compute_bounds(&d.w.window).unwrap();
+                let exposed = [grip.x() + 6., grip.y() + grip.height() / 2.];
+                assert!(
+                    !d.w.drawer.placement().unwrap().bounds.contains(exposed[0], exposed[1]),
+                    "toolbar handle {floating}/{touch}: the drawer covers the tapped grip"
+                );
+                contact(&mut d, exposed, touch);
                 assert!(
                     state(&d.w).customization.drawer.is_none(),
                     "toolbar handle {floating}/{touch}"

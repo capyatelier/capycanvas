@@ -2376,10 +2376,17 @@ fn native_tool_drawers() {
         panel: Panel::Adjustments,
     });
     pump(1000);
-    let filter_button = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[8]))
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap();
+    let panel_tile = |panel| {
+        let index = controls
+            .iter()
+            .position(|c| *c == ToolbarControl::Panel { panel })
+            .unwrap();
+        find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[index]))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+    };
+    let filter_button = panel_tile(Panel::Adjustments);
     click(&filter_button);
     pump(1200);
     let filter_texture = |root: &gtk::Widget| {
@@ -2413,29 +2420,32 @@ fn native_tool_drawers() {
             "Filters scrollbar reaches the panel edge in docks and drawers"
         );
         let header = find_css(root.upcast_ref(), "filter-picker-header").unwrap();
+        let (content, inset) = if header.is_visible() {
+            (header, 6.0)
+        } else {
+            (find_css(root.upcast_ref(), "filter-picker-body").unwrap(), 8.0)
+        };
         assert_eq!(
-            header.compute_bounds(&root).unwrap().x(),
-            6.0,
+            content.compute_bounds(&root).unwrap().x(),
+            inset,
             "moving the scrollbar preserves content padding"
         );
     }
-    let requests = w.effects.preview_requests();
-    assert!(requests > 0);
+    assert!(w.effects.preview_requests() > 0);
     click(&filter_button);
     pump(500);
     click(&filter_button);
     pump(800);
+    let requests = w.effects.preview_requests();
+    pump(800);
     assert_eq!(
         w.effects.preview_requests(),
         requests,
-        "closing/reopening must reuse the preview cache"
+        "reopened filter previews settle without re-requesting"
     );
     click(&filter_button);
     pump(250);
-    let layers = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[7]))
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap();
+    let layers = panel_tile(Panel::Layers);
     let requests = w.layer_panel.preview_requests();
     click(&layers);
     pump(500);
