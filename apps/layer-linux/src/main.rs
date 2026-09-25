@@ -276,7 +276,16 @@ fn snapshot_window(window: &impl IsA<gtk::Window>, scale: f32) -> gtk::gdk::Text
             window.snapshot_child(&widget, &snapshot);
         }
         if let Some(node) = snapshot.to_node() {
-            return window.renderer().unwrap().render_texture(&node, None);
+            let bounds = gtk::graphene::Rect::new(
+                0.,
+                0.,
+                window.width() as f32 * scale,
+                window.height() as f32 * scale,
+            );
+            return window
+                .renderer()
+                .unwrap()
+                .render_texture(&node, Some(&bounds));
         }
         window.queue_draw();
         let context = gtk::glib::MainContext::default();

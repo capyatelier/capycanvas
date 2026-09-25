@@ -4452,9 +4452,16 @@ fn native_navigator() {
     // Place the image over today's allocated panel, including the actual
     // letterbox/header offset. Fixed document-era window coordinates can miss
     // the panel after workspace geometry changes.
+    let grip = w
+        .resolved()
+        .groups
+        .into_iter()
+        .find(|g| g.panels.contains(&Panel::Navigator))
+        .unwrap()
+        .bounds;
     let float_position = [
-        20. + brushes.x() + brushes.width() * 0.5 - (p.bounds[0] + 8.),
-        180. + brushes.y() + brushes.height() * 0.5 - (p.bounds[1] + 8.),
+        grip.x + grip.width * 0.5 + brushes.x() + brushes.width() * 0.5 - (p.bounds[0] + 8.),
+        grip.y + TAB_BAR_HEIGHT * 0.5 + brushes.y() + brushes.height() * 0.5 - (p.bounds[1] + 8.),
     ];
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Navigator,
