@@ -46,15 +46,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("material uniform-dispatch reference"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                &working_color::shader(&renderer.device),
-                &dry_material::shader_destination(false),
-                &source,
-                include_str!("../brush_geometry.wgsl"),
-                include_str!("../brush_coverage.wgsl"),
-                include_str!("../contact.wgsl"),
-                include_str!("../selection_clip.wgsl"),
-            ])),
+            source: wgpu::ShaderSource::Wgsl(dry_material::shader_source(&renderer.device, false, &source)),
         });
     let bindings: [_; 4] =
         std::array::from_fn(|i| renderer.pipelines.material[0].get_bind_group_layout(i as u32));

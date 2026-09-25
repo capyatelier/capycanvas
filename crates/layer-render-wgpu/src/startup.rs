@@ -700,8 +700,8 @@ mod gpu_tests {
         assert!(regions.raw.pipelines().all(|p| !p.ready()));
         assert_eq!(
             regions.storage_bytes(),
-            116,
-            "only empty bindings and the seed color exist"
+            116 + 352 + tonal::STAT_WORDS as u64 * 4,
+            "only empty bindings, fixed tonal bindings and the seed color exist"
         );
         assert!(renderer.region_pending());
         release.send(()).unwrap();

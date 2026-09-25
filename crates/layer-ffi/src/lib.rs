@@ -1215,7 +1215,7 @@ mod tests {
         );
         assert_eq!(metrics.input_events, 3);
         assert_eq!(metrics.committed_strokes, 1);
-        assert!(metrics.raster_dabs > 3);
+        assert_eq!(metrics.raster_dabs, events.len() as u64);
     }
 
     #[test]

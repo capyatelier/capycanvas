@@ -3118,7 +3118,8 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
             assert_eq!(paint.pages.len(), 2, "native={native}");
             let plan = BrushPassPlan::for_device(&stroke.style, &r.device);
             assert_eq!(paint.coverage_pages.len(), if plan.state.coverage { 2 } else { 0 }, "native={native}, preset={preset:?}");
-            assert!(paint.pages.iter().all(|p| p.secondary.is_some() == plan.requires_destination()),
+            let companions = plan.requires_destination() && !r.in_place_dry_material(&stroke);
+            assert!(paint.pages.iter().all(|p| p.secondary.is_some() == companions),
                 "native={native}, preset={preset:?}");
             assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
             for center in [90, 890] {
