@@ -51,6 +51,8 @@ mod workspace_motion;
 mod toolbar_component;
 #[path = "picker_tests.rs"]
 mod picker;
+#[path = "tonal_tests.rs"]
+mod tonal;
 
 type RasterSamples = (
     std::collections::BTreeMap<

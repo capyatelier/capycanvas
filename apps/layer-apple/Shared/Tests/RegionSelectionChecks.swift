@@ -144,8 +144,8 @@ extension XCTestCase {
         app.launch(); capturePaintEditor(in: app)
         #if os(macOS)
         let viewport = workspaceViewport(in: app)
-        let center = CGPoint(x: 0.48, y: 0.55)
-        let points = [center, CGPoint(x: 0.58, y: 0.55), CGPoint(x: 0.66, y: 0.55)]
+        let center = CGPoint(x: 0.445, y: 0.55)
+        let points = [center, CGPoint(x: 0.535, y: 0.55), CGPoint(x: 0.605, y: 0.55)]
         func coordinate(_ point: CGPoint) -> XCUICoordinate {
             viewport.coordinate(withNormalizedOffset: CGVector(dx: point.x, dy: point.y))
         }
@@ -158,16 +158,16 @@ extension XCTestCase {
         // A separate outline layer makes the three region sources distinguishable.
         editorTool("Figure", in: app)
         editorChoice("Rectangle", group: true, in: app); editorChoice("Outline", in: app)
-        coordinate(CGPoint(x: 0.44, y: 0.42)).click(forDuration: 0.05,
-            thenDragTo: coordinate(CGPoint(x: 0.62, y: 0.68)))
+        coordinate(CGPoint(x: 0.40, y: 0.42)).click(forDuration: 0.05,
+            thenDragTo: coordinate(CGPoint(x: 0.58, y: 0.68)))
         editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-Use selected layers as references"])
         XCTAssertTrue(app.buttons["layer-Stop using this layer as a reference"].isSelected)
         workspaceActivate(app.buttons["layer-New layer"])
         // Visible artwork includes this unmarked divider; reference-only sampling ignores it.
         editorChoice("Line", group: true, in: app)
-        coordinate(CGPoint(x: 0.53, y: 0.42)).click(forDuration: 0.05,
-            thenDragTo: coordinate(CGPoint(x: 0.53, y: 0.68)))
+        coordinate(CGPoint(x: 0.49, y: 0.42)).click(forDuration: 0.05,
+            thenDragTo: coordinate(CGPoint(x: 0.49, y: 0.68)))
         editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-New layer"])
         workspaceActivate(app.buttons["color-swap"])
@@ -191,7 +191,12 @@ extension XCTestCase {
         for tool in ["Fill", "Auto select"] {
             editorTool(tool, in: app)
             for source in ["Visible artwork", "Editing layer", "Reference layers"] {
-                editorChoice(source, in: app)
+                if tool == "Fill" { editorChoice(source, in: app) } else {
+                    let action = app.buttons["tool-action-selection_" + ["Visible artwork": "visible", "Editing layer": "editing", "Reference layers": "reference"][source]!]
+                    workspaceActivate(action)
+                    expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: action)
+                    waitForExpectations(timeout: 5)
+                }
                 for setting in ["tolerance", "smoothing"] {
                     XCTAssertTrue(app.buttons["number-value-tool-" + setting].exists)
                 }

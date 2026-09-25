@@ -1,6 +1,6 @@
 # Tonal range selections
 
-GTK, Web and Android expose **Tonal range** in the Select family. It writes ordinary byte-coverage
+GTK, Web, Android, macOS and iPadOS expose **Tonal range** in the Select family. It writes ordinary byte-coverage
 selections and saved selection masks. The shared Rust model supplies the same
 choice, numeric and selection-mode controls to each host's panel and Tool Options bar.
 The panel presents five SDR tones (Shadows through Highlights, with Midtones in
@@ -142,6 +142,12 @@ See [photographic-size performance](tonal-performance.md) for memory bounds,
   `AndroidRasterTest#tonalHdrCoverageAndSamplingOnDevice` checks actual Vulkan
   mask coverage above reference white and sampling through the overlay.
   Build/install with a separate `capyApplicationId` to isolate device tests.
+- Apple: `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib tonal
+  -- --test-threads=1` runs both Apple policies through the C ABI and Metal: presets,
+  one-step refinement history, clamped Custom ranges, stale toolbar contexts and
+  artwork sampling inside Quick Mask. `EditorLaunchTests/testTonalSelection` on
+  macOS and iPad covers the tone bar, a range handle drag, typed endpoints, the
+  compact drawer form and removal when leaving the tool.
 
 Host tests replay input events on the device; they do not verify physical pen
 pressure or the feel of moving the attached pen by hand.

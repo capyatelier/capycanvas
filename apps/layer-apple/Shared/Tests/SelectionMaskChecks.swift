@@ -29,11 +29,11 @@ extension XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: end)
             #endif
         }
-        drag(CGVector(dx: 0.4, dy: 0.4), CGVector(dx: 0.5, dy: 0.55))
+        drag(CGVector(dx: 0.38, dy: 0.57), CGVector(dx: 0.47, dy: 0.64))
         workspaceActivate(modes[1])
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: modes[1])
         waitForExpectations(timeout: 5)
-        drag(CGVector(dx: 0.52, dy: 0.45), CGVector(dx: 0.6, dy: 0.6))
+        drag(CGVector(dx: 0.45, dy: 0.59), CGVector(dx: 0.57, dy: 0.66))
         attachEditor(in: app, name: "selection-add")
         workspaceActivate(modes[0])
         workspaceActivate(app.buttons["selection-menu-selection"])

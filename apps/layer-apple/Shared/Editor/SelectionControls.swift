@@ -12,6 +12,7 @@ enum SelectionModes {
 struct SelectionModeGroup: View {
     @ObservedObject var store: EditorStore
     let actions: [JSON]
+    var height: CGFloat = 44
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         HStack(spacing: 0) {
@@ -20,7 +21,7 @@ struct SelectionModeGroup: View {
                 if index > 0 { Rectangle().fill(palette["text"].opacity(0.2)).frame(width: 1) }
                 Button { store.invoke(command["id"].string) } label: {
                     SharedIcon(name: command["icon"].string, size: 20)
-                        .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, minHeight: height).contentShape(Rectangle())
                 }.buttonStyle(SelectionSegmentStyle(selected: command["selected"].bool))
                     .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
                     .help(command["tooltip"].string)
