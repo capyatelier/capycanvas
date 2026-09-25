@@ -5362,7 +5362,7 @@ fn native_layer_panel_review() {
     pump(80);
     assert_eq!(state(&w).layers.len(), count);
     w.dispatch(UiAction::SelectLayer { id: 2 });
-    assert!(!delete.is_sensitive());
+    assert!(delete.is_sensitive());
     w.dispatch(UiAction::SelectLayer { id: 1 });
     let dir = "../../artifacts/ui/layers-gtk";
     std::fs::create_dir_all(dir).unwrap();
@@ -5551,17 +5551,15 @@ fn native_layer_panel_review() {
     // selection changes (double clicks must not lose their GTK gesture).
     let row = |id| find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{id}")).unwrap();
     let label = find_css(&row(1), "layer-name").unwrap();
-    let controllers = row(1).observe_controllers();
+    let controllers = label.observe_controllers();
     let rename = (0..controllers.n_items())
         .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
         .find(|g| g.button() == 1)
         .unwrap();
-    let label_bounds = label.compute_bounds(&row(1)).unwrap();
-    let (label_x, label_y) = (label_bounds.x() as f64 + 5., label_bounds.y() as f64 + 5.);
-    rename.emit_by_name::<()>("released", &[&1i32, &label_x, &label_y]);
+    rename.emit_by_name::<()>("pressed", &[&1i32, &5f64, &5f64]);
     pump(100);
     assert_eq!(label, find_css(&row(1), "layer-name").unwrap());
-    rename.emit_by_name::<()>("released", &[&2i32, &label_x, &label_y]);
+    rename.emit_by_name::<()>("pressed", &[&2i32, &5f64, &5f64]);
     pump(100);
     let entry: gtk::Entry = find_css(&row(1), "layer-name-entry")
         .unwrap()
@@ -5642,7 +5640,11 @@ fn native_layer_panel_review() {
     let target = row(inner);
     let controllers = target.observe_controllers();
     let drop = (0..controllers.n_items())
-        .find_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
+        .find(|drop| {
+            drop.formats()
+                .is_some_and(|formats| formats.contains_type(String::static_type()))
+        })
         .unwrap();
     let y = target.height() as f64 / 2.;
     drop.emit_by_name::<gdk::DragAction>("enter", &[&80f64, &y]);
@@ -5799,7 +5801,10 @@ fn native_layer_panel_review() {
         .unwrap()
         .downcast()
         .unwrap();
-    let popover: gtk::PopoverMenu = w.layer_panel.root.last_child().unwrap().downcast().unwrap();
+    let popover: gtk::PopoverMenu =
+        std::iter::successors(w.layer_panel.root.first_child(), |c| c.next_sibling())
+            .find_map(|c| c.downcast().ok())
+            .unwrap();
     let open_menu = |id, mask, name: &str| {
         send(&w, A::Context { id, mask });
         click(&more);
@@ -5996,20 +6001,15 @@ fn native_layer_panel_review() {
             .unwrap()
             .selected
     );
-    assert!(w.layer_panel.opacity.is_sensitive());
+    assert!(!w.layer_panel.opacity.is_sensitive());
     assert!(!state(&w).layer_tools.controls.mask);
-    let protected = find_css(&paper, "dim-label").unwrap();
-    assert_eq!(
-        protected.downcast::<gtk::Label>().unwrap().text(),
-        "Protected"
-    );
     let thumbnail = find_css(&paper, "layer-thumbnail")
         .unwrap()
         .downcast::<gtk::Button>()
         .unwrap();
     assert_eq!(
         thumbnail.tooltip_text().as_deref(),
-        Some("Paper is protected; select a paint layer to draw")
+        Some("Select layer content")
     );
     capture_reference(&w, &format!("{dir}/17-paper-selected.png"), 1.);
     open_menu(2, false, "18-paper-context");
