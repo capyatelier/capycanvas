@@ -144,6 +144,26 @@ impl WebApp {
     pub fn reflow_navigators(&mut self) -> Result<bool, JsValue> {
         self.present_navigators()
     }
+    pub fn set_glass(&mut self, boxes: &[f32], connections: JsValue, squircle: bool) -> Result<(), JsValue> {
+        let connections: Vec<layer_ui::DrawerConnection> = serde_wasm_bindgen::from_value(connections).map_err(js)?;
+        let scale = self.viewport_scale;
+        use layer_render_wgpu::BackdropRegion;
+        let shape = if squircle { BackdropRegion::SQUIRCLE } else { BackdropRegion::CIRCULAR };
+        self.glass = boxes
+            .chunks_exact(8)
+            .map(|b| BackdropRegion::rounded(
+                [b[0], b[1], b[2], b[3]].map(|v| v * scale),
+                [b[4], b[5], b[6], b[7]].map(|v| v * scale),
+                shape,
+            ))
+            .chain(connections.iter().flat_map(|c| c.glass()).map(|(bounds, radii)| BackdropRegion {
+                bounds: bounds.map(|v| v * scale),
+                radii: radii.map(|v| v * scale),
+                shape: BackdropRegion::SQUIRCLE,
+            }))
+            .collect();
+        Ok(())
+    }
     pub fn drawer(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: DrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
         let state = self.session.state();

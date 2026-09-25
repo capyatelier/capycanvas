@@ -42,6 +42,7 @@ pub struct WebApp {
     deferred_contacts: std::collections::BTreeSet<u64>,
     overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
     header_drag: Option<layer_ui::HeaderDrag>,
+    glass: Vec<layer_render_wgpu::BackdropRegion>,
 }
 
 #[derive(Deserialize)]
@@ -459,6 +460,7 @@ impl WebApp {
             deferred_contacts: Default::default(),
             overviews: Default::default(),
             header_drag: None,
+            glass: Vec::new(),
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -891,6 +893,9 @@ impl WebApp {
     pub fn renderer_stats(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.renderer_stats())
     }
+    pub fn backdrop_frames(&self) -> Vec<f64> {
+        self.session.engine().backend().0.as_ref().map_or([0; 2], |gpu| gpu.presenter.backdrop_frames()).map(|v| v as f64).to_vec()
+    }
     pub fn panel_view(&self, panel: JsValue) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
         serialize(&self.session.panel_view(panel).map_err(js)?)
@@ -1057,7 +1062,13 @@ impl WebApp {
             .session
             .set_viewport([logical_width, logical_height], [width, height])
             .map_err(js)?;
-        self.viewport_scale = width as f32 / logical_width.max(1.);
+        let scale = width as f32 / logical_width.max(1.);
+        for region in &mut self.glass {
+            let ratio = scale / self.viewport_scale;
+            region.bounds = region.bounds.map(|v| v * ratio);
+            region.radii = region.radii.map(|v| v * ratio);
+        }
+        self.viewport_scale = scale;
         if let Some(gpu) = &mut self.session.renderer_mut().0
             && [width, height] != [gpu.config.width, gpu.config.height]
         {
@@ -1255,12 +1266,18 @@ impl WebApp {
         self.session.update_canvas_cursor(&mut self.cursor);
         self.session.append_layer_overlay(&mut self.cursor.segments);
         let picker = self.session.color_picker_overlay();
+        let glass = self.session.state().palette.glass;
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter
             .set_cursor(gpu.renderer.device(), &self.cursor.segments, scale);
         gpu.presenter.set_color_picker(&gpu.renderer, picker);
+        gpu.presenter.set_backdrop(
+            &gpu.renderer,
+            if glass.transparency.enabled() { &self.glass } else { &[] },
+            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+        );
         let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,

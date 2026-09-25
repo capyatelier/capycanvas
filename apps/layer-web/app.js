@@ -8,6 +8,7 @@ import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
+import { createGlass } from "./glass.js";
 import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
@@ -47,7 +48,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, editor, selectionUi, workspaceChrome, documents, systemStatus, header;
+let refreshPreferences, customization, layerPanel, effectPanels, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -77,6 +78,10 @@ function applyTheme(theme, palette) {
   if (palette) for (const [name, color] of Object.entries(palette)) {
     if (typeof color === "string") document.body.style.setProperty(`--${name.replaceAll("_", "-")}`, name === "button" ? `${color}0d` : color);
   }
+  if (palette) for (const [name, color] of Object.entries(palette.glass)) {
+    if (Array.isArray(color)) document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, `rgb(${color.slice(0, 3).map(v => v * 255).join(" ")} / ${color[3]})`);
+  }
+  glass?.queue();
   document.querySelector('meta[name="theme-color"]').content = palette?.bg || (theme === "dark" ? "#333333" : "#b8b8b8");
 }
 
@@ -342,6 +347,7 @@ function frame(frameTime) {
   if (state.settings_open && startupTimes.complete === null) return;
   try {
     flushWorkspacePresentation();
+    glass?.flush();
     while (pending.length) {
       const batch = pending[0],
         count = app.pen(batch.records, batch.revision);
@@ -419,6 +425,7 @@ function place(node, rect) {
     width: `${rect.width}px`,
     height: `${rect.height}px`,
   });
+  glass?.queue();
 }
 function tabLabel(tab, view) {
   tab.classList.toggle("icon-only-tab", !view.tab.show_name);
@@ -1175,6 +1182,7 @@ function updateZen() {
   if (hidden !== workspace.classList.contains("zen-hidden")) {
     workspaceChrome?.refresh();
     editor?.queuePositions();
+    glass?.queue();
   }
 }
 function buildHeader() {
@@ -1617,6 +1625,7 @@ try {
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
+  glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});

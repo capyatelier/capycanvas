@@ -193,7 +193,9 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         const c=r.connection;
         r.bridge=bridge(r.bridge,c);r.bridge.style.zIndex=r.column==null?"1899":"1799";
         r.root.style.borderRadius=c.square_corners.map(square=>square?"0":"var(--surface-radius)").join(" ");
-      } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="var(--surface-radius)";}
+        const b=r.placement.bounds,x=c.bounds.x-b.x,y=c.bounds.y-b.y;
+        r.shadow.style.clipPath=`path(evenodd,"M-64 -64H${b.width+64}V${b.height+64}H-64Z M${x} ${y}h${c.bounds.width}v${c.bounds.height}h${-c.bounds.width}Z")`;
+      } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="var(--surface-radius)";r.shadow.style.clipPath="";}
       r.shadow.style.borderRadius=r.root.style.borderRadius;
 
       r.root.style.zIndex=r.column==null?"1900":"1800";
@@ -231,5 +233,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     if(more&&!animating){animating=true;requestAnimationFrame(animate);}
   }
   workspace.addEventListener("scroll",()=>{if(drawers.size&&!animating){animating=true;requestAnimationFrame(animate);}},true);
-  return {arrange,refresh,tabHits,measureColumnDrawers,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
+  function connectionList(){return[...[...drawers.values()].map(r=>r.connection).filter(Boolean),...(resolved?.collapsed??[]).flatMap(c=>c.open?.connections.map(([,connection])=>connection)??[])];}
+  return {arrange,refresh,tabHits,measureColumnDrawers,connections:connectionList,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
 }

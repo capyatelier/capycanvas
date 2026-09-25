@@ -27,6 +27,8 @@ const duration = Number(process.env.LAYER_PEN_DURATION || 5000);
 const repeats = Number(process.env.LAYER_PEN_REPEATS || 3);
 const size = Number(process.env.LAYER_PEN_SIZE || 1024);
 const speed = Number(process.env.LAYER_PEN_SPEED || 1);
+const transparency = process.env.LAYER_PEN_TRANSPARENCY;
+assert([undefined, "off", "low", "medium", "high"].includes(transparency), "LAYER_PEN_TRANSPARENCY must be off, low, medium or high");
 for (const [name, value] of Object.entries({ duration, repeats, size }))
   assert(Number.isSafeInteger(value) && value > 0, `${name} must be a positive integer`);
 assert(Number.isFinite(speed) && speed > 0, "speed must be positive and finite");
@@ -120,17 +122,18 @@ try {
     [...document.querySelectorAll(".document-dialog button")].find(node => node.textContent === "Create").click();
   }, size);
   await waitFor(`!layerApp.state().document_file.busy && layerApp.state().tabs.find(tab=>tab.active)?.width===${size} && layerApp.app.brush_ready()`);
-  await inPage(panel => {
+  await inPage((panel, transparency) => {
     layerApp.dispatch({ type: "select_brush", id: 1 });
     layerApp.dispatch({ type: "set_brush_size", value: 18 });
     layerApp.dispatch({ type: "restore_settings", settings: {
       ...layerApp.state().settings, feedback: true, platform_prediction: false, prediction_ms: 16,
+      ...(transparency ? { transparency } : {}),
     } });
     layerApp.dispatch({ type: "invoke", command: "fit_canvas" });
     const group = layerApp.app.layout(innerWidth, innerHeight).groups.find(group => group.panels.includes("stats"));
     // Selecting the already-active tab would open its configuration popup.
     if (group.active !== panel) layerApp.dispatch({ type: "select_panel_tab", group: group.id, panel });
-  }, options.has("--navigator") ? "navigator" : "stats");
+  }, options.has("--navigator") ? "navigator" : "stats", transparency);
   await waitFor("layerApp.app.brush_ready() && layerApp.app.startup_progress().every(Boolean)");
   await delay(1500);
   const info = await inPage(() => JSON.parse(JSON.stringify({
@@ -266,11 +269,13 @@ try {
       for (const values of Object.values(penBench.calls)) values.length = 0;
     });
     const before = await evaluate("Number(layerApp.state().document_file.revision)");
+    const glassBefore = await evaluate("layerApp.app.backdrop_frames?.() ?? [0, 0]");
     await stroke(run + 1, duration);
     await delay(500);
     const data = await inPage(() => JSON.parse(JSON.stringify({
       frames: penBench.frames, events: penBench.events, raf: penBench.raf, calls: penBench.calls,
       stats: layerApp.app.renderer_stats(), revision: layerApp.state().document_file.revision,
+      glass: layerApp.app.backdrop_frames?.() ?? [0, 0],
     }, (_, value) => typeof value === "bigint" ? Number(value) : value)));
     await writeFile(`${output}/${label}-latest.json`, JSON.stringify({ info, before, data, errors }, null, 2));
     if(picker){
@@ -288,6 +293,7 @@ try {
     data.summary = {
       ...(picker?{wheel:run%2===1,sample_width:sampleWidth}:{}),
       frames: frames.length, updates_per_second: frames.length / ((up - down) / 1000),
+      glass: { computed: data.glass[0] - glassBefore[0], reused: data.glass[1] - glassBefore[1] },
       frame_cpu_ms: summary(frames.map(frame => frame.end - frame.start)),
       frame_interval_ms: summary(frames.slice(1).map((frame, i) => frame.start - frames[i].start)),
       raf_interval_ms: summary(raf.slice(1).map((time, i) => time - raf[i])),

@@ -162,6 +162,21 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     input.hidden = active !== custom;
     if (document.activeElement !== input && input.value !== kind.custom) input.value = kind.custom;
   }
+  function paintCircles(widget, kind) {
+    const dark = document.body.dataset.theme === "dark", key = `${dark} ${kind.selected}`;
+    if (widget.painted === key) return;
+    widget.painted = key;
+    const grey = v => `rgb(${v * 255} ${v * 255} ${v * 255})`;
+    widget.querySelectorAll("[data-choice]").forEach((choice, index) => {
+      const alpha = kind.presentation.alphas[index][Number(dark)], clear = 1 - alpha, checked = index === kind.selected;
+      const checks = alpha < 1 ? Array.from({ length: 16 }, (_, i) => `<rect x="${i % 4 / 4}" y="${Math.floor(i / 4) / 4}" width=".25" height=".25" fill="${grey((i % 4 + Math.floor(i / 4)) % 2 ? .28 : .94)}"/>`).join("") : "";
+      const sheen = alpha < 1 ? `<radialGradient id="sheen-${index}" cx=".32" cy=".26" fr=".02" r=".5"><stop offset="0" stop-color="white" stop-opacity="${Math.min(1, .25 + 1.2 * clear)}"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient><circle cx=".5" cy=".5" r=".5" fill="url(#sheen-${index})"/>` : "";
+      const [ink, halo] = dark ? [1, 0] : [.18, 1];
+      const check = checked ? `<path d="M.3 .52L.44 .66L.71 .36" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="${grey(halo)}" stroke-opacity=".45" stroke-width="${4 / 28}"/><path d="M.3 .52L.44 .66L.71 .36" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="${grey(ink)}" stroke-width="${2 / 28}"/>` : "";
+      choice.innerHTML = `<svg viewBox="0 0 1 1"><clipPath id="disc-${index}"><circle cx=".5" cy=".5" r=".5"/></clipPath><g clip-path="url(#disc-${index})">${checks}<rect width="1" height="1" fill="${grey(dark ? .55 : .8)}" fill-opacity="${alpha}"/>${sheen}</g><circle cx=".5" cy=".5" r="${.5 - .5 / 28}" fill="none" stroke="${grey(.5)}" stroke-opacity=".45" stroke-width="${1 / 28}"/>${check}</svg>`;
+      choice.setAttribute("aria-checked", String(checked));
+    });
+  }
   function build(model) {
     for (const page of model.pages) {
       const tab = button("", () => { send({ type: "page", page: page.id }); root.classList.add("show-content"); });
@@ -231,7 +246,17 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               break;
             }
             case "choice":
-              if (row.kind.presentation.type === "image_tiles") {
+              if (row.kind.presentation.type === "circles") {
+                input = element("input"); input.type = "hidden";
+                widget = element("div", "swatch-circles transparency-circles");
+                widget.setAttribute("role", "radiogroup"); widget.setAttribute("aria-label", row.title);
+                row.kind.options.forEach((name, index) => {
+                  const choice = button("", () => { input.value = index; input.dispatchEvent(new Event("input")); }, "swatch");
+                  choice.dataset.choice = index; choice.setAttribute("role", "radio"); choice.title = name; choice.setAttribute("aria-label", name);
+                  widget.append(choice);
+                });
+                widget.append(input);
+              } else if (row.kind.presentation.type === "image_tiles") {
                 input = element("input"); input.type = "hidden";
                 widget = element("div", "preference-image-tiles");
                 widget.setAttribute("role", "group"); widget.setAttribute("aria-label", row.title);
@@ -355,7 +380,8 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (row.kind.type === "number") { input.setDisabled(!row.enabled); input.update(row.kind.value); }
       else if (row.kind.type === "choice") {
         if (input.value !== String(row.kind.selected)) input.value = row.kind.selected;
-        if (row.kind.presentation.type === "image_tiles") {
+        if (row.kind.presentation.type === "circles") paintCircles(widget, row.kind);
+        else if (row.kind.presentation.type === "image_tiles") {
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-pressed", String(Number(choice.dataset.choice) === row.kind.selected));
         } else if (row.kind.icons.length && field.selection !== row.kind.selected) {
           field.selection = row.kind.selected;

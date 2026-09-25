@@ -232,10 +232,13 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), color.toLowerCase());
     assert.equal(await evaluate("document.querySelector('meta[name=theme-color]').content"), color.toLowerCase());
     assert.ok(await evaluate(`(() => {
-      const palette=layerApp.state().palette;
-      const rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
-      return [['.dock-group','panel'],['.dock-tabs','tabbar'],['#settings','settings'],['.preferences-sidebar','sidebar'],['${selector}','input']]
-        .every(([selector,key])=>getComputedStyle(document.querySelector(selector)).backgroundColor===rgb(palette[key]));
+      const palette=layerApp.state().palette, probe=document.body.appendChild(document.createElement('i'));
+      const css=color=>{probe.style.background=color;return getComputedStyle(probe).backgroundColor};
+      const glass=name=>css('rgb('+palette.glass[name].slice(0,3).map(v=>v*255).join(' ')+' / '+palette.glass[name][3]+')');
+      const surfaces=[['.panel-preview:has(> .dock-tabs) > .panel-frame',glass('panel')],['.dock-tabs',glass('strip')],
+        ['#settings',css(palette.settings)],['.preferences-sidebar',css(palette.sidebar)],['${selector}',css(palette.input)]];
+      probe.remove();
+      return surfaces.every(([selector,color])=>getComputedStyle(document.querySelector(selector)).backgroundColor===color);
     })()`), 'all surfaces bind the core palette');
     await capture(`custom-base-${theme}`);
     const defaultColor = theme === 'dark' ? '#333333' : '#b8b8b8';
@@ -296,8 +299,9 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.equal(await evaluate('layerApp.state().settings.accent ?? null'), null, 'Blue is the web default');
     assert.equal(await evaluate("document.querySelector('#setting-accent').hidden"), true);
     await action({ type: 'close_settings' });
-    assert.ok(await evaluate(`(() => { const p=layerApp.state().palette, rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')', pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]');
-      return !pressed || getComputedStyle(pressed).backgroundColor===rgb(p.header_selection); })()`), 'the switcher uses the core header selection');
+    assert.ok(await evaluate(`(() => { const c=layerApp.state().palette.glass.switcher_selection, pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]'), probe=document.body.appendChild(document.createElement('i'));
+      probe.style.background='rgb('+c.slice(0,3).map(v=>v*255).join(' ')+' / '+c[3]+')'; const expected=getComputedStyle(probe).backgroundColor; probe.remove();
+      return !pressed || getComputedStyle(pressed).backgroundColor===expected; })()`), 'the switcher uses the core switcher selection');
   }
   await click('#header [data-command="settings"]');
   await evaluate("document.querySelector('[data-settings-page=appearance]').focus()");

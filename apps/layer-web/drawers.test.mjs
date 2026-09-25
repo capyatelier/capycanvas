@@ -97,6 +97,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
   const wait=async()=>{await settle();await evaluate('new Promise(r=>setTimeout(r,350))');};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
   const customize=action=>send({type:'customize',action});
+  await send({type:'preferences',action:{type:'edit',id:'transparency',value:0}});
   const tabs=(id,panels)=>({kind:'tabs',id,panels,active:panels[0],tab_style:'icon_name'});
   const fixture=structuredClone(saved.workspace);
   Object.assign(fixture.layout,{bands:[
