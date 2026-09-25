@@ -58,6 +58,7 @@ import SwiftUI
     lazy var histogram = HistogramController(store: self)
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
+    lazy var strokeRecording = StrokeRecording(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
     var displayColors: JSON {

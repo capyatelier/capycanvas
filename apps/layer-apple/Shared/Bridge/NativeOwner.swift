@@ -375,6 +375,18 @@ final class NativeOwner: @unchecked Sendable {
                 ? capy_apple_error(handle).map(String.init(cString:)) ?? "Proof is unavailable" : nil)
         }
     }
+    func strokeRecordingData(completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
+        queue.async { [self] in
+            var length = 0
+            guard let bytes = capy_apple_stroke_recording_data(handle, &length) else {
+                completion(.failure(HostFailure(message: capy_apple_error(handle).map(String.init(cString:)) ?? "The recording is unavailable")))
+                return
+            }
+            let data = Data(bytes: bytes, count: length)
+            capy_bytes_free(bytes, length)
+            completion(.success(data))
+        }
+    }
     func checkProof(_ task: NativeProjectTask, completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do { try check(capy_apple_proof_check(handle, task.handle)); completion(nil) }

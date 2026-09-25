@@ -116,7 +116,7 @@ private struct CurveProperty: View {
     @GestureState private var contact = false
     @State private var selected: Int?
     @State private var dragging = false
-    @State private var dragPoint: (index: Int, point: CGPoint)?
+    @State private var dragPoint: (index: Int, point: CGPoint, existing: Bool)?
     @State private var lastTap: (index: Int, time: Date)?
     private var key: String { control["key"].string }
     private var points: [JSON] { control["value"]["value"].array }
@@ -173,18 +173,23 @@ private struct CurveProperty: View {
                         guard size.width > 0, size.height > 0 else { return }
                         if !dragging {
                             dragging = true
-                            selected = nil
                             let nearest = points.indices.min { a, b in distance(points[a], event.startLocation, size) < distance(points[b], event.startLocation, size) }
-                            if let index = nearest, distance(points[index], event.startLocation, size) <= 12 {
-                                selected = index
+                            if let index = nearest, distance(points[index], event.startLocation, size) <= 16 {
                                 let point = CGPoint(x: points[index][0].number, y: points[index][1].number)
-                                dragPoint = (index, point)
+                                dragPoint = (index, point, true)
                                 change([point.x, point.y], index: index, phase: "down")
+                            } else {
+                                let point = CGPoint(x: event.startLocation.x / size.width, y: 1 - event.startLocation.y / size.height)
+                                dragPoint = (points.filter { $0[0].number < point.x }.count, point, false)
+                                change([point.x, point.y], index: nil, phase: "down")
                             }
+                            selected = dragPoint?.index
                         }
                         if let point = dragPoint, event.translation != .zero {
-                            change([point.point.x + event.translation.width / size.width,
-                                point.point.y - event.translation.height / size.height], index: point.index, phase: "move")
+                            let next = CGPoint(x: point.point.x + event.translation.width / size.width,
+                                y: point.point.y - event.translation.height / size.height)
+                            selected = (-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y) ? point.index : nil
+                            change([next.x, next.y], index: point.index, phase: "move")
                         }
                     }.onEnded { event in
                         guard dragging else { return }
@@ -192,36 +197,32 @@ private struct CurveProperty: View {
                         if let point = dragPoint {
                             let tapped = hypot(event.translation.width, event.translation.height) < 4
                             let now = Date()
-                            let double = tapped && lastTap.map { $0.index == point.index && now.timeIntervalSince($0.time) < 0.4 } == true
-                            lastTap = tapped && !double ? (point.index, now) : nil
-                            change([point.point.x + event.translation.width / geometry.size.width,
-                                point.point.y - event.translation.height / geometry.size.height], index: point.index, remove: double, phase: "up")
-                            if double { selected = nil }
-                        } else {
-                            // Commit insertion once. Subsequent drags address the
-                            // actual returned model, never a guessed insertion index.
-                            change([event.location.x / geometry.size.width, 1 - event.location.y / geometry.size.height], index: nil)
+                            let double = point.existing && tapped
+                                && lastTap.map { $0.index == point.index && now.timeIntervalSince($0.time) < 0.4 } == true
+                            lastTap = point.existing && tapped && !double ? (point.index, now) : nil
+                            let next = CGPoint(x: point.point.x + event.translation.width / geometry.size.width,
+                                y: point.point.y - event.translation.height / geometry.size.height)
+                            change([next.x, next.y], index: point.index, remove: double, phase: "up")
+                            let onGraph = (-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y)
+                            if double || !onGraph { selected = nil }
                         }
                         dragging = false; dragPoint = nil
                     })
                     .allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { cancelDrag() } }
                     .onDisappear(perform: cancelDrag)
+                    .help("Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.")
                     .accessibilityLabel("\(control["label"].string), \(points.count) points")
                     .accessibilityIdentifier("effect-curve")
             }.frame(height: 200)
                 .overlay(alignment: .bottomTrailing) {
                     if modified {
                         Button { selected = nil; lastTap = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
-                            Image(systemName: "arrow.counterclockwise").frame(width: 28, height: 28).contentShape(Rectangle())
+                            SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
                             .help("Reset curve").accessibilityLabel("Reset curve").accessibilityIdentifier("curve-reset")
                     }
                 }
-        }.onChange(of: points.map { $0[0].number }) { previous, current in
-            guard current.count == previous.count + 1,
-                let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }
-            selected = inserted
         }
     }
     private func distance(_ point: JSON, _ location: CGPoint, _ size: CGSize) -> CGFloat {

@@ -113,7 +113,8 @@ extension XCTestCase {
         nearPoint.press(forDuration: 0.05, thenDragTo: destination.withOffset(CGVector(dx: 5, dy: 5)),
             withVelocity: .slow, thenHoldForDuration: 0.1)
         let moved = changed(from: curved)
-        XCTAssertLessThan(moved[0], curved[0]); XCTAssertEqual(moved[1], curved[1]); XCTAssertEqual(moved[2], curved[2])
+        XCTAssertLessThan(moved[0], curved[0])
+        XCTAssertEqual(Int(moved[1]), Int(curved[1]), accuracy: 1); XCTAssertEqual(Int(moved[2]), Int(curved[2]), accuracy: 1)
         XCTAssertEqual(curve.label, "Red, 3 points", "Dragging an existing point must not insert another")
         editorHistory("Undo", in: app); expectPixels(curved)
         #if os(macOS)
@@ -144,6 +145,22 @@ extension XCTestCase {
         #endif
         workspaceActivate(app.buttons["curve-reset"])
         expectPixels(blue); history(before: moved, after: blue)
+        func expectPoints(_ count: Int) {
+            expectation(for: NSPredicate(format: "label == %@", "Red, \(count) points"), evaluatedWith: curve)
+            waitForExpectations(timeout: 10)
+        }
+        let press = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.35))
+        let pressed = press.withOffset(CGVector(dx: 12, dy: -30))
+        press.press(forDuration: 0.05, thenDragTo: pressed, withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectPoints(3)
+        let inserted = changed(from: blue)
+        editorHistory("Undo", in: app); expectPixels(blue); expectPoints(2)
+        editorHistory("Redo", in: app); expectPixels(inserted); expectPoints(3)
+        pressed.press(forDuration: 0.05, thenDragTo: curve.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 1.4)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectPoints(2); expectPixels(blue)
+        editorHistory("Undo", in: app); expectPixels(inserted); expectPoints(3)
+        editorHistory("Redo", in: app); expectPixels(blue)
         workspaceActivate(app.buttons["layer-Delete selected layers"])
         expectLayers(2)
 

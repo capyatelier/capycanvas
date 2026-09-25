@@ -121,6 +121,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(WorkspaceDialogs(store: store))
         .modifier(SelectionResizeDialog(store: store))
         .modifier(PaletteFiles(controller: store.palettes))
+        .modifier(StrokeRecordingFiles(recording: store.strokeRecording))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {
             SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)

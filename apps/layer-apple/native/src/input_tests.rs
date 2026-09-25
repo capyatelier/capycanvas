@@ -441,3 +441,49 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
         }
     }
 }
+
+#[test]
+fn apple_stroke_recordings_capture_hover_and_contacts_and_export_compressed() {
+    use std::io::{Read as _, Seek as _};
+    use std::os::fd::AsRawFd;
+    for (platform, name) in [(0, "ios"), (1, "mac")] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        let status = |action: Value| app.request(2, json!({"type":"stroke_recording","action":action})).unwrap();
+        assert_eq!(status(Value::Null)["label"], "Start stroke recording");
+        assert_eq!(status(json!("start"))["recording"], true);
+        let handle = app.0;
+        let send = |id: u64, points: &[(f64, f64)]| {
+            let records: Vec<f64> = points.iter().enumerate().flat_map(|(i, &(x, phase))| {
+                [x, 300., if phase == 0. { 0. } else { 0.6 }, 0., 0., 0., 0., 3_000_000_000. + i as f64 * 5_000_000., phase]
+            }).collect();
+            assert_eq!(unsafe { capy_apple_pointer(handle, id, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(handle)) }, 0);
+        };
+        send(5, &[(400., 0.)]);
+        send(5, &[(420., 1.), (440., 2.), (460., 2.), (460., 3.)]);
+        app.draw_until_idle();
+        let stopped = status(json!("stop"));
+        assert_eq!((stopped["recording"].as_bool(), stopped["ready"].as_bool()), (Some(false), Some(true)));
+        assert!(stopped["raw_events"].as_u64().unwrap() >= 4);
+        let mut length = 0usize;
+        let bytes = unsafe { capy_apple_stroke_recording_data(handle, &mut length) };
+        assert!(!bytes.is_null() && length > 0);
+        let path = std::env::temp_dir().join(format!("capy-recording-{}-{name}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(unsafe { capy_stroke_recording_write(bytes, length, file.as_raw_fd()) }.is_null());
+        unsafe { capy_bytes_free(bytes, length) };
+        file.rewind().unwrap();
+        let mut compressed = Vec::new();
+        file.read_to_end(&mut compressed).unwrap();
+        assert!(compressed.starts_with(b"CAPYPEN2"));
+        let records = layer_engine::recording::read(&compressed[..]).unwrap();
+        use layer_engine::recording::Record;
+        assert!(matches!(&records[0], Record::Metadata(text) if text.contains(name)), "{:?}", records[0]);
+        assert!(records.iter().filter(|r| matches!(r, Record::Raw { .. })).count() >= 4);
+        assert!(records.iter().any(|r| matches!(r, Record::Begin { .. })));
+        assert!(records.iter().any(|r| matches!(r, Record::End { cancelled: false, .. })));
+        assert_eq!(status(json!("saved"))["label"], "Start stroke recording");
+    }
+}

@@ -14,6 +14,8 @@ mod previews;
 pub use previews::*;
 mod workspaces;
 pub use workspaces::*;
+mod stroke_recording;
+pub use stroke_recording::*;
 #[cfg(test)]
 mod tests;
 use layer_host::{NativeHost, PointerBatch};

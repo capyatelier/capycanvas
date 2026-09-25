@@ -311,6 +311,43 @@ private final class TabletEvent: NSEvent {
                 let redone = try await pixels(); try require(redone == painted, "Redo restores the pen line")
             }
         }
+        for button in [1, 2] {
+            try await newDocument()
+            try await action(["type":"set_brush_size", "value":4])
+            try await tool(["figure":["shape":"line", "paint":"outline"]])
+            let paper = try await pixels(), camera = store.state["camera"]
+            let tablet = TabletEvent()
+            tablet.nativeButton = button
+            func chord(_ x: Double, force: Float, _ type: NSEvent.EventType) async throws {
+                let scale = window.backingScaleFactor
+                tablet.point = canvas.convert(CGPoint(
+                    x: (camera["translation"][0].number + x * camera["zoom"].number) / scale,
+                    y: (camera["translation"][1].number + 64 * camera["zoom"].number) / scale), to: nil)
+                tablet.force = force; tablet.time = ProcessInfo.processInfo.systemUptime; tablet.nativeType = type
+                switch type {
+                case .rightMouseDown: canvas.rightMouseDown(with: tablet)
+                case .rightMouseDragged: canvas.rightMouseDragged(with: tablet)
+                case .rightMouseUp: canvas.rightMouseUp(with: tablet)
+                case .otherMouseDown: canvas.otherMouseDown(with: tablet)
+                case .otherMouseDragged: canvas.otherMouseDragged(with: tablet)
+                default: canvas.otherMouseUp(with: tablet)
+                }
+                try await drain(0.025)
+            }
+            let (down, dragged, up): (NSEvent.EventType, NSEvent.EventType, NSEvent.EventType) = button == 1
+                ? (.rightMouseDown, .rightMouseDragged, .rightMouseUp) : (.otherMouseDown, .otherMouseDragged, .otherMouseUp)
+            try await chord(24, force: 0, down)
+            try await chord(24, force: 1, dragged)
+            try await chord(72, force: 1, dragged)
+            try await chord(96, force: 0, dragged)
+            try await chord(96, force: 0, up)
+            let painted = try await pixels()
+            try require(blue(painted,32,64) && blue(painted,64,64), "A tip chorded with a held side button still draws")
+            try require(store.state["camera"]["translation"].array.map(\.number)
+                == camera["translation"].array.map(\.number), "A held side button cannot pan the canvas")
+            try await invoke("undo")
+            let undone = try await pixels(); try require(undone == paper, "One Undo removes the chorded line")
+        }
         // Match the existing UIKit figure checks with actual AppKit mouse and
         // modifier delivery through the assembled editor's canvas hit target.
         // Changing Shift while stationary must affect the committed figure;

@@ -95,8 +95,9 @@ struct RendererStatsPanel: View {
                     chart
                 }
             }
+            RecordingButton(recording: store.strokeRecording)
         }.accessibilityElement(children: .contain).accessibilityIdentifier("renderer-stats")
-            .onAppear { stats.show(viewer) }.onDisappear { stats.hide(viewer) }
+            .onAppear { stats.show(viewer); store.strokeRecording.refresh() }.onDisappear { stats.hide(viewer) }
     }
     private var chart: some View {
         Canvas { context, size in
@@ -117,5 +118,15 @@ struct RendererStatsPanel: View {
             }
             context.stroke(chart, with: .color(palette["text"]), lineWidth: 1.5)
         }.frame(height: 46).accessibilityElement().accessibilityLabel(stats.view["chart_label"].string)
+    }
+}
+
+private struct RecordingButton: View {
+    @ObservedObject var recording: StrokeRecording
+    var body: some View {
+        Button { recording.activate() } label: {
+            Text(recording.label).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
+        }.buttonStyle(EditorControlButtonStyle(background: Color.primary.opacity(0.05))).disabled(recording.busy)
+            .help("Record tablet input for up to 10 minutes").accessibilityIdentifier("stroke-recording")
     }
 }

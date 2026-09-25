@@ -643,6 +643,13 @@ impl NativeHost {
     }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum StrokeRecordingAction {
+            Start,
+            Stop,
+            Saved,
+        }
+        #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
             ToolbarStamp { context: layer_ui::ToolbarContext },
@@ -689,6 +696,10 @@ impl NativeHost {
             },
             PaletteMenu {
                 target: layer_ui::PaletteMenuTarget,
+            },
+            StrokeRecording {
+                #[serde(default)]
+                action: Option<StrokeRecordingAction>,
             },
             RevealPanel {
                 panel: layer_ui::Panel,
@@ -821,6 +832,27 @@ impl NativeHost {
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::StrokeRecording { action } => {
+                let platform = match self.session.state().platform {
+                    layer_ui::Platform::Mac => "mac",
+                    layer_ui::Platform::Ios => "ios",
+                    layer_ui::Platform::Windows => "windows",
+                    layer_ui::Platform::Android => "android",
+                    layer_ui::Platform::Web => "web",
+                    layer_ui::Platform::Gtk => "gtk",
+                    layer_ui::Platform::Generic => "generic",
+                };
+                let mut recorder = self.session.stroke_recording();
+                match action {
+                    Some(StrokeRecordingAction::Start) => recorder.start(platform)?,
+                    Some(StrokeRecordingAction::Stop) => {
+                        recorder.stop(layer_engine::recording::StopReason::Manual)
+                    }
+                    Some(StrokeRecordingAction::Saved) => recorder.saved(),
+                    None => {}
+                }
+                json!(recorder.status())
+            }
             Query::PaletteMenu { target } => {
                 json!(self.session.state().colors.library.menu(target)?)
             }
