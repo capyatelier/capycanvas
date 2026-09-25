@@ -20,6 +20,19 @@ preference validation. For changes to the rendering contract or shared native
 integration, also run the relevant tests in `layer-render`, `layer-render-wgpu`
 and `layer-host`. Renderer tests that create a device need a working GPU backend.
 
+Most renderer tests create and destroy their own device. The workspace
+[`.cargo/config.toml`](../../.cargo/config.toml) therefore runs four libtest
+threads unless `RUST_TEST_THREADS` or `--test-threads` is set. NVIDIA's 610.57
+Linux driver allows 63 live Vulkan devices per process; later requests fail with
+device loss or crash inside the driver. Its `vkDestroyDevice` can also deadlock
+while other threads wait for the driver: `layer-ffi` hung in 3 of 20 runs with
+eight threads and in none of 45 runs with four.
+
+Headless renderers keep one wgpu instance for the process lifetime so the driver
+stays loaded: each reload consumes glibc static TLS, and the 19th load fails.
+They also omit wgpu debug labels: Vulkan loaders before 1.4.345 can crash when
+one thread names an object while another creates or destroys a device.
+
 A workspace-wide test can be useful in a fully configured environment, but it
 also includes platform crates. Start with the affected packages rather than
 assuming a Linux machine can build and validate every native client.
