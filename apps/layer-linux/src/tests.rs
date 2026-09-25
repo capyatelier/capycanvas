@@ -3304,16 +3304,15 @@ fn native_operation_tool() {
             viewport,
         });
         pump(120);
-        // Other panels in the same column can impose a larger minimum. The
-        // tool controls themselves still fit the three-tile content contract.
-        assert!(panel.width() >= 128 && panel.width() < before_width);
+        let minimum = layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32;
+        assert_eq!(panel.width(), minimum);
         assert!(
             w.tool_settings
                 .root
                 .measure(gtk::Orientation::Horizontal, -1)
                 .0
-                <= 128,
-            "tool settings exceed three-tile minimum"
+                <= minimum,
+            "tool settings exceed their six-tile minimum"
         );
         capture_reference(&w, &format!("{dir}/operation-narrow-{theme:?}.png"), 1.);
         w.dispatch(UiAction::ResizeDock {
@@ -3363,14 +3362,22 @@ fn native_operation_tool() {
     w.dispatch(UiAction::Layer {
         action: LayerAction::Deselect,
     });
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::Tool {
-            tool: LayerCanvasTool::PickVisible,
-        },
-    });
-    native_pen_path(&w, &[[700., 750.], [700., 750.]]);
+    let sample = |point: [f32; 2]| {
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::PickVisible,
+            },
+        });
+        native_pen_path(&w, &[point, point]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while state(&w).layer_tools.tool.picks_color() {
+            assert!(Instant::now() < deadline, "visible color sample");
+            pump(10);
+        }
+        state(&w).colors.foreground.rgba
+    };
     assert!(
-        state(&w).colors.foreground.rgba[0] > 0.9,
+        sample([700., 750.])[0] > 0.9,
         "old location should be paper"
     );
     w.dispatch(UiAction::Invoke {
@@ -3382,8 +3389,7 @@ fn native_operation_tool() {
     pump(200);
     assert_eq!(document().layers, original.layers);
     assert_eq!(document().selection, original.selection);
-    native_pen_path(&w, &[[700., 750.], [700., 750.]]);
-    let c = state(&w).colors.foreground.rgba;
+    let c = sample([700., 750.]);
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
     // A selected mask uses the same native controls. By default the linked
     // artwork travels with it, and one undo restores both targets.
