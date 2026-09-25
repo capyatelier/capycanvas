@@ -404,6 +404,7 @@ impl CapyHost {
             gpu,
             if glass.transparency.enabled() { self.glass.regions(self.scale) } else { &[] },
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
+            self.native.session.engine().has_active_stroke(),
         );
         presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
