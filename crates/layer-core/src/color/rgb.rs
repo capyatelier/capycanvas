@@ -12,6 +12,14 @@ pub enum RgbSpace {
 }
 
 pub type Matrix3 = [[f64; 3]; 3];
+
+/// Bradford cone response matrix, XYZ to sharpened LMS.
+pub const BRADFORD: Matrix3 = [
+    [0.8951, 0.2664, -0.1614],
+    [-0.7502, 1.7135, 0.0367],
+    [0.0389, -0.0685, 1.0296],
+];
+
 impl RgbSpace {
     pub const ALL: [Self; 4] = [Self::Srgb, Self::DisplayP3, Self::AdobeRgb, Self::ProPhoto];
 
@@ -86,10 +94,7 @@ impl RgbSpace {
     }
 
     pub fn to_xyz(self) -> Matrix3 {
-        let p = self.primaries().map(xy_to_xyz);
-        let unscaled = std::array::from_fn(|row| std::array::from_fn(|col| p[col][row]));
-        let scale = apply(inverse(unscaled), xy_to_xyz(self.white()));
-        std::array::from_fn(|row| std::array::from_fn(|col| unscaled[row][col] * scale[col]))
+        primaries_to_xyz(self.primaries(), self.white())
     }
 
     /// Bradford adaptation between each space's reference whites, then primary
@@ -98,20 +103,7 @@ impl RgbSpace {
         if self == destination {
             return [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
         }
-        let bradford = [
-            [0.8951, 0.2664, -0.1614],
-            [-0.7502, 1.7135, 0.0367],
-            [0.0389, -0.0685, 1.0296],
-        ];
-        let source_white = apply(bradford, xy_to_xyz(self.white()));
-        let target_white = apply(bradford, xy_to_xyz(destination.white()));
-        let adapted = std::array::from_fn(|row| {
-            std::array::from_fn(|col| bradford[row][col] * target_white[row] / source_white[row])
-        });
-        multiply(
-            inverse(destination.to_xyz()),
-            multiply(inverse(bradford), multiply(adapted, self.to_xyz())),
-        )
+        linear_rgb_transform(self.primaries(), self.white(), destination)
     }
 
     /// Preserve absolute XYZ, including the source white, without adaptation.
@@ -140,15 +132,29 @@ pub fn apply(matrix: Matrix3, vector: [f64; 3]) -> [f64; 3] {
 /// Linear primary conversion with Bradford white adaptation. Used for explicitly
 /// tagged interchange spaces as well as the built-in document spaces.
 pub fn linear_rgb_transform(primaries: [[f64; 2]; 3], white: [f64; 2], destination: RgbSpace) -> Matrix3 {
+    multiply(
+        inverse(destination.to_xyz()),
+        multiply(
+            bradford(white, destination.white()),
+            primaries_to_xyz(primaries, white),
+        ),
+    )
+}
+/// Linear RGB to XYZ for xy chromaticity primaries, scaled so `white` has Y = 1.
+pub fn primaries_to_xyz(primaries: [[f64; 2]; 3], white: [f64; 2]) -> Matrix3 {
     let p = primaries.map(xy_to_xyz);
     let unscaled = std::array::from_fn(|row| std::array::from_fn(|col| p[col][row]));
     let scale = apply(inverse(unscaled), xy_to_xyz(white));
-    let source = std::array::from_fn(|row| std::array::from_fn(|col| unscaled[row][col] * scale[col]));
-    let bradford = [[0.8951,0.2664,-0.1614],[-0.7502,1.7135,0.0367],[0.0389,-0.0685,1.0296]];
-    let sw = apply(bradford, xy_to_xyz(white));
-    let dw = apply(bradford, xy_to_xyz(destination.white()));
-    let adapted = std::array::from_fn(|row| std::array::from_fn(|col| bradford[row][col]*dw[row]/sw[row]));
-    multiply(inverse(destination.to_xyz()), multiply(inverse(bradford), multiply(adapted, source)))
+    std::array::from_fn(|row| std::array::from_fn(|col| unscaled[row][col] * scale[col]))
+}
+/// Complete XYZ-to-XYZ Bradford adaptation between xy chromaticity whites.
+pub fn bradford(source_white: [f64; 2], destination_white: [f64; 2]) -> Matrix3 {
+    let source = apply(BRADFORD, xy_to_xyz(source_white));
+    let destination = apply(BRADFORD, xy_to_xyz(destination_white));
+    let adapted = std::array::from_fn(|row| {
+        std::array::from_fn(|col| BRADFORD[row][col] * destination[row] / source[row])
+    });
+    multiply(inverse(BRADFORD), adapted)
 }
 fn xy_to_xyz([x, y]: [f64; 2]) -> [f64; 3] {
     [x / y, 1., (1. - x - y) / y]
