@@ -220,6 +220,35 @@ fn retained_targets_repaint_only_changed_glass() {
     assert_eq!(frame(&mut blur, Some(&[])), [PixelRect::new(40, 16, 104, 80)], "removed glass repaints the artwork");
 }
 
+#[test]
+fn region_list_changes_repaint_only_added_and_removed_glass() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut blur = BackdropBlur::new(r.device(), FORMAT);
+    let frame = |blur: &mut BackdropBlur| {
+        let mut encoder = r.device().create_command_encoder(&Default::default());
+        let mut repaint = Vec::new();
+        blur.encode(&r, &mut encoder, [512, 256], 0, layer_core::Affine::IDENTITY, false, Some(&[]), |_| {}, None, &mut repaint);
+        r.queue().submit([encoder.finish()]);
+        repaint
+    };
+    let panels = [region([0., 0., 96., 256.], [0.; 4]), region([416., 0., 96., 256.], [0.; 4])];
+    let bar = region([160., 200., 192., 40.], [12.; 4]);
+    let [left, right, shown] = [PixelRect::new(0, 0, 96, 256), PixelRect::new(416, 0, 512, 256), PixelRect::new(160, 200, 352, 240)];
+    blur.set_regions(&[panels[0], panels[1], bar]);
+    assert_eq!(frame(&mut blur), [left, right, shown]);
+    assert_eq!(blur.frames(), [1, 0]);
+    blur.set_regions(&panels);
+    assert_eq!(frame(&mut blur), [shown], "hiding the bar leaves panel glass untouched");
+    assert_eq!(blur.frames(), [1, 1], "the remaining panels keep their cached blur");
+    blur.set_regions(&[panels[0], panels[1], bar]);
+    assert_eq!(frame(&mut blur), [shown], "showing the bar repaints only the bar");
+    assert_eq!(blur.frames(), [1, 2], "the unchanged backdrop keeps the bar's cached blur");
+    blur.set_regions(&[bar, panels[1], panels[0]]);
+    assert_eq!(frame(&mut blur), [], "reordering the same glass repaints nothing");
+    blur.set_regions(&[panels[0], panels[1], region([160., 200., 192., 40.], [20.; 4])]);
+    assert_eq!(frame(&mut blur), [shown], "a new shape with the same bounds repaints them once");
+}
+
 fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
     let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
     dab.center = layer_core::Point { x: 110., y: 64. };
@@ -429,8 +458,17 @@ fn backdrop_blur_cost() {
             let cached = measure(&r, iterations, |encoder, _| {
                 presenter.encode(&r, encoder, &target, camera(200.), surround).unwrap();
             });
+            let bar = region([extent[0] as f32 * 0.4, extent[1] as f32 * 0.8, 360. * scale, 44. * scale], [14. * scale; 4]);
+            let with_bar: Vec<_> = regions.iter().copied().chain([bar]).collect();
+            let mut retained = ViewportPresenter::for_renderer(&r, FORMAT);
+            retained.set_target_retention(true);
+            retained.set_backdrop(&r, &regions, style, false);
+            let toggled = measure(&r, iterations, |encoder, i| {
+                retained.set_backdrop(&r, if i % 2 == 0 { &with_bar } else { &regions }, style, false);
+                retained.encode(&r, encoder, &target, camera(200.), surround).unwrap();
+            });
             eprintln!(
-                "{extent:?} @{scale}x glass {:.0}% of surface, reach {}px, levels {} offset {}: viewport median {:.4} ms p95 {:.4}; with glass, recomputing camera median {:.4} ms p95 {:.4} (CPU encode {:.4} ms), moved blur median {:.4} ms, cached median {:.4} ms p95 {:.4}",
+                "{extent:?} @{scale}x glass {:.0}% of surface, reach {}px, levels {} offset {}: viewport median {:.4} ms p95 {:.4}; with glass, recomputing camera median {:.4} ms p95 {:.4} (CPU encode {:.4} ms), moved blur median {:.4} ms, cached median {:.4} ms p95 {:.4}, retained bar shown or hidden median {:.4} ms p95 {:.4}",
                 100. * area / (extent[0] * extent[1]) as f32,
                 style.reach(),
                 style.levels,
@@ -443,6 +481,8 @@ fn backdrop_blur_cost() {
                 median(&moved),
                 median(&cached),
                 p95(&cached),
+                median(&toggled),
+                p95(&toggled),
             );
         }
     }

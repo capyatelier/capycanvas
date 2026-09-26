@@ -109,7 +109,7 @@ pub(crate) struct BackdropBlur {
     extent: [u32; 2],
     regions: Vec<BackdropRegion>,
     placed: Vec<BackdropRegion>,
-    drawn: Vec<PixelRect>,
+    drawn: Vec<(BackdropRegion, PixelRect)>,
     interiors: Vec<PixelRect>,
     valid: Vec<PixelRect>,
     hold: bool,
@@ -314,20 +314,21 @@ impl BackdropBlur {
         })
     }
 
-    fn bounds(&self) -> Vec<PixelRect> {
+    fn placed_bounds(&self) -> Vec<(BackdropRegion, PixelRect)> {
         self.placed
             .iter()
             .map(|r| {
                 let [x, y, w, h] = r.bounds;
                 let clamp = |v: f32, max: u32| v.clamp(0., max as f32) as u32;
-                PixelRect::new(
+                let bounds = PixelRect::new(
                     clamp(x.floor(), self.extent[0]),
                     clamp(y.floor(), self.extent[1]),
                     clamp((x + w).ceil(), self.extent[0]),
                     clamp((y + h).ceil(), self.extent[1]),
-                )
+                );
+                (*r, bounds)
             })
-            .filter(|b| !b.is_empty())
+            .filter(|(_, b)| !b.is_empty())
             .collect()
     }
 
@@ -495,7 +496,7 @@ impl BackdropBlur {
             self.uploaded = false;
         }
         if self.placed.is_empty() || extent[0] == 0 || extent[1] == 0 {
-            repaint.append(&mut self.drawn);
+            repaint.extend(self.drawn.drain(..).map(|(_, b)| b));
             self.interiors.clear();
             self.levels.clear();
             self.cache = None;
@@ -507,12 +508,17 @@ impl BackdropBlur {
             return false;
         }
         self.prepare(renderer.device(), renderer.queue(), extent);
-        let bounds = self.bounds();
-        if self.drawn != bounds {
-            repaint.append(&mut self.drawn);
-            repaint.extend_from_slice(&bounds);
-            self.drawn.clone_from(&bounds);
+        let drawn = self.placed_bounds();
+        if self.drawn != drawn {
+            let removed = self.drawn.iter().filter(|d| !drawn.contains(d));
+            for (_, b) in removed.chain(drawn.iter().filter(|d| !self.drawn.contains(d))) {
+                if !repaint.contains(b) {
+                    repaint.push(*b);
+                }
+            }
+            self.drawn = drawn;
         }
+        let bounds: Vec<PixelRect> = self.drawn.iter().map(|(_, b)| *b).collect();
         let reach = self.style.reach();
         let document = camera.then(surface_rotation(turns, size));
         let settled = damage.is_some() && self.document.is_some_and(|d| d != document);
