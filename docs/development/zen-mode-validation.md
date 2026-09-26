@@ -81,11 +81,13 @@ Logs and captures are in
 
 Build Web with `bash apps/layer-web/build.sh`, serve `apps/layer-web` locally,
 and use ADB reverse forwarding to open a dedicated test page on the Huion.
-Forward Chrome's debugger, then select only that test tab:
+Forward Chrome's debugger; the harness selects only the tab at `LAYER_WEB_URL`
+and writes captures to `LAYER_TEST_ARTIFACTS`:
 
 ```sh
 adb -s G7DL2S300241 forward tcp:9240 localabstract:chrome_devtools_remote
-node apps/layer-web/zen-tablet.test.mjs TEST_TAB_ID
+LAYER_DEVICE_CDP=http://127.0.0.1:9240 LAYER_WEB_URL=http://127.0.0.1:8127/ \
+  node apps/layer-web/device.test.mjs --zen
 adb -s G7DL2S300241 shell am instrument -w \
   -e class art.capycanvas.AndroidTitleBarTest#zenCapyAndEdgeRevealPreferences \
   art.capycanvas.zentest.test/androidx.test.runner.AndroidJUnitRunner

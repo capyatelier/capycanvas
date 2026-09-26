@@ -82,17 +82,18 @@ in the distribution. Then run:
 ```sh
 LAYER_WEB_URL=http://127.0.0.1:8130 node apps/layer-web/test.mjs --proof
 adb -s 5ll21u1002931 forward tcp:9230 localabstract:chrome_devtools_remote
-node apps/layer-web/proof-tablet.test.mjs TEST_TAB_ID journey
-node apps/layer-web/proof-tablet.test.mjs TEST_TAB_ID performance
+export LAYER_DEVICE_CDP=http://127.0.0.1:9230 LAYER_WEB_URL=http://127.0.0.1:8130/
+node apps/layer-web/device.test.mjs --proof
+node apps/layer-web/device.test.mjs --proof-performance
 ```
 
-The tablet CLI only touches the explicitly selected test tab. `performance` needs
-the documented 9504×6336 photo at `/pkg/proof-photo61mp.jpg`; it saves three normal
-and three proof runs. `memory` opens/prepares the same fixture with a short idle
-period for an external sampler, without the navigation timing loop. Override
-fixture URLs with `LAYER_PHOTO_URL`, `LAYER_PROOF_URL`, `LAYER_PROOF_ORIGINAL_URL`;
-use `LAYER_CDP_URL` for a different forwarded debugger port. An optional third
-CLI argument changes the output directory. No flags or unrelated tabs are changed.
+The tablet harness only touches the test tab at `LAYER_WEB_URL`.
+`--proof-performance` needs the documented 9504×6336 photo at
+`/pkg/proof-photo61mp.jpg`; it saves three normal and three proof runs.
+`--proof-memory` opens/prepares the same fixture with a short idle period for an
+external sampler, without the navigation timing loop. Override fixture URLs with
+`LAYER_PHOTO_URL`, `LAYER_PROOF_URL`, `LAYER_PROOF_ORIGINAL_URL`, and the output
+directory with `LAYER_TEST_ARTIFACTS`. No flags or unrelated tabs are changed.
 
 For native tests, install the matching test APK, push the CMYK and synthetic
 portable file into `/data/local/tmp`, and run:

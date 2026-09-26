@@ -6,10 +6,8 @@
 //   node tools/performance/web-refresh.mjs
 // --desktop-ui-only launches a temporary Chrome profile without WebGPU. This
 // checks the harness/UI path, and is not a GPU or tablet performance result.
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { connectTab, launchChrome } from '../cdp.mjs';
 import { installRefreshProbe } from './web-refresh-probe.js';
 import { replayRefreshStrokes } from './web-refresh-strokes.mjs';
 
@@ -23,67 +21,19 @@ const runs = Number(process.env.LAYER_REFRESH_RUNS || 1);
 if (!Number.isSafeInteger(duration) || duration < 1000 || !Number.isSafeInteger(runs) || runs < 1)
   throw Error('LAYER_REFRESH_MS and LAYER_REFRESH_RUNS must be positive integers (capture >= 1000 ms)');
 await mkdir(output, { recursive: true });
-let chrome, profile, socket, send, session, sequence = 0;
-const pending = new Map(), errors = [];
-let finishTrace;
-function receive(message) {
-  if (message.id) {
-    const job = pending.get(message.id); if (!job) return;
-    pending.delete(message.id); clearTimeout(job.timer);
-    message.error ? job.reject(Error(JSON.stringify(message.error))) : job.resolve(message.result);
-  } else if (message.method === 'Tracing.tracingComplete') finishTrace?.(message.params);
-  else if (message.method === 'Runtime.exceptionThrown') errors.push(message.params);
-  else if (message.method === 'Page.javascriptDialogOpening' && message.params.type === 'beforeunload') {
-    call('Page.handleJavaScriptDialog', { accept: true }).catch(error => errors.push(String(error)));
-  }
-}
-function call(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++sequence;
-    const timer = setTimeout(() => { pending.delete(id); reject(Error(`CDP timeout: ${method}`)); }, duration + 30000);
-    pending.set(id, { resolve, reject, timer });
-    send({ id, method, params, ...(session ? { sessionId: session } : {}) });
-  });
-}
-async function evaluate(expression) {
-  const result = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-  if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
-  return result.result.value;
-}
+const options = { timeout: duration + 30000 };
+const cdp = desktop
+  ? await launchChrome(['--headless=new', '--ozone-platform=headless',
+    ...(uiOnly ? ['--disable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader']),
+    '--window-size=1440,1000'], options)
+  : await connectTab(process.env.LAYER_DEVICE_CDP || 'http://127.0.0.1:9247', t => t.url === url, options);
+const { call, evaluate, errors } = cdp;
 let preload;
 let tracing = false, profiling = false;
 let strokeWork;
 const strokeAbort = new AbortController();
 try {
-  if (desktop) {
-    profile = await mkdtemp(join(tmpdir(), 'capy-refresh-'));
-    chrome = spawn(process.env.CHROME || 'google-chrome', [
-      '--headless=new', '--ozone-platform=headless', '--remote-debugging-pipe',
-      ...(uiOnly ? ['--disable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader']),
-      `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
-      '--password-store=basic', '--window-size=1440,1000', 'about:blank',
-    ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
-    chrome.stderr.on('data', () => {});
-    let buffer = '';
-    chrome.stdio[4].on('data', data => {
-      buffer += data.toString();
-      for (let index; (index = buffer.indexOf('\0')) >= 0;) {
-        receive(JSON.parse(buffer.slice(0, index))); buffer = buffer.slice(index + 1);
-      }
-    });
-    send = message => chrome.stdio[3].write(JSON.stringify(message) + '\0');
-    const { targetInfos } = await call('Target.getTargets');
-    ({ sessionId: session } = await call('Target.attachToTarget', { targetId: targetInfos.find(t => t.type === 'page').targetId, flatten: true }));
-  } else {
-    const endpoint = process.env.LAYER_DEVICE_CDP || 'http://127.0.0.1:9247';
-    const tabs = await (await fetch(`${endpoint}/json/list`, { signal: AbortSignal.timeout(10000) })).json();
-    const tab = tabs.find(t => t.url === url);
-    if (!tab) throw Error(`Open dedicated test origin ${url} first`);
-    socket = new WebSocket(tab.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-    socket.onmessage = e => receive(JSON.parse(e.data));
-    send = message => socket.send(JSON.stringify(message));
-  }
+  if (desktop) await cdp.attachPage();
   for (const domain of ['Page', 'Runtime', 'Network']) await call(`${domain}.enable`);
   await call('Page.bringToFront');
   ({ identifier: preload } = await call('Page.addScriptToEvaluateOnNewDocument', {
@@ -141,7 +91,7 @@ try {
       await writeFile(`${output}/refresh-${run}.cpuprofile`, JSON.stringify(profile));
     }
     if (process.argv.includes('--timeline')) {
-      const finished = new Promise(resolve => { finishTrace = resolve; });
+      const finished = cdp.once('Tracing.tracingComplete', duration + 30000);
       await call('Tracing.end'); const { stream } = await finished;
       tracing = false;
       const chunks = [];
@@ -160,10 +110,7 @@ try {
   await strokeWork;
   if (profiling) await call('Profiler.stop').catch(() => {});
   if (tracing) await call('Tracing.end').catch(() => {});
-  if (send) await evaluate('window.refreshTrace?.dispose(); undefined').catch(() => {});
+  await evaluate('window.refreshTrace?.dispose(); undefined').catch(() => {});
   if (preload) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: preload }).catch(() => {});
-  socket?.close(); chrome?.kill();
-  for (const job of pending.values()) clearTimeout(job.timer);
-  if (chrome) await new Promise(resolve => chrome.exitCode !== null ? resolve() : chrome.once('exit', resolve));
-  if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  await cdp.close();
 }

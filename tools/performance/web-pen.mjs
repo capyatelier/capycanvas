@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { connectTab } from "../cdp.mjs";
 
 const exec = promisify(execFile);
 const options = new Set(process.argv.slice(2));
@@ -45,42 +46,8 @@ const inject = (x, y, rx, ry, hz, seconds, mode="stroke") => exec(adb, ["-s", se
 ], { timeout: seconds * 1000 + 30000 });
 
 await mkdir(output, { recursive: true });
-const tabs = await (await fetch(`${endpoint}/json/list`, { signal: AbortSignal.timeout(10000) })).json();
-const tab = tabs.find(tab => tab.url === url);
-assert(tab, `Open the dedicated test origin ${url}`);
-const ws = new WebSocket(tab.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  const timer = setTimeout(() => { ws.close(); reject(Error("Chrome connection timed out")); }, 10000);
-  ws.onopen = () => { clearTimeout(timer); resolve(); };
-  ws.onerror = error => { clearTimeout(timer); reject(error); };
-});
-let sequence = 0, traceDone;
-const pending = new Map(), errors = [];
-ws.onmessage = event => {
-  const message = JSON.parse(event.data);
-  if (message.id) {
-    const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    clearTimeout(request.timer);
-    if (message.error) request.reject(Error(JSON.stringify(message.error)));
-    else request.resolve(message.result);
-  } else if (message.method === "Runtime.exceptionThrown") errors.push(message.params);
-  else if (message.method === "Page.javascriptDialogOpening" && message.params.type === "beforeunload")
-    call("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
-  else if (message.method === "Tracing.tracingComplete") traceDone?.(message.params);
-};
-const call = (method, params = {}) => new Promise((resolve, reject) => {
-  const id = ++sequence;
-  const timer = setTimeout(() => { pending.delete(id); reject(Error(`Timeout: ${method}`)); }, 180000);
-  pending.set(id, { resolve, reject, timer });
-  ws.send(JSON.stringify({ id, method, params }));
-});
-const evaluate = async expression => {
-  const result = await call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
-  return result.result.value;
-};
+const cdp = await connectTab(endpoint, tab => tab.url === url, { timeout: 180000 });
+const { call, evaluate, errors } = cdp;
 // Functions sent here run in the page and must use only their arguments/globals.
 const inPage = (fn, ...args) => evaluate(`(${fn})(...${JSON.stringify(args)})`);
 const waitFor = condition => evaluate(`new Promise((resolve,reject)=>{
@@ -312,7 +279,7 @@ try {
     await writeFile(`${output}/${label}.cpuprofile`, JSON.stringify(result.profile));
   }
   if (tracing) {
-    const done = new Promise(resolve => traceDone = resolve);
+    const done = cdp.once("Tracing.tracingComplete", 180000);
     await call("Tracing.end");
     tracing = false;
     const { stream } = await done;
@@ -344,6 +311,5 @@ try {
     delete window.penCalibration;
     delete window.penBenchRecovery;
   }).catch(() => {});
-  ws.close();
-  for (const request of pending.values()) clearTimeout(request.timer);
+  await cdp.close();
 }

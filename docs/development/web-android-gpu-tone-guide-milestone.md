@@ -154,8 +154,8 @@ explicitly selects SDR proof, including on HDR-capable displays.
 
 Build Web with `bash apps/layer-web/build.sh`. Serve `apps/layer-web`, reverse
 that local port to the Huion with ADB, and forward its Chrome DevTools socket.
-Run `proof-tablet.test.mjs TEST_TAB_ID hdr OUTPUT_DIRECTORY` with
-`LAYER_CDP_URL` and `LAYER_TEST_ARTIFACTS` set. Select `hdr-performance` and set
+Run `device.test.mjs --hdr` with `LAYER_DEVICE_CDP`, `LAYER_WEB_URL` and
+`LAYER_TEST_ARTIFACTS` set. Select `--hdr-performance` and set
 `LAYER_HDR_WORKLOADS=sparse4k`, `LAYER_DEVICE_SERIAL=G7DL2S300241` and `ADB` for
 browser performance and process memory evidence. The test targets one explicit
 tab and uses ordinary Chrome WebGPU, without experimental browser flags.

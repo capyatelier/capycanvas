@@ -42,11 +42,9 @@ import {checkPalettes} from "./palettes.test.mjs";
 // Real Chrome + Wasm + WebGPU smoke/conformance test. No browser framework.
 import {checkDrawerDragging,checkDrawerStyling,checkToolbarDrawerSwitching} from "./drawers.test.mjs";
 import { checkDragCursors } from "./drag-cursors.test.mjs";
-import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+import { launchChrome } from "../../tools/cdp.mjs";
 import { checkRaster } from "./raster.test.mjs";
 import { checkPhotoPaint } from "./photo-paint.test.mjs";
 import { checkImagePlacement } from "./image-placement.test.mjs";
@@ -68,18 +66,11 @@ import { checkWorkspaceRendering } from "./workspace-rendering.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
-const profile = await mkdtemp(join(tmpdir(), "layer-chrome-"));
-const chrome = spawn(
-  process.env.CHROME || "google-chrome",
+const cdp = await launchChrome(
   [
     ...(process.argv.includes("--headless")
       ? ["--headless=new", "--ozone-platform=headless"]
       : ["--ozone-platform=wayland"]),
-    "--remote-debugging-pipe",
-    `--user-data-dir=${profile}`,
-    "--no-first-run",
-    "--password-store=basic",
-    "--no-default-browser-check",
     // GTK reference PNGs are sRGB; do not bake the monitor's gamma into captures.
     "--force-color-profile=srgb",
     "--enable-gpu",
@@ -89,60 +80,30 @@ const chrome = spawn(
     ...(process.platform === "linux" ? ["--use-angle=vulkan",
       "--enable-features=Vulkan", "--disable-vulkan-surface"] : []),
     "--window-size=1440,1000",
-    "about:blank",
   ],
-  { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] },
+  {
+    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--filter-investigation"].includes(x)) ? 180000 : 30000,
+    onEvent: (event) => {
+      if (
+        event.method === "Runtime.consoleAPICalled" &&
+        ["error", "warning"].includes(event.params.type)
+      )
+        cdp.report(
+          event.params.args.map((a) => a.value || a.description).join(" "),
+        );
+      else if (
+        event.method === "Log.entryAdded" &&
+        ["error", "warning"].includes(event.params.entry.level) &&
+        !event.params.entry.text.includes("favicon") &&
+        !(event.params.entry.level === "warning" && event.params.entry.text.startsWith('Compilation log for [ShaderModule "connected region"]:') && !/\berror(?:s)?\b/i.test(event.params.entry.text))
+      ) {
+        if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
+        cdp.report([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
+      }
+    },
+  },
 );
-let sequence = 0,
-  buffer = "",
-  session;
-const requests = new Map(),
-  errors = [];
-const observedError=message=>{errors.push(message);if(process.env.LAYER_TEST_VERBOSE)console.error(message);};
-chrome.stderr.on("data", (data) => {
-  if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(data);
-});
-chrome.stdio[4].on("data", (data) => {
-  buffer += data.toString();
-  for (;;) {
-    const end = buffer.indexOf("\0");
-    if (end < 0) break;
-    const event = JSON.parse(buffer.slice(0, end));
-    buffer = buffer.slice(end + 1);
-    if (event.id) {
-      const waiter = requests.get(event.id);
-      if (!waiter) continue;
-      requests.delete(event.id);
-      clearTimeout(waiter.timer);
-      if (event.error) waiter.reject(new Error(`${waiter.method}: ${JSON.stringify(event.error)}`));
-      else waiter.resolve(event.result);
-    } else if (event.method === "Page.javascriptDialogOpening" && event.params.type === "beforeunload") {
-      // Only this disposable test profile is navigated away from by the harness.
-      call("Page.handleJavaScriptDialog", {accept:true}).catch(()=>{});
-    } else if (event.method === "Runtime.exceptionThrown")
-      observedError(
-        event.params.exceptionDetails.exception?.description ||
-          event.params.exceptionDetails.exception?.value ||
-          event.params.exceptionDetails.text,
-      );
-    else if (
-      event.method === "Runtime.consoleAPICalled" &&
-      ["error", "warning"].includes(event.params.type)
-    )
-      observedError(
-        event.params.args.map((a) => a.value || a.description).join(" "),
-      );
-    else if (
-      event.method === "Log.entryAdded" &&
-      ["error", "warning"].includes(event.params.entry.level) &&
-      !event.params.entry.text.includes("favicon") &&
-      !(event.params.entry.level === "warning" && event.params.entry.text.startsWith('Compilation log for [ShaderModule "connected region"]:') && !/\berror(?:s)?\b/i.test(event.params.entry.text))
-    ) {
-      if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
-      observedError([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
-    }
-  }
-});
+const { call, settle, errors } = cdp;
 function checkRasterErrors() {
   if(!process.argv.includes("--offscreen-raster")){assert.deepEqual(errors,[]);return;}
   // Chrome 150 / NVIDIA 610 headless presentation also fails on pre-M1 main.
@@ -152,43 +113,11 @@ function checkRasterErrors() {
   assert.deepEqual(remaining,[]);
   if(remaining.length!==errors.length)console.log("Presentation NOT qualified: pre-existing Chrome headless Dawn instance failure (also reproduced on pre-M1 main).");
 }
-function call(method, params = {}, sessionId = session) {
-  const id = ++sequence;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      requests.delete(id);
-      reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--filter-investigation"].includes(x)) ? 180000 : 30000);
-    requests.set(id, { resolve, reject, timer, method });
-    chrome.stdio[3].write(
-      JSON.stringify({
-        id,
-        method,
-        params,
-        ...(sessionId ? { sessionId } : {}),
-      }) + "\0",
-    );
-  });
-}
 async function evaluate(expression) {
   if(process.env.LAYER_TEST_VERBOSE)process.stderr.write(`Evaluate: ${expression.slice(0,300)}\n`);
-  const result = await call("Runtime.evaluate", {
-    expression,
-    returnByValue: true,
-    awaitPromise: true,
-  });
-  if (result.exceptionDetails)
-    throw new Error(
-      result.exceptionDetails.exception?.description ||
-        result.exceptionDetails.text,
-    );
-  return result.result.value;
+  return cdp.evaluate(expression);
 }
 const reload = async () => { await call("Page.reload", {ignoreCache:true}); await new Promise(r=>setTimeout(r,1000)); };
-const settle = () =>
-  evaluate(
-    "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-  );
 async function canvasPixels() {
   const clip = await evaluate(
     "(() => { const r = layerApp.canvas.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}; })()",
@@ -205,18 +134,7 @@ async function click(selector) {
   await settle();
 }
 try {
-  const target = await call(
-    "Target.createTarget",
-    { url: "about:blank" },
-    null,
-  );
-  session = (
-    await call(
-      "Target.attachToTarget",
-      { targetId: target.targetId, flatten: true },
-      null,
-    )
-  ).sessionId;
+  const targetId = await cdp.attachPage();
   await call("Runtime.enable");
   await call("Page.enable");
   await call("Log.enable");
@@ -225,7 +143,7 @@ try {
   if (process.argv.includes("--parity") || process.argv.includes("--preferences"))
     await call("Input.setIgnoreInputEvents", { ignore: true });
   if (process.argv.includes("--native-input")) {
-    const {windowId} = await call("Browser.getWindowForTarget", {targetId:target.targetId}, null);
+    const {windowId} = await call("Browser.getWindowForTarget", {targetId}, null);
     await call("Browser.setWindowBounds", {windowId,bounds:{windowState:"fullscreen"}}, null);
     await call("Page.bringToFront");
   } else if (!process.argv.includes("--fullscreen")) await call("Emulation.setDeviceMetricsOverride", {
@@ -376,7 +294,7 @@ try {
     await checkMediumTiles({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--fullscreen")) {
-    const {windowId} = await call("Browser.getWindowForTarget",{targetId:target.targetId},null);
+    const {windowId} = await call("Browser.getWindowForTarget",{targetId},null);
     await checkFullscreen({call,evaluate,settle,windowId});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-panel")) {
@@ -1051,13 +969,6 @@ try {
   console.error("Page errors:", errors);
   throw error;
 } finally {
-  try {
-    await call("Browser.close", {}, null);
-  } catch {
-    chrome.kill("SIGTERM");
-  }
-  if (chrome.exitCode === null)
-    await new Promise((resolve) => chrome.once("exit", resolve));
-  await rm(profile, { recursive: true, force: true });
+  await cdp.close();
   await packageHost?.close();
 }

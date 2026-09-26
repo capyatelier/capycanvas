@@ -32,42 +32,24 @@ import {checkDeviceFullscreen} from "./fullscreen.test.mjs";
 import {checkMediumTiles} from "./tiles.test.mjs";
 import {checkPaintColumns} from "./paint-columns.test.mjs";
 import {checkPalettes} from "./palettes.test.mjs";
+import {checkZen} from "./zen.test.mjs";
+import {benchPhotoNavigation} from "./photo-navigation-bench.test.mjs";
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
+import {join} from "node:path";
+import {connectTab} from "../../tools/cdp.mjs";
 const endpoint=process.env.LAYER_DEVICE_CDP||"http://127.0.0.1:9228";
 const url=process.env.LAYER_WEB_URL||"http://127.0.0.1:8127/";
-let tab;
-const openingDeadline=Date.now()+10000;
-while(!tab && Date.now()<openingDeadline) {
-  const tabs=await(await fetch(`${endpoint}/json/list`,{signal:AbortSignal.timeout(10000)})).json();tab=tabs.find(t=>t.url===url);
-  if(!tab)await new Promise(resolve=>setTimeout(resolve,100));
-}
-if(!tab)throw Error(`Open ${url} on the tablet first`);
-const socket=new WebSocket(tab.webSocketDebuggerUrl);
-await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Tablet Chrome connection timed out')),10000);socket.onopen=()=>{clearTimeout(timeout);resolve();};socket.onerror=e=>{clearTimeout(timeout);reject(e);};});
-let sequence=0,onLoad;const pending=new Map(),errors=[];
-socket.onclose=()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error("Tablet CDP disconnected"));}pending.clear();};
-socket.onmessage=event=>{
-  const m=JSON.parse(event.data);
-  if(m.id){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(`${p.method}: ${JSON.stringify(m.error)}`)):p.resolve(m.result);}
-  else if(m.method==="Page.loadEventFired"){onLoad?.();onLoad=null;}
-  else if(m.method==="Page.javascriptDialogOpening" && m.params.type==="beforeunload"){call("Page.handleJavaScriptDialog",{accept:true}).catch(()=>{});}
-  else if(m.method==="Runtime.exceptionThrown")errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);
-  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")errors.push(m.params.entry.text);
-  else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
-};
-const call=(method,params={})=>new Promise((resolve,reject)=>{
-  if(socket.readyState!==WebSocket.OPEN){reject(Error("Tablet CDP disconnected"));return;}
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?300000:180000);
-  pending.set(id,{resolve,reject,timer,method});socket.send(JSON.stringify({id,method,params}));
+const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
+const cdp=await connectTab(endpoint,t=>t.url===url,{
+  timeout:process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?300000:180000,
+  onEvent:m=>{
+    if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")cdp.report(m.params.entry.text);
+    else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")cdp.report(m.params.args.map(a=>a.value||a.description).join(" "));
+  },
 });
-const evaluate=async expression=>{
-  const result=await call("Runtime.evaluate",{expression,awaitPromise:true,returnByValue:true});
-  if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
-  return result.result.value;
-};
-const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),60000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:true});await loaded;};
-const settle=()=>evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+const {call,evaluate,settle,errors}=cdp;
+const reload=async()=>{const loaded=cdp.once("Page.loadEventFired",60000);await call("Page.reload",{ignoreCache:true});await loaded;};
 const canvasPixels=async()=>{
   const shot=await call("Page.captureScreenshot",{format:"png"});
   return evaluate(`(async()=>{const image=new Image();image.src="data:image/png;base64,${shot.data}";await image.decode();const canvas=document.createElement("canvas");canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext("2d",{willReadFrequently:true});ctx.drawImage(image,0,0);const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;let white=0;for(let i=0;i<rgba.length;i+=4)if(rgba[i]>245&&rgba[i+1]>245&&rgba[i+2]>245)white++;return{white,total:rgba.length/4};})()`);
@@ -87,7 +69,7 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes'].includes(flag))) {
+  if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes','--zen','--proof-performance','--proof-memory'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
@@ -131,7 +113,36 @@ try {
   } else if(process.argv.includes("--hdr")){
     await checkHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--proof")){
-    await checkProof({call,evaluate,settle});assert.deepEqual(errors,[]);
+    await checkProof({call,evaluate,settle},{profileUrl:process.env.LAYER_PROOF_URL,originalUrl:process.env.LAYER_PROOF_ORIGINAL_URL});assert.deepEqual(errors,[]);
+  } else if(process.argv.some(x=>['--proof-performance','--proof-memory'].includes(x))){
+    const performanceRun=process.argv.includes('--proof-performance');
+    const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const started=performance.now();function poll(){if(${condition})resolve();else if(performance.now()-started>120000)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,30)}poll()})`);
+    await mkdir(directory,{recursive:true});
+    await wait('layerApp.state().commands.find(c=>c.id==="open_document")?.enabled && !document.querySelector("dialog[open]")');
+    const photo=process.env.LAYER_PHOTO_URL||'/pkg/proof-photo61mp.jpg',profile=process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc';
+    await evaluate(`(async()=>{window.proofBench={open:window.showOpenFilePicker};const response=await fetch(${JSON.stringify(photo)});if(!response.ok)throw Error('Photo fixture unavailable');const blob=await response.blob();window.showOpenFilePicker=async()=>[{name:'proof-photo.jpg',async getFile(){return new File([blob],'proof-photo.jpg')}}];proofBench.importStart=performance.now();layerApp.dispatch({type:'invoke',command:'open_document'});})()`);
+    await settle();await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
+    await wait('layerApp.state().tabs[0].width===9504 && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+    await evaluate('proofBench.importMs=performance.now()-proofBench.importStart;window.showOpenFilePicker=proofBench.open');
+    if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-normal.json'));
+    await evaluate(`(async()=>{proofBench.profile=await layerApp.app.profile_library('import',undefined,new Uint8Array(await(await fetch(${JSON.stringify(profile)})).arrayBuffer()));layerApp.dispatch({type:'invoke',command:'soft_proof_setup'});})()`);
+    await wait(`!![...document.querySelectorAll('dialog[open] optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name)`);
+    await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Proof profile"]');s.value=[...s.querySelectorAll('optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name).value;s.dispatchEvent(new Event('change'));proofBench.frames=[];proofBench.longTasks=[];proofBench.preparing=true;const tick=t=>{proofBench.frames.push(t);if(proofBench.preparing)requestAnimationFrame(tick)};requestAnimationFrame(tick);proofBench.observer=new PerformanceObserver(list=>{proofBench.longTasks.push(...list.getEntries().map(e=>({start:e.startTime,duration:e.duration})))});proofBench.observer.observe({type:'longtask'});proofBench.prepareStart=performance.now();})()`);
+    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Apply'&&!b.disabled).click()`);
+    await wait(`!document.querySelector('dialog[open]') && layerApp.app.proof_status().text.startsWith('Proof:')`);await settle();
+    const preparation=await evaluate(`(()=>{proofBench.preparing=false;proofBench.observer.disconnect();return JSON.parse(JSON.stringify({import_ms:proofBench.importMs,preparation_ms:performance.now()-proofBench.prepareStart,raf:proofBench.frames,long_tasks:proofBench.longTasks,proof:layerApp.app.proof_status(),color:layerApp.app.document_color(),memory:performance.memory?{used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize}:null},(_,v)=>typeof v==='bigint'?Number(v):v))})()`);
+    await writeFile(join(directory,'web-proof-preparation.json'),JSON.stringify(preparation,null,2));console.log('Preparation:',JSON.stringify(preparation));
+    if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-proof.json'));
+    else await evaluate('new Promise(r=>setTimeout(r,12000))');
+    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(directory,'web-photo-proof.png'),Buffer.from(shot.data,'base64'));
+    assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--zen")){
+    await mkdir(directory,{recursive:true});
+    await checkZen({call,evaluate,settle,capture:async name=>{
+      const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(directory,`${name}.png`),Buffer.from(shot.data,'base64'));
+    }});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--filter-previews")) {
     await checkFilterPreviews({call,evaluate,settle});
     assert.deepEqual(errors,[]);
@@ -214,7 +225,6 @@ try {
     await reload();
     timings.push(await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(layerApp.startupTimes);else if(performance.now()-start>55000)reject(Error("startup timeout"));else setTimeout(check,100);}check();})'));
   }
-  const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
   await mkdir(directory,{recursive:true});await writeFile(`${directory}/tablet-startup.json`,JSON.stringify(timings,null,2));
   console.log("Tablet touch zoom/rotate and startup passed",timings);
   }
@@ -227,5 +237,5 @@ try {
     await workspaceInput({type:'submit',name:''}); await workspaceIdle();
     const normalize=text=>JSON.stringify(JSON.parse(text),(key,value)=>key==='timestamp_ms'?'date':value);
     assert.equal(normalize(await evaluate('layerApp.app.workspace_capture()')),normalize(workspaceIsolation.capture),'The original workspace and its history remain intact');
-  } } finally { await evaluate("window.deviceRecoveryWatcher?.disconnect();delete window.deviceRecoveryWatcher").catch(()=>{});socket.close();for(const p of pending.values())clearTimeout(p.timer); }
+  } } finally { await evaluate("window.deviceRecoveryWatcher?.disconnect();delete window.deviceRecoveryWatcher").catch(()=>{});await cdp.close(); }
 }

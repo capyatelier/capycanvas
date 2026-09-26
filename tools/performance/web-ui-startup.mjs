@@ -2,26 +2,16 @@
 // Example: LAYER_DEVICE_CDP=http://127.0.0.1:9246 LAYER_WEB_URL=http://127.0.0.1:4196/ node tools/performance/web-ui-startup.mjs
 import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
+import {connectTab} from '../cdp.mjs';
 const endpoint=process.env.LAYER_DEVICE_CDP||'http://127.0.0.1:9246';
 const url=process.env.LAYER_WEB_URL||'http://127.0.0.1:4196/';
 const output=process.env.LAYER_TEST_ARTIFACTS||'artifacts/ui-startup';
 const count=Number(process.env.LAYER_UI_RUNS||3);
 await mkdir(output,{recursive:true});
-let tab;
-for (const deadline=Date.now()+10000; !tab && Date.now()<deadline;) {
- const tabs=await(await fetch(`${endpoint}/json/list`)).json();
- tab=tabs.find(x=>x.url===url);
- if(!tab)await new Promise(resolve=>setTimeout(resolve,100));
-}
-assert(tab,`Open the dedicated test origin ${url}`);
-const ws=new WebSocket(tab.webSocketDebuggerUrl);await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});
-let onLoad;
-let sequence=0;const pending=new Map(),errors=[];
-ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}else if(m.method==='Page.loadEventFired'){onLoad?.();onLoad=null;}else if(m.method==='Page.javascriptDialogOpening'&&m.params.type==='beforeunload'){call('Page.handleJavaScriptDialog',{accept:true}).catch(()=>{});}else if(m.method==='Runtime.exceptionThrown')errors.push(m.params);};
-const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(method));},150000);pending.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});
-const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+const cdp=await connectTab(endpoint,x=>x.url===url,{timeout:150000});
+const {call,evaluate,errors}=cdp;
 const waitFor=(condition,timeout=120000)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+${timeout};function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error('UI startup timed out'));else setTimeout(check,25)}check()})`);
-const reload=async(ignoreCache=false)=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Navigation timed out')),20000);onLoad=()=>{clearTimeout(timer);resolve();};});await call('Page.reload',{ignoreCache});await loaded;};
+const reload=async(ignoreCache=false)=>{const loaded=cdp.once('Page.loadEventFired',20000);await call('Page.reload',{ignoreCache});await loaded;};
 const median=values=>values.sort((a,b)=>a-b)[Math.floor(values.length/2)];
 let preload;
 try {
@@ -66,4 +56,4 @@ try {
  const summary={ui_ms:median(results.map(x=>x.marks['capy.startup.ui'])),workspace_ms:median(results.map(x=>x.marks['capy.startup.workspace'])),settings_ms:median(results.flatMap(x=>x.steadySettings.map(s=>s.frame_ms))),settings_during_startup_ms:median(results.flatMap(x=>x.settings.slice(1).map(s=>s.frame_ms))),panels_ms:panelTimes.length?median(panelTimes):null};
  console.log('Medians',summary);await writeFile(`${output}/web-summary.json`,JSON.stringify(summary,null,2));
  if(process.argv.includes('--assert-targets')){assert(summary.ui_ms<=700,'UI <=700 ms');assert(summary.workspace_ms<1000,'workspace <1000 ms');assert(summary.settings_ms<75,'Settings <75 ms');if(panelTimes.length)assert(summary.panels_ms<75,'Panel tabs <75 ms');}
-} finally {if(preload)await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:preload});ws.close();for(const p of pending.values())clearTimeout(p.timer);}
+} finally {if(preload)await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:preload});await cdp.close();}

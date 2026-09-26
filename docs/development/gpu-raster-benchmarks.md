@@ -303,18 +303,21 @@ successfully does not by itself pass the 120 Hz gate: inspect delivered-frame
 counts, callback cadence and each CPU field. Do not count expected-presentation
 timestamps as measured presentation feedback.
 
-For Chrome, forward its debug socket, open the photo in a dedicated test tab and
-select that tab's explicit ID from the endpoint's `/json/list` response:
+For Chrome, serve the 9504×6336 photo at `/pkg/proof-photo61mp.jpg` (or set
+`LAYER_PHOTO_URL`), forward its debug socket and open the dedicated test page at
+`LAYER_WEB_URL`:
 
 ```sh
 adb forward tcp:9228 localabstract:chrome_devtools_remote
-node apps/layer-web/photo-navigation-bench.test.mjs TEST_TAB_ID REPORT.json
+node apps/layer-web/device.test.mjs --proof-performance
 ```
 
-The script requests fullscreen, uses ordinary app frame scheduling and records
-three 361-request runs, CPU frame time, RAF cadence, camera, viewport and renderer
-storage. It never changes Chrome flags or launches/closes user tabs. This injects
-camera commands, not hardware touch; it is not an input-to-photon test. Run tablet
+The harness opens the photo, requests fullscreen, uses ordinary app frame
+scheduling and records three 361-request runs before and after Print proof
+preparation: CPU frame time, RAF cadence, camera, viewport and renderer storage,
+written to `LAYER_TEST_ARTIFACTS`. It never changes Chrome flags or
+launches/closes user tabs. This injects camera commands, not hardware touch; it
+is not an input-to-photon test. Run tablet
 native and Web workloads separately, with other test photos released. Account for
 browser refresh throttling independently of GPU rendering time. The milestone
 [tablet validation record](../history/color-management-web-android-m2-validation.md)

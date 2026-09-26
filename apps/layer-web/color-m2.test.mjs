@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 
+const helpers=(evaluate,{timeout=60000,enabled=false}={})=>{
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||${enabled}&&b.disabled)throw Error('Missing button '+${JSON.stringify(label)});b.click()})()`);
+  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  return {wait,click,invoke,idle};
+};
+
 // Run with the real Wasm app and WebGPU, including on scaled tablet Chrome.
 export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/prophoto16.png') {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Missing button '+${JSON.stringify(label)});b.click();})()`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const {wait,click,invoke}=helpers(evaluate);
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
   await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
   await evaluate(`window.sdrFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){sdrFiles.set(options.suggestedName,bytes)},async abort(){}}}});
@@ -111,9 +117,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
 }
 
 export async function checkColorEdits({call,evaluate,settle}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>120000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled button '+${JSON.stringify(label)});b.click()})()`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const {wait,click,invoke}=helpers(evaluate,{timeout:120000,enabled:true});
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');};
   const backing=value=>({blobs:value.blobs,sources:value.tiled_sources,color:value.document.color});
   await invoke('fit_canvas');
@@ -153,10 +157,7 @@ export async function checkColorEdits({call,evaluate,settle}) {
 }
 
 export async function checkSourceImports({call,evaluate}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const {wait,invoke,click,idle}=helpers(evaluate);
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
   const original=await evaluate('sdrManifest(sdrPhotoMaster).tiled_sources');
   await invoke('new_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
@@ -194,10 +195,7 @@ export async function checkSourceImports({call,evaluate}) {
 }
 
 export async function checkSourceEdits({call,evaluate,settle}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const {wait,invoke,click,idle}=helpers(evaluate);
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
   const backing=m=>({blobs:m.blobs,rasters:m.rasters,sources:m.tiled_sources});
   const source=m=>m.tiled_sources.images[m.tiled_sources.layers.find(l=>l.target===m.document.active_layer).image];
@@ -230,9 +228,8 @@ export async function checkSourceEdits({call,evaluate,settle}) {
 }
 
 export async function checkExportPresets({evaluate}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const {wait,click}=helpers(evaluate);
   const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
-  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
   const name='Tablet delivery '+Date.now();
   await invoke();await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('select[aria-label="'+label+'"]');node.value=value;node.dispatchEvent(new Event('change'));};
@@ -261,10 +258,7 @@ export async function checkExportPresets({evaluate}) {
 }
 
 export async function checkProfileLibrary({evaluate}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const {wait,invoke,click,idle}=helpers(evaluate);
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([sdrPhotoBytes],'profile-library.png')}}];`);
   await invoke('open_document');await idle();
   const report=await evaluate(`(async()=>{
@@ -305,10 +299,7 @@ export async function checkProfileLibrary({evaluate}) {
 
 
 export async function checkFlattenedCopy({evaluate}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const {wait,invoke,click,idle}=helpers(evaluate,{enabled:true});
   const saved=await evaluate('({file:JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v)),color:layerApp.app.document_color(),count:sdrFiles.size})');
   const prepare=async()=>{
     await invoke('convert_color_space');await wait(`!!document.querySelector('dialog[open] select[aria-label="Result"]')`);
@@ -342,9 +333,7 @@ export async function checkFlattenedCopy({evaluate}) {
 
 
 export async function checkPhotoCorrections({evaluate,settle}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
-  const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const {wait,invoke,idle}=helpers(evaluate);
   const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
   const source=(await save()).tiled_sources;

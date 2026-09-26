@@ -1,11 +1,10 @@
 // Deterministic shared-editor capture, using an isolated local Chrome profile.
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, writeFile, realpath, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve, extname, sep, dirname, basename } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve, extname, sep } from 'node:path';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
+import { launchChrome } from '../cdp.mjs';
 import {captureToolbarFixture} from './toolbar-fixture.mjs';
 import {captureWorkspaceTabs} from './workspace-tabs.mjs';
 import {captureHeaderControls} from './header-controls.mjs';
@@ -36,42 +35,11 @@ const server = createServer(async (req, res) => {
 });
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
-const profileRoot = await realpath(tmpdir());
-const profile = await mkdtemp(join(profileRoot, 'capy-parity-chrome-'));
-const chrome = spawn(process.env.CAPY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
-  '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
-  '--no-first-run', '--no-default-browser-check', '--force-color-profile=srgb',
-  '--enable-gpu', '--enable-unsafe-webgpu', 'about:blank',
-], {stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe']});
-let seq = 0, buffer = '', session, stderr = '';
-const requests = new Map(), errors = [];
-chrome.stderr.on('data', data => { stderr += data.toString(); });
-chrome.stdio[4].on('data', data => {
-  buffer += data.toString();
-  for (let end; (end = buffer.indexOf('\0')) >= 0;) {
-    const event = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
-    if (event.id) {
-      const req = requests.get(event.id); if (!req) continue;
-      requests.delete(event.id); clearTimeout(req.timer);
-      event.error ? req.reject(new Error(JSON.stringify(event.error))) : req.resolve(event.result);
-    } else if (event.method === 'Runtime.exceptionThrown') errors.push(event.params.exceptionDetails);
-  }
-});
-function call(method, params = {}, sessionId = session) {
-  return new Promise((resolve, reject) => {
-    const id = ++seq, timer = setTimeout(() => { requests.delete(id); reject(new Error(`Timeout ${method}: ${stderr.slice(-2000)}`)); }, 30000);
-    requests.set(id, {resolve, reject, timer});
-    chrome.stdio[3].write(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}) + '\0');
-  });
-}
-async function evaluate(expression) {
-  const r = await call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
-  if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails));
-  return r.result.value;
-}
+const cdp = await launchChrome(['--headless=new', '--force-color-profile=srgb', '--enable-gpu', '--enable-unsafe-webgpu'],
+  {executable: process.env.CAPY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+const {call, evaluate, errors} = cdp;
 try {
-  const target = await call('Target.createTarget', {url:'about:blank'}, null);
-  session = (await call('Target.attachToTarget', {targetId:target.targetId, flatten:true}, null)).sessionId;
+  await cdp.attachPage();
   await call('Runtime.enable'); await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor:scale, mobile:false});
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion', value:'reduce'}]});
@@ -195,14 +163,6 @@ try {
   if (errors.length) console.error(JSON.stringify({browserExceptions: errors}));
   throw error;
 } finally {
-  const exited = once(chrome,'exit');
-  chrome.kill(); await exited;
+  await cdp.close();
   server.closeAllConnections(); await new Promise(resolve=>server.close(resolve));
-  // Delete only the exact generated directory under the canonical temp root.
-  // Refuse a redirected/replaced profile path, including Windows junctions.
-  const cleanup = await realpath(profile);
-  assert.equal(cleanup, profile);
-  assert.equal(dirname(cleanup), profileRoot);
-  assert.ok(basename(cleanup).startsWith('capy-parity-chrome-'));
-  await rm(cleanup,{recursive:true,force:true});
 }
