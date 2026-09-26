@@ -86,28 +86,6 @@ pub fn raster_worker_export_presets(
 }
 
 #[wasm_bindgen]
-pub fn raster_worker_inspect_profile(
-    bytes: js_sys::Uint8Array,
-    include_bytes: bool,
-) -> Result<JsValue, JsValue> {
-    if bytes.length() as usize > layer_color::MAX_ICC_BYTES {
-        return Err(js("ICC profile exceeds 16 MiB"));
-    }
-    let profile = layer_core::color::ColorProfile::Icc(bytes.to_vec().into());
-    let name = layer_color::profile_description(&profile).map_err(js)?;
-    let channels = layer_color::profile_channels(&profile).map_err(js)?;
-    if include_bytes {
-        serialize(&layer_ui::ExportProfile {
-            profile,
-            name,
-            channels,
-        })
-    } else {
-        serialize(&serde_json::json!({"name":name,"channels":channels}))
-    }
-}
-
-#[wasm_bindgen]
 pub fn raster_worker_profile_library(request: &str, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
     let action: layer_ui::profile_library::ProfileLibraryAction = serde_json::from_str(request).map_err(js)?;
     let result = action.execute(&bytes.to_vec()).map_err(js)?;

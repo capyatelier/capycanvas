@@ -294,8 +294,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   for (const theme of process.argv.includes("--gestures") ? [] : ["dark", "light"]) {
     await reset(); await send({ type: "set_theme", theme });
     await workspaceMenu(); await shot(`workspace-menu-${theme}`);
-    const menuModel = await evaluate("layerApp.app.workspace_menu()");
-    assert.equal(menuModel.sections.length, 4);
+    assert.equal(await evaluate("document.querySelectorAll('#workspace-menu > hr').length + 1"), 4);
     await choose("Tool Set", "#workspace-menu"); assert.equal(await group("brushes"), undefined);
     await workspaceMenu(); await choose("Tool Set", "#workspace-menu"); assert.ok(await group("brushes"));
     await workspaceMenu(); await choose("Quick Access Toolbars", "#workspace-menu"); await choose("New Toolbar…", "#workspace-menu");

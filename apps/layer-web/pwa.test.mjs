@@ -336,7 +336,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
   assert.equal(await evaluate("globalThis.capyTestRelease ?? null"), null);
   // Focus, viewport and status revisions can legitimately change in another
   // tab. Compare drawing identity/content revisions and document tabs instead.
-  const snapshot = "JSON.stringify({drawing:layerApp.app.recovery_document(),tabs:layerApp.app.document_tabs(0)},(_,v)=>typeof v==='bigint'?String(v):v)";
+  const snapshot = "JSON.stringify({drawing:layerApp.app.recovery_document_for(layerApp.app.document_tabs(0).selected),tabs:layerApp.app.document_tabs(0)},(_,v)=>typeof v==='bigint'?String(v):v)";
   const keys = await evaluate("caches.keys()");
   // Keep a second old editor open throughout deployment and refresh. It must
   // retain both its live state and lazily requested old JS/CSS, even offline.

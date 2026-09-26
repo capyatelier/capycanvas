@@ -94,9 +94,6 @@ impl WebApp {
             raster_project::save(project).await
         }))
     }
-    pub fn recovery_document(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.recovery_document())
-    }
     pub fn recovery_update(&self, state: &str, event: JsValue) -> Result<JsValue, JsValue> {
         let event = serde_wasm_bindgen::from_value(event).map_err(js)?;
         serialize(&layer_ui::recovery::recovery_update(state, event).map_err(js)?)

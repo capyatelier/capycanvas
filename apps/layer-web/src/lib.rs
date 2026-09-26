@@ -968,9 +968,6 @@ impl WebApp {
     pub fn toolbar_manager(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.toolbar_manager())
     }
-    pub fn workspace_menu(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.workspace_menu())
-    }
     pub fn panel_handle_target(&self, item: JsValue) -> Result<JsValue, JsValue> {
         let item = serde_wasm_bindgen::from_value(item).map_err(js)?;
         serialize(
@@ -1074,9 +1071,6 @@ impl WebApp {
     }
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.layout([width, height]))
-    }
-    pub fn dragging_attached_tab(&self) -> bool {
-        self.session.dragging_attached_tab()
     }
     pub fn begin_tab_drag(&mut self, tabs: JsValue, clip: JsValue) -> Result<(), JsValue> {
         let tabs: Vec<layer_ui::TabHit> = serde_wasm_bindgen::from_value(tabs).map_err(js)?;

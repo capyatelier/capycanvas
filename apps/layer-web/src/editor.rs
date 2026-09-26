@@ -64,9 +64,6 @@ impl WebApp {
     pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().display_colors().wheel_hue_stops())
     }
-    pub fn color_panel_layout(&self, size: f32) -> Result<JsValue, JsValue> {
-        serialize(&if self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float() {layer_ui::ColorPanelLayout::with_hdr(size)} else {layer_ui::ColorPanelLayout::new(size)})
-    }
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
         color_field(&self.session.state().preview_colors(), side,

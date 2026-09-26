@@ -72,9 +72,7 @@ export async function captureColorPanels({manifest,fixturePath,output,evaluate,c
       const icon=name=>{const template=document.createElement('template');template.innerHTML=colorCaptureIcons[name];return template.content.firstElementChild;};
       for(const item of fixture.items){
         const bytes=item.field_base64?Uint8Array.from(atob(item.field_base64),c=>c.charCodeAt(0)):null;
-        const app={color_panel:()=>item.model,color_panel_layout:size=>{
-          if(size!==item.size)throw Error('Unexpected panel allocation');return item.layout;
-        },color_hue_stops:()=>item.hue_stops,color_field_pixels:side=>{
+        const app={color_panel:()=>item.model,color_hue_stops:()=>item.hue_stops,color_field_pixels:side=>{
           if(side!==item.field_side)throw Error('Unexpected field raster size');return bytes;
         }};
         const panels=createEditorPanels({app,state:()=>({}),element,button,icon,
