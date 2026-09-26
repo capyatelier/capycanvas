@@ -44,6 +44,8 @@ class AndroidColorPanelTest {
     private var contact = false
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
+    private var previousRotation = 0
+    private var autoRotate = true
     private var button = MotionEvent.BUTTON_PRIMARY
     private var waitForInput = true
     private var replayOrigin: IntArray? = null
@@ -98,6 +100,21 @@ class AndroidColorPanelTest {
         RecoveryController.directoryForTest = File(root, "recovery")
         ColorPreferencesStore.directoryForTest = File(root, "color-preferences")
         scenario = ActivityScenario.launch(MainActivity::class.java)
+        var portrait = false
+        scenario.onActivity {
+            previousRotation = it.window.decorView.display.rotation
+            autoRotate = android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0
+            portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        }
+        if (portrait) {
+            assertTrue(instrumentation.uiAutomation.setRotation(if (previousRotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
+            val until = SystemClock.uptimeMillis() + 10_000
+            while (portrait && SystemClock.uptimeMillis() < until) {
+                SystemClock.sleep(50)
+                scenario.onActivity { portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+            }
+            assertFalse("The color panel fixtures place a floating panel in landscape", portrait)
+        }
         scenario.onActivity {
             activity = it; host = it.host; owner = findOwner(it.window.decorView)!!; density = it.resources.displayMetrics.density
         }
@@ -124,6 +141,7 @@ class AndroidColorPanelTest {
             }
         } finally {
             if (referenceHandle != 0L) Native.destroy(referenceHandle)
+            instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
             if (::scenario.isInitialized) scenario.close()
             CanvasHost.workspaceDirectoryForTest = null
             RecoveryController.directoryForTest = null

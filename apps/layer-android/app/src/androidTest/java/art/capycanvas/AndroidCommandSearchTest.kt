@@ -172,6 +172,11 @@ class AndroidCommandSearchTest {
         if (::root.isInitialized) root.deleteRecursively()
     }
     @Test fun nativeKeyboardTouchPenAndPerformance() {
+        if (mainWindow.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            assertTrue(instrumentation.uiAutomation.setRotation(if (mainWindow.display.rotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
+            waitFor("landscape") { mainWindow.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+            scenario.onActivity { mainWindow = it.window.decorView }
+        }
         repeat(3) {
             open()
             instrumentation.sendStringSync("pencil")

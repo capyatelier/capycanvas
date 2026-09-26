@@ -36,6 +36,8 @@ class AndroidInteractionTest {
     private lateinit var saved: JSONObject
     private lateinit var fixture: JSONObject
     private var density = 1f
+    private var previousRotation = 0
+    private var autoRotate = true
     private var downAt = 0L
     private var contact = false
     private var popupInput = false
@@ -199,6 +201,21 @@ class AndroidInteractionTest {
         // focus. Isolate drawing recovery alongside the workspace fixture.
         RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         scenario = ActivityScenario.launch(MainActivity::class.java)
+        var portrait = false
+        scenario.onActivity {
+            previousRotation = it.window.decorView.display.rotation
+            autoRotate = android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0
+            portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        }
+        if (portrait) {
+            assertTrue(instrumentation.uiAutomation.setRotation(if (previousRotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
+            val until = SystemClock.uptimeMillis() + 10_000
+            while (portrait && SystemClock.uptimeMillis() < until) {
+                SystemClock.sleep(50)
+                scenario.onActivity { portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+            }
+            assertFalse("The interaction fixtures use the landscape tablet layout", portrait)
+        }
         scenario.onActivity {
             activity=it
             host = it.host; owner = findView<ViewRootForTest>(it.window.decorView)!!
@@ -234,7 +251,10 @@ class AndroidInteractionTest {
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 recovery.delete()
             } }
-            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null; RecoveryController.directoryForTest = null }
+            finally {
+                instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
+                if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null; RecoveryController.directoryForTest = null
+            }
         }
     }
 
@@ -1099,7 +1119,7 @@ class AndroidInteractionTest {
                 assertEquals(command, state().getJSONObject("brush").getString("tool"))
                 assertTrue("New tool activates on the same tap", state().array("commands").objects().first { it.getString("id") == command }.getBoolean("selected"))
             }
-            assertTrue(exists("tool-drawer"))
+            waitFor("tool drawer shown for ${ids[i]}") { exists("tool-drawer") }
         }
         fun move(target: JSONObject) = action(obj("type" to "move_panel", "panel" to "toolbar", "target" to target,
             "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
@@ -1727,9 +1747,20 @@ class AndroidInteractionTest {
         action(obj("type" to "set_tool_setting", "id" to "size", "value" to 2048))
         for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
             customize(obj("type" to "set_tile_style", "panel" to options.first, "style" to style))
-            waitFor("vertical field $style") { exists("toolbar-setting-size") }
+            if (style == "small" || style == "medium") waitFor("vertical field $style") { exists("toolbar-setting-size") }
+            else {
+                settle()
+                if (!exists("toolbar-setting-size")) {
+                    tap(bounds("toolbar-more-${options.second}").center)
+                    waitFor("overflowing field $style reachable") { exists("tool-drawer") }
+                    customize(obj("type" to "close_expanded"))
+                    waitFor("overflow closed $style") { !exists("tool-drawer") }
+                }
+            }
             captureToolbar("options-$style")
         }
+        customize(obj("type" to "set_tile_style", "panel" to options.first, "style" to "small"))
+        waitFor("vertical field") { exists("toolbar-setting-size") }
         tap(bounds("toolbar-setting-size").center); settle()
         captureToolbar("vertical-value-popup")
         action(obj("type" to "invoke", "command" to "eraser")); settle()
