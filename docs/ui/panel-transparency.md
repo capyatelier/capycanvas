@@ -5,8 +5,10 @@
 **Appearance → Panel transparency** offers Off, Low (the default), Medium and
 High. It is a shared setting (`Settings::transparency`) presented by GTK, Web,
 Android, macOS, iPadOS and Windows. The other levels show a blurred copy of the
-artwork behind panels, tab strips, drawers, their connectors and title-bar
-controls. Controls inside panels, such as inputs, lists and sliders, stay opaque.
+artwork behind panels, tab strips, drawers, their connectors, title-bar
+controls and the [command bar](command-search.md). Controls inside panels, such
+as inputs, lists and sliders, stay opaque. Menus, popovers and tooltips stay
+opaque.
 
 Off keeps the opaque theme. Title-bar controls, the zoom readout and the Zen
 button are opaque too, rather than the earlier translucent fill with no blur.
@@ -44,10 +46,17 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
   by enclosing clip nodes, and the corner radii of its enclosing rounded clip.
   Radii use the same superellipse conversion as the
   [squircle](squircle-corners.md) converter. Nodes inside a found surface are
-  skipped, so panel content is not visited.
+  skipped, so panel content is not visited. The command bar is a native popup
+  on its own surface, outside that scan. The workspace adds its body, with
+  circular corners, from the popup's position relative to the window. The
+  region is refreshed when the popup's layout changes and dropped when it
+  unmaps.
 - Web: `glass.js` measures the translucent DOM surfaces and their CSS radii in
-  the canvas frame, and `set_glass` scales them to device pixels. Layout,
-  theme and Zen changes queue a new measurement for the next canvas frame.
+  the canvas frame, and `set_glass` scales them to device pixels. Each region
+  carries its corner shape: workspace surfaces are squircles where the browser
+  supports `corner-shape`, while the command bar dialog is circular. Layout,
+  theme and Zen changes, and the command bar opening, resizing or closing,
+  queue a new measurement for the next canvas frame.
 - Android: `Modifier.glass(shape, color)` draws the fill and registers its
   surface-pixel bounds and radii. `CanvasHost` sends all regions once per layout
   pass through `Native.glassRegions`.
@@ -240,7 +249,13 @@ strokes held the glass:
 - The GTK canvas subsurface is desynchronized from GTK, so while a panel moves
   its blur follows about one frame behind. Web and Android place glass in the
   canvas frame that follows the layout.
-- Popovers, menus and tooltips are separate surfaces and stay opaque.
+- Popovers, menus and tooltips are separate surfaces and stay opaque. The
+  command bar is the exception. On GTK its popup and the canvas are separate
+  surfaces, so when the result count changes its size, the blur can trail the
+  new edge by a frame. The blur appears at full strength while the bar's
+  entrance fades in.
+- The command bar blurs only the canvas. Over a panel, as on narrow windows,
+  the panel's content shows faintly through it, as with drawers.
 - The blur only reaches the canvas. A drawer that opens over another panel,
   such as the Paint tool drawer over the Tool Set column, is translucent over
   that panel too, so its content shows faintly through the drawer on every
@@ -283,6 +298,11 @@ bash tools/performance/workspace-motion.sh web --preferences
 cargo test --locked -p layer-windows --lib glass
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-transparency.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe
 ```
+
+`native_command_bar_glass` (see [command search](command-search.md)) and the
+Web `--command-bar` test check the command bar at each level in both themes.
+Inside the bar, stripes painted behind it must be blurred and tinted; after the
+bar shrinks or closes, the freed area must show them sharp again.
 
 The capture test paints bands across the window and captures the Paint, Sketch
 (header drawer) and Photo (column drawer) workspaces and Preferences.

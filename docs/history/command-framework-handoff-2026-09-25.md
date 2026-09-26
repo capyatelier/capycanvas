@@ -2,6 +2,15 @@
 
 Date: 2026-09-25. Implementation checkpoint: `a7d6f28a`, pushed to `main`.
 
+**Status update, later on 2026-09-25:** the command bar and catalog follow-ups
+below are complete. The missing "panel transparency" was the bar using the
+opaque popup color with no blur. The bar is now panel glass on GTK, Web and
+Android. Menus stay opaque, at the user's direction. Web and Android show the
+shared footer and placement. Stage A's coverage ledger, identities and
+unavailable reasons are closed; see [command search](../ui/command-search.md)
+and audit §7.5. What remains is the keybinding project (stages C–F) and the
+Apple and Windows bars. The rest of this document is the original handoff.
+
 The shared catalog and command bars are implemented on GTK, Web and Android.
 The broader contextual shortcut, held-action, gesture, device and compatibility
 preset project is unfinished. The latest user report is that panel transparency

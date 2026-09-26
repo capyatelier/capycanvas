@@ -8,9 +8,13 @@ or tool engine. The implementation follows the
 ## Shared boundary
 
 `command_catalog.rs` adapts live application menus, supported `CommandId`s,
-brush resources, tool families, tool choices, current tool parameter schemas,
-and basic color operations. The catalog also describes held pan; held entries
-are binding targets and are excluded from executable search results.
+tool families, brush resources and brush sets, and every ruler, shape, auto
+select, fill and gradient variant. It also adapts the current tool's choices
+(such as picker source and sample size) and numeric settings, the active
+layer's properties, every managed workspace, the paint color slots and quick
+colors. Layer properties become numeric, choice and toggle entries, such as
+Layer opacity and Layer blend mode. The catalog also describes held pan; held
+entries are binding targets and are excluded from executable search results.
 
 Commands use existing snake-case wire identities. Nested action identities
 include their typed arguments. Active-layer adapters omit transient layer IDs
@@ -18,6 +22,20 @@ and the next value of boolean toggles; invocation resolves a fresh menu model
 against the current editing target. Resource and saved-selection choices retain
 their resource IDs. Labels and Rust `Debug` formatting are not identities.
 The explicit legacy shortcut ID mapping preserves existing v1 preferences.
+Menu items that repeat an active-layer command, such as the Layer menu's Clear,
+Delete, Rasterize Source and Repair Source Profile, share that command's ID.
+The managed Restore Starting Layout item likewise shares the Reset Layout
+command's ID, so each operation appears once. Layer property and
+selection-coverage IDs omit the active layer, as other active-layer actions do.
+The commands that the View menu leaves to the Proof panel are omitted in the
+same way.
+
+Every unavailable entry carries a specific reason. Commands use the same gates
+as dispatch: document, snapshot, workspace and canvas idleness, selection and
+mask targets, locks, transform state, proofing, HDR and zoom limits. Menu
+actions report layer grouping and deletion errors, missing selections or masks,
+filters while editing a mask, and locked layers. The generic "Unavailable in
+the current tool or edit target" text remains only a fallback.
 
 `ExecuteCommand` accepts only an ID found in a newly evaluated catalog. It
 cannot execute arbitrary serialized internal events. Search invocation also
@@ -39,15 +57,26 @@ reservation rules filter out Primary+Shift+P on Web.
 The shared search model owns ranking, eight-result limits, five recent choices,
 selection, disabled reasons and numeric entry. Hosts own text/IME, focus,
 accessibility, popup capture and animation. A result contains its name, one
-effective shortcut and optional checked state. The footer shows the selected
-result's unavailability explanation or contextual guidance. GTK shows the shared
-catalog's concise behavior/scope description, falling back to the menu location
-when one exists. Tool settings show their name, current value and hard input
-range, formatted by the shared numeric schema. The single footer line prioritizes
-errors and unavailable reasons; it does not repeat basic keyboard navigation.
-The GTK popup opens one-fifth down the workspace (48–192px),
-anchored independently of result count. Escape returns from parameter entry
-to the query, then dismisses. Reopening starts with an empty query.
+effective shortcut and optional checked state. `CommandSearchView::detail` is
+the complete footer line and every host shows it verbatim. It holds the error or
+unavailable reason when there is one. Otherwise it holds the selected command's
+concise behavior or scope description, falling back to its menu location.
+Numeric entries show their name, current value and hard input range, formatted
+by the shared numeric schema. The footer never repeats basic keyboard
+navigation.
+
+`CommandSearchStyle` also carries the 12px corner radius and the placement
+rule: the bar opens one-fifth down the visible workspace, clamped to 48–192px
+(`CommandSearchStyle::top`), anchored independently of the result count. Web
+and Android apply it to the height left visible by the on-screen keyboard;
+their compact layouts (below 600px/dp wide) keep a 16px edge margin. Escape
+returns from parameter entry to the query, then dismisses. Reopening starts
+with an empty query.
+
+The bar is panel glass on every host, as described in
+[panel transparency](panel-transparency.md): its body uses the panel glass fill
+and publishes its bounds, so the presenter blurs the artwork behind it. The
+search field stays opaque. Menus, popovers and tooltips remain opaque.
 
 Hosts retain the meaningful editor focus before opening. Palette focus routes
 Undo/Redo to color reorder history; the search entry taking focus cannot switch
@@ -60,7 +89,10 @@ delegate to dispatch for forms and operations whose outcome determines history.
 Search builds an index when opened and performs no I/O or thumbnail work while
 typing. `COMMAND_SEARCH` changes leave workspace model/content revisions alone.
 GTK updates only the popup for these changes; opening and closing use native
-popover behavior and motion preferences. Web uses a search-only Wasm publication
+popover behavior and motion preferences. The popup is its own Wayland surface,
+so the workspace publishes its body as an extra glass region from the popup's
+position whenever the popup's layout changes, and removes it when the popup
+unmaps. Web uses a search-only Wasm publication
 and retains workspace DOM controls. Its native modal dialog supports IME,
 combobox/listbox accessibility, reduced motion and visual-viewport sizing.
 Outside-dismissal contacts must not reach the canvas. Closing restores the
@@ -89,22 +121,33 @@ events cannot discard the parameter step.
 
 ## Coverage and subsequent input work
 
-| Surface | Route |
+| Source | Route |
 | --- | --- |
-| Supported command IDs | Live command flags and ordinary dispatch; retired tonal IDs excluded |
-| File/Edit/Layer/Select/Filter/View/Window/Help actions | Existing live menu providers, including active-layer and resource adapters |
-| Brushes and tool-family cycling | Resource choices and ordinary tool dispatch |
+| Supported command IDs | Live command flags and ordinary dispatch; retired tonal IDs and Proof-panel-owned proofing commands excluded |
+| File/Edit/Layer/Select/Filter/View/Window/Help actions | Existing live menu providers, including active-layer, saved-selection and effect resources |
+| Tools, brushes, brush sets and tool variants | Tool families, brush resources, brush sets, rulers, shapes, auto select/fill sources and gradients; current tool choices |
 | Current tool numeric settings | Shared schema and a value-entry step |
+| Active layer properties | Numeric properties as value entries; choices and toggles as entries; one history step each |
+| Workspaces | Every managed workspace, beyond the Window menu's first five |
+| Colors | Paint slots, swap and quick colors |
 | Held pan | Cataloged as held; existing input lifecycle remains authoritative |
 | Focused palette Undo/Redo | Shared palette history, with origin focus retained through search |
 | Native text editing and drawing-tab focus actions | Existing native focus owners; general focus-context bindings require the resolver stage |
 | Complex forms, file pickers and confirmations | Existing native dialogs and host requests |
-| Measurements, restore/completion messages, raw pen samples | Private transport; never independently cataloged as commands |
+| Rows, tiles and palettes other than the active target | Their context menus; they need an explicit target, not the active one |
+| Panel-local controls | Slider bookmarks, per-setting reset, color panel presentation, color/curve/gradient editors; each owns its gesture |
+| Toolbar and title-bar editing | Customization surfaces and their context menus |
+| Proof panel controls | Host-routed proof actions, as the View menu defers to them |
+| Next/previous drawing, drawing tab order, close window | Host-owned multi-document and window lifecycle; Drawings and Close Drawing are cataloged commands |
+| Brush size presets | Covered by the Brush size value entry; `size.N` bindings remain shortcuts |
+| Custom shortcut actions | Shortcut-only; search shows their binding on the matching catalog entry, never arbitrary serialized actions |
+| Measurements, drag/drop phases, restore/completion messages, raw pen samples | Private transport; never independently cataloged as commands |
 
 The general context resolver, tokenized held/continuous overrides, device
 adapters and compatibility presets remain the later C–F stages in the
 investigation. The command bar does not create Bluetooth support or reproduce
-other editors' held-modifier behavior by itself.
+other editors' held-modifier behavior by itself. The bar is implemented on GTK,
+Web and Android; Apple and Windows presentation is separate follow-up work.
 
 ## Reproducible checks
 
@@ -118,6 +161,15 @@ LAYER_TEST_ARTIFACTS=/tmp/command-search bash tools/performance/workspace-motion
 The GTK test uses an isolated compositor, real key delivery, light/dark popup
 captures, numeric entry, repeated opening, disabled actions and outside-contact
 dismissal. Native artifacts are written to the test runner's temporary directory.
+`native_command_bar_glass` paints sharp stripes behind the bar and checks
+compositor captures at Off, Low, Medium and High in both themes. Inside the bar
+the stripes must be blurred and tinted by the glass fill, and Off must be
+opaque. Where a shrinking bar or a closed bar used to be, they must be sharp:
+
+```sh
+LAYER_NATIVE_CAPTURE_DIR=/tmp/command-bar-glass \
+  bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_glass --native-storage
+```
 The Web test additionally checks native keyboard focus, ARIA selection, touch
 activation at narrow width, retained workspace DOM and query-to-frame latency.
 

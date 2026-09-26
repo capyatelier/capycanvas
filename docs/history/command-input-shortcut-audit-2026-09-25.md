@@ -1452,6 +1452,31 @@ scanout benchmarks. General held overrides, raw device protocols and compatibili
 presets remain stages C–F; the three command-bar hosts do not imply those later
 input features are implemented.
 
+### 7.5 Implementation checkpoint: catalog convergence and command bar glass
+
+Stage A's coverage gaps from §5.1 and §7.1 are closed or named. Search now
+reaches every ruler, shape, auto select, fill and gradient variant, the current
+tool's choices, brush sets, the active layer's properties, every managed
+workspace and the paint slots. Duplicate menu routes to active-layer commands
+share the command identity. [Command search](../ui/command-search.md) records
+the complete route and exception ledger, including object-targeted context
+menus, panel-local controls, Proof panel controls, host-owned drawing tabs,
+brush size presets and custom shortcut actions. Unavailable entries use the
+same gates as dispatch to explain themselves. The generic reason remains
+only as a fallback.
+
+The bar is panel glass on GTK, Web and Android, and all three show the shared
+footer line and one-fifth placement. Compositor and page-capture tests on GTK
+and Web paint sharp stripes behind the bar at every transparency level. They
+check blur and tint inside the bar and sharp artwork after it shrinks or
+closes. Warm timings stayed within their earlier ranges: GTK 10.9ms
+open-to-paint and 19.0ms query-to-paint p95, and Web 16.8–19.0ms to two
+animation frames. On the Huion, back-to-back synthetic queries measured about
+34ms query-to-draw p95 against about 26ms before glass. When the result count
+changes the card's height, the blur region changes and the presenter
+re-renders it before the next dispatch. Typed keystrokes arrive after that
+frame. The Apple and Windows presentations, and stages C–F, remain future work.
+
 ## 8. Research limitations and maintenance
 
 This checkpoint inspected shared code and all six host input paths; it did not
