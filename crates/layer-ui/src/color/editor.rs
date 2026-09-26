@@ -150,9 +150,7 @@ impl ColorEditor {
                 .to_string(),
         ];
         if self.model == ColorInputModel::SrgbHex {
-            let rgb = self.definition.encoded_in(RgbSpace::Srgb).unwrap();
-            let rgb = rgb.map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
-            self.fields[0] = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+            self.fields[0] = ColorLibrary::hex_preview(self.definition);
             self.fields[1].clear();
             self.fields[2].clear();
         }

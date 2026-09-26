@@ -114,24 +114,28 @@ impl FigureShape {
                     y: end.y,
                 },
             ],
-            Self::Ellipse => {
-                let radii = [(end.x - start.x) * 0.5, (end.y - start.y) * 0.5];
-                let n = (std::f32::consts::PI
-                    * (radii[0].abs().max(radii[1].abs()) * zoom / 0.25).sqrt())
-                .ceil()
-                .clamp(16., 512.) as usize;
-                (0..n)
-                    .map(|i| {
-                        let a = i as f32 / n as f32 * std::f32::consts::TAU;
-                        Point {
-                            x: (start.x + end.x) * 0.5 + radii[0] * a.cos(),
-                            y: (start.y + end.y) * 0.5 + radii[1] * a.sin(),
-                        }
-                    })
-                    .collect()
-            }
+            Self::Ellipse => ellipse_outline(start, end, zoom, 512),
         }
     }
+}
+
+/// Quarter-pixel sagitta at `zoom`; a multiple of four keeps the exact
+/// horizontal and vertical extrema.
+pub fn ellipse_outline(start: Point, end: Point, zoom: f32, max: usize) -> Vec<Point> {
+    let radii = [(end.x - start.x) * 0.5, (end.y - start.y) * 0.5];
+    let steps = ((std::f32::consts::PI * (radii[0].abs().max(radii[1].abs()) * zoom / 0.25).sqrt())
+        .ceil() as usize)
+        .clamp(16, max)
+        .next_multiple_of(4);
+    (0..steps)
+        .map(|i| {
+            let angle = i as f32 / steps as f32 * std::f32::consts::TAU;
+            Point {
+                x: (start.x + end.x) * 0.5 + radii[0] * angle.cos(),
+                y: (start.y + end.y) * 0.5 + radii[1] * angle.sin(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -219,6 +223,7 @@ mod tests {
                     );
                     let guide = shape.guide(start, end, 1.);
                     assert!(guide.len() >= 4 && guide.len() <= 512);
+                    assert_eq!(guide.len() % 4, 0);
                     assert!(guide.iter().all(|p| p.x >= start.x.min(end.x)
                         && p.x <= start.x.max(end.x)
                         && p.y >= start.y.min(end.y)

@@ -441,11 +441,7 @@ impl ProfilePicker {
                                 ..
                             }) = &document
                             {
-                                let key = glib::compute_checksum_for_data(
-                                    glib::ChecksumType::Sha256,
-                                    bytes,
-                                )
-                                .unwrap();
+                                let key = layer_ui::profile_library::profile_identity(bytes);
                                 if let Ok(entries) = &mut entries {
                                     entries.retain(|entry| {
                                         entry.path.file_stem().and_then(|s| s.to_str())
@@ -460,11 +456,7 @@ impl ProfilePicker {
                                 let ColorProfile::Icc(bytes) = &p.profile else {
                                     return false;
                                 };
-                                let key = glib::compute_checksum_for_data(
-                                    glib::ChecksumType::Sha256,
-                                    bytes,
-                                )
-                                .unwrap();
+                                let key = layer_ui::profile_library::profile_identity(bytes);
                                 !entries.as_ref().is_ok_and(|entries| {
                                     entries.iter().any(|entry| {
                                         entry.issue.is_none()

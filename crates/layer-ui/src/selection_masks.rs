@@ -219,6 +219,21 @@ impl SelectionMasks {
     }
 }
 
+fn load_selection_items(id: u64) -> Vec<ContextMenuItem> {
+    [
+        ("Load Selection", SelectionMode::New, false),
+        ("Add to Selection", SelectionMode::Add, false),
+        ("Subtract from Selection", SelectionMode::Subtract, false),
+        ("Intersect with Selection", SelectionMode::Intersect, false),
+        ("Load Inverted Selection", SelectionMode::New, true),
+    ]
+    .into_iter()
+    .map(|(label, mode, inverted)| {
+        ContextMenuItem::command(label, UiAction::Selection { action: SelectionAction::LoadLayer { id, mode, inverted } })
+    })
+    .collect()
+}
+
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn selection_menu(&self, kind: SelectionMenu) -> ContextMenu {
         match kind {
@@ -296,34 +311,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.enabled = enabled;
             item
         };
-        let mut uses: Vec<_> = [
-            ("Load Selection", SelectionMode::New),
-            ("Add to Selection", SelectionMode::Add),
-            ("Subtract from Selection", SelectionMode::Subtract),
-            ("Intersect with Selection", SelectionMode::Intersect),
-        ]
-        .into_iter()
-        .map(|(label, mode)| {
-            action(
-                label,
-                SelectionAction::LoadLayer {
-                    id: id.0,
-                    mode,
-                    inverted: false,
-                },
-                true,
-            )
-        })
-        .collect();
-        uses.push(action(
-            "Load Inverted Selection",
-            SelectionAction::LoadLayer {
-                id: id.0,
-                mode: SelectionMode::New,
-                inverted: true,
-            },
-            true,
-        ));
         let roots = doc.layer_roots(&self.layer_interaction.selected);
         let multiple = roots.len() > 1 && self.layer_interaction.selected.contains(&id);
         let mut organize_items = vec![
@@ -434,7 +421,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(ContextMenu {
             title: layer.name.to_string(),
             sections: vec![
-                vec![ContextMenuItem::submenu("Load Selection", vec![uses])],
+                vec![ContextMenuItem::submenu("Load Selection", vec![load_selection_items(id.0)])],
                 vec![ContextMenuItem::submenu(
                     "Modify",
                     vec![
@@ -539,32 +526,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .iter()
             .filter(|l| l.kind == LayerKind::Selection)
             .map(|l| {
-                ContextMenuItem::submenu(
-                    &self.saved_selection_label(l),
-                    vec![
-                        [
-                            ("Load Selection", SelectionMode::New, false),
-                            ("Add to Selection", SelectionMode::Add, false),
-                            ("Subtract from Selection", SelectionMode::Subtract, false),
-                            ("Intersect with Selection", SelectionMode::Intersect, false),
-                            ("Load Inverted Selection", SelectionMode::New, true),
-                        ]
-                        .into_iter()
-                        .map(|(label, mode, inverted)| {
-                            ContextMenuItem::command(
-                                label,
-                                UiAction::Selection {
-                                    action: SelectionAction::LoadLayer {
-                                        id: l.id.0,
-                                        mode,
-                                        inverted,
-                                    },
-                                },
-                            )
-                        })
-                        .collect(),
-                    ],
-                )
+                ContextMenuItem::submenu(&self.saved_selection_label(l), vec![load_selection_items(l.id.0)])
             })
             .collect()
     }

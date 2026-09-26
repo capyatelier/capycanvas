@@ -68,14 +68,6 @@ fn repair_edit(
 impl<R: CanvasRenderer> UiSession<R> {
     /// Validate total source ownership against the same limits as native Save,
     /// and ensure both directions fit history, before allocating a live ID.
-    pub(super) fn source_edit_candidate(
-        &self,
-        edit: &Edit,
-        allocated: Option<LayerId>,
-        limits: layer_core::ProjectLimits,
-    ) -> Result<Project, String> {
-        self.source_edit_candidates(edit, allocated.as_slice(), limits)
-    }
     pub(super) fn source_edit_candidates(
         &self,
         edit: &Edit,
@@ -102,12 +94,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 l.kind == LayerKind::Paint && l.source.as_ref().is_some_and(|s| s.is_original())
             })
     }
-    pub(super) fn request_source_repair(&mut self, id: LayerId) -> Result<(), String> {
+    pub(super) fn request_source_edit(&mut self, id: LayerId, request: DocumentRequest) -> Result<(), String> {
         if !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());
         }
-        self.request_document(DocumentRequest::RepairSourceProfile { layer: id.0 })?;
-        Ok(())
+        self.request_document(request)
     }
     fn validate_source_repair(
         &self,
@@ -140,6 +131,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(layer.clone())
     }
+    fn repair_plan(&self, id: LayerId, layer: Layer, corrected: SourceImage) -> (Edit, LayerId, Option<LayerId>) {
+        let document = self.engine.document();
+        let index = document.layers.iter().position(|l| l.id == id).unwrap();
+        let allocated = baked(&layer).then(|| document.next_layer_id());
+        let (edit, result) = repair_edit(layer, corrected, index, allocated.unwrap_or(id));
+        (edit, result, allocated)
+    }
     /// Prepare the complete candidate stack with the same edit used by Apply.
     /// The cloned document owns provisional IDs; no live history/counter changes.
     pub fn preview_layer_source(
@@ -149,28 +147,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         corrected: SourceImage,
     ) -> Result<Project, String> {
         let layer = self.validate_source_repair(id, original, &corrected)?;
-        if corrected != **original {
-            let index = self
-                .engine
-                .document()
-                .layers
-                .iter()
-                .position(|l| l.id == id)
-                .unwrap();
-            let allocated = baked(&layer);
-            let next = if allocated {
-                self.engine.document().next_layer_id()
-            } else {
-                id
-            };
-            let edit = repair_edit(layer, corrected, index, next).0;
-            return self.source_edit_candidate(
-                &edit,
-                allocated.then_some(next),
-                Default::default(),
-            );
+        if corrected == **original {
+            return self.capture_project_recovery();
         }
-        self.capture_project_recovery()
+        let (edit, _, allocated) = self.repair_plan(id, layer, corrected);
+        self.source_edit_candidates(&edit, allocated.as_slice(), Default::default())
     }
     /// The host validates interpretation with its source CMM before publishing.
     /// Original sample tiles remain shared with the captured source.
@@ -184,22 +165,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if corrected == **original {
             return Ok(id);
         }
-        let index = self
-            .engine
-            .document()
-            .layers
-            .iter()
-            .position(|l| l.id == id)
-            .unwrap();
-        let allocated = baked(&layer);
-        let next = if allocated {
-            self.engine.document().next_layer_id()
-        } else {
-            id
-        };
-        let (edit, result) = repair_edit(layer, corrected, index, next);
-        self.source_edit_candidate(&edit, allocated.then_some(next), Default::default())?;
-        if allocated {
+        let (edit, result, allocated) = self.repair_plan(id, layer, corrected);
+        self.source_edit_candidates(&edit, allocated.as_slice(), Default::default())?;
+        if let Some(next) = allocated {
             let allocated = self.engine.allocate_layer_id();
             debug_assert_eq!(allocated, next);
         }
@@ -212,13 +180,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn request_source_rasterize(&mut self, id: LayerId) -> Result<(), String> {
-        if !self.can_edit_original(id) {
-            return Err("Select an unlocked retained image layer".into());
-        }
-        self.request_document(DocumentRequest::RasterizeSource { layer: id.0 })?;
-        Ok(())
-    }
     fn rasterized_layer(
         &self,
         id: LayerId,
@@ -255,11 +216,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         converted: Arc<SourceImage>,
     ) -> Result<Project, String> {
         let layer = self.rasterized_layer(id, original, converted)?;
-        self.source_edit_candidate(
-            &Edit::ReplaceLayer(Box::new(layer)),
-            None,
-            Default::default(),
-        )
+        self.source_edit_candidates(&Edit::ReplaceLayer(Box::new(layer)), &[], Default::default())
     }
     pub fn apply_rasterized_source(
         &mut self,
@@ -269,7 +226,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         let layer = self.rasterized_layer(id, original, converted)?;
         let edit = Edit::ReplaceLayer(Box::new(layer));
-        self.source_edit_candidate(&edit, None, Default::default())?;
+        self.source_edit_candidates(&edit, &[], Default::default())?;
         self.engine.apply_edit(edit).map_err(error)?;
         self.refresh_document();
         self.refresh_commands();

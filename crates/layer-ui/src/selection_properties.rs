@@ -10,53 +10,43 @@ pub(super) fn properties(
     enabled: bool,
 ) -> LayerPropertiesView {
     let defaults = SelectionMaskProperties::default();
-    let mut controls = Vec::new();
-    let mut add = |key: &str, label: &str, kind, value, default| {
-        controls.push(PropertyControl {
-            plot: Vec::new(),
-            key: key.into(),
-            label: label.into(),
-            section: None,
-            kind,
-            modified: value != default,
-            value,
-            default,
-            color_action: None,
-        })
-    };
-    add(
-        "mask_mode",
-        "Mode",
-        PropertyKind::Choice {
-            options: ["Paint selection", "Grayscale mask"]
-                .map(std::sync::Arc::from)
-                .into(),
+    let controls = vec![
+        PropertyControl::new(
+            "mask_mode",
+            "Mode",
+            PropertyKind::Choice {
+                options: ["Paint selection", "Grayscale mask"]
+                    .map(std::sync::Arc::from)
+                    .into(),
+            },
+            EffectValue::Choice(u32::from(painting == SelectionPaintBehavior::BlackWhite)),
+            EffectValue::Choice(0),
+        ),
+        PropertyControl {
+            color_action: Some(UiAction::Effect {
+                action: EffectAction::UseCurrentColor {
+                    layer: id,
+                    key: "mask_color".into(),
+                },
+            }),
+            ..PropertyControl::new(
+                "mask_color",
+                "Overlay color",
+                PropertyKind::Color,
+                EffectValue::Color(p.color),
+                EffectValue::Color(defaults.color),
+            )
         },
-        EffectValue::Choice(u32::from(painting == SelectionPaintBehavior::BlackWhite)),
-        EffectValue::Choice(0),
-    );
-    add(
-        "mask_color",
-        "Overlay color",
-        PropertyKind::Color,
-        EffectValue::Color(p.color),
-        EffectValue::Color(defaults.color),
-    );
-    add(
-        "mask_opacity",
-        "Overlay opacity",
-        PropertyKind::Number {
-            numeric: NumericControl::percent(),
-        },
-        EffectValue::Number(p.opacity),
-        EffectValue::Number(defaults.opacity),
-    );
-    controls[1].color_action = Some(UiAction::Effect {
-        action: EffectAction::UseCurrentColor {
-            layer: id,
-            key: "mask_color".into(),
-        },
-    });
+        PropertyControl::new(
+            "mask_opacity",
+            "Overlay opacity",
+            PropertyKind::Number {
+                numeric: NumericControl::percent(),
+            },
+            EffectValue::Number(p.opacity),
+            EffectValue::Number(defaults.opacity),
+        ),
+    ];
     LayerPropertiesView {
         layer: Some(id),
         title: title.into(),
@@ -122,29 +112,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             let mut p = self.mask_properties();
             let view = properties(id, "", &p, self.state.settings.selection_painting, true);
-            let field = view
-                .controls
-                .iter()
-                .find(|c| c.key == *key)
-                .ok_or("Unknown mask property")?;
-            let value = match action {
-                EffectAction::Set { value, .. } => value.clone(),
-                EffectAction::Reset { .. } => field.default.clone(),
-                EffectAction::UseCurrentColor { .. } => {
-                    EffectValue::Color(self.selection_masks.colors.definition())
-                }
-                EffectAction::Number { operation, .. } => {
-                    let (PropertyKind::Number { numeric }, EffectValue::Number(value)) =
-                        (&field.kind, &field.value)
-                    else {
-                        return Err("Not a number".into());
-                    };
-                    EffectValue::Number(
-                        numeric.resolve(*value as f64, operation.clone())?.value as f32,
-                    )
-                }
-                _ => unreachable!(),
-            };
+            let value = super::effects::property_value(&view, key, action, self.selection_masks.colors.definition())?;
             match (key.as_str(), value) {
                 ("mask_mode", EffectValue::Choice(v @ 0..=1)) => {
                     self.state.settings.selection_painting = if v == 0 {

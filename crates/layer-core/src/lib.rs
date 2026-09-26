@@ -32,7 +32,7 @@ pub use effects::*;
 mod presets;
 pub use layers::*;
 mod figures;
-pub use figures::{Figure, FigurePaint, FigureShape};
+pub use figures::{Figure, FigurePaint, FigureShape, ellipse_outline};
 mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;

@@ -307,6 +307,41 @@ pub struct PropertyControl {
     /// Optional shortcut alongside a color editor, supplied by shared policy.
     pub color_action: Option<UiAction>,
 }
+impl PropertyControl {
+    pub(super) fn new(key: &str, label: &str, kind: PropertyKind, value: EffectValue, default: EffectValue) -> Self {
+        Self {
+            plot: Vec::new(),
+            key: key.into(),
+            label: label.into(),
+            section: None,
+            kind,
+            modified: value != default,
+            value,
+            default,
+            color_action: None,
+        }
+    }
+}
+pub(super) fn property_value(
+    view: &LayerPropertiesView,
+    key: &str,
+    action: &EffectAction,
+    color: layer_core::color::RgbColor,
+) -> Result<EffectValue, String> {
+    let control = view.controls.iter().find(|c| c.key == key).ok_or("Unknown property")?;
+    Ok(match action {
+        EffectAction::Set { value, .. } => value.clone(),
+        EffectAction::Reset { .. } => control.default.clone(),
+        EffectAction::UseCurrentColor { .. } => EffectValue::Color(color),
+        EffectAction::Number { operation, .. } => {
+            let (PropertyKind::Number { numeric }, EffectValue::Number(value)) = (&control.kind, &control.value) else {
+                return Err("Not a numeric property".into());
+            };
+            EffectValue::Number(numeric.resolve(*value as f64, operation.clone())?.value as f32)
+        }
+        _ => return Err("Not a property edit".into()),
+    })
+}
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PropertyKind {
@@ -347,26 +382,20 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
         EffectParameterKind::Curve => PropertyKind::Curve,
         EffectParameterKind::Gradient => PropertyKind::Gradient,
     };
-    let modified = value != p.default;
+    let plot = if let EffectValue::Curve(points) = &value {
+        (0..=128)
+            .map(|i| {
+                let x = i as f32 / 128.;
+                [x, layer_core::curve_value(points, x)]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     PropertyControl {
-        plot: if let EffectValue::Curve(points) = &value {
-            (0..=128)
-                .map(|i| {
-                    let x = i as f32 / 128.;
-                    [x, layer_core::curve_value(points, x)]
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
-        key: p.key.to_string(),
-        label: p.label.to_string(),
+        plot,
         section: p.section.as_ref().map(ToString::to_string),
-        kind,
-        value,
-        default: p.default.clone(),
-        modified,
-        color_action: None,
+        ..PropertyControl::new(&p.key, &p.label, kind, value, p.default.clone())
     }
 }
 /// Extend only the bundled linear algorithms, whose math is independent of
@@ -423,46 +452,21 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     } else if layer.kind == LayerKind::Background {
         let paper = layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE);
         controls.push(PropertyControl {
-            plot: Vec::new(), key: "paper_color".into(), label: "Paper color".into(),
-            section: None, kind: PropertyKind::Color,
-            value: EffectValue::Color(paper),
-            default: EffectValue::Color(layer_core::color::RgbColor::WHITE),
-            modified: paper != layer_core::color::RgbColor::WHITE,
             color_action: Some(UiAction::Effect { action: EffectAction::UseCurrentColor {
                 layer: layer.id.0, key: "paper_color".into(),
             } }),
+            ..PropertyControl::new("paper_color", "Paper color", PropertyKind::Color,
+                EffectValue::Color(paper), EffectValue::Color(layer_core::color::RgbColor::WHITE))
         });
         String::new()
     } else {
         let mut numeric = NumericControl::percent();
         numeric.default_value = Some(1.);
-        controls.push(PropertyControl {
-            plot: Vec::new(),
-            key: "opacity".into(),
-            label: "Opacity".into(),
-            section: None,
-            kind: PropertyKind::Number { numeric },
-            value: EffectValue::Number(layer.opacity),
-            default: EffectValue::Number(1.),
-            modified: layer.opacity != 1.,
-            color_action: None,
-        });
-        controls.push(PropertyControl {
-                plot: Vec::new(),
-                key: "blend".into(),
-                label: "Blend mode".into(),
-                section: None,
-                kind: PropertyKind::Choice {
-                    options: layer_core::LayerBlend::ALL
-                        .iter()
-                        .map(|b| Arc::from(b.label()))
-                        .collect(),
-                },
-                value: EffectValue::Choice(layer.properties.blend as u32),
-                default: EffectValue::Choice(0),
-                modified: layer.properties.blend as u32 != 0,
-                color_action: None,
-            });
+        controls.push(PropertyControl::new("opacity", "Opacity", PropertyKind::Number { numeric },
+            EffectValue::Number(layer.opacity), EffectValue::Number(1.)));
+        let options = layer_core::LayerBlend::ALL.iter().map(|b| Arc::from(b.label())).collect();
+        controls.push(PropertyControl::new("blend", "Blend mode", PropertyKind::Choice { options },
+            EffectValue::Choice(layer.properties.blend as u32), EffectValue::Choice(0)));
         String::new()
     };
     LayerPropertiesView {
@@ -588,6 +592,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    fn effect_parameter(&self, layer: u64, key: &str) -> Result<EffectValue, String> {
+        let layer = self.engine.document().layer(LayerId(layer)).ok_or("Unknown layer")?;
+        let effect = layer.effect.as_ref().ok_or("Not an adjustment")?;
+        effect.value(key).cloned().ok_or_else(|| "Unknown property".into())
+    }
+
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         if let Some(result) = self.mask_property_action(&action) { return result; }
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err("Return to artwork before applying a filter".into());}
@@ -600,10 +610,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.customization.drawer = None;
                 self.state.customization.expanded = None;
             }
-            EffectAction::UseCurrentColor { layer, key } => {
-                return self.effect_action(EffectAction::Set {
-                    layer, key, value: EffectValue::Color(self.state.colors.definition()),
-                });
+            EffectAction::UseCurrentColor { layer, ref key }
+            | EffectAction::Number { layer, ref key, .. }
+            | EffectAction::Reset { layer, ref key } => {
+                let view = properties(self.engine.document(), self.state.settings.selection_painting);
+                if view.layer != Some(layer) {
+                    return Err("Select this layer before editing its properties".into());
+                }
+                let value = property_value(&view, key, &action, self.state.colors.definition())?;
+                return self.effect_action(EffectAction::Set { layer, key: key.clone(), value });
             }
             EffectAction::Gesture { phase, action } => return self.effect_gesture_action(phase, *action),
             EffectAction::GradientStop {
@@ -617,19 +632,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !position.is_finite() {
                     return Err("Invalid gradient position".into());
                 }
-                let l = self
-                    .engine
-                    .document()
-                    .layer(LayerId(layer))
-                    .ok_or("Unknown layer")?;
-                let effect = l.effect.as_ref().ok_or("Not an adjustment")?;
-                let i = effect
-                    .program
-                    .parameters
-                    .iter()
-                    .position(|p| p.key.as_ref() == key)
-                    .ok_or("Unknown gradient")?;
-                let EffectValue::Gradient(mut stops) = effect.values[i].clone() else {
+                let EffectValue::Gradient(mut stops) = self.effect_parameter(layer, &key)? else {
                     return Err("Not a gradient".into());
                 };
                 if let Some(i) = index {
@@ -679,19 +682,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !point.iter().all(|x| x.is_finite()) {
                     return Err("Invalid curve coordinate".into());
                 }
-                let l = self
-                    .engine
-                    .document()
-                    .layer(LayerId(layer))
-                    .ok_or("Unknown layer")?;
-                let effect = l.effect.as_ref().ok_or("Not an adjustment")?;
-                let i = effect
-                    .program
-                    .parameters
-                    .iter()
-                    .position(|p| p.key.as_ref() == key)
-                    .ok_or("Unknown curve")?;
-                let EffectValue::Curve(mut points) = effect.values[i].clone() else {
+                let EffectValue::Curve(mut points) = self.effect_parameter(layer, &key)? else {
                     return Err("Not a curve".into());
                 };
                 let dragging = self.effect_gesture.as_ref().filter(|g| g.original.id.0 == layer && g.key == key);
@@ -774,57 +765,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.customization.expanded = None;
                     self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
                 }
-            }
-            EffectAction::Number {
-                layer,
-                key,
-                operation,
-            } => {
-                let view = properties(self.engine.document(), self.state.settings.selection_painting);
-                if view.layer != Some(layer) {
-                    return Err("Select this layer before editing its properties".into());
-                }
-                let c = view
-                    .controls
-                    .iter()
-                    .find(|c| c.key == key)
-                    .ok_or("Unknown property")?;
-                let (PropertyKind::Number { numeric }, EffectValue::Number(value)) =
-                    (&c.kind, &c.value)
-                else {
-                    return Err("Not a numeric property".into());
-                };
-                let result = numeric.resolve(*value as f64, operation)?;
-                return self.effect_action(EffectAction::Set {
-                    layer,
-                    key,
-                    value: EffectValue::Number(result.value as f32),
-                });
-            }
-            EffectAction::Reset { layer, key } => {
-                let l = self
-                    .engine
-                    .document()
-                    .layer(LayerId(layer))
-                    .ok_or("Unknown layer")?;
-                let value = if let Some(fx) = &l.effect {
-                    fx.program
-                        .parameters
-                        .iter()
-                        .find(|p| p.key.as_ref() == key)
-                        .ok_or("Unknown property")?
-                        .default
-                        .clone()
-                } else if key == "opacity" {
-                    EffectValue::Number(1.)
-                } else if key == "blend" {
-                    EffectValue::Choice(0)
-                } else if key == "paper_color" {
-                    EffectValue::Color(layer_core::color::RgbColor::WHITE)
-                } else {
-                    return Err("Unknown property".into());
-                };
-                return self.effect_action(EffectAction::Set { layer, key, value });
             }
             EffectAction::Set {
                 layer: id,

@@ -45,8 +45,8 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
             let minimum=(-2f32).min(stops.floor()); let limit=if depth==Some(layer_core::color::SampleDepth::F32) {128.} else {65504f32.log2()}; let maximum=6f32.max(stops.ceil()).min(limit);
             let samples=(0..=80).map(|i|{
-                let t=i as f32/80.;let mut p=base.linear_in(document_space)?;let gain=f64::from(minimum+t*(maximum-minimum)).exp2();
-                for c in &mut p[..3]{*c=(f64::from(*c)*gain).clamp(-f64::from(f32::MAX),f64::from(f32::MAX)) as f32;}
+                let t=i as f32/80.;
+                let p=super::hdr_picker::scale_linear(base.linear_in(document_space)?,minimum+t*(maximum-minimum)).map(|c|c.clamp(-f32::MAX,f32::MAX));
                 let color=RgbColor::from_linear(document_space,p)?;
                 Ok(crate::color_management::picker_preview(color,document_space,recipe,headroom)?)
             }).collect::<Result<Vec<_>,String>>()?;

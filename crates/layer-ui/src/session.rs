@@ -3811,12 +3811,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request_document(DocumentRequest::ChangeColor { operation })?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::RasterizeSource => {
-                self.request_source_rasterize(self.engine.document().active_layer)?;
-                Ok((DOCUMENT | HOST, false))
-            }
-            CommandId::RepairSourceProfile => {
-                self.request_source_repair(self.engine.document().active_layer)?;
+            CommandId::RasterizeSource | CommandId::RepairSourceProfile => {
+                let id = self.engine.document().active_layer;
+                self.request_source_edit(id, if command == CommandId::RasterizeSource {
+                    DocumentRequest::RasterizeSource { layer: id.0 }
+                } else {
+                    DocumentRequest::RepairSourceProfile { layer: id.0 }
+                })?;
                 Ok((DOCUMENT | HOST, false))
             }
             CommandId::ImportImage | CommandId::PasteImage => {

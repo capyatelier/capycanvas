@@ -10,25 +10,27 @@ pub(super) struct HdrPaint {
 impl Default for HdrPaint {
     fn default() -> Self { Self { base: RgbColor::BLACK, stops: 0. } }
 }
+pub(super) fn scale_linear(mut color: [f32; 4], stops: f32) -> [f32; 4] {
+    let gain = f64::from(stops).exp2();
+    for v in &mut color[..3] {
+        *v = (f64::from(*v) * gain) as f32;
+    }
+    color
+}
 impl HdrPaint {
     pub fn from_color(color: RgbColor, space: RgbSpace) -> Result<Self, String> {
         let stops = color.brightness_ev(space)?.unwrap_or(0.).max(0.);
         if stops == 0. {
             return Ok(Self { base: color, stops });
         }
-        let mut p = color.linear_in(space)?;
-        for v in &mut p[..3] {
-            *v = (f64::from(*v) / f64::from(stops).exp2()) as f32;
-        }
         Ok(Self {
-            base: RgbColor::from_linear(space, p)?,
+            base: RgbColor::from_linear(space, scale_linear(color.linear_in(space)?, -stops))?,
             stops,
         })
     }
     pub fn at_intensity(color: RgbColor, space: RgbSpace, stops: f32) -> Result<Self, String> {
         Self::validate_stops(stops)?;
-        let mut p = color.linear_in(space)?;
-        for v in &mut p[..3] { *v = (f64::from(*v) / f64::from(stops).exp2()) as f32; }
+        let p = scale_linear(color.linear_in(space)?, -stops);
         Ok(Self { base: if stops == 0. { color } else { RgbColor::from_linear(space, p)? }, stops })
     }
     pub fn validate_stops(stops: f32) -> Result<(), String> {
@@ -38,10 +40,7 @@ impl HdrPaint {
         Ok(())
     }
     pub fn color(self, space: RgbSpace) -> Result<RgbColor, String> {
-        let mut p = self.base.linear_in(space)?;
-        for v in &mut p[..3] {
-            *v = (f64::from(*v) * f64::from(self.stops).exp2()) as f32;
-        }
+        let p = scale_linear(self.base.linear_in(space)?, self.stops);
         layer_core::color::hdr::validate_pixel(layer_core::color::SampleDepth::F32, p).map_err(str::to_string)?;
         RgbColor::from_linear(space, p)
     }
@@ -142,10 +141,7 @@ impl ColorState {
                 if !paint.stops.is_finite() || !(-149. ..=128.).contains(&paint.stops) {
                     return Err("Invalid HDR picker intensity".into());
                 }
-                let mut expected = paint.base.linear_in(actual.space)?;
-                for v in &mut expected[..3] {
-                    *v = (f64::from(*v) * f64::from(paint.stops).exp2()) as f32;
-                }
+                let expected = scale_linear(paint.base.linear_in(actual.space)?, paint.stops);
                 if expected
                     .into_iter()
                     .zip(actual.linear_in(actual.space)?)

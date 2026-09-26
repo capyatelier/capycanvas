@@ -604,15 +604,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         name: &str,
         source: layer_core::color::source::SourceImage,
     ) -> Result<(), String> {
-        self.import_layer_source_with_limits(name, source, Default::default())
-    }
-    pub(super) fn import_layer_source_with_limits(
-        &mut self,
-        name: &str,
-        source: layer_core::color::source::SourceImage,
-        limits: layer_core::ProjectLimits,
-    ) -> Result<(), String> {
-        self.import_sources(vec![(name.into(), source)], limits, false, None, None)
+        self.import_sources(vec![(name.into(), source)], Default::default(), false, None, None)
     }
     /// Prepared photo placement. The supplied center is captured in document
     /// pixels at drop time; menu/clipboard imports default to the canvas center.
@@ -632,7 +624,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         self.import_sources(sources, Default::default(), true, center, destination)
     }
-    fn import_sources(
+    pub(super) fn import_sources(
         &mut self,
         sources: Vec<(String, layer_core::color::source::SourceImage)>,
         limits: layer_core::ProjectLimits,
@@ -782,8 +774,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             action
         };
         match action {
-            LayerAction::RasterizeSource { id } => self.request_source_rasterize(LayerId(id))?,
-            LayerAction::RepairSourceProfile { id } => self.request_source_repair(LayerId(id))?,
+            LayerAction::RasterizeSource { id } => {
+                self.request_source_edit(LayerId(id), DocumentRequest::RasterizeSource { layer: id })?
+            }
+            LayerAction::RepairSourceProfile { id } => {
+                self.request_source_edit(LayerId(id), DocumentRequest::RepairSourceProfile { layer: id })?
+            }
             LayerAction::Visibility { id, value } => self.layer_edit(Edit::SetLayerVisibility {
                 id: LayerId(id),
                 visible: value,

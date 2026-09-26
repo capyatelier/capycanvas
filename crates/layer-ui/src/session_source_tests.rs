@@ -608,27 +608,27 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     let limits = ProjectLimits { asset_bytes: source.resident_bytes() as u64 + 1024, ..Default::default() };
     let mut session = session(Platform::Gtk);
     session.engine.backend_mut().tiled_sources = true;
-    session.import_layer_source_with_limits("First", source.clone(), limits).unwrap();
+    session.import_sources(vec![("First".into(), source.clone())], limits, false, None, None).unwrap();
     session.engine.apply_edit(Edit::SetLayerOpacity { id: session.engine.document().active_layer, opacity: 0.5 }).unwrap();
     session.engine.undo().unwrap();
     let before = session.engine.document().clone();
     let checkpoint = session.engine.checkpoint();
     assert!(session.engine.can_redo());
-    let error = session.import_layer_source_with_limits("Independent allocation", fixture(), limits).unwrap_err();
+    let error = session.import_sources(vec![("Independent allocation".into(), fixture())], limits, false, None, None).unwrap_err();
     assert!(error.contains("memory limit"), "{error}");
     assert_eq!(session.engine.document(), &before);
     assert_eq!(session.engine.checkpoint(), checkpoint);
     assert!(session.engine.can_redo());
     // Identical bytes in a different allocation count twice; shared tile backing
     // counts once even when separate layers own different image-index objects.
-    session.import_layer_source_with_limits("Shared backing", source, limits).unwrap();
+    session.import_sources(vec![("Shared backing".into(), source)], limits, false, None, None).unwrap();
     session.capture_project_recovery().unwrap().pruned().unwrap().validate(limits).unwrap();
     let before = session.engine.document().clone();
     let mut repaired = before.layer(before.active_layer).unwrap().clone();
     let mut source = repaired.source.as_ref().unwrap().as_ref().clone();
     source.interpretation.profile = ColorProfile::Icc(vec![19; 16384].into());
     repaired.source = Some(Arc::new(source));
-    let error = session.source_edit_candidate(&Edit::ReplaceLayer(Box::new(repaired)), None, limits).unwrap_err();
+    let error = session.source_edit_candidates(&Edit::ReplaceLayer(Box::new(repaired)), &[], limits).unwrap_err();
     assert!(error.contains("memory limit"), "{error}");
     assert_eq!(session.engine.document(), &before);
 }

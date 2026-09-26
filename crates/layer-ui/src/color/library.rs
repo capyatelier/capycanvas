@@ -175,14 +175,7 @@ impl ColorLibrary {
                 "Gray"
             }
         } else {
-            let hue = (if max == r {
-                (g - b) / delta
-            } else if max == g {
-                (b - r) / delta + 2.
-            } else {
-                (r - g) / delta + 4.
-            }) * 60.;
-            match hue.rem_euclid(360.) as u32 {
+            match components([r, g, b, 1.], ColorSpace::Hsv, 0.)[0] as u32 {
                 0..=19 | 345..=359 => {
                     if max < 0.65 {
                         "Brick"
@@ -222,17 +215,7 @@ impl ColorLibrary {
             .map(|(_, name)| name.as_str())
     }
     fn unique_name(base: String, names: impl Iterator<Item = String>) -> String {
-        let names: std::collections::BTreeSet<_> = names.map(|n| n.to_lowercase()).collect();
-        if !names.contains(&base.to_lowercase()) {
-            return base;
-        }
-        for suffix in 2.. {
-            let candidate = format!("{} {suffix}", base.chars().take(55).collect::<String>());
-            if !names.contains(&candidate.to_lowercase()) {
-                return candidate;
-            }
-        }
-        unreachable!()
+        UniqueNames { used: names.map(|n| n.to_lowercase()).collect(), ..Default::default() }.claim(base)
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.history.len() > Self::MAX_HISTORY {

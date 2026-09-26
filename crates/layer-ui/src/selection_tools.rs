@@ -98,23 +98,26 @@ impl Default for SelectionOptions {
         }
     }
 }
+fn feather_control() -> NumericControl {
+    NumericControl::number(0., layer_render::SelectionRefinement::MAX_FEATHER as f64, 1., 1).unit("px")
+}
+fn ratio_control() -> NumericControl {
+    NumericControl::number(0.01, 10000., 0.1, 2)
+}
+fn size_control() -> NumericControl {
+    NumericControl::number(1., 131072., 1., 0).unit("px")
+}
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), String> {
         self.tonal.validate()?;
         self.brush.validate()?;
         self.display.validate()?;
-        NumericControl::number(
-            0.,
-            layer_render::SelectionRefinement::MAX_FEATHER as f64,
-            1.,
-            1,
-        )
-        .validate(self.feather, "Feather radius")?;
+        feather_control().validate(self.feather, "Feather radius")?;
         for value in self.ratio {
-            NumericControl::number(0.01, 10000., 0.1, 2).validate(value, "Aspect ratio")?;
+            ratio_control().validate(value, "Aspect ratio")?;
         }
         for value in self.size {
-            NumericControl::number(1., 131072., 1., 0).validate(value, "Selection size")?;
+            size_control().validate(value, "Selection size")?;
             if value.fract() != 0. {
                 return Err("Selection size needs whole pixels".into());
             }
@@ -127,13 +130,7 @@ impl SelectionOptions {
             label: "Feather radius",
             group: "Edges",
             value: self.feather,
-            numeric: NumericControl::number(
-                0.,
-                layer_render::SelectionRefinement::MAX_FEATHER as f64,
-                1.,
-                1,
-            )
-            .unit("px"),
+            numeric: feather_control(),
         }]
     }
     pub fn controls(&self) -> Vec<ToolSetting> {
@@ -143,13 +140,13 @@ impl SelectionOptions {
                 ["selection_ratio_width", "selection_ratio_height"],
                 ["Ratio width", "Ratio height"],
                 self.ratio,
-                NumericControl::number(0.01, 10000., 0.1, 2),
+                ratio_control(),
             ),
             SelectionConstraint::Size => (
                 ["selection_width", "selection_height"],
                 ["Width", "Height"],
                 self.size,
-                NumericControl::number(1., 131072., 1., 0).unit("px"),
+                size_control(),
             ),
         };
         (0..2)
@@ -308,23 +305,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if kind == SelectionTool::Rectangle {
             FigureShape::Rectangle.guide(start, end, 1.)
         } else {
-            let radii = [(end.x - start.x) * 0.5, (end.y - start.y) * 0.5];
-            // Quarter-pixel sagitta even on large images; a multiple of four
-            // retains the exact horizontal/vertical extrema.
-            let steps =
-                ((std::f32::consts::PI * (radii[0].abs().max(radii[1].abs()) / 0.25).sqrt()).ceil()
-                    as usize)
-                    .clamp(16, 4096)
-                    .next_multiple_of(4);
-            (0..steps)
-                .map(|i| {
-                    let angle = i as f32 / steps as f32 * std::f32::consts::TAU;
-                    Point {
-                        x: (start.x + end.x) * 0.5 + radii[0] * angle.cos(),
-                        y: (start.y + end.y) * 0.5 + radii[1] * angle.sin(),
-                    }
-                })
-                .collect()
+            layer_core::ellipse_outline(start, end, 1., 4096)
         }
     }
     pub(super) fn finish_polygon_selection(&mut self) -> Result<(), String> {
