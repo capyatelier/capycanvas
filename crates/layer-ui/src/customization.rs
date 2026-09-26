@@ -306,8 +306,7 @@ impl PanelConfig {
     pub(crate) fn defaults() -> Vec<Self> {
         Panel::ALL
             .into_iter()
-            // Commands is installed by the full editor preset. Existing saved
-            // layouts (including deleted toolbars) must remain unchanged.
+            // Commands is installed by the full editor preset.
             .filter(|id| *id != Panel::Commands)
             .map(|id| Self {
                 id,
@@ -2166,13 +2165,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_workspace_defaults_and_customized_state_roundtrip() {
-        let original = WorkspaceState::default();
-        let mut legacy = serde_json::to_value(&original).unwrap();
-        legacy["layout"].as_object_mut().unwrap().remove("panels");
-        let restored: WorkspaceState = serde_json::from_value(legacy).unwrap();
-        assert_eq!(restored, original);
-        let mut state = original;
+    fn customized_workspace_state_roundtrips_and_reset_docking_keeps_panels() {
+        let mut state = WorkspaceState::default();
         let toolbar = state
             .layout
             .add_toolbar(Some(8), "Painting", &[PEN, ERASE])

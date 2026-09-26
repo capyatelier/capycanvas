@@ -1008,10 +1008,6 @@ pub struct DockLayout {
     pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
-    #[serde(
-        default = "PanelConfig::defaults",
-        deserialize_with = "read_panel_registry"
-    )]
     pub panels: Vec<PanelConfig>,
     pub floating: Vec<FloatingGroup>,
     /// Collapsing preserves the underlying dock tree and its expanded width.
@@ -1040,39 +1036,6 @@ pub use compact_edges::EdgeAlignment;
 
 fn initial_tile_id() -> u32 {
     crate::TOOLBAR_CONTROLS.len() as u32 + 1
-}
-fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Vec<PanelConfig>, D::Error> {
-    let mut panels = Vec::<PanelConfig>::deserialize(d)?;
-    // Newly available built-ins start hidden in saved workspaces. Keep every
-    // existing dock, custom toolbar, tab order and user configuration intact.
-    let defaults = PanelConfig::defaults();
-    for (index, default) in defaults.iter().enumerate() {
-        if matches!(
-            default.id,
-            Panel::Adjustments
-                | Panel::Properties
-                | Panel::Stats
-                | Panel::ToolSettings
-                | Panel::BrushSets
-                | Panel::FilterTypes
-                | Panel::SculptSets
-                | Panel::Tools
-                | Panel::Color
-                | Panel::Palettes
-                | Panel::Navigator
-                | Panel::Proof
-        ) && !panels.iter().any(|p| p.id == default.id)
-        {
-            let at = defaults[index + 1..]
-                .iter()
-                .find_map(|next| panels.iter().position(|p| p.id == next.id))
-                .unwrap_or(panels.len());
-            panels.insert(at, default.clone());
-        }
-    }
-    Ok(panels)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1488,11 +1451,7 @@ impl DockLayout {
             if let Some(existing) = layout.panels.iter_mut().find(|p| p.id == id) {
                 *existing = config;
             } else {
-                // Loading an older registry appends newly available panels.
-                // Match that order so untouched defaults remain recognizable.
-                let index = layout.panels.iter().position(|p|
-                    matches!(p.id, Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::FilterTypes)).unwrap_or(layout.panels.len());
-                layout.panels.insert(index, config);
+                layout.panels.push(config);
             }
         }
         // Earlier bands own corners: side columns extend to the bottom while
