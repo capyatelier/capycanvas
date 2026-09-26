@@ -454,18 +454,6 @@ pub enum BrushGrainBehavior {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
-pub enum DualCombineMode {
-    #[default]
-    Multiply,
-    Add,
-    Subtract,
-    Difference,
-    Min,
-    Max,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[repr(u8)]
 pub enum ColorMixSpace {
     #[default]
     LinearRgb,
@@ -606,17 +594,6 @@ pub struct BrushGrain {
     pub depth: f32,
     pub rotation_radians: f32,
     pub offset_jitter: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct DualBrush {
-    pub tip: BrushTip,
-    pub grain: Option<BrushGrain>,
-    pub combine: DualCombineMode,
-    pub scale: f32,
-    pub aspect: f32,
-    pub angle_radians: f32,
-    pub offset: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -808,7 +785,6 @@ pub struct BrushSnapshot {
     pub taper: BrushTaper,
     pub shape: BrushShape,
     pub grain: Option<BrushGrain>,
-    pub dual: Option<Arc<DualBrush>>,
     pub color_dynamics: BrushColorDynamics,
     pub rendering: BrushRendering,
     pub wet_mix: BrushWetMix,
@@ -839,7 +815,6 @@ impl Default for BrushSnapshot {
             taper: BrushTaper::default(),
             shape: BrushShape::default(),
             grain: None,
-            dual: None,
             color_dynamics: BrushColorDynamics::default(),
             rendering: BrushRendering::default(),
             wet_mix: BrushWetMix::default(),
@@ -1029,24 +1004,6 @@ impl BrushSnapshot {
         }
         if let Some(grain) = &self.grain {
             validate_grain(grain)?;
-        }
-        if let Some(dual) = &self.dual {
-            let values = [
-                dual.scale,
-                dual.aspect,
-                dual.angle_radians,
-                dual.offset[0],
-                dual.offset[1],
-            ];
-            if values.iter().any(|value| !value.is_finite())
-                || !(0.01..=16.0).contains(&dual.scale)
-                || !(0.02..=50.0).contains(&dual.aspect)
-            {
-                return Err(BrushError::InvalidAdvanced);
-            }
-            if let Some(grain) = &dual.grain {
-                validate_grain(grain)?;
-            }
         }
         Ok(())
     }

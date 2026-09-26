@@ -1,7 +1,7 @@
 //! Brush-slider bookmarks and small, on-demand tip previews. The raster is
 //! generated once when an editor opens; motion only changes scale and alpha.
 use crate::*;
-use layer_core::{BrushGrain, BrushGrainBehavior, BrushTip, DualCombineMode};
+use layer_core::{BrushGrain, BrushGrainBehavior, BrushTip};
 use layer_render::{CanvasRenderer, HostImage};
 use serde::{Deserialize, Serialize};
 
@@ -280,38 +280,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let brush = self.engine().configured_brush();
         let renderer = self.engine().backend();
-        let tip = |tip: &BrushTip| -> Result<_, String> {
-            Ok(match tip {
-                BrushTip::AnalyticEllipse => None,
-                BrushTip::Mask(id) => {
-                    Some(renderer.tip_mask(id).ok_or("Brush tip is unavailable")?)
-                }
+        let mask = match &brush.tip {
+            BrushTip::AnalyticEllipse => None,
+            BrushTip::Mask(id) => Some(renderer.tip_mask(id).ok_or("Brush tip is unavailable")?),
+        };
+        let grain_mask = brush
+            .grain
+            .as_ref()
+            .map(|g| {
+                renderer
+                    .tip_mask(&g.asset)
+                    .ok_or("Brush grain is unavailable")
             })
-        };
-        let grain = |grain: &Option<BrushGrain>| -> Result<_, String> {
-            grain
-                .as_ref()
-                .map(|g| {
-                    renderer
-                        .tip_mask(&g.asset)
-                        .ok_or_else(|| "Brush grain is unavailable".to_owned())
-                })
-                .transpose()
-        };
-        let mask = tip(&brush.tip)?;
-        let grain_mask = grain(&brush.grain)?;
-        let dual_mask = brush
-            .dual
-            .as_ref()
-            .map(|d| tip(&d.tip))
-            .transpose()?
-            .flatten();
-        let dual_grain = brush
-            .dual
-            .as_ref()
-            .map(|d| grain(&d.grain))
-            .transpose()?
-            .flatten();
+            .transpose()?;
         let size = 192;
         let extent = (1. / brush.aspect).max(1.);
         let (sin, cos) = brush.angle_radians.sin_cos();
@@ -323,28 +304,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let (u, v) = (x * cos + y * sin, (-x * sin + y * cos) * brush.aspect);
                 let world = [x * brush.diameter * 0.5, y * brush.diameter * 0.5];
                 let primary = coverage(mask, u, v, brush.hardness);
-                let mut value =
+                let value =
                     primary * grain_coverage(brush.grain.as_ref().zip(grain_mask), [u, v], world);
-                if primary > 0.
-                    && let Some(dual) = &brush.dual
-                {
-                    let (sin, cos) = dual.angle_radians.sin_cos();
-                    let (u, v) = (u - dual.offset[0], v - dual.offset[1]);
-                    let (u, v) = (
-                        (u * cos + v * sin) / (dual.scale * dual.aspect),
-                        (-u * sin + v * cos) / dual.scale,
-                    );
-                    let secondary = coverage(dual_mask, u, v, brush.hardness)
-                        * grain_coverage(dual.grain.as_ref().zip(dual_grain), [u, v], world);
-                    value = match dual.combine {
-                        DualCombineMode::Multiply => value * secondary,
-                        DualCombineMode::Add => (value + secondary).min(1.),
-                        DualCombineMode::Subtract => (value - secondary).max(0.),
-                        DualCombineMode::Difference => (value - secondary).abs(),
-                        DualCombineMode::Min => value.min(secondary),
-                        DualCombineMode::Max => value.max(secondary),
-                    };
-                }
                 alpha.push((value * 255.).round() as u8);
             }
         }

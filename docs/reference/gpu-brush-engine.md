@@ -55,7 +55,7 @@ The selected pipeline is prepared before pen-down:
 - dry analytic paint or erase uses an instanced graphics pass and fixed-function
   blending;
 - a single-mask dry brush uses one filtered R8 sample;
-- grain and dual-tip brushes use a separate bounded textured-coverage pipeline;
+- grain brushes use a separate bounded textured-coverage pipeline;
 - a destination-aware step uses a source/destination GPU pass over its affected
   pages.
 
@@ -68,7 +68,7 @@ directly, while watercolor snapshot, deposition, transport, and direct-page
 traversal stay shared. Direct and material target-layout pipelines are stored as
 finite indexed tables rather than independent feature branches. The textured
 direct and material shaders also compose the same `brush_coverage.wgsl`
-functions for tip, grain, and dual-tip coverage.
+functions for tip and grain coverage.
 
 ## Current frame path
 
@@ -285,7 +285,7 @@ simulation code. That persistence format is deliberately deferred.
 Implemented now:
 
 - analytic and R8-mask contact coverage;
-- grain and dual-tip coverage;
+- grain coverage;
 - pressure/dynamics-resolved ordered contacts;
 - premultiplied paint and erase;
 - blend modes, smudge pickup/pull/blur, wet deposition, and Oklab mixing;

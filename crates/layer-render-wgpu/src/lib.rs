@@ -19,7 +19,7 @@ use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
     AssetId, BrushAccumulation, BrushBlendMode, BrushExecution,
-    BrushGrainBehavior, BrushTip, ColorMixSpace, DualCombineMode, Layer, LayerId, LayerKind,
+    BrushGrainBehavior, BrushTip, ColorMixSpace, Layer, LayerId, LayerKind,
     LiquifyMode, PAPER_GRAIN_TEXTURE_ASSET,
     StrokeId, WATERCOLOR_TIP_TEXTURE_ASSET, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
     WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET, WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET,
@@ -525,7 +525,6 @@ impl BrushPassPlan {
             || state.coverage;
         let textured = style.contact.is_some()
             || style.grain.is_some()
-            || style.dual.is_some()
             || style.rendering.alpha_threshold > 0.0
             || style.rendering.wet_edge > 0.0
             || style.rendering.burnt_edge > 0.0;
@@ -777,8 +776,6 @@ struct MaskAsset {
 struct TextureSetKey {
     primary: AssetId,
     grain: AssetId,
-    dual: AssetId,
-    dual_grain: AssetId,
     transport: AssetId,
 }
 
@@ -1567,32 +1564,14 @@ impl WgpuRasterizer {
             .as_ref()
             .map(|grain| grain.asset.clone())
             .unwrap_or_else(|| white.clone());
-        let (dual, dual_grain) = style
-            .dual
-            .as_ref()
-            .map(|dual| {
-                let tip = match &dual.tip {
-                    BrushTip::AnalyticEllipse => white.clone(),
-                    BrushTip::Mask(id) => id.clone(),
-                };
-                let grain = dual
-                    .grain
-                    .as_ref()
-                    .map(|grain| grain.asset.clone())
-                    .unwrap_or_else(|| white.clone());
-                (tip, grain)
-            })
-            .unwrap_or_else(|| (white.clone(), white));
         TextureSetKey {
             primary,
             grain,
-            dual,
-            dual_grain,
             transport: style
                 .transport
                 .as_ref()
                 .map(|transport| transport.conductance.clone())
-                .unwrap_or_else(|| AssetId::from(WHITE_MASK_ASSET)),
+                .unwrap_or(white),
         }
     }
 
@@ -1602,13 +1581,11 @@ impl WgpuRasterizer {
         }
         let primary = &self.mask(&key.primary)?.view;
         let grain = &self.mask(&key.grain)?.view;
-        let dual = &self.mask(&key.dual)?.view;
-        let dual_grain = &self.mask(&key.dual_grain)?.view;
         let transport = &self.mask(&key.transport)?.view;
         let bind_group = create_advanced_texture_bind_group(
             &self.device,
             &self.advanced_texture_layout,
-            [primary, grain, dual, dual_grain, transport],
+            [primary, grain, transport],
             &self.brush_sampler,
         );
         let transport_bind_group = create_texture_bind_group(
@@ -4815,11 +4792,7 @@ struct StyleGpu {
     color: [f32; 4],
     canvas_opacity: [f32; 4],
     grain: [f32; 4],
-    dual: [f32; 4],
-    dual_offset_flags: [f32; 4],
     flags: [f32; 4],
-    dual_grain: [f32; 4],
-    advanced: [f32; 4],
     edges: [f32; 4],
     material_a: [f32; 4],
     material_b: [f32; 4],
@@ -4869,11 +4842,7 @@ impl StyleGpu {
             color,
             canvas_opacity: [extent[0] as f32, extent[1] as f32, opacity, 0.0],
             grain: [0.0; 4],
-            dual: [0.0; 4],
-            dual_offset_flags: [0.0; 4],
             flags: [0.0; 4],
-            dual_grain: [0.0; 4],
-            advanced: [0.0; 4],
             edges: [0.0; 4],
             material_a: [0.0; 4],
             material_b: [0.0; 4],
@@ -4914,15 +4883,7 @@ impl StyleGpu {
     fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32) -> Self {
         let plan = BrushPassPlan::for_style(style);
         let grain = style.grain.as_ref();
-        let dual = style.dual.as_deref();
-        let dual_grain = dual.and_then(|dual| dual.grain.as_ref());
         let (grain_cos, grain_sin) = grain
-            .map(|grain| (grain.rotation_radians.cos(), grain.rotation_radians.sin()))
-            .unwrap_or((1.0, 0.0));
-        let (dual_cos, dual_sin) = dual
-            .map(|dual| (dual.angle_radians.cos(), dual.angle_radians.sin()))
-            .unwrap_or((1.0, 0.0));
-        let (dual_grain_cos, dual_grain_sin) = dual_grain
             .map(|grain| (grain.rotation_radians.cos(), grain.rotation_radians.sin()))
             .unwrap_or((1.0, 0.0));
         let mut result = Self::plain(extent, [0.0; 4], 1.0);
@@ -4938,41 +4899,17 @@ impl StyleGpu {
             grain_cos,
             grain_sin,
         ];
-        result.dual = [
-            dual.map_or(1.0, |dual| dual.scale),
-            dual.map_or(1.0, |dual| dual.aspect),
-            dual_cos,
-            dual_sin,
-        ];
-        result.dual_offset_flags = [
-            dual.map_or(0.0, |dual| dual.offset[0]),
-            dual.map_or(0.0, |dual| dual.offset[1]),
-            dual.map_or(0.0, |dual| dual_combine_code(dual.combine)),
-            style.rendering.alpha_threshold,
-        ];
         result.flags = [
             f32::from(matches!(style.tip, BrushTip::AnalyticEllipse)),
             f32::from(grain.is_some()),
-            f32::from(dual.is_some_and(|dual| matches!(dual.tip, BrushTip::AnalyticEllipse))),
-            f32::from(dual.is_some()),
-        ];
-        result.dual_grain = [
-            dual_grain.map_or(1.0, |grain| grain.scale),
-            dual_grain.map_or(0.0, |grain| grain.depth),
-            dual_grain_cos,
-            dual_grain_sin,
-        ];
-        result.advanced = [
-            f32::from(dual_grain.is_some()),
             f32::from(grain.is_some_and(|grain| grain.behavior == BrushGrainBehavior::Canvas)),
-            f32::from(dual_grain.is_some_and(|grain| grain.behavior == BrushGrainBehavior::Canvas)),
             grain.map_or(0.0, |grain| grain.offset_jitter),
         ];
         result.edges = [
             style.rendering.wet_edge,
             style.rendering.burnt_edge,
             style.rendering.edge_width,
-            dual_grain.map_or(0.0, |grain| grain.offset_jitter),
+            style.rendering.alpha_threshold,
         ];
         result.material_a = [
             style.wet_mix.amount_of_paint,
@@ -5046,17 +4983,6 @@ fn preview_layer_is_frontmost_visible(layer_id: LayerId, layers: &[Layer]) -> bo
         return false;
     };
     layers[index].visible && layers[..index].iter().all(|layer| !layer.visible)
-}
-
-fn dual_combine_code(mode: DualCombineMode) -> f32 {
-    match mode {
-        DualCombineMode::Multiply => 0.0,
-        DualCombineMode::Add => 1.0,
-        DualCombineMode::Subtract => 2.0,
-        DualCombineMode::Difference => 3.0,
-        DualCombineMode::Min => 4.0,
-        DualCombineMode::Max => 5.0,
-    }
 }
 
 fn blend_mode_code(mode: BrushBlendMode) -> f32 {
@@ -5228,12 +5154,12 @@ fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
         },
         count: None,
     };
-    let mut entries = Vec::with_capacity(6);
-    for binding in 0..5 {
+    let mut entries = Vec::with_capacity(4);
+    for binding in 0..3 {
         entries.push(wgpu::BindGroupLayoutEntry { binding, ..texture });
     }
     entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 5,
+        binding: 3,
         visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
@@ -5468,7 +5394,7 @@ fn create_texture_bind_group(
 fn create_advanced_texture_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    views: [&wgpu::TextureView; 5],
+    views: [&wgpu::TextureView; 3],
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -5489,14 +5415,6 @@ fn create_advanced_texture_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(views[3]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(views[4]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
@@ -6688,7 +6606,6 @@ mod tests {
             mode: DabMode::Paint,
             execution,
             grain: None,
-            dual: None,
             rendering: BrushRendering::default(),
             wet_mix: BrushWetMix::default(),
             transport: None,
@@ -6798,7 +6715,7 @@ mod tests {
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 368);
+        assert_eq!(mem::size_of::<StyleGpu>(), 304);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 

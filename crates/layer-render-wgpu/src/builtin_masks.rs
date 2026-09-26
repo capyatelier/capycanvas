@@ -33,13 +33,7 @@ impl Masks {
         priority: u8,
     ) {
         let key = WgpuRasterizer::texture_set_key(style);
-        for id in [
-            key.primary,
-            key.grain,
-            key.dual,
-            key.dual_grain,
-            key.transport,
-        ] {
+        for id in [key.primary, key.grain, key.transport] {
             if let Some(mask) = self.0.iter_mut().find(|m| m.id == id) {
                 mask.priority = mask.priority.min(priority);
                 compiler.pipeline(&mask.pixels, priority);

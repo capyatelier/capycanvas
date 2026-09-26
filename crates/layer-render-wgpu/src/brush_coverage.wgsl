@@ -46,22 +46,3 @@ fn grain_uv(
     return rotate(coordinate, parameters.z, parameters.w) * parameters.x
         + vec2<f32>(0.5) + random_offset * offset_jitter;
 }
-
-fn combine_coverage(primary: f32, secondary: f32, mode: f32) -> f32 {
-    if mode < 0.5 {
-        return primary * secondary;
-    }
-    if mode < 1.5 {
-        return min(primary + secondary, 1.0);
-    }
-    if mode < 2.5 {
-        return max(primary - secondary, 0.0);
-    }
-    if mode < 3.5 {
-        return abs(primary - secondary);
-    }
-    if mode < 4.5 {
-        return min(primary, secondary);
-    }
-    return max(primary, secondary);
-}

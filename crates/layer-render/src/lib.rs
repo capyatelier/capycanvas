@@ -7,7 +7,7 @@
 
 use layer_core::{
     AssetId, BrushDeform, BrushExecution, BrushGrain, BrushRendering, BrushTip, BrushTransport,
-    BrushWetMix, DualBrush, Layer, LayerId, Point, Rect, StrokeId,
+    BrushWetMix, Layer, LayerId, Point, Rect, StrokeId,
 };
 use std::fmt;
 mod outline;
@@ -147,7 +147,6 @@ pub struct DabStyle {
     pub mode: DabMode,
     pub execution: BrushExecution,
     pub grain: Option<BrushGrain>,
-    pub dual: Option<std::sync::Arc<DualBrush>>,
     pub rendering: BrushRendering,
     pub wet_mix: BrushWetMix,
     pub transport: Option<BrushTransport>,
@@ -167,7 +166,6 @@ impl DabStyle {
             },
             execution: brush.execution_class(),
             grain: brush.grain.clone(),
-            dual: brush.dual.clone(),
             rendering: brush.rendering,
             wet_mix: brush.wet_mix,
             transport: brush.transport.clone(),

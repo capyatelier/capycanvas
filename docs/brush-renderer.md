@@ -32,9 +32,8 @@ stroke ID.
 `layer-render-wgpu` uploads the contiguous contacts once. One four-vertex
 instanced quad bounds each rotated contact. The fragment stage either evaluates
 analytic elliptical coverage or samples a filterable `R8Unorm` tip. An explicit
-textured-dry pipeline handles moving/canvas grain and a transformed dual tip
-without adding texture work to ordinary ink. Contacts outside the ellipse are
-discarded.
+textured-dry pipeline handles moving/canvas grain without adding texture work to
+ordinary ink. Contacts outside the ellipse are discarded.
 
 Effective alpha is:
 

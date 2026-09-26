@@ -39,8 +39,8 @@ and units are vertically centered beside it. The header fade scales with the
 tile (65px on medium tiles) from 50% panel color to transparent. Size uses
 the current tip at its document-pixel diameter, filling the popup to its rounded
 edges for oversized tips. A background fade keeps the header legible;
-opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness,
-grain and dual-tip texture come from the configured brush.
+opacity uses a fixed fitted stamp. The tip mask, aspect, rotation, hardness and
+grain texture come from the configured brush.
 
 The preview's plus button bookmarks the value for that brush preset; the minus
 button removes an existing mark. Marks are short lines perpendicular to the

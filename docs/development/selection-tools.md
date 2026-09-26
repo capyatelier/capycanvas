@@ -128,7 +128,7 @@ parked document and adopting a project reset temporary editing state. Filters
 and destructive artwork actions are blocked during mask editing.
 
 The GPU material and mask paths share `brush_footprint.wgsl`, contact geometry,
-tip/grain/dual textures and accumulation semantics. Mask gradients and fills
+tip/grain textures and accumulation semantics. Mask gradients and fills
 write scalar coverage; connected fills classify artwork. Raw-alpha and stored
 layer-mask loading share the region/refinement pipeline and preserve soft values.
 Saved previews composite each visible layer’s color/opacity into a cached packed

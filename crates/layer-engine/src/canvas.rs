@@ -1242,7 +1242,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     if let Some(contact) = &mut brush.contact {
                         contact.paper = 0.0;
                     }
-                    brush.dual = None;
                     brush.rendering = Default::default();
                     brush.transport = None;
                     brush.wet_mix = Default::default();
