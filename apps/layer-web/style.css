@@ -1075,8 +1075,8 @@ body[data-theme="light"] #header { text-shadow:none; }
 .interval-thumb.upper { transform: translateX(1px); }
 .interval-input:focus-visible + .interval-thumb { outline: 1px solid var(--text); outline-offset: 3px; }
 .toolbar-range { display: flex; align-items: center; }
-/* Command search uses the same native-popup palette and shared search rhythm. */
-#command-bar { width: min(var(--command-width), calc(100vw - 32px)); height: auto; max-width: none; max-height: calc(100dvh - 48px); margin: 0 auto; inset: min(12vh, 72px) 0 auto; padding: var(--command-inset); box-sizing: border-box; border-radius: 12px; background: var(--popover); color: var(--text); box-shadow: 0 8px 24px #0004, 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; }
+/* Command search uses the panel glass fill and shared search rhythm. */
+#command-bar { width: min(var(--command-width), calc(100vw - 32px)); height: auto; max-width: none; max-height: calc(100dvh - 48px); margin: 0 auto; inset: clamp(var(--command-top-min), 20dvh, var(--command-top-max)) 0 auto; padding: var(--command-inset); box-sizing: border-box; border-radius: var(--command-radius); background: var(--glass-panel); color: var(--text); box-shadow: 0 8px 24px #0004, 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; }
 #command-bar[open] { display: flex; flex-direction: column; gap: var(--command-gap); }
 #command-bar::backdrop { background: transparent; backdrop-filter: none; }
 .command-search-header { display: flex; align-items: center; gap: var(--command-gap); flex: none; }

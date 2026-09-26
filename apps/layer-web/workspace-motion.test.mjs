@@ -125,7 +125,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
     held="mouse";await input("down",grip);
     for(let i=1;i<=6;i++){await input("move",{x:grip.x-12*i,y:grip.y+9*i});await settle();}
     await settle();
-    const glass=await evaluate(`(()=>{const c=layerApp.canvas.getBoundingClientRect(),r=document.querySelector('.dock-group[data-group="43"] .panel-preview').getBoundingClientRect(),boxes=glassProbe.boxes;return{panel:[r.x-c.x,r.y-c.y,r.width,r.height],boxes:Array.from({length:boxes.length/8},(_,i)=>boxes.slice(i*8,i*8+4))}})()`);
+    const glass=await evaluate(`(()=>{const c=layerApp.canvas.getBoundingClientRect(),r=document.querySelector('.dock-group[data-group="43"] .panel-preview').getBoundingClientRect(),boxes=glassProbe.boxes;return{panel:[r.x-c.x,r.y-c.y,r.width,r.height],boxes:Array.from({length:boxes.length/9},(_,i)=>boxes.slice(i*9,i*9+4))}})()`);
     await input("up");held=null;await wait();
     await evaluate("layerApp.app.set_glass=glassProbe.set;delete window.glassProbe");
     assert.ok(glass.boxes.some(b=>b.every((v,i)=>Math.abs(v-glass.panel[i])<1)),`Panel glass follows a dragged float: ${JSON.stringify(glass)}`);

@@ -1,5 +1,5 @@
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
-export function createCommandBar({element, button, icon, dispatch, style, canvas}) {
+export function createCommandBar({element, button, icon, dispatch, style, canvas, layoutChanged}) {
   const dialog = element("dialog", "command-bar");
   dialog.id = "command-bar";
   dialog.setAttribute("aria-label", "Search commands");
@@ -29,9 +29,10 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
   function fitViewport() {
     if (!view) return;
     const viewport = window.visualViewport, height = viewport?.height ?? innerHeight;
-    const top = innerWidth <= 600 ? 16 : Math.min(72, height * .12);
+    const top = innerWidth <= 600 ? 16 : Math.min(style.top_max, Math.max(style.top_min, height / 5));
     dialog.style.top = `${top + (viewport?.offsetTop ?? 0)}px`;
     dialog.style.maxHeight = `${height - top - 16}px`;
+    layoutChanged();
   }
   window.visualViewport?.addEventListener("resize", fitViewport);
   window.addEventListener("resize", fitViewport);
@@ -69,7 +70,7 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
       const wasOpen = !!view, previousParameter = view?.parameter?.id;
       view = next ? {...next, selected:Number(next.selected)} : null;
       if (!view) {
-        if (dialog.open) dialog.close();
+        if (dialog.open) { dialog.close(); layoutChanged(); }
         if (wasOpen && !document.querySelector("dialog[open]")) {
           if (previousFocus?.isConnected && !dialog.contains(previousFocus)) previousFocus.focus({preventScroll:true});
           if (document.activeElement === document.body || dialog.contains(document.activeElement)) canvas.focus({preventScroll:true});
@@ -111,12 +112,12 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
       const selected = parameter ?? view.results[view.selected];
       if (selected && !parameter) input.setAttribute("aria-activedescendant", `command-result-${view.selected}`);
       else input.removeAttribute("aria-activedescendant");
-      detail.textContent = view.error ?? selected?.disabled_reason ?? (parameter ? parameter.label : selected?.category) ?? "";
+      detail.textContent = view.detail;
       if (!wasOpen) {
         previousFocus = document.activeElement;
         dialog.showModal(); input.focus({preventScroll:true});
         if (!matchMedia("(prefers-reduced-motion: reduce)").matches)
-          dialog.animate([{opacity:0, transform:"translateY(-4px)"}, {opacity:1, transform:"translateY(0)"}], {duration:120, easing:"cubic-bezier(.2,.8,.2,1)"});
+          dialog.animate([{opacity:0, transform:"translateY(-4px)"}, {opacity:1, transform:"translateY(0)"}], {duration:120, easing:"cubic-bezier(.2,.8,.2,1)"}).onfinish = layoutChanged;
       }
       fitViewport();
       if (!parameter) list.children[view.selected]?.scrollIntoView({block:"nearest"});

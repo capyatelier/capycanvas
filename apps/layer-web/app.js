@@ -1645,7 +1645,7 @@ try {
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = `${catalog.app_name} — drawing workspace`;
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences_cached() });
-  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, canvas});
+  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
