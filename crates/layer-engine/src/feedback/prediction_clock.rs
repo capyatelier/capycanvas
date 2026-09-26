@@ -56,13 +56,7 @@ impl PredictionClock {
                 confidence
             }
         });
-        let budget = motion.motion_horizon(
-            confidence as u32,
-            InstantFeedbackConfig {
-                max_prediction_distance_px: MAX_PREDICTION_DISTANCE_PX,
-                ..config
-            },
-        );
+        let budget = motion.motion_horizon(confidence as u32, MAX_PREDICTION_DISTANCE_PX);
         // Remember the usable budget after physical limiting (anti-windup).
         // A resolved stop can have tiny position variance, hence a nominally
         // long statistical horizon. Remembering that unused horizon lets the
@@ -74,10 +68,7 @@ impl PredictionClock {
         let target = (i64::from(age) + lead.min(i64::from(requested))).max(0) as u32;
         motion.motion_horizon(
             target.min(MAX_PREDICTION_HORIZON_MICROS),
-            InstantFeedbackConfig {
-                max_prediction_distance_px: motion.display_distance_budget(age, config),
-                ..config
-            },
+            motion.display_distance_budget(age),
         )
     }
 }

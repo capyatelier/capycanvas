@@ -21,10 +21,7 @@ fn recorded_production_queries_replay_exactly() {
             ..Default::default()
         })
         .unwrap();
-    engine.set_pressure_curve(PressureCurve {
-        gamma: 2.,
-        ..Default::default()
-    });
+    engine.set_pressure_curve(PressureCurve { gamma: 2. });
     engine
         .recording
         .lock()

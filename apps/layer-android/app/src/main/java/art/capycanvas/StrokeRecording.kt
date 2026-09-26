@@ -50,7 +50,7 @@ internal class StrokeRecording(private val host: CanvasHost) {
                 withContext(Dispatchers.IO) {
                     val stream = resolver.openOutputStream(uri, "wt") ?: error("Could not open recording destination")
                     stream.use { output ->
-                        output.write("CAPYPEN2".toByteArray(Charsets.US_ASCII))
+                        output.write("CAPYPEN3".toByteArray(Charsets.US_ASCII))
                         GZIPOutputStream(output).use { it.write(raw) }
                     }
                 }

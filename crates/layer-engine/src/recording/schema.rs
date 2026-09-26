@@ -77,16 +77,8 @@ mod config_wire {
         (
             value.enabled,
             value.use_platform_prediction,
-            value.use_engine_prediction,
-            3u32,
             value.timestamp_resolution_micros,
-            value.finalization_lag_micros,
             value.prediction_horizon_micros,
-            value.max_prediction_distance_px,
-            value.tip_lock,
-            value.correction_easing,
-            value.minimum_prediction_speed_px_per_second,
-            value.corner_suppression,
         )
             .serialize(serializer)
     }
@@ -96,42 +88,14 @@ mod config_wire {
         let (
             enabled,
             use_platform_prediction,
-            use_engine_prediction,
-            _,
             timestamp_resolution_micros,
-            finalization_lag_micros,
             prediction_horizon_micros,
-            max_prediction_distance_px,
-            tip_lock,
-            correction_easing,
-            minimum_prediction_speed_px_per_second,
-            corner_suppression,
-        ): (
-            bool,
-            bool,
-            bool,
-            u32,
-            u32,
-            u32,
-            u32,
-            f32,
-            f32,
-            f32,
-            f32,
-            f32,
         ) = Deserialize::deserialize(deserializer)?;
         Ok(InstantFeedbackConfig {
             enabled,
             use_platform_prediction,
-            use_engine_prediction,
             timestamp_resolution_micros,
-            finalization_lag_micros,
             prediction_horizon_micros,
-            max_prediction_distance_px,
-            tip_lock,
-            correction_easing,
-            minimum_prediction_speed_px_per_second,
-            corner_suppression,
         })
     }
 }

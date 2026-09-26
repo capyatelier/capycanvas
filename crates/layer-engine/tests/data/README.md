@@ -15,10 +15,15 @@ Device names are provenance labels, not hardware IDs inferred from input events.
 
 | File | Capture | Contacts | Predictor samples | Queries | Compressed bytes |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `wacom-pro-27.capystrokes` | Wacom Pro 27, GTK; name supplied by the user | 81 | 22,029 | 10,985 | 1,353,690 |
-| `movink14.capystrokes` | Wacom Movink 14 (DTHA140), Android | 89 | 20,879 | 10,272 | 1,312,397 |
+| `wacom-pro-27.capystrokes` | Wacom Pro 27, GTK; name supplied by the user | 81 | 22,029 | 10,985 | 1,337,795 |
+| `movink14.capystrokes` | Wacom Movink 14 (DTHA140), Android | 89 | 20,879 | 10,272 | 1,398,124 |
 
-This replaces the former `pen-20260921` fixture. Its SHA256 is
+Both files were re-encoded once from their original `CAPYPEN2` captures to
+`CAPYPEN3`. The re-encoding dropped only policy and pressure-curve fields that
+held the fixed Smooth Motion constants; replay output is byte-identical.
+
+`wacom-pro-27` replaces the former `pen-20260921` fixture. The original
+capture's SHA256 is
 `dc30c7cc1cfb60beda7b37919175181d76c950243b81d8791cee0d979b960d86`.
 The 132.345-second capture contains raw tablet deliveries, predictor samples,
 corrections, policies and queries. Recorded clocks do not measure presentation
@@ -26,7 +31,8 @@ latency. Its reviewed summary includes the continuity refinement's small
 instantaneous-error tradeoff, documented in the evaluation guide below.
 
 `movink14` is the user's replacement capture, saved as
-`stroke-recording (1).capystrokes`, not the earlier unsuffixed file. SHA256:
+`stroke-recording (1).capystrokes`, not the earlier unsuffixed file. The
+original capture's SHA256 is
 `b001b18ef51846a02a1aee1b10731e454aa578d72a57139ce7112f5e66ba9c15`.
 It contains 100.284 seconds of capture and 28,245 raw events, with no native
 predictions. The shared predictor used a 16 ms requested horizon.

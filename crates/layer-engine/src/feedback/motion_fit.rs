@@ -6,7 +6,7 @@
 //! same equations: velocity = max(v + a*t, 0) * direction(theta + omega*t).
 //! Position measurements are fitted directly, avoiding noisy finite differences.
 
-use super::{InstantFeedbackConfig, transform_vector};
+use super::transform_vector;
 use layer_core::{Point, StrokePoint};
 
 const HISTORY_MICROS: u32 = 128_000;
@@ -823,11 +823,11 @@ impl MotionFit {
 
     /// Input-age travel plus future distance, bounded by measured braking and
     /// the absolute safety radius. Solve arc length with tangential braking.
-    pub(super) fn display_distance_budget(&self, age: u32, config: InstantFeedbackConfig) -> f32 {
+    pub(super) fn display_distance_budget(&self, age: u32) -> f32 {
         // Input-age compensation is not extra future lookahead. A fixed cap
         // from the newest report can be shorter than the distance between two
         // reports at high speeds, making a stable display-time target impossible.
-        (f64::from(config.max_prediction_distance_px) + self.travel(f64::from(age) / 1000.))
+        (f64::from(super::PREDICTION_DISTANCE_PX) + self.travel(f64::from(age) / 1000.))
             .min(f64::from(super::MAX_PREDICTION_DISTANCE_PX))
             .min(self.stopping_distance)
             .min(if self.parameters[4] < 0. {
@@ -837,13 +837,13 @@ impl MotionFit {
             }) as f32
     }
 
-    pub(super) fn motion_horizon(&self, requested: u32, config: InstantFeedbackConfig) -> u32 {
+    pub(super) fn motion_horizon(&self, requested: u32, limit: f32) -> u32 {
         let speed = self.speed();
-        if speed * 1000. < f64::from(config.minimum_prediction_speed_px_per_second) {
+        if speed * 1000. < f64::from(super::MINIMUM_PREDICTION_SPEED) {
             return 0;
         }
         let mut duration = self.duration(f64::from(requested) / 1000.);
-        let limit = f64::from(config.max_prediction_distance_px).min(self.stopping_distance);
+        let limit = f64::from(limit).min(self.stopping_distance);
         if self.travel(duration) > limit {
             let acceleration = self.parameters[4] / self.span_ms.powi(2);
             let end_speed = (speed * speed + 2. * acceleration * limit).max(0.).sqrt();

@@ -1,5 +1,5 @@
 {
-  "sha256": "dc30c7cc1cfb60beda7b37919175181d76c950243b81d8791cee0d979b960d86",
+  "sha256": "235a5cace89fa530bd31e4847ce2cee2bc234c6fb80f284491c9d6eb833af53c",
   "method": "Human visual classification of recorded stroke gallery; families describe shape, not recognized characters. Used only for reporting, never for predictor selection.",
   "groups": [
     {"label": "Letter-like strokes", "contacts": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,71,72,73,74,75]},

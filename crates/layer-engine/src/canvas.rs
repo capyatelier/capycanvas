@@ -57,8 +57,6 @@ pub struct EngineMetrics {
     pub platform_prediction_frames: u64,
     pub engine_prediction_frames: u64,
     pub preview_dabs: u64,
-    pub last_tip_gap_surface_px: f32,
-    pub maximum_tip_gap_surface_px: f32,
     pub last_endpoint_correction_surface_px: f32,
     pub maximum_endpoint_correction_surface_px: f32,
     pub corrected_input_samples: u64,
@@ -1029,11 +1027,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let end = if active.feedback.enabled {
             // Sensor latency may hold back persistent ink, but must not
             // change the watercolor update boundaries of the real samples.
-            finalized_count(
-                self.builder.real_points(),
-                self.finalized_real_points,
-                active.feedback.finalization_lag_micros,
-            )
+            finalized_count(self.builder.real_points(), self.finalized_real_points)
         } else {
             self.builder.real_points().len()
         } as u32;
@@ -1061,12 +1055,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         });
         let before_estimate_window =
             real.partition_point(|point| point.elapsed_micros < estimate_cutoff);
-        let count = finalized_count(
-            real,
-            self.finalized_real_points,
-            active.feedback.finalization_lag_micros,
-        )
-        .min(
+        let count = finalized_count(real, self.finalized_real_points).min(
             self.estimates
                 .values()
                 .filter(|e| e.stroke == active.id)
@@ -1683,7 +1672,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     raw_tip,
                     estimate.point,
                     self.view.document_to_surface,
-                    active.feedback.max_prediction_distance_px,
                 );
                 generator.append(point, &active.brush, &mut self.dabs);
             }
@@ -1701,27 +1689,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         generator.finish(&active.brush, &mut self.dabs);
 
         let modeled_endpoint = generator.modeled_position().unwrap_or(latest.position);
-        let locked_endpoint = layer_core::Point {
-            x: modeled_endpoint.x
-                + (estimate.point.position.x - modeled_endpoint.x) * active.feedback.tip_lock,
-            y: modeled_endpoint.y
-                + (estimate.point.position.y - modeled_endpoint.y) * active.feedback.tip_lock,
-        };
+        let endpoint = estimate.point.position;
         lock_dab_tail(
             &mut self.dabs[prediction_start..],
             modeled_endpoint,
-            estimate.point.position,
-            active.feedback.tip_lock,
-            active.feedback.correction_easing,
+            endpoint,
         );
-        if (taper
-            && self
-                .dabs
-                .last()
-                .is_none_or(|dab| dab.center != locked_endpoint))
-            || !dabs_cover_point(&self.dabs[start..], locked_endpoint)
+        if (taper && self.dabs.last().is_none_or(|dab| dab.center != endpoint))
+            || !dabs_cover_point(&self.dabs[start..], endpoint)
         {
-            generator.append_terminal_copy(locked_endpoint, &mut self.dabs);
+            generator.append_terminal_copy(endpoint, &mut self.dabs);
         }
         if taper {
             taper_prediction(
@@ -1732,20 +1709,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         if self.dabs.len() > start {
             self.push_active_preview(start);
-            let tip_gap = surface_distance(
-                locked_endpoint,
-                estimate.point.position,
-                self.view.document_to_surface,
-            );
-            let correction = surface_distance(
-                modeled_endpoint,
-                estimate.point.position,
-                self.view.document_to_surface,
-            );
+            let correction =
+                surface_distance(modeled_endpoint, endpoint, self.view.document_to_surface);
             self.metrics.feedback_frames = self.metrics.feedback_frames.saturating_add(1);
-            self.metrics.last_tip_gap_surface_px = tip_gap;
-            self.metrics.maximum_tip_gap_surface_px =
-                self.metrics.maximum_tip_gap_surface_px.max(tip_gap);
             self.metrics.last_endpoint_correction_surface_px = correction;
             self.metrics.maximum_endpoint_correction_surface_px = self
                 .metrics
@@ -3088,7 +3054,7 @@ mod tests {
         for capture in 0..5 {
             let samples: Vec<_> = rows.iter().filter(|r| r[0] as usize == capture).collect();
             let mut reference = None;
-            for (feedback, lag) in [(false, 0), (true, 0), (true, 8_000), (true, 32_000)] {
+            for feedback in [false, true] {
                 for cadence in [1, 4, 64] {
                     let (mut input, consumer) = input_queue(128);
                     let mut engine = CanvasEngine::new(
@@ -3105,7 +3071,6 @@ mod tests {
                     engine
                         .set_instant_feedback(InstantFeedbackConfig {
                             enabled: feedback,
-                            finalization_lag_micros: lag,
                             ..Default::default()
                         })
                         .unwrap();
@@ -3149,7 +3114,7 @@ mod tests {
                     DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
                     assert_eq!(
                         engine.backend.persistent, replay,
-                        "capture={capture}, cadence={cadence}, feedback={feedback}, lag={lag}"
+                        "capture={capture}, cadence={cadence}, feedback={feedback}"
                     );
                     assert_eq!(
                         replay.last().unwrap().center,
@@ -3159,7 +3124,7 @@ mod tests {
                     if !feedback
                         && let Some(preview) = before_up
                     {
-                        assert_eq!(preview, replay, "preview capture={capture}, lag={lag}");
+                        assert_eq!(preview, replay, "preview capture={capture}");
                     }
                     if let Some(reference) = &reference {
                         assert_eq!(&replay, reference);
@@ -4555,9 +4520,8 @@ mod tests {
             .unwrap();
             engine
                 .set_instant_feedback(InstantFeedbackConfig {
-                    use_engine_prediction: prediction,
                     use_platform_prediction: false,
-                    prediction_horizon_micros: 16_000,
+                    prediction_horizon_micros: if prediction { 16_000 } else { 0 },
                     ..Default::default()
                 })
                 .unwrap();
@@ -4676,7 +4640,6 @@ mod tests {
             &engine.backend().preview,
             layer_core::Point { x: 52.0, y: 16.0 }
         ));
-        assert!(engine.metrics().last_tip_gap_surface_px < 0.001);
         assert_eq!(engine.metrics().platform_prediction_frames, 1);
 
         let mut up = event(4, PenPhase::Up, 28.0);
@@ -4709,10 +4672,7 @@ mod tests {
                 },
             )
             .unwrap();
-            engine.set_pressure_curve(PressureCurve {
-                gamma,
-                ..PressureCurve::default()
-            });
+            engine.set_pressure_curve(PressureCurve { gamma });
             let mut inputs = Vec::new();
             for (i, pressure) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
                 let mut sample = event(
@@ -4830,7 +4790,7 @@ mod tests {
 
     #[test]
     fn finalized_contacts_are_independent_of_frame_cadence() {
-        let render = |one_event_per_frame: bool, prediction: bool| {
+        let render = |one_event_per_frame: bool, feedback: bool| {
             let (mut producer, consumer) = input_queue(32);
             let mut engine = CanvasEngine::new(
                 RecordingRenderer::default(),
@@ -4845,7 +4805,7 @@ mod tests {
             .unwrap();
             engine
                 .set_instant_feedback(InstantFeedbackConfig {
-                    use_engine_prediction: prediction,
+                    enabled: feedback,
                     ..Default::default()
                 })
                 .unwrap();
@@ -4870,9 +4830,9 @@ mod tests {
             engine.backend().persistent.clone()
         };
         let reference = render(true, false);
-        for prediction in [false, true] {
-            assert_eq!(reference, render(true, prediction));
-            assert_eq!(reference, render(false, prediction));
+        for feedback in [false, true] {
+            assert_eq!(reference, render(true, feedback));
+            assert_eq!(reference, render(false, feedback));
         }
     }
 

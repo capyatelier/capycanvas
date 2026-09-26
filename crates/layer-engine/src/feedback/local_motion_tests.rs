@@ -384,16 +384,7 @@ fn local_motion_tracks_cartesian_acceleration_and_zoom() {
         );
         assert_eq!(real, original);
         let clamped = PredictionState::default()
-            .estimate(
-                &real,
-                &[],
-                latest + 16000,
-                transform,
-                InstantFeedbackConfig {
-                    max_prediction_distance_px: 2.,
-                    ..cfg
-                },
-            )
+            .estimate(&real, &[], latest + 16000, transform.map(|v| v * 48.), cfg)
             .unwrap();
         assert!(
             surface_distance(
@@ -597,11 +588,12 @@ fn prediction_length_is_not_quantized_to_curve_sampling_intervals() {
         let cfg = InstantFeedbackConfig {
             timestamp_resolution_micros: 1000,
             prediction_horizon_micros: 32_000,
-            max_prediction_distance_px: limit,
             ..config()
         };
+        let scale = 96. / limit;
+        let transform = [scale, 0., 0., scale, 0., 0.];
         let tip = state
-            .estimate(&real, &[], latest.elapsed_micros + 32_000, IDENTITY, cfg)
+            .estimate(&real, &[], latest.elapsed_micros + 32_000, transform, cfg)
             .unwrap();
         let lead = surface_distance(latest.position, tip.point.position, IDENTITY);
         assert!(lead <= limit + 0.001);

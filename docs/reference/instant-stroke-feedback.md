@@ -110,8 +110,8 @@ brush semantics.
   or time-based paint accumulation.
 - Dab spacing, texture randomness, pressure, tilt, and twist remain continuous
   across the finalized/provisional frontier.
-- The displayed mark covers the presentation-time tip estimate; tip-gap p95 and
-  p99 are measured in pixels rather than judged only by render latency.
+- The displayed mark ends at the presentation-time tip estimate, so the preview
+  itself adds no tip gap.
 - Provisional-to-final position, tangent, opacity, and color corrections are
   measured at p95/p99 and visually tested for swimming and texture flicker.
 - Preview plus composition remains inside the 8.33 ms 120 Hz frame budget on
@@ -124,21 +124,18 @@ smallest possible, smoothly distributed correction behind the nib.
 ## Runtime controls
 
 `InstantFeedbackConfig` is interaction state and is snapshotted at pen-down; it
-is not saved into a brush or document. The C ABI exposes the same fields through
-`LayerInstantFeedbackSettings`.
+is not saved into a brush or document.
 
 | Control | Default | Purpose |
 | --- | ---: | --- |
 | enabled | true | Zero-work bypass for interaction A/B tests |
 | platform prediction | true | Prefer native/browser future samples |
-| engine prediction | true | Confidence-limited fallback when native prediction is absent |
-| finalization lag | 8 ms | Size of the replaceable real-input suffix |
 | prediction horizon | 8 ms | Engine future interval; native samples have a separate 64 ms safety cap |
-| maximum prediction distance | 96 physical px | Zoom-independent runaway clamp |
-| tip lock | 1.0 | Endpoint correction strength; automatic at full strength in preferences |
-| correction easing | 1.5 | Distribution of correction behind the endpoint |
-| minimum prediction speed | 12 physical px/s | Suppresses stationary noise |
-| corner suppression | 1.0 | Stops extrapolation at right-angle turns and reversals |
+
+The rest of the tuning is fixed: an 8 ms replaceable real-input suffix, a
+96 physical px zoom-independent distance clamp, full-strength endpoint tracking
+with correction easing 1.5, no extrapolation below 12 physical px/s, and full
+suppression at right-angle turns and reversals.
 
 `CanvasEngine::render_frame_for(now, presentation)` is preferred when a platform
 knows its expected presentation timestamp. Both values share the pen-event
@@ -187,8 +184,7 @@ currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
 prediction is selected, **Prediction amount** and its
 reset action are disabled. Native timing comes from its sample timestamps and presentation time.
-Endpoint tracking is always full strength for both native and shared prediction;
-the retired `tip_lock` preference still loads but no longer affects rendering.
+Endpoint tracking is always full strength for both native and shared prediction.
 If native samples are absent,
 the engine uses Smooth Motion with its automatic 8 ms fallback. Turning native prediction off, or
 losing support, restores the saved prediction time.

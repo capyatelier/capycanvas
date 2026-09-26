@@ -95,8 +95,6 @@ pub struct Settings {
     pub feedback: bool,
     pub platform_prediction: bool,
     pub prediction_ms: f32,
-    /// Retained for saved-settings compatibility; preview tracking is automatic.
-    pub tip_lock: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
     /// Per-preset slider values, shared by every placement of that slider.
@@ -125,7 +123,6 @@ impl Default for Settings {
             feedback: true,
             platform_prediction: true,
             prediction_ms: 16.0,
-            tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
             slider_bookmarks: BTreeMap::new(),
         }
@@ -150,13 +147,7 @@ impl Settings {
                 control.validate(value, &row.title)?;
             }
         }
-        // Continue validating the retained legacy value without applying it.
-        layer_engine::InstantFeedbackConfig {
-            tip_lock: self.tip_lock,
-            ..self.feedback_config()
-        }
-        .validate()
-        .map_err(|e| e.to_string())?;
+        self.feedback_config().validate().map_err(|e| e.to_string())?;
         self.validate_shortcuts()
     }
     pub(crate) fn feedback_config(&self) -> layer_engine::InstantFeedbackConfig {
@@ -164,8 +155,6 @@ impl Settings {
             enabled: self.feedback,
             use_platform_prediction: self.platform_prediction,
             prediction_horizon_micros: (self.prediction_ms * 1000.0).round() as u32,
-            // Always track the predicted endpoint at full strength. Prediction
-            // time alone controls how far ahead the preview should reach.
             ..Default::default()
         }
     }
@@ -265,8 +254,6 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
-    /// Retired preference ID, retained to decode old serialized actions.
-    TipLock,
     Version,
     License,
     Renderer,
@@ -297,7 +284,6 @@ impl PreferenceId {
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
             Self::PredictionHorizon => "prediction-horizon",
-            Self::TipLock => "tip-lock",
             Self::Version => "version",
             Self::License => "license",
             Self::Renderer => "renderer",
@@ -1149,7 +1135,6 @@ impl Settings {
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
-            TipLock => return Err("Pen tip tracking is automatic.".into()),
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
                 self.platform_prediction = matches!(value, PreferenceValue::Bool(true))

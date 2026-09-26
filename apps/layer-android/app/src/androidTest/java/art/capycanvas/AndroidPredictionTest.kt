@@ -44,8 +44,6 @@ class AndroidPredictionTest {
     private fun row(id: String = "platform_prediction") = rows().first { it.getString("id") == id }
     private fun manualControls(enabled: Boolean) {
         val id = "prediction_horizon"
-        assertFalse(rows().any { it.getString("id") == "tip_lock" })
-        compose.onNodeWithTag("preference-tip_lock").assertDoesNotExist()
         assertEquals(enabled, row(id).getBoolean("enabled"))
         assertEquals("slider", row(id).getJSONObject("kind").getJSONObject("control").getString("kind"))
         val control = compose.onNodeWithTag("setting-slider-$id").performScrollTo()

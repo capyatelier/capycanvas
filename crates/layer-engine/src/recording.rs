@@ -14,7 +14,7 @@ pub use schema::{Event, Policy, Sample};
 
 pub const MAX_DURATION_SECS: u64 = 600;
 pub const MAX_BYTES: usize = 32 * 1024 * 1024;
-pub const MAGIC: &[u8; 8] = b"CAPYPEN2";
+pub const MAGIC: &[u8; 8] = b"CAPYPEN3";
 
 /// Parked drawings share their window's recorder. Disabled capture needs only
 /// an atomic load, with no locking, allocation, clock reads or serialization.
@@ -64,7 +64,7 @@ impl Recording {
     }
 }
 
-/// Append-only schema. Variant order and field order are part of version 2.
+/// Append-only schema. Variant order and field order are part of version 3.
 /// All clocks are monotonic, never wall time. Raw timestamps retain host units
 /// converted to ns; delivery_ns is relative to the start of the recording.
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,7 +212,7 @@ impl Recorder {
         self.data = Vec::with_capacity(MAX_BYTES);
         self.started = Some(Instant::now());
         self.active.store(true, Ordering::Relaxed);
-        self.append(Record::Metadata(serde_json::json!({"format":"capy-pen-recording", "version":2, "platform":platform, "raw_input":true, "max_duration_seconds":MAX_DURATION_SECS}).to_string()));
+        self.append(Record::Metadata(serde_json::json!({"format":"capy-pen-recording", "version":3, "platform":platform, "raw_input":true, "max_duration_seconds":MAX_DURATION_SECS}).to_string()));
         Ok(())
     }
     fn append(&mut self, record: Record) {

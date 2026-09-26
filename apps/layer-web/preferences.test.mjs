@@ -324,7 +324,6 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     const rows=layerApp.app.preferences().pages.find(p=>p.id==='input').groups.flatMap(g=>g.rows);
     return rows[rows.findIndex(r=>r.id==='feedback')+1].id==='platform_prediction';
   })()`));
-  assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), nativeAvailable);
   if (nativeAvailable) await click('#setting-platform-prediction');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '16 ms', 'units appear beside numeric values');

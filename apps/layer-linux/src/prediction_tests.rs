@@ -122,12 +122,10 @@ fn native_fullscreen_prediction() {
     timer.remove();
     let after = w.gpu.borrow().as_ref().unwrap().session.engine().metrics();
     assert!(after.engine_prediction_frames > before.engine_prediction_frames + 10);
-    assert!(after.last_tip_gap_surface_px < 0.1);
     eprintln!(
-        "native Smooth Motion viewport={:?} samples={samples} predicted_frames={} gap={}px",
+        "native Smooth Motion viewport={:?} samples={samples} predicted_frames={}",
         camera.viewport,
         after.engine_prediction_frames - before.engine_prediction_frames,
-        after.last_tip_gap_surface_px
     );
     let last = last.unwrap();
     w.input.send(

@@ -4396,7 +4396,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .map_err(error)?;
         self.engine.set_pressure_curve(PressureCurve {
             gamma: settings.pressure_gamma,
-            ..Default::default()
         });
         let mask_mode_changed = self.state.settings.selection_painting != settings.selection_painting;
         self.state.settings = settings;
@@ -15999,7 +15998,6 @@ mod tests {
             s.set_platform(platform);
             let settings = Settings {
                 prediction_ms: 23.0,
-                tip_lock: 0.3,
                 ..Settings::default()
             };
             s.dispatch(UiAction::RestoreSettings {
@@ -16026,22 +16024,6 @@ mod tests {
             assert_eq!(rows[index + 1].id, PreferenceId::PlatformPrediction);
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
-            assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
-            // Legacy settings still load, but neither old actions nor their
-            // stored value can override automatic endpoint tracking.
-            for action in [
-                PreferenceAction::Edit {
-                    id: PreferenceId::TipLock,
-                    value: PreferenceValue::Number(0.0),
-                },
-                PreferenceAction::Reset {
-                    id: PreferenceId::TipLock,
-                },
-            ] {
-                preference(&mut s, action);
-                assert!(s.preferences().unwrap().error.is_some());
-                assert_eq!(s.state.settings, settings);
-            }
             {
                 let id = PreferenceId::PredictionHorizon;
                 let row = &rows[index + 2];
@@ -16078,7 +16060,6 @@ mod tests {
                 config.prediction_horizon_micros,
                 if supported { 8_000 } else { 23_000 }
             );
-            assert_eq!(config.tip_lock, 1.0);
             if supported {
                 edit_preference(
                     &mut s,
@@ -16091,7 +16072,6 @@ mod tests {
                     .feedback_config_for(s.state.platform, s.platform_prediction_available());
                 assert!(!config.use_platform_prediction);
                 assert_eq!(config.prediction_horizon_micros, 23_000);
-                assert_eq!(config.tip_lock, 1.0);
                 edit_preference(
                     &mut s,
                     PreferenceId::PredictionHorizon,
@@ -16137,7 +16117,6 @@ mod tests {
             PreferenceValue::Bool(false),
         );
         assert!(!s.state.settings.feedback_config().use_platform_prediction);
-        assert!(s.state.settings.feedback_config().use_engine_prediction);
         let saved = s.state.settings.clone();
         s.state.requests.clear();
         s.set_platform_prediction_available(false);
@@ -16197,10 +16176,6 @@ mod tests {
             },
             Settings {
                 pan_speed: -1.0,
-                ..old.clone()
-            },
-            Settings {
-                tip_lock: 5.0,
                 ..old.clone()
             },
         ] {

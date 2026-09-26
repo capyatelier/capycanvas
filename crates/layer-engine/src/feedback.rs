@@ -17,6 +17,17 @@ mod test_support;
 pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
+/// Real input newer than this remains in the replaceable tail.
+const FINALIZATION_LAG_MICROS: u32 = 8_000;
+/// Physical-pixel distance limit, independent of document zoom. Smooth Motion
+/// prediction applies this to future travel beyond frame time, separately
+/// compensating for input age; total extrapolation is still capped at 512 px.
+/// Native predictors measure this from the latest observation.
+const PREDICTION_DISTANCE_PX: f32 = 96.0;
+/// Below this physical-pixel velocity, the engine does not extrapolate.
+const MINIMUM_PREDICTION_SPEED: f32 = 12.0;
+/// Suppression applied as recent motion approaches a right-angle turn.
+const CORNER_SUPPRESSION: f32 = 1.0;
 
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
 /// of a brush preset or persisted stroke.
@@ -24,28 +35,12 @@ const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 pub struct InstantFeedbackConfig {
     pub enabled: bool,
     pub use_platform_prediction: bool,
-    pub use_engine_prediction: bool,
     /// Input clock quantum, supplied by the host (GTK/GDK: 1 ms). This is
     /// measurement uncertainty, not prediction time or a user preference.
     pub timestamp_resolution_micros: u32,
-    /// Real input newer than this remains in the replaceable tail.
-    pub finalization_lag_micros: u32,
     /// Engine lookahead, also used without a presentation timestamp. Native
     /// samples use their own horizon, capped independently at 64 ms.
     pub prediction_horizon_micros: u32,
-    /// Physical-pixel distance limit, independent of document zoom. Smooth Motion
-    /// prediction applies this to future travel beyond frame time, separately
-    /// compensating for input age; total extrapolation is still capped at 512 px.
-    /// Native predictors measure this from the latest observation.
-    pub max_prediction_distance_px: f32,
-    /// `0` preserves modeled geometry; `1` puts terminal coverage at the tip.
-    pub tip_lock: f32,
-    /// Power applied to the smooth endpoint-correction envelope.
-    pub correction_easing: f32,
-    /// Below this physical-pixel velocity, the engine does not extrapolate.
-    pub minimum_prediction_speed_px_per_second: f32,
-    /// Suppression applied as recent motion approaches a right-angle turn.
-    pub corner_suppression: f32,
 }
 
 impl Default for InstantFeedbackConfig {
@@ -53,39 +48,16 @@ impl Default for InstantFeedbackConfig {
         Self {
             enabled: true,
             use_platform_prediction: true,
-            use_engine_prediction: true,
             timestamp_resolution_micros: 1,
-            finalization_lag_micros: 8_000,
             prediction_horizon_micros: 8_000,
-            max_prediction_distance_px: 96.0,
-            tip_lock: 1.0,
-            correction_easing: 1.5,
-            minimum_prediction_speed_px_per_second: 12.0,
-            corner_suppression: 1.0,
         }
     }
 }
 
 impl InstantFeedbackConfig {
     pub fn validate(self) -> Result<(), FeedbackConfigError> {
-        let finite = [
-            self.max_prediction_distance_px,
-            self.tip_lock,
-            self.correction_easing,
-            self.minimum_prediction_speed_px_per_second,
-            self.corner_suppression,
-        ]
-        .iter()
-        .all(|value| value.is_finite());
-        if !finite
-            || self.finalization_lag_micros > MAX_FINALIZATION_LAG_MICROS
-            || self.timestamp_resolution_micros > MAX_PREDICTION_HORIZON_MICROS
+        if self.timestamp_resolution_micros > MAX_PREDICTION_HORIZON_MICROS
             || self.prediction_horizon_micros > MAX_PREDICTION_HORIZON_MICROS
-            || !(0.0..=MAX_PREDICTION_DISTANCE_PX).contains(&self.max_prediction_distance_px)
-            || !(0.0..=1.0).contains(&self.tip_lock)
-            || !(0.25..=4.0).contains(&self.correction_easing)
-            || !(0.0..=10_000.0).contains(&self.minimum_prediction_speed_px_per_second)
-            || !(0.0..=1.0).contains(&self.corner_suppression)
         {
             return Err(FeedbackConfigError);
         }
@@ -194,7 +166,7 @@ impl MotionState {
             motion.clone(),
             horizon,
             transform,
-            motion.display_distance_budget(age, config),
+            motion.display_distance_budget(age),
         )
         .with_local_motion(real, config, age, memory, self.local.as_ref(), continuity);
         // Preserve display lead through fit-window confidence changes. Fresh
@@ -355,11 +327,7 @@ impl PredictionState {
         let latest = *real.last()?;
         let previous_output = self.output.take();
         let horizon = self.lift_horizon();
-        let mut drawing = if config.use_engine_prediction {
-            drawing_state::DrawingState::measure(real, transform)
-        } else {
-            Default::default()
-        };
+        let mut drawing = drawing_state::DrawingState::measure(real, transform);
         let interrupted = drawing.interrupted
             || drawing.stop_in_micros
                 <= f64::from(
@@ -432,7 +400,7 @@ impl PredictionState {
             && platform
                 .iter()
                 .any(|p| p.elapsed_micros > latest.elapsed_micros);
-        if config.use_engine_prediction && !native {
+        if !native {
             self.lead = None;
             let measured =
                 motion_fit::MotionFit::fit(real, transform, config.timestamp_resolution_micros);
@@ -545,7 +513,7 @@ impl PredictionState {
         // Retreat immediately for loss of motion, corners and impending lift.
         // Smooth extension only. A shorter forecast or braking bound always
         // wins immediately; old preview state must never lengthen it.
-        let unsafe_motion = motion_confidence(real, transform, config) < 0.5;
+        let unsafe_motion = motion_confidence(real, transform) < 0.5;
         let mut lead = distance;
         if let Some((time, old, direction)) = self.lead {
             let agreement = direction.x * surface.x + direction.y * surface.y;
@@ -560,7 +528,7 @@ impl PredictionState {
                 lead = filtered
                     .min(distance)
                     .min(old + dt * 0.0008)
-                    .min(config.max_prediction_distance_px);
+                    .min(PREDICTION_DISTANCE_PX);
             }
         }
         if unsafe_motion && estimate.source == TipSource::Platform {
@@ -605,7 +573,6 @@ impl PredictionState {
         raw_tip: StrokePoint,
         tip: StrokePoint,
         transform: [f32; 6],
-        maximum: f32,
     ) -> StrokePoint {
         let raw_distance = surface_distance(anchor.position, raw_tip.position, transform);
         let lead = surface_distance(anchor.position, tip.position, transform);
@@ -621,19 +588,17 @@ impl PredictionState {
             },
             ..point
         };
-        clamp_prediction(anchor, point, transform, maximum.min(lead))
+        clamp_prediction(anchor, point, transform, PREDICTION_DISTANCE_PX.min(lead))
     }
 }
 
-pub(crate) fn finalized_count(
-    real: &[StrokePoint],
-    already_finalized: usize,
-    lag_micros: u32,
-) -> usize {
+pub(crate) fn finalized_count(real: &[StrokePoint], already_finalized: usize) -> usize {
     let Some(latest) = real.last() else {
         return 0;
     };
-    let cutoff = latest.elapsed_micros.saturating_sub(lag_micros);
+    let cutoff = latest
+        .elapsed_micros
+        .saturating_sub(FINALIZATION_LAG_MICROS);
     let stable = real.partition_point(|point| point.elapsed_micros <= cutoff);
     stable.max(1).max(already_finalized).min(real.len())
 }
@@ -666,7 +631,7 @@ pub(crate) fn estimate_tip(
             latest,
             sample_at_time(latest, &platform[first..], target_time),
             document_to_surface,
-            config.max_prediction_distance_px,
+            PREDICTION_DISTANCE_PX,
         );
         return Some(TipEstimate {
             point,
@@ -674,7 +639,7 @@ pub(crate) fn estimate_tip(
         });
     }
 
-    if config.use_engine_prediction && target_time > latest.elapsed_micros {
+    if target_time > latest.elapsed_micros {
         return PredictionState::default().estimate_for(
             real,
             &[],
@@ -710,11 +675,7 @@ fn sample_at_time(anchor: StrokePoint, predicted: &[StrokePoint], target: u32) -
     previous
 }
 
-fn motion_confidence(
-    real: &[StrokePoint],
-    document_to_surface: [f32; 6],
-    config: InstantFeedbackConfig,
-) -> f32 {
+fn motion_confidence(real: &[StrokePoint], document_to_surface: [f32; 6]) -> f32 {
     let Some(&current) = real.last() else {
         return 0.0;
     };
@@ -733,9 +694,7 @@ fn motion_confidence(
             y: (current.position.y - previous.position.y) / elapsed,
         },
     );
-    if surface_velocity.x.hypot(surface_velocity.y) * 1_000_000.0
-        < config.minimum_prediction_speed_px_per_second
-    {
+    if surface_velocity.x.hypot(surface_velocity.y) * 1_000_000.0 < MINIMUM_PREDICTION_SPEED {
         return 0.0;
     }
     let mut confidence = 1.0;
@@ -755,7 +714,7 @@ fn motion_confidence(
                     + prior_surface.y * surface_velocity.y)
                     / (prior_speed * current_speed))
                     .clamp(0.0, 1.0);
-                confidence *= 1.0 - config.corner_suppression * (1.0 - direction_agreement);
+                confidence *= 1.0 - CORNER_SUPPRESSION * (1.0 - direction_agreement);
                 confidence *= (current_speed / prior_speed).clamp(0.0, 1.0);
             }
         }
@@ -1021,7 +980,7 @@ mod tests {
         assert_eq!(raw.point, platform[1]);
         let tip = point(8., 0., 20_000);
         let intermediate =
-            PredictionState::platform_point(real[1], platform[0], raw.point, tip, IDENTITY, 96.);
+            PredictionState::platform_point(real[1], platform[0], raw.point, tip, IDENTITY);
         assert!(surface_distance(real[1].position, intermediate.position, IDENTITY) <= 4.001);
     }
 
@@ -1041,9 +1000,10 @@ mod tests {
             point(0.0, 0.0, 0),
             point(4.0, 0.0, 4_000),
             point(8.0, 0.0, 8_000),
+            point(12.0, 0.0, 12_000),
         ];
-        assert_eq!(finalized_count(&points, 0, 4_000), 2);
-        assert_eq!(finalized_count(&points, 2, 8_000), 2);
+        assert_eq!(finalized_count(&points, 0), 2);
+        assert_eq!(finalized_count(&points[..3], 2), 2);
     }
 
     #[test]
@@ -1135,12 +1095,14 @@ mod tests {
             point(90., 0., 2_000),
             point(100., 0., 3_000),
         ];
-        let config = InstantFeedbackConfig {
-            max_prediction_distance_px: 12.0,
-            ..InstantFeedbackConfig::default()
-        };
-        let estimate =
-            estimate_tip(&real, &[], 9_000, [2.0, 0.0, 0.0, 2.0, 0.0, 0.0], config).unwrap();
+        let estimate = estimate_tip(
+            &real,
+            &[],
+            9_000,
+            [16.0, 0.0, 0.0, 16.0, 0.0, 0.0],
+            InstantFeedbackConfig::default(),
+        )
+        .unwrap();
         assert_eq!(estimate.source, TipSource::Engine);
         assert!((estimate.point.position.x - 106.0).abs() < 0.001);
     }

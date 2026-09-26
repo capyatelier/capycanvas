@@ -59,7 +59,7 @@ function Recording-File([string]$Path){
  $file=@{bytes=$null}
  Wait-Until {(Test-Path -LiteralPath $Path) -and ($file.bytes=[IO.File]::ReadAllBytes($Path)).Length -ge 10} "Stroke recording was not written to $Path" 20
  $bytes=$file.bytes
- if([Text.Encoding]::ASCII.GetString($bytes,0,8) -ne 'CAPYPEN2' -or $bytes[8] -ne 0x1f -or $bytes[9] -ne 0x8b){throw 'Stroke recording is not CAPYPEN2 followed by gzip'}
+ if([Text.Encoding]::ASCII.GetString($bytes,0,8) -ne 'CAPYPEN3' -or $bytes[8] -ne 0x1f -or $bytes[9] -ne 0x8b){throw 'Stroke recording is not CAPYPEN3 followed by gzip'}
  $bytes.Length
 }
 try{
@@ -92,7 +92,7 @@ try{
  Wait-Until {(Label) -eq 'Start stroke recording'} 'Second saved recording was not released'
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
  if(!$review.WaitForExit(15000)){throw 'Recording review did not close'}
- @{start_stop_save='passed';capypen2_gzip='passed';release_after_delivery='passed';cancel_retains='passed';first_bytes=$size;zero_exit='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+ @{start_stop_save='passed';capypen3_gzip='passed';release_after_delivery='passed';cancel_retains='passed';first_bytes=$size;zero_exit='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
  Get-Content (Join-Path $run 'results.json')
 }catch{
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace)

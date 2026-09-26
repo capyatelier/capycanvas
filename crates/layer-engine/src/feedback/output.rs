@@ -182,7 +182,7 @@ impl Output {
             // Reusing the old model's radius with a new velocity can clip a
             // correctly predicted curve to an obsolete braking envelope.
             // Measure this model's age travel at its accepted time.
-            self.maximum_distance = (config.max_prediction_distance_px
+            self.maximum_distance = (super::PREDICTION_DISTANCE_PX
                 + surface_distance(
                     self.anchor.position,
                     local.point_at(age).position,

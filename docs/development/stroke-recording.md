@@ -32,9 +32,9 @@ without prediction queries are valid.
 No screenshot or rendered prediction is stored. Positions and pen input can
 still reveal what was drawn. There is no upload or automatic on-disk retention.
 
-## Binary format v2
+## Binary format v3
 
-`.capystrokes` starts with the eight ASCII bytes `CAPYPEN2`, followed by one gzip
+`.capystrokes` starts with the eight ASCII bytes `CAPYPEN3`, followed by one gzip
 member. The decompressed stream contains repeated `[u32 little-endian length,
 payload]` frames. Payloads use the pinned bincode 2.0.1 serde codec with its
 standard configuration: little endian, variable-length integers, exact IEEE
@@ -79,8 +79,8 @@ Replay runs the current Smooth Motion predictor, including its corrections and
 native-prediction precedence, on the recorded inputs, policies and query timing.
 It writes per-query CSV to stdout and summary diagnostics to stderr;
 `--frames frames.jsonl` additionally exports the entire preview and causal
-actual-sample replacements. The v2 policy wire layout keeps
-its reserved integer slot, which new captures write as 3 and replay ignores.
+actual-sample replacements. Policies record only the runtime controls; the fixed
+Smooth Motion tuning is not stored.
 
 ## Evaluating visible stability and tracking
 
@@ -185,7 +185,7 @@ capture naming, hash-bound baselines and adding recordings from other tablets.
   input, the real system save dialog, cancellation and retry.
 - Windows: `stroke_recordings_save_off_thread_and_release_only_after_delivery`
   and `apps/layer-windows/scripts/exercise-stroke-recording.ps1`, which records a
-  controlled pen stroke, saves through the owned picker, checks the CAPYPEN2 gzip
+  controlled pen stroke, saves through the owned picker, checks the CAPYPEN3 gzip
   file, and confirms that a cancelled save keeps the recording for a retry.
 - Web: desktop and device harnesses accept `--stroke-recording`; this covers
   browser pen delivery, cancellation, provider failure, retry and binary export.

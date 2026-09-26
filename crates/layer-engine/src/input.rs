@@ -81,26 +81,18 @@ pub struct PenEvent {
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PressureCurve {
-    pub dead_zone: f32,
     pub gamma: f32,
-    pub ceiling: f32,
 }
 
 impl Default for PressureCurve {
     fn default() -> Self {
-        Self {
-            dead_zone: 0.0,
-            gamma: 1.0,
-            ceiling: 1.0,
-        }
+        Self { gamma: 1.0 }
     }
 }
 
 impl PressureCurve {
     pub fn map(self, raw: f32) -> f32 {
-        let span = (self.ceiling - self.dead_zone).max(f32::EPSILON);
-        let normalized = ((raw - self.dead_zone) / span).clamp(0.0, 1.0);
-        normalized.powf(self.gamma.max(0.01))
+        raw.clamp(0.0, 1.0).powf(self.gamma.max(0.01))
     }
 }
 

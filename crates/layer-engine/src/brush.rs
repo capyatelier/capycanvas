@@ -15,6 +15,8 @@ const SPEED_FILTER_SECONDS: f32 = 0.015;
 const PRESSURE_FALL_RESPONSE_SECONDS: f32 = 0.004;
 const MIN_DAB_DISTANCE: f32 = 0.25;
 const MAX_DABS_PER_SEGMENT: usize = 65_536;
+/// Power applied to the smooth endpoint-correction envelope.
+const CORRECTION_EASING: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug)]
 struct DynamicPoint {
@@ -650,19 +652,13 @@ impl DabGenerator {
 /// Smoothly distributes an endpoint correction over a replaceable contact
 /// tail. The first contact remains attached to the stable frontier and the last
 /// contact receives the full correction.
-pub(crate) fn lock_dab_tail(
-    dabs: &mut [Dab],
-    modeled_endpoint: Point,
-    target: Point,
-    strength: f32,
-    easing: f32,
-) {
-    if dabs.is_empty() || strength <= 0.0 {
+pub(crate) fn lock_dab_tail(dabs: &mut [Dab], modeled_endpoint: Point, target: Point) {
+    if dabs.is_empty() {
         return;
     }
     let correction = Point {
-        x: (target.x - modeled_endpoint.x) * strength,
-        y: (target.y - modeled_endpoint.y) * strength,
+        x: target.x - modeled_endpoint.x,
+        y: target.y - modeled_endpoint.y,
     };
     let count = dabs.len();
     let last = count.saturating_sub(1).max(1) as f32;
@@ -670,7 +666,7 @@ pub(crate) fn lock_dab_tail(
     for (index, dab) in dabs.iter_mut().enumerate() {
         let linear = if count == 1 { 1.0 } else { index as f32 / last };
         let smooth = linear * linear * (3.0 - 2.0 * linear);
-        let weight = smooth.powf(easing);
+        let weight = smooth.powf(CORRECTION_EASING);
         dab.center.x += correction.x * weight;
         dab.center.y += correction.y * weight;
         dab.motion[0] += correction.x * (weight - previous_weight);

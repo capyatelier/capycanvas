@@ -477,7 +477,7 @@ fn apple_stroke_recordings_capture_hover_and_contacts_and_export_compressed() {
         file.rewind().unwrap();
         let mut compressed = Vec::new();
         file.read_to_end(&mut compressed).unwrap();
-        assert!(compressed.starts_with(b"CAPYPEN2"));
+        assert!(compressed.starts_with(b"CAPYPEN3"));
         let records = layer_engine::recording::read(&compressed[..]).unwrap();
         use layer_engine::recording::Record;
         assert!(matches!(&records[0], Record::Metadata(text) if text.contains(name)), "{:?}", records[0]);

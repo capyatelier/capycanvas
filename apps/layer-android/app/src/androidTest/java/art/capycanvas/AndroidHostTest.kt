@@ -2051,7 +2051,6 @@ class AndroidHostTest {
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { !it.getJSONObject("settings").getBoolean("feedback") }
         compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsNotEnabled()
-        compose.onNodeWithTag("preference-tip_lock").assertDoesNotExist()
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { it.getJSONObject("settings").getBoolean("feedback") }
         compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsEnabled()

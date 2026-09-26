@@ -264,7 +264,6 @@ fn replay_contacts(
                                             raw,
                                             forecast.point,
                                             policy.transform,
-                                            config.max_prediction_distance_px,
                                         ))
                                     }),
                             );

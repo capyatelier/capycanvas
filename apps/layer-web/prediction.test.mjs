@@ -20,13 +20,11 @@ export async function checkPrediction({call, evaluate, settle}) {
   try {
     for (const available of [false, true]) {
       await evaluate(`layerApp.app.prediction_availability(${available})`);
-      await action({type:'restore_settings', settings:{...saved, feedback:true, platform_prediction:true, prediction_ms:23, tip_lock:.3}});
+      await action({type:'restore_settings', settings:{...saved, feedback:true, platform_prediction:true, prediction_ms:23}});
       await action({type:'open_settings', page:'input'});
       assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').disabled"), !available);
-      assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
       assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), available);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 23);
-      assert.ok(Math.abs(await evaluate("layerApp.state().settings.tip_lock") - .3) < .000001);
     }
     for (const enabled of [true, false]) {
       await action({type:'preferences', action:{type:'edit', id:'platform_prediction', value:enabled}});

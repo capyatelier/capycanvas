@@ -225,7 +225,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.camera.input_transform(),
                 PressureCurve {
                     gamma: self.state.settings.pressure_gamma,
-                    ..Default::default()
                 },
                 None,
             )
@@ -363,7 +362,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.camera.input_transform(),
                 PressureCurve {
                     gamma: self.state.settings.pressure_gamma,
-                    ..Default::default()
                 },
                 (!mask).then_some(
                     6. * self

@@ -40,7 +40,7 @@ export async function checkStrokeRecording({call, evaluate, settle}) {
     await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+15000;function check(){if(strokeTest.bytes&&!layerApp.app.stroke_recording_status().ready)resolve();else if(performance.now()>deadline)reject(Error('Recording export timed out'));else setTimeout(check,20);}check();})`);
     const result = await evaluate('({name:strokeTest.name,bytes:strokeTest.bytes,state:{ready:layerApp.app.stroke_recording_status().ready}})');
     assert.equal(result.name,'stroke-recording.capystrokes'); assert.equal(result.state.ready,false);
-    const bytes=Buffer.from(result.bytes);assert.equal(bytes.subarray(0,8).toString(),'CAPYPEN2');assert.ok(gunzipSync(bytes.subarray(8)).length>bytes.length);
+    const bytes=Buffer.from(result.bytes);assert.equal(bytes.subarray(0,8).toString(),'CAPYPEN3');assert.ok(gunzipSync(bytes.subarray(8)).length>bytes.length);
     const output=process.env.LAYER_TEST_ARTIFACTS || 'artifacts/stroke-recording-web';
     await mkdir(output,{recursive:true});await writeFile(`${output}/web.capystrokes`,bytes);
     assert.equal(await evaluate(`${button}.textContent`),'Start stroke recording');
