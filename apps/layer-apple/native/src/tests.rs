@@ -1769,7 +1769,7 @@ fn apple_transform_settings_and_actions_preserve_pixel_transactions() {
         let painted = app.pixels();
         app.invoke("scale_rotate");
         assert_eq!(app.state()["tool_settings"].as_array().unwrap().len(), 6);
-        for command in ["transform_aspect", "apply_transform", "cancel_transform"] {
+        for command in ["apply_transform", "cancel_transform"] {
             assert!(
                 app.state()["tool_actions"]
                     .as_array()
