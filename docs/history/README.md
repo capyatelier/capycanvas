@@ -30,6 +30,7 @@ remains at its existing path while implementation work continues.
 
 ## Workspace and settings
 
+- [Command search, shortcut presets, and device input audit — 2026-09-25](command-input-shortcut-audit-2026-09-25.md).
 - [Familiar drawing workspace (GTK review)](../familiar-workspace.md).
 - [Shared workspace logic audit](workspace-core-audit.md).
 - [Workspace management implementation](workspace-management-progress.md).
