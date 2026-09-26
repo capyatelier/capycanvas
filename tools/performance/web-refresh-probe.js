@@ -1,6 +1,6 @@
 // Injected by web-refresh.mjs before page code. Observation only unless probes
 // are explicitly enabled; all times are milliseconds since navigation.
-export function installRefreshProbe({ duration, probes, uiOnly, skipCatalog, quietCompiler, earlyRecovery }) {
+export function installRefreshProbe({ duration, probes, uiOnly }) {
   const trace = window.refreshTrace = {
     calls: [], gpu: [], workers: [], longtasks: [], frames: [], inputs: [],
     states: [], dialogs: [], probes: [], errors: [],
@@ -85,47 +85,21 @@ export function installRefreshProbe({ duration, probes, uiOnly, skipCatalog, qui
     return show.call(this);
   };
   cleanup.push(() => { HTMLDialogElement.prototype.showModal = show; });
-  const contacts = new Set(); let quietAt = 0;
-  for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'pointermove', 'keydown', 'wheel']) {
+  for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'keydown', 'wheel']) {
     listen(window, type, e => {
-      if (type === 'pointerdown') contacts.add(e.pointerId);
-      if (type === 'pointerup' || type === 'pointercancel') contacts.delete(e.pointerId);
-      if (type !== 'pointermove' || e.buttons) quietAt = now() + 500;
-      if (active() && type !== 'pointermove') trace.inputs.push({ type, start: now(), eventTime: e.timeStamp, target: e.target.id || e.target.tagName, pointer: e.pointerType });
+      if (active()) trace.inputs.push({ type, start: now(), eventTime: e.timeStamp, target: e.target.id || e.target.tagName, pointer: e.pointerType });
     }, { capture: true, passive: true });
   }
-  listen(window, 'blur', () => { contacts.clear(); quietAt = now() + 500; });
   listen(window, 'error', e => trace.errors.push(String(e.error || e.message)));
   listen(window, 'unhandledrejection', e => trace.errors.push(String(e.reason)));
   let attached = false;
   function attach() {
     if (attached || !window.layerApp) return;
     attached = true;
-    // Experimental ablations, never production fixes. Skipping the catalog can
-    // shift compilation to the first effect/preview use; measure that separately.
-    if (skipCatalog) {
-      const original = layerApp.app.load_filter_library;
-      cleanup.push(() => { layerApp.app.load_filter_library = original; });
-      layerApp.app.load_filter_library = () => ({ regions: 0, canvas_wake: false });
-    }
-    if (quietCompiler) {
-      const compile = layerApp.app.compile_startup_step.bind(layerApp.app);
-      cleanup.push(() => { layerApp.app.compile_startup_step = compile; });
-      layerApp.app.compile_startup_step = async (...args) => {
-        while (active() && layerApp.app.brush_ready() && (contacts.size || now() < quietAt || document.querySelector('dialog[open],details[open]'))) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        return compile(...args);
-      };
-    }
-    for (const name of ['frame', 'compile_startup_step', 'load_filter_library', 'attach_gpu', 'prepare_document', 'adopt_document', 'capture_tab_recovery', 'workspace_tick']) {
+    for (const name of ['frame', 'compile_startup_step', 'attach_gpu', 'prepare_document', 'adopt_document', 'capture_tab_recovery', 'workspace_tick']) {
       wrap(layerApp.app, name, trace.calls);
     }
     for (const name of ['startRecovery', 'autosave']) wrap(layerApp.documents, name, trace.calls);
-    if (earlyRecovery) {
-      Promise.resolve().then(() => layerApp.documents.startRecovery())
-        .catch(error => trace.errors.push(`Early recovery experiment: ${error}`));
-    }
   }
   const mark = performance.mark.bind(performance);
   performance.mark = (...args) => { if (args[0] === 'capy.startup.ui') attach(); return mark(...args); };

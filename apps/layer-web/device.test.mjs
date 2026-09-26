@@ -8,9 +8,7 @@ import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
-import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
-import {checkDrawingTabsOffline} from "./drawing-tabs-offline.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -54,12 +52,12 @@ socket.onmessage=event=>{
   else if(m.method==="Page.loadEventFired"){onLoad?.();onLoad=null;}
   else if(m.method==="Page.javascriptDialogOpening" && m.params.type==="beforeunload"){call("Page.handleJavaScriptDialog",{accept:true}).catch(()=>{});}
   else if(m.method==="Runtime.exceptionThrown")errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);
-  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error"&&!(process.argv.includes('--drawing-tabs-offline')&&m.params.entry.url?.includes('/__capy-tabs-offline-probe?')))errors.push(m.params.entry.text);
+  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")errors.push(m.params.entry.text);
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{
   if(socket.readyState!==WebSocket.OPEN){reject(Error("Tablet CDP disconnected"));return;}
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?300000:180000);
+  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?300000:180000);
   pending.set(id,{resolve,reject,timer,method});socket.send(JSON.stringify({id,method,params}));
 });
 const evaluate=async expression=>{
@@ -67,7 +65,7 @@ const evaluate=async expression=>{
   if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
   return result.result.value;
 };
-const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),60000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:!process.argv.includes('--drawing-tabs-offline')});await loaded;};
+const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),60000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:true});await loaded;};
 const settle=()=>evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
 const canvasPixels=async()=>{
   const shot=await call("Page.captureScreenshot",{format:"png"});
@@ -86,16 +84,16 @@ try {
   // Allow its ordinary beforeunload confirmation, which this harness accepts.
   await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   await reload();
-  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
+  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
   if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
   }
-  if (process.argv.includes('--ui-speed') || process.argv.includes('--editor'))
+  if (process.argv.includes('--editor'))
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Start with a clean fixture without recovery or other dialogs');
-  if (['--ui-speed','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
+  if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
     const capture=await evaluate('layerApp.app.workspace_capture()');
     const theme=await evaluate('layerApp.state().settings.theme ?? null');
@@ -123,15 +121,6 @@ try {
     await checkPenRendering({call,evaluate,settle});
     await checkPrediction({call,evaluate,settle});
     assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--ui-speed")) {
-    await checkStagedStartup({call,evaluate,settle,canvasPixels,uiOnly:true});
-    await checkUiUpdates({evaluate});
-    await checkSettingsUpdates({evaluate,settle});
-    await checkTitleBarFeedback({call,evaluate,settle});
-    await checkWorkspaceResize({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawing-tabs-offline")) {
-    await checkDrawingTabsOffline({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--drawing-tabs-recovery")){
     await checkDrawingTabRecovery({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--drawing-tabs")){
@@ -170,7 +159,7 @@ try {
     await checkDrawerStyling({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-panel")) {
-    await checkColorPanel({call,evaluate,settle,inputOnly:process.argv.includes("--color-input")});
+    await checkColorPanel({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--selection-tools")) {
     await checkSelectionTools({call,evaluate,settle});

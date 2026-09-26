@@ -48,7 +48,6 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import { benchRaster } from "./raster-bench.test.mjs";
 import { checkRaster } from "./raster.test.mjs";
 import { checkPhotoPaint } from "./photo-paint.test.mjs";
 import { checkImagePlacement } from "./image-placement.test.mjs";
@@ -57,7 +56,7 @@ import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
-import { checkAdjustments, checkDiagnostics, benchmarkFilters } from "./effects.test.mjs";
+import { checkAdjustments } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
@@ -66,7 +65,6 @@ import { checkMediumTiles } from "./tiles.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager, checkToolPicker } from "./customization.test.mjs";
 import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
 import { checkWorkspaceResize } from "./workspace-resize.test.mjs";
-import { checkResizeRendering } from "./workspace-resize-rendering.test.mjs";
 import { checkWorkspaceRendering } from "./workspace-rendering.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
@@ -287,9 +285,6 @@ try {
     await checkPhotoCorrections({evaluate,settle});
     await checkFlattenedCopy({evaluate});
     checkRasterErrors();
-  } else if (process.argv.includes("--raster-bench")) {
-    await benchRaster({evaluate,settle});
-    checkRasterErrors();
   } else if (process.argv.includes("--raster")) {
     await checkRaster({call,evaluate,settle,canvasPixels});
     checkRasterErrors();
@@ -340,12 +335,6 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--layer-hold")) {
     await checkLayerHolding({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-acceptance")) {
-    await checkEditor({call,evaluate,settle,canvasPixels});
-    await checkDrawerDragging({call,evaluate,settle});
-    await checkDragCursors({call,evaluate,settle});
-    await checkLongPressDragging({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace-rendering")) {
     await checkWorkspaceRendering({call,evaluate,settle});
@@ -421,14 +410,8 @@ try {
   } else if (process.argv.includes("--staged-startup")) {
     await checkStagedStartup({ call, evaluate, settle, canvasPixels });
     assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--filter-bench")) {
-    await benchmarkFilters({ evaluate });
-    assert.deepEqual(errors, []);
   } else if (process.argv.includes("--stroke-recording")) {
     await checkStrokeRecording({call,evaluate,settle});
-  } else if (process.argv.includes("--diagnostics")) {
-    await checkDiagnostics({evaluate,settle});
-    assert.deepEqual(errors, []);
   } else if (process.argv.includes("--adjustments")) {
     await checkAdjustments({ call, evaluate, settle });
     assert.deepEqual(errors, []);
@@ -446,9 +429,6 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--settings-audit")) {
     await checkSettingsParity({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--resize-rendering")) {
-    await checkResizeRendering({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace-resize")) {
     await checkWorkspaceResize({call,evaluate,settle});

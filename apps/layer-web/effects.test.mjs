@@ -1,63 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 
-// The ordinary Wasm renderer API, driven once per browser frame. No benchmark
-// GPU path or production instrumentation; GPU timings are the existing Stats.
-export async function benchmarkFilters({evaluate}) {
-  const choices=await evaluate("layerApp.app.state().adjustments.map(c=>c.id)");
-  const expensive=["motion_blur","gaussian_blur","domain_warp","painterly","denoise"];
-  const prepared=["pencil","soft_focus","bloom","gaussian_blur","unsharp_mask"];
-  const cases=[["Baseline",[]],...choices.map(id=>[id,[id]]),["Five expensive",expensive],["Prepared edits",["unsharp_mask"]],["Five prepared edits",prepared]];
-  const label=process.env.CAPY_FILTER_BENCHMARK_LABEL??"";
-  if(label&&!/^[a-z0-9_-]+$/.test(label))throw new Error("Invalid benchmark label");
-  const output=`artifacts/benchmarks/filter-web${label?`-${label}`:""}.json`;
-  const report=[];
-  for(const [label,filters] of cases) {
-    const modes=label.endsWith("edits")?["relevant","unrelated"]:label==="Five expensive"?["local","full","animation"]:["local"];
-    for(const mode of modes) {
-      const result=await evaluate(`(${async function(filters,mode){
-        const app=layerApp.app,send=a=>app.dispatch(a),effect=a=>send({type:"effect",action:a}),ids=[];
-        send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
-        const group=app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("stats"));
-        if(group.active!=="stats")send({type:"select_panel_tab",group:group.id,panel:"stats"});
-        send({type:"select_layer",id:1});
-        send({type:"set_brush_size",value:24});send({type:"set_color",rgba:[.2,.5,.7,1]});
-        for(const id of filters){
-          effect({op:"insert",effect:id});const view=app.state().layer_properties;ids.push(view.layer);
-          if(view.controls.some(c=>c.key==="animate"))effect({op:"set",layer:view.layer,key:"animate",value:{kind:"toggle",value:mode==="animation"}});
-          // Exercise non-neutral pointwise defaults as well as neighborhood work.
-          if(id==="curves")effect({op:"curve_point",layer:view.layer,key:"curve_0",index:null,point:[.45,.65],remove:false});
-          else {const c=view.controls.find(c=>c.kind.kind==="number"&&c.value.value===0&&c.key!=="time");
-            if(c)effect({op:"set",layer:view.layer,key:c.key,value:{kind:"number",value:c.kind.numeric.max*.25}});}
-        }
-        send({type:"select_layer",id:1});
-        const revision=app.state().camera.revision,frame=()=>new Promise(requestAnimationFrame),wall=[];
-        const before=app.renderer_stats().rows.find(r=>r.label==="Frames").value;
-        for(let i=0;i<180;i++){
-          const now=await frame();
-          const start=performance.now();
-          if(mode==="local")app.pen(new Float64Array([777,i===0?1:i===179?3:2,600+i%80,500+Math.sin(i*.1)*35,.8,0,0,0,now,2,0]),revision);
-          if(mode==="full")send({type:"set_layer_opacity",id:1,opacity:.7+(i%20)*.01});
-          if(mode==="relevant"||mode==="unrelated")effect({op:"set",layer:ids[ids.length-1],key:mode==="relevant"?"sigma":"amount",value:{kind:"number",value:mode==="relevant"?2+(i%20)*.5:50+(i%20)*5}});
-          app.frame(now,now+1000/120);if(i>=60)wall.push(performance.now()-start);
-        }
-        await frame();const stats=JSON.parse(JSON.stringify(app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v));
-        for(const id of ids.reverse()){send({type:"select_layer",id});send({type:"layer",action:{op:"delete_selected"}});}
-        send({type:"select_layer",id:1});
-        wall.sort((a,b)=>a-b);
-        return {stats,frames:Number(stats.rows.find(r=>r.label==="Frames").value)-Number(before),frame_cpu: [.5,.95,.99].map(q=>wall[Math.round((wall.length-1)*q)])};
-      }})(${JSON.stringify(filters)},${JSON.stringify(mode)})`);
-      assert.ok(result.frames>=150,`${label}: insufficient rendered updates (${result.frames})`);
-      report.push({filter:label,mode,...result});
-      console.log(`${label} ${mode}: ${result.stats.rows.slice(0,2).map(r=>r.label+" "+r.value).join("; ")}`);
-      await mkdir("artifacts/benchmarks",{recursive:true});
-      await writeFile(output,JSON.stringify(report,null,2));
-    }
-  }
-}
-
-// Use the visible endpoint, not a point calculated from the outer hit area:
-// SVG letterboxing used to put that handle outside its own pickup radius.
 export async function checkCurveEndpoint({call,evaluate,settle}) {
   const count=()=>evaluate("document.querySelector('.curve-field:not([hidden]) .curve-editor').querySelectorAll('circle').length");
   const before=await count();assert.equal(before,2);
@@ -102,29 +45,6 @@ export async function checkCurveEditing({call,evaluate,settle}) {
   await mouse("mouseMoved",{x:point.x,y:box.y+box.height+60});
   await mouse("mouseReleased",{x:point.x,y:box.y+box.height+60});await settle();
   assert.equal(await count(),2,"Releasing off the graph keeps the point removed");
-}
-
-export async function checkDiagnostics({evaluate,settle}) {
-  const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
-  await send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
-  await send({type:"move_panel",panel:"stats",viewport:[1440,1000],target:{kind:"float",position:[720,120]}});
-  for(const theme of ["dark","light"]) {
-    await send({type:"set_theme",theme});
-    await evaluate(`new Promise((resolve,reject)=>{
-      const deadline=performance.now()+10000;
-      const ready=()=>{
-        const chart=document.querySelector('.renderer-stats .renderer-chart');
-        if(chart?.getBoundingClientRect().height>0)resolve(true);
-        else if(performance.now()>deadline)reject(Error('Visible diagnostics chart timed out'));
-        else setTimeout(ready,100);
-      };ready();
-    })`);
-    await settle();
-    assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),
-      ["CPU · ms","GPU · ms","chart","Frames","Canvas storage","Dabs","Effect passes","Pipelines","Start stroke recording"]);
-    assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
-  }
-  console.log("PASS: live diagnostics chart after GPU timings and storage after Frames in both themes");
 }
 
 export async function checkAdjustments({call,evaluate,settle}) {

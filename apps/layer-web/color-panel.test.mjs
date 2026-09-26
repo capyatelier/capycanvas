@@ -3,7 +3,7 @@ import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 
 // Production DOM, Rust color policy, and real Chrome input (including pen).
-export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
+export async function checkColorPanel({call,evaluate,settle}) {
   const native=process.argv.includes('--native-input'),inputDir=process.env.LAYER_NATIVE_INPUT_DIR;
   let nativeStep=0;
   const performNative=async events=>{
@@ -48,7 +48,6 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
   const resizePanel=async(width,height=width+36)=>{await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence(),f=workspace.layout.floating.find(f=>f.root.panels?.includes('color'));f.width=${width};f.height=${height};layerApp.dispatch({type:'restore_workspace',workspace});})()`);await settle();};
   const setShape=shape=>send({type:'color',action:{op:'shape',shape}});
   const reports=[];
-  if(!inputOnly) {
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:2,mobile:false});
   await settle();
   for(const theme of ['dark','light'])for(const width of [144,160,200,280,360]) {
@@ -137,9 +136,6 @@ export async function checkColorPanel({call,evaluate,settle,inputOnly=false}) {
   })()`);
   await writeFile(`${output}/raster-resolution.json`,JSON.stringify(sampling,null,2));
   for(const sample of sampling)assert.ok(sample.maximum<=2,`Disc interpolation: ${JSON.stringify(sample)}`);
-  } else {
-    await call('Emulation.clearDeviceMetricsOverride');await resizePanel(100,180);await setShape('circle');
-  }
   if(native)await writeFile(`${inputDir}/ready`,'ready');
   for(const device of ['mouse','touch','pen']) {
     console.log('Color panel input:',device);

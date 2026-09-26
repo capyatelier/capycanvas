@@ -16,9 +16,6 @@ import { replayRefreshStrokes } from './web-refresh-strokes.mjs';
 const uiOnly = process.argv.includes('--desktop-ui-only');
 const software = process.argv.includes('--desktop-software');
 const desktop = uiOnly || software;
-const skipCatalog = process.argv.includes('--skip-catalog');
-const quietCompiler = process.argv.includes('--quiet-compiler');
-const earlyRecovery = process.argv.includes('--early-recovery');
 const url = process.env.LAYER_WEB_URL || 'http://127.0.0.1:4197/';
 const output = process.env.LAYER_TEST_ARTIFACTS || 'artifacts/web-refresh';
 const duration = Number(process.env.LAYER_REFRESH_MS || 60000);
@@ -90,7 +87,7 @@ try {
   for (const domain of ['Page', 'Runtime', 'Network']) await call(`${domain}.enable`);
   await call('Page.bringToFront');
   ({ identifier: preload } = await call('Page.addScriptToEvaluateOnNewDocument', {
-    source: `(${installRefreshProbe.toString()})(${JSON.stringify({ duration, uiOnly, skipCatalog, quietCompiler, earlyRecovery, probes: process.argv.includes('--probes') })})`,
+    source: `(${installRefreshProbe.toString()})(${JSON.stringify({ duration, uiOnly, probes: process.argv.includes('--probes') })})`,
   }));
   for (let run = 0; run < runs; run++) {
     if (process.argv.includes('--timeline')) {
@@ -134,7 +131,6 @@ try {
       workspace: JSON.parse(layerApp.app.workspace_view()).name,
     })`);
     result.mode = uiOnly ? 'desktop UI only; GPU disabled' : software ? 'desktop software WebGPU; not hardware timing' : 'attached browser';
-    result.ablations = { skipCatalog, quietCompiler, earlyRecovery };
     result.probed = process.argv.includes('--probes'); result.cdpErrors = [...errors];
     result.strokes = !!strokeWork;
     result.instrumentation = { timeline: process.argv.includes('--timeline'), profile: process.argv.includes('--profile') };

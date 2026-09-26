@@ -185,10 +185,8 @@ Use `--bypass-http-cache` once after rebuilding to avoid mixing new JS with old
 Wasm. It does not clear shader caches. Repeat separately with `--probes` for
 menus; use `--strokes` on an empty dedicated drawing and at least 30 seconds for
 the final build (75 seconds for the old baseline). `--timeline --profile` adds
-Chrome GPU/main-thread attribution and profiling overhead. The experimental
-`--skip-catalog`, `--quiet-compiler` and `--early-recovery` switches are retained
-for reproducing the old investigation, not for validating final production
-behavior. Software/GPU-disabled desktop runs are harness checks only.
+Chrome GPU/main-thread attribution and profiling overhead. Software/GPU-disabled
+desktop runs are harness checks only.
 
 For recovery, open a known image and let its checkpoint finish, then refresh.
 Accept Recover during capture to retain both initial and restored renderer
