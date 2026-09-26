@@ -23,7 +23,6 @@ function Undo-Redo([string]$Before,[string]$After) {
     Layer-History 'Undo';Wait-Until {(Rows) -eq $Before} 'Final Undo did not restore the fixture'
 }
 function Reveal([string]$Id) {
-    # Accepted drags near the short list's edge legitimately auto-scroll it.
     $item=Find $Id
     if($Id -notlike 'layer-*' -or !$item -or !$item.Current.IsOffscreen){return}
     $scroll=(Find 'layer-list').GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
@@ -104,7 +103,6 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
         Pick-Up $Id $Layer
         Move-To $to
     }
-    # Edge auto-scroll can leave the pointer over the next sibling: above it is the same slot.
     $layers=@((Model).state.layers);$index=[Array]::IndexOf(@($layers.id),[int64]$Target)
     $next=if($index -ge 0 -and $index+1 -lt $layers.Count -and $layers[$index+1].depth -eq $layers[$index].depth){$layers[$index+1].id}
     Wait-Until {
