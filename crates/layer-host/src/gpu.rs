@@ -60,7 +60,6 @@ impl GpuContext {
             None => WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color),
         }
         .map_err(|e| e.to_string())?;
-        gpu.enable_demand_shaders();
         gpu.configure_ui_previews(options.ui_color.preview_space())
             .map_err(|e| e.to_string())?;
         if finish_cache {
@@ -111,7 +110,7 @@ mod tests {
     use layer_render::CanvasRenderer;
 
     #[test]
-    fn renderer_factory_enables_demand_shaders_and_follows_host_ui_color() {
+    fn renderer_factory_admits_input_and_follows_host_ui_color() {
         let color = DocumentColor::default();
         let headless = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut host = crate::NativeHost::new(layer_ui::Platform::Mac).unwrap();

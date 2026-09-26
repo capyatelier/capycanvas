@@ -1,9 +1,8 @@
 # Shared shader readiness
 
-Android, Apple, GTK, Web and Windows now use the same demand-driven dependency
-tracking and input admission policy in `layer-render-wgpu`. This extends the
-[Web refresh work](web-refresh-responsiveness.md). Apple and Windows still need
-the device validation below before the legacy warmup path is removed.
+Every host uses the same demand-driven dependency tracking and input admission
+policy in `layer-render-wgpu`. This extends the
+[Web refresh work](web-refresh-responsiveness.md).
 
 ## What changes
 
@@ -43,8 +42,7 @@ does not add persistence for later first-use variants.
 
 Net code growth supports lifetime dependency identity, the common admission
 policy, host input bridges and regression coverage. Superseded catalog loading
-and the separate browser quiet-time policy are removed. Legacy eager warming
-remains in the renderer until that device validation completes.
+and the separate browser quiet-time policy are removed.
 
 ## Measurements, 2026-09-25
 
@@ -125,8 +123,7 @@ Use an unminified benchmark plus its matching test APK for white-box Android tes
 ## Windows integration
 
 Windows builds its live, file-open and resumed-tab renderers with the shared
-`layer_host::GpuContext::rasterizer` factory, which enables demand shaders;
-color candidates inherit the live device setting. Window pointer, chrome, key and
+`layer_host::GpuContext::rasterizer` factory. Window pointer, chrome, key and
 action traffic already reaches the shared `UiSession` on the render owner, which
 forwards `shader_input()`, so no separate observer is needed. Startup no longer
 reloads the embedded catalog or stages `Assets/filters`; `CAPY_FILTERS_DIR` remains
@@ -135,9 +132,8 @@ an explicit override, and identical library refreshes are no-ops.
 ## Apple integration
 
 Apple builds its live, file-open and resumed-tab renderers with the same shared
-factory; color candidates inherit the live device setting. Native window input
-reaches the shared `UiSession`, which forwards `shader_input()`. Removing Apple's
-duplicate startup catalog loading and extending the identical-library no-op
-remain open. Validate first-use effects/tools, failed compilation/restart, held
-contacts, rapid edits, document restoration and cache reuse on Apple and Windows
-devices before removing the legacy warmup path.
+factory. Native window input reaches the shared `UiSession`, which forwards
+`shader_input()`. Removing Apple's duplicate startup catalog loading and
+extending the identical-library no-op remain open. First-use effects/tools,
+failed compilation/restart, held contacts, rapid edits, document restoration and
+cache reuse still need validation on Apple and Windows devices.

@@ -46,13 +46,6 @@ impl Masks {
             }
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn remaining(&mut self, compiler: &startup::Compiler) {
-        for mask in &mut self.0 {
-            mask.priority = mask.priority.min(startup::OTHER);
-            compiler.pipeline(&mask.pixels, startup::OTHER);
-        }
-    }
     pub fn ready_through(&self, priority: u8) -> bool {
         self.0.iter().all(|m| m.priority > priority || m.uploaded)
     }

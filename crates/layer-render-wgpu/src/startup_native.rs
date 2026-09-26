@@ -52,7 +52,6 @@ impl Activity {
 }
 impl Compiler {
     pub fn activity(&self) -> Activity { Activity(self.0.clone()) }
-    pub fn enable_admission(&self) { self.0.queue.lock().unwrap().admission.enabled = true; }
     pub fn input(&self) { self.activity().input(); }
     pub fn idle(&self, idle: bool) { self.activity().idle(idle); }
     pub fn delay(&self) -> std::time::Duration { self.0.queue.lock().unwrap().admission.delay() }
@@ -219,7 +218,6 @@ mod tests {
     #[test]
     fn input_admission_resumes_without_polling_and_promoted_dependencies_run_once() {
         let compiler = Compiler::new().unwrap();
-        compiler.enable_admission();
         compiler.idle(false);
         compiler.input();
         let (ran, events) = mpsc::channel();

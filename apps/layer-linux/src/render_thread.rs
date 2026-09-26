@@ -1312,7 +1312,6 @@ impl Worker {
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
             adapter, device, queue, &cache, color,
         ).map_err(error)?;
-        renderer.enable_demand_shaders();
         renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))

@@ -175,7 +175,6 @@ impl Requirements {
 }
 pub(super) struct Startup {
     pub compiler: Compiler,
-    pub demand: bool,
     masks: builtin_masks::Masks,
     document_key: Option<ShaderDocument>,
     brush: Option<BrushSnapshot>,
@@ -184,8 +183,6 @@ pub(super) struct Startup {
     current: Requirements,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
     effects_ready: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    others_queued: bool,
     pub(super) host_catalog_pending: bool,
     pub(super) finished: bool,
 }
@@ -198,10 +195,8 @@ impl Startup {
         };
         #[cfg(target_arch = "wasm32")]
         let compiler = Compiler::new(device)?;
-        if device.demand_shaders { compiler.enable_admission(); }
         Ok(Self {
             compiler,
-            demand: device.demand_shaders,
             masks: builtin_masks::Masks::new(),
             document_key: None,
             brush: None,
@@ -210,22 +205,12 @@ impl Startup {
             current: Requirements::default(),
             effects: None,
             effects_ready: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            others_queued: false,
             host_catalog_pending: false,
             finished: false,
         })
     }
 }
 impl WgpuRasterizer {
-    /// Opt in before submitting paper.
-    pub fn enable_demand_shaders(&mut self) {
-        self.device.demand_shaders = true;
-        if let Some(startup) = &mut self.startup {
-            startup.demand = true;
-            startup.compiler.enable_admission();
-        }
-    }
     pub fn shader_input(&self) {
         if let Some(startup) = &self.startup { startup.compiler.input(); }
     }
@@ -284,10 +269,9 @@ impl WgpuRasterizer {
         transform: bool,
     ) -> bool {
         self.startup.as_ref().is_some_and(|s| {
-            (s.demand || !s.finished)
-                && (s.document_key.as_ref().is_none_or(|key| !key.matches(document))
-                    || s.brush.as_ref() != Some(brush)
-                    || s.transform != transform)
+            s.document_key.as_ref().is_none_or(|key| !key.matches(document))
+                || s.brush.as_ref() != Some(brush)
+                || s.transform != transform
         })
     }
     /// Called after the blank canvas has been submitted. Document, brush and
@@ -449,59 +433,6 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.brush = Some(brush.clone());
         startup.transform = transform;
-        // Legacy hosts warm everything. Demand-driven hosts retain recipes
-        // and request only dependencies of the current document/tool.
-        #[cfg(not(target_arch = "wasm32"))]
-        if !startup.demand && !startup.others_queued {
-            startup.masks.remaining(&startup.compiler);
-            if let Some(native) = &self.native_edit {
-                for p in native.pipelines() { startup.compiler.pipeline(p, OTHER); }
-            }
-            if self.device.working_format() == wgpu::TextureFormat::Rgba32Float {
-                let mip = self.display_pipelines
-                    .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                startup.compiler.pipeline(&mip.reduce, OTHER);
-                startup.compiler.pipeline(&mip.fused_reduce, OTHER);
-            }
-            for p in self
-                .pipelines
-                .direct
-                .iter()
-                .chain(&self.pipelines.material)
-                .chain(&self.pipelines.material_gather)
-                .chain(&self.pipelines.watercolor_transport)
-                .chain([
-                    &self.pipelines.reservoir,
-                    &self.pipelines.stroke_edge,
-                    &self.pipelines.watercolor_composite,
-                    &self.pipelines.export,
-                ])
-                .chain(self.layer_masks.brush.iter())
-                .chain([&self.layer_masks.initialize])
-            {
-                startup.compiler.pipeline(p, OTHER);
-            }
-            if let Some(dry) = &self.pipelines.dry_material {
-                for p in &dry.kernels { startup.compiler.pipeline(p, OTHER); }
-            }
-            for p in [
-                &self.selection_clip.crossings,
-                &self.selection_clip.fill,
-                &self.selection_clip.resample,
-            ] {
-                startup.compiler.pipeline(p, OTHER);
-            }
-            for p in self.transforms.as_ref().unwrap().pipelines() {
-                startup.compiler.pipeline(p, OTHER);
-            }
-            let regions = self
-                .regions
-                .get_or_insert_with(|| region_requests::RegionRequests::new(&self.device));
-            for p in regions.flood.pipelines().chain(regions.raw.pipelines()) {
-                startup.compiler.pipeline(p, OTHER);
-            }
-            startup.others_queued = true;
-        }
         startup.compiler.start();
         self.startup = Some(startup);
         Ok(())
@@ -521,13 +452,6 @@ impl WgpuRasterizer {
             });
         };
         startup.compiler.check()?;
-        if !startup.demand && startup.finished {
-            return Ok(StartupProgress {
-                canvas_ready: true,
-                brush_ready: true,
-                complete: true,
-            });
-        }
         if let Some(rx) = &startup.effects {
             match rx.try_recv() {
                 Ok(result) => {
@@ -681,7 +605,6 @@ mod gpu_tests {
             color,
         )
         .unwrap();
-        renderer.enable_demand_shaders();
         renderer.finish_startup_cache();
         assert!(renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()));
         assert!(
@@ -861,342 +784,6 @@ mod gpu_tests {
                 .flood
                 .pipelines()
                 .all(Deferred::ready)
-        );
-    }
-    #[test]
-    fn live_transform_promotes_dependencies_without_blocking_the_caller() {
-        let reference = WgpuRasterizer::new_headless().unwrap();
-        let mut renderer = WgpuRasterizer::from_wgpu_staged(
-            reference.adapter.clone(),
-            reference.device().clone(),
-            reference.queue.clone(),
-        )
-        .unwrap();
-        let (release, wait) = mpsc::channel();
-        let (entered, blocked) = mpsc::channel();
-        renderer
-            .startup
-            .as_ref()
-            .unwrap()
-            .compiler
-            .enqueue(OTHER, move || {
-                entered.send(()).map_err(|e| e.to_string())?;
-                wait.recv_timeout(Duration::from_secs(20))
-                    .map_err(|e| e.to_string())
-            });
-        let doc = Document::new("Live transform readiness", 128, 128);
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
-        renderer.prepare_startup(&doc, &brush, false).unwrap();
-        blocked.recv_timeout(Duration::from_secs(20)).unwrap();
-        assert!(renderer.poll_startup().unwrap().brush_ready);
-        assert!(!renderer.startup_needs_update(&doc, &brush, false));
-        assert!(renderer.startup_needs_update(&doc, &brush, true));
-        let start = std::time::Instant::now();
-        renderer.prepare_startup(&doc, &brush, true).unwrap();
-        let progress = renderer.poll_startup().unwrap();
-        assert!(!progress.canvas_ready && !progress.brush_ready);
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "Never join the compiler on the input/render thread"
-        );
-        assert!(
-            renderer
-                .transforms
-                .as_ref()
-                .unwrap()
-                .pipelines()
-                .iter()
-                .all(|p| !p.ready())
-        );
-        let pending = renderer.startup.as_ref().unwrap().compiler.pending();
-        renderer.prepare_startup(&doc, &brush, true).unwrap();
-        assert_eq!(
-            renderer.startup.as_ref().unwrap().compiler.pending(),
-            pending,
-            "Unchanged requirements must not enqueue duplicate preparation"
-        );
-        // Cancel while compilation is pending. The unchanged canvas can resume.
-        renderer.prepare_startup(&doc, &brush, false).unwrap();
-        assert!(renderer.poll_startup().unwrap().brush_ready);
-        renderer.prepare_startup(&doc, &brush, true).unwrap();
-        assert!(!renderer.poll_startup().unwrap().canvas_ready);
-        assert_eq!(
-            renderer.startup.as_ref().unwrap().compiler.pending(),
-            pending
-        );
-        release.send(()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !renderer.poll_startup().unwrap().brush_ready {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(
-            renderer
-                .transforms
-                .as_ref()
-                .unwrap()
-                .pipelines()
-                .iter()
-                .all(|p| p.ready())
-        );
-        assert!(renderer.selection_clip.crossings.ready());
-        assert!(renderer.selection_clip.fill.ready());
-        assert!(renderer.selection_clip.resample.ready());
-        while !renderer.poll_startup().unwrap().complete {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(!renderer.startup_needs_update(&doc, &brush, false));
-        assert!(!renderer.startup_needs_update(&doc, &brush, true));
-    }
-    #[test]
-    fn loaded_filters_and_current_brush_render_before_unused_pipelines() {
-        verify_document_startup(0);
-    }
-    #[test]
-    fn saved_transforms_compile_before_document_replay() {
-        verify_document_startup(1);
-    }
-    #[test]
-    fn saved_mask_transforms_compile_before_document_replay() {
-        verify_document_startup(2);
-    }
-    fn verify_document_startup(target: u8) {
-        let transform = target != 0;
-        let mut reference = WgpuRasterizer::new_headless().unwrap();
-        let mut renderer = WgpuRasterizer::from_wgpu_staged(
-            reference.adapter.clone(),
-            reference.device().clone(),
-            reference.queue.clone(),
-        )
-        .unwrap();
-        assert!(renderer.pipelines.material.iter().all(|p| !p.ready()));
-        assert!(renderer.pipelines.direct.iter().all(|p| !p.ready()));
-        assert!(
-            renderer
-                .transforms
-                .as_ref()
-                .unwrap()
-                .pipelines()
-                .iter()
-                .all(|p| !p.ready())
-        );
-        let (release, wait) = mpsc::channel();
-        renderer
-            .startup
-            .as_ref()
-            .unwrap()
-            .compiler
-            .enqueue(OTHER, move || {
-                wait.recv_timeout(Duration::from_secs(30))
-                    .map_err(|e| e.to_string())
-            });
-        let mut doc = Document::new("startup filters", 128, 128);
-        let asset = AssetId("startup checker".into());
-        doc.layers[0].asset = Some(asset.clone());
-        if transform {
-            doc.layers[0]
-                .pending_operations
-                .push(layer_core::LayerOperation {
-                    placement: layer_core::Affine::IDENTITY,
-                    coverage: layer_core::LayerMask::reveal_all(
-                        LayerId(100),
-                        layer_core::Point::default(),
-                    ),
-                    kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform::affine(
-                        layer_core::Affine::translation(layer_core::Point { x: 9., y: 13. }),
-                    )),
-                });
-            if target == 2 {
-                let mut mask =
-                    layer_core::LayerMask::reveal_all(LayerId(9), layer_core::Point::default());
-                mask.default_coverage = 0.;
-                mask.initial = Some(
-                    layer_core::Selection::polygon(vec![
-                        layer_core::Point { x: 10., y: 10. },
-                        layer_core::Point { x: 110., y: 10. },
-                        layer_core::Point { x: 10., y: 110. },
-                    ])
-                    .unwrap(),
-                );
-                mask.pending_operations =
-                    Arc::new(std::mem::take(&mut doc.layers[0].pending_operations));
-                doc.layers[0].mask = Some(mask);
-            }
-        }
-        for (i, id) in ["domain_warp", "curves", "curves"].into_iter().enumerate() {
-            let mut layer = Layer::paint(LayerId(10 + i as u64), id);
-            layer.kind = LayerKind::Effect;
-            layer.effect = Some(Arc::new(layer_core::EffectInstance::new(
-                layer_core::bundled_effect_catalog()
-                    .get(id)
-                    .unwrap()
-                    .program(),
-            )));
-            doc.layers.insert(0, layer);
-        }
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
-        let bytes: Vec<_> = (0..128 * 128)
-            .flat_map(|i| {
-                if (i % 128 / 16 + i / 128 / 16) % 2 == 0 {
-                    [220, 30, 80, 255]
-                } else {
-                    [20, 190, 140, 255]
-                }
-            })
-            .collect();
-        for r in [&mut reference, &mut renderer] {
-            r.prepare_asset(
-                &asset,
-                HostImage {
-                    width: 128,
-                    height: 128,
-                    stride: 512,
-                    format: PixelFormat::Rgba8Srgb,
-                    bytes: &bytes,
-                },
-            )
-            .unwrap();
-        }
-        renderer.prepare_startup(&doc, &brush, false).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        loop {
-            let progress = renderer.poll_startup().unwrap();
-            if progress.brush_ready {
-                assert!(!progress.complete);
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(
-            renderer
-                .pipelines
-                .material
-                .iter()
-                .enumerate()
-                .all(|(index, p)| {
-                    let required = index
-                        == MaterialPipelineKind::Coverage.index(MaterialOperation::Coverage)
-                        || index == MaterialPipelineKind::Color.index(MaterialOperation::Coverage);
-                    !p.ready() || required
-                }),
-            "Unrelated material shaders must not gate current content"
-        );
-        assert!(
-            renderer
-                .transforms
-                .as_ref()
-                .unwrap()
-                .pipelines()
-                .iter()
-                .all(|p| p.ready() == transform),
-            "Only loaded transforms belong in document-priority compilation"
-        );
-        let view = layer_render::ViewState {
-            width_px: 128,
-            height_px: 128,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [1.; 4],
-        };
-        let dabs = [Dab {
-            center: layer_core::Point { x: 64., y: 64. },
-            radii: [20., 20.],
-            rotation: [1., 0.],
-            motion: [0.; 2],
-            color_rgba_linear: [0.1, 0.2, 0.9, 1.],
-            flow: 1.,
-            hardness: 1.,
-            texture_sign: [1.; 2],
-            material: [0.; 4],
-            previous: [0.0; 4],
-            contact: [0.0; 4],
-            previous_contact: [0.0; 4],
-        }];
-        let mut batches = vec![DabBatch {
-            material_update: 0,
-            stroke_id: StrokeId(1),
-            layer_id: doc.active_layer,
-            kind: DabBatchKind::Persistent,
-            stroke_start: true,
-            stroke_end: true,
-            first_dab: 0,
-            dab_count: 1,
-            style: style(&brush, StrokeTool::Brush, false),
-            damage: layer_core::Rect {
-                min: layer_core::Point { x: 40., y: 40. },
-                max: layer_core::Point { x: 88., y: 88. },
-            },
-        }];
-        if transform {
-            batches.insert(
-                0,
-                DabBatch {
-                    kind: DabBatchKind::LayerOperation(0),
-                    layer_id: if target == 2 {
-                        LayerId(9)
-                    } else {
-                        doc.active_layer
-                    },
-                    dab_count: 0,
-                    damage: layer_core::Rect {
-                        min: layer_core::Point::default(),
-                        max: layer_core::Point { x: 128., y: 128. },
-                    },
-                    ..batches[0].clone()
-                },
-            );
-        }
-        let packet = FramePacket {
-            time_seconds: 0.,
-            view,
-            document_extent: [128, 128],
-            layers: &doc.layers,
-            dabs: &dabs,
-            dab_batches: &batches,
-            restore_rasters: &[],
-            reset_layers: true,
-            composite_all: true,
-        };
-        let compilations = renderer.scene.as_ref().unwrap().effects.compilations;
-        renderer.submit(packet).unwrap();
-        assert_eq!(
-            renderer.scene.as_ref().unwrap().effects.compilations,
-            compilations,
-            "Document warmup must include actual fused/image pipelines"
-        );
-        assert!(
-            renderer
-                .pipelines
-                .material
-                .iter()
-                .enumerate()
-                .all(|(index, p)| {
-                    let required = index
-                        == MaterialPipelineKind::Coverage.index(MaterialOperation::Coverage)
-                        || index == MaterialPipelineKind::Color.index(MaterialOperation::Coverage);
-                    !p.ready() || required
-                })
-        );
-        reference.submit(packet).unwrap();
-        assert_eq!(
-            renderer.readback_srgb_rgba8().unwrap(),
-            reference.readback_srgb_rgba8().unwrap()
-        );
-        release.send(()).unwrap();
-        while !renderer.poll_startup().unwrap().complete {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(renderer.pipelines.material.iter().all(Deferred::ready));
-        assert!(
-            renderer
-                .transforms
-                .as_ref()
-                .unwrap()
-                .pipelines()
-                .iter()
-                .all(|p| p.ready())
         );
     }
 }

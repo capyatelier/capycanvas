@@ -177,7 +177,6 @@ impl Worker {
             request.project.document.color,
         )
         .map_err(error)?;
-        renderer.enable_demand_shaders();
         renderer.configure_ui_previews(self.view_color.space()).map_err(error)?;
         for (id, asset) in &request.project.assets {
             check()?;

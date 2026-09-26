@@ -57,9 +57,7 @@ impl WgpuRasterizer {
             self.scene_pipelines.effects(self)
         };
         if let Some(startup) = &self.startup {
-            // Demand-driven hosts compile only the programs being installed;
-            // legacy hosts still warm their initial catalog here.
-            let programs = if startup.demand || startup.finished { request.programs.clone() } else { request.namespace.clone() };
+            let programs = request.programs.clone();
             let state = Arc::new(std::sync::Mutex::new(BackgroundValidation {
                 effects: Some(candidate),
                 errors: Vec::new(),

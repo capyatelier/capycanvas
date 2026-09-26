@@ -25,7 +25,6 @@ pub(crate) struct Compiler {
     device: PipelineDevice,
 }
 impl Compiler {
-    pub fn enable_admission(&self) { self.queue.borrow_mut().admission.enabled = true; }
     pub fn input(&self) { self.queue.borrow_mut().admission.input(); }
     pub fn idle(&self, idle: bool) { self.queue.borrow_mut().admission.idle = idle; }
     pub fn delay(&self) -> std::time::Duration { self.queue.borrow().admission.delay() }
