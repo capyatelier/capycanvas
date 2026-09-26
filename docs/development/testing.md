@@ -58,7 +58,10 @@ bash tools/performance/workspace-motion.sh web --drag-pickup
 
 GTK uses Mutter mouse/touch delivery; Web uses Chrome mouse/touch/pen injection.
 Neither replaces physical stylus testing. The `--workspace-motion` mode measures
-steady dragging separately from the intentional hold delay.
+steady dragging separately from the intentional hold delay. The GTK modes
+`--workspace-cursor`, `--workspace-clicks`, `--workspace-columns` and
+`--workspace-drag` cover divider cursors, floating panel clicks, collapsed
+columns and toolbar dragging with real pointer input.
 
 Painted selections have focused GPU and native journeys:
 

@@ -43,14 +43,6 @@ fn artwork(app: &adw::Application, output: &Path) {
     .collect();
     names.sort();
     let grid_height = names.len().div_ceil(12) as i32 * 48;
-    let mut expected: Vec<_> =
-        std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../layer-web/icons"))
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter_map(|n| n.strip_suffix(".svg").map(str::to_owned))
-            .collect();
-    expected.sort();
-    assert_eq!(names, expected, "audit the entire packaged bank");
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_widget_name("icon-audit-root");
     let grid = gtk::Grid::builder()

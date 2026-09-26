@@ -26,7 +26,7 @@ are historical; this checkpoint and the current requirements take precedence.
 | Navigator, camera drag/rotation/flips, live Diagnostics | `native_navigator`, `native_navigation_tools`, `native_tool_drawers` |
 | Connected selection/fill, reference layers, selection-constrained brushes, gradients | `native_connected_tools`, `native_selected_brushes`, `native_gradient_tool`, GPU oracle tests |
 | Operation/linked masks, figures, editable/snapping rulers | `native_operation_tool`, `native_figure_tools`, `native_ruler_tools`, engine/GPU tests |
-| Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_drop_and_resize` |
+| Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_column_input`, `native_divider_cursor_input` |
 | GTK column drawer tab/group tear-off, incoming drops, tab reordering, cancellation and history | `native_column_drawer_drag_input` (`native-input.js --workspace-drawer` in an isolated Mutter session) |
 | GTK window movement, panel/drawer docking and divider input in windowed, maximized, fullscreen and restored modes | `native_window_drag_input` (`native-input.js --workspace-window` in an isolated Mutter session) |
 | Partial/total Zen, eight menus, document files, workspace restore, native fullscreen | `native_zen_behaviors`, `native_menu_sections`, `native_document_files`, `native_workspace_restore`, `native_fullscreen_header_clock_and_battery` |

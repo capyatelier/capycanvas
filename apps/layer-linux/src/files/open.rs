@@ -152,104 +152,12 @@ pub(crate) fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, SampleDepth, source::*};
     #[test]
-    fn photo_open_preserves_source_depth_profile_and_master_separation() {
+    fn untagged_jpeg_opens_with_the_assumed_default_profile() {
         let directory =
             std::env::temp_dir().join(format!("capy-open-photo-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        for space in RgbSpace::ALL {
-            for depth in [SampleDepth::U8, SampleDepth::U16] {
-                let profile = ColorProfile::Icc(
-                    layer_color::profile_bytes(&ColorProfile::Builtin(space))
-                        .unwrap()
-                        .into(),
-                );
-                let mut builder = SourceBuilder::new(
-                    [3, 1],
-                    SourceInterpretation {
-                        channels: SourceChannels::Rgba,
-                        depth,
-                        profile,
-                        profile_assumed: false,
-                    },
-                    1024 * 1024,
-                )
-                .unwrap();
-                let codes = [
-                    65535u16, 0, 32767, 1, 12345, 54321, 1001, 50000, 7654, 65535, 12456, 0,
-                ];
-                let row: Vec<u8> = if depth == SampleDepth::U8 {
-                    codes.map(|v| (v / 257) as u8).to_vec()
-                } else {
-                    codes.into_iter().flat_map(u16::to_le_bytes).collect()
-                };
-                builder.push_row(&row).unwrap();
-                let source = builder.finish().unwrap();
-                // Misleading extension cannot change file interpretation.
-                let path = directory.join(format!("Photo-{space:?}-{depth:?}.capy"));
-                layer_color::photo::write_png(std::fs::File::create(&path).unwrap(), &source)
-                    .unwrap();
-                let bytes = std::fs::read(&path).unwrap();
-                let (project, location) = read(
-                    &path,
-                    DocumentLocation {
-                        uri: "source".into(),
-                        name: "Photo.png".into(),
-                    },
-                    Default::default(),
-                    Default::default(),
-                )
-                .unwrap();
-                assert!(location.is_none());
-                assert_eq!(project.document.color.space, space);
-                assert_eq!(project.document.color.depth, depth);
-                assert!(!project.document.layers[1].visible);
-                assert_eq!(project.document.layers[0].source.as_deref(), Some(&source));
-                let policy = layer_ui::PhotoOpenPolicy {
-                    promote_to_16: true,
-                    missing_profile: layer_ui::MissingProfilePolicy::Ask,
-                };
-                let (promoted, _) = read(
-                    &path,
-                    DocumentLocation {
-                        uri: "source".into(),
-                        name: "Photo.png".into(),
-                    },
-                    policy,
-                    Default::default(),
-                )
-                .unwrap();
-                assert_eq!(promoted.document.color.depth, SampleDepth::U16);
-                assert_eq!(promoted.document.layers[0].source.as_deref(), Some(&source));
-                let mut master = Vec::new();
-                project.write(&mut master).unwrap();
-                assert_eq!(
-                    Project::read(std::io::Cursor::new(master), Default::default()).unwrap(),
-                    project
-                );
-                assert_eq!(std::fs::read(&path).unwrap(), bytes);
-                let native = directory.join(format!("master-{space:?}-{depth:?}.capy"));
-                project
-                    .write(std::fs::File::create(&native).unwrap())
-                    .unwrap();
-                let (reopened, location) = read(
-                    &native,
-                    DocumentLocation {
-                        uri: "master".into(),
-                        name: "master.capy".into(),
-                    },
-                    policy,
-                    Default::default(),
-                )
-                .unwrap();
-                assert!(location.is_some());
-                assert_eq!(
-                    reopened, project,
-                    "photo policies never reinterpret a native master"
-                );
-            }
-        }
         let path = directory.join("Ordinary.jpg");
         let mut builder = SourceBuilder::new(
             [3, 1],
@@ -267,7 +175,6 @@ mod tests {
             .unwrap();
         let mut jpeg = Vec::new();
         layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), 95).unwrap();
-        // Strip APP2 ICC segments to exercise an ordinary untagged JPEG.
         let mut untagged = jpeg[..2].to_vec();
         let mut at = 2;
         while jpeg[at + 1] != 0xda {

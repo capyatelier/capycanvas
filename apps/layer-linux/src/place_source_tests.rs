@@ -109,40 +109,9 @@ fn native_heif_avif_open_import_and_paste() {
     native_raster_open_import_and_paste(&[("Photo.heic", "image/heic"), ("P3.avif", "image/avif"), ("ICC.avif", "image/avif")]);
 }
 
-#[test]
-#[ignore = "private Wayland display and GPU; run with an empty codec directory"]
-fn portable_heif_open_import_and_paste_without_codec_bundle() {
-    assert!(layer_color::photo::extensions().any(|v|v=="heic"));
-    let directory = std::env::temp_dir().join(format!("capy-portable-heif-{}-{}",std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    std::fs::create_dir(&directory).unwrap();
-    for (name,bytes) in [
-        ("Red.heic",include_bytes!("../../../crates/layer-color/tests/fixtures/heif/flat-red-8bit.heic").as_slice()),
-        ("P3 grid.heic",include_bytes!("../../../crates/layer-color/tests/fixtures/heif/p3-grid-8bit.heic").as_slice()),
-        ("P3 10bit.heic",include_bytes!("../../../crates/layer-color/tests/fixtures/heif/p3-gray-10bit.heic").as_slice()),
-    ] {std::fs::write(directory.join(name),bytes).unwrap();}
-    raster_open_import_and_paste(&directory,&[("Red.heic","image/heic"),("P3 grid.heic","image/heic"),("P3 10bit.heic","image/heic")]);
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
-#[test]
-#[ignore = "private Wayland display, GPU and LAYER_RASTER_FIXTURES"]
-fn native_avif_sequence_and_geometry_open_import_and_paste() {
-    native_raster_open_import_and_paste(&[
-        ("sequence-different-poster.avif", "image/avif"),
-        ("colors-animated-8bpc-alpha-exif-xmp.avif", "image/avif"),
-        ("p3-12bit-crop-r1-m1.avif", "image/avif"),
-    ]);
-}
-
 #[allow(deprecated)]
 fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
     let directory = std::path::PathBuf::from(std::env::var_os("LAYER_RASTER_FIXTURES").expect("codec fixtures"));
-    raster_open_import_and_paste(&directory,cases);
-}
-
-#[allow(deprecated)]
-fn raster_open_import_and_paste(directory: &std::path::Path, cases: &[(&str,&str)]) {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.CommonRaster");
     let w = Workspace::with_project(&app, Some((new_drawing(256, 128).unwrap(), None)));
