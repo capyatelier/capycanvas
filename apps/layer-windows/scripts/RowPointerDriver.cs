@@ -46,12 +46,12 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- static uint owner,kind;static bool active;static Point last;static IntPtr pen;
+ static uint owner,kind,penButtons;static bool active;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
  public static void Initialize(uint process) {
   if(active||pulse!=null||pen!=IntPtr.Zero)throw new InvalidOperationException("Dispose the previous pointer review first.");
-  failure=null;kind=0;owner=process;
+  failure=null;kind=0;penButtons=0;owner=process;
   if(Marshal.SizeOf(typeof(TouchInfo))!=144||Marshal.SizeOf(typeof(PenInfo))!=120||Marshal.SizeOf(typeof(TypeInfo))!=152)
    throw new Exception("Pointer structures require the x64 ABI.");
   if(!InitializeTouchInjection(1,3))throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -83,7 +83,7 @@ public static class CapyRowPointer {
    bool accepted;
    if(kind==2)accepted=InjectTouchInput(1,new[]{new TouchInfo{pointer=info,mask=7,
     contact=new Rect{left=point.x-2,top=point.y-2,right=point.x+2,bottom=point.y+2},orientation=90,pressure=512}});
-   else accepted=InjectSyntheticPointerInput(pen,new[]{new TypeInfo{type=3,pen=new PenInfo{pointer=info,mask=1,pressure=512}}},1);
+   else accepted=InjectSyntheticPointerInput(pen,new[]{new TypeInfo{type=3,pen=new PenInfo{pointer=info,flags=penButtons,mask=1,pressure=512}}},1);
    if(accepted)return;
    int error=Marshal.GetLastWin32Error();if(error!=21)throw new Win32Exception(error);Thread.Sleep(1);
   }
@@ -110,6 +110,18 @@ public static class CapyRowPointer {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
    var point=new Point{x=x,y=y};Guard(point);kind=3;Send(point,0x20002);last=point;
+  }
+ }
+ public static void Barrel(bool held) {
+  lock(gate){
+   Check();if(kind!=3)throw new Exception("The barrel button needs a pen in range.");
+   penButtons=held?1u:0u;Guard(last);Send(last,active?0x20006u:0x20002u);
+  }
+ }
+ public static void PenLeave() {
+  lock(gate){
+   Check();if(active||kind!=3)return;
+   penButtons=0;Guard(last);Send(last,0x20000);
   }
  }
  public static void Down(string device,int x,int y) {
@@ -151,14 +163,16 @@ public static class CapyRowPointer {
    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
   }
  }
- public static void RightDrag(int x0,int y0,int x1,int y1) {
+ public static void RightDrag(int x0,int y0,int x1,int y1){ButtonDrag(8,16,x0,y0,x1,y1);}
+ public static void MiddleDrag(int x0,int y0,int x1,int y1){ButtonDrag(32,64,x0,y0,x1,y1);}
+ static void ButtonDrag(uint down,uint up,int x0,int y0,int x1,int y1) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
    var start=new Point{x=x0,y=y0};Guard(start);MouseMove(start);last=start;
-   MouseButton(8);
+   MouseButton(down);
    try{
     for(int i=1;i<=12;i++){var point=new Point{x=x0+(x1-x0)*i/12,y=y0+(y1-y0)*i/12};Guard(point);MouseMove(point);last=point;Thread.Sleep(10);}
-   }finally{MouseButton(16);}
+   }finally{MouseButton(up);}
   }
  }
  public static void RightClick(int x,int y) {
@@ -218,6 +232,7 @@ public static class CapyRowPointer {
     pulse=null;
    }
    if(pen!=IntPtr.Zero){DestroySyntheticPointerDevice(pen);pen=IntPtr.Zero;}
+   penButtons=0;
   }
  }
 }

@@ -1106,7 +1106,10 @@ minimization. Drawer checks explicitly select Open individual panels, and Zen
 checks chrome hiding/restoration. Drifting short taps retain native button clicks
 while disarming reorder pickup; pen checks keep hover in range between contacts.
 `exercise-pen-buttons.ps1 -Executable <path>` additionally verifies six single-tap
-Clear actions immediately after pen strokes, including eight-pixel tap drift.
+Clear actions immediately after pen strokes, including eight-pixel tap drift. It
+presses and releases the injected barrel button mid-stroke (one stroke, removed by
+one Undo, with no view change), paints with the barrel held from hover through
+lift, and checks that a mouse middle drag still pans.
 The canvas cursor is hidden through InputPointerSource; native chrome keeps its
 normal cursor. See [Wacom input follow-up](../../docs/development/windows-pen-input-20260920.md).
 Existing `exercise-tab-drag.ps1`
