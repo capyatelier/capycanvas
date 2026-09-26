@@ -141,27 +141,6 @@ pub fn preview_hdr_rows(
     Ok((extent, pixels, statistics))
 }
 
-/// Full-resolution range inspection without encoding a PNG or changing samples.
-/// The row provider owns cancellation and bounded composition/resampling.
-pub fn inspect_hdr_rows(
-    extent: [u32; 2], space: RgbSpace,
-    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<crate::OutputStatistics, String> {
-    validate_extent(extent, 32768)?;
-    let mut statistics = crate::OutputStatistics::default();
-    let mut pixels = vec![[0.; 4]; extent[0] as usize];
-    let to_srgb = space.linear_transform(RgbSpace::Srgb);
-    let to_2020 = hdr::srgb_to_bt2020();
-    for y in 0..extent[1] {
-        read(y, &mut pixels)?;
-        for p in &pixels {
-            statistics.clipped_channels += output_nits(p, to_srgb, to_2020)?.into_iter()
-                .filter(|nits| !(0. ..=10000.).contains(nits)).count() as u64;
-        }
-    }
-    Ok(statistics)
-}
-
 /// Rows are unmodified linear-premultiplied artwork in `space`. Mapping to PQ's
 /// gamut/range is an explicit delivery choice; strict mode fails before publish.
 /// Metadata defines BT.2020 PQ in absolute nits, independently of the monitor.
@@ -245,25 +224,6 @@ mod tests {
             assert!(pixels.iter().any(|p| p[0] > 1.));
         }
         assert!(preview_hdr_rows([4, 1], [2, 1], RgbSpace::Srgb, |_, _| Err("cancelled".into())).unwrap_err().contains("cancelled"));
-    }
-    #[test]
-    fn range_inspection_agrees_with_writer_and_propagates_cancellation() {
-        for space in RgbSpace::ALL {
-            for pixel in [[8., 2., 1., 1.], [-2., 100., 0., 0.5], [400., 1., 0., 0.]] {
-                let rows = |_: u32, row: &mut [[f32; 4]]| { row.fill(pixel); Ok(()) };
-                let inspected = inspect_hdr_rows([7, 3], space, rows).unwrap();
-                let written = write_hdr_png_rows(Vec::new(), [7, 3], space, None, true, rows).unwrap();
-                assert_eq!(inspected.clipped_channels, written.clipped_channels);
-                assert_eq!(write_hdr_png_rows(Vec::new(), [7, 3], space, None, false, rows).is_ok(), inspected.clipped_channels == 0);
-            }
-        }
-        let mut rows = 0;
-        let error = inspect_hdr_rows([9, 10], RgbSpace::Srgb, |y, row| {
-            rows += 1;
-            if y == 2 { return Err("cancelled".into()); }
-            row.fill([1.; 4]); Ok(())
-        }).unwrap_err();
-        assert_eq!(error, "cancelled"); assert_eq!(rows, 3);
     }
     #[test]
     fn pq_png_tags_normalization_alpha_and_explicit_range_mapping() {

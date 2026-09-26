@@ -3,6 +3,13 @@ use layer_core::{ColorTransition, Document, Editor, Layer, LayerKind, LayerMask,
 
 const LIMIT: usize = 16 * 1024 * 1024;
 
+fn edit(prepared: &PreparedDocumentColor) -> Edit {
+    Edit::SetColor {
+        color: prepared.project.document.color,
+        layers: prepared.project.document.layers.clone(),
+    }
+}
+
 fn key(plane: RasterPlane) -> TileKey {
     TileKey {
         plane,
@@ -179,9 +186,6 @@ fn assignment_preserves_every_code_and_shared_backing_in_all_eight_modes() {
                 assert_eq!(source.interpretation.profile, ColorProfile::Builtin(target));
                 for (coordinate, blob) in &a[1].source.as_ref().unwrap().tiles {
                     assert!(Arc::ptr_eq(blob, &source.tiles[coordinate]));
-                }
-                if target == space {
-                    assert_eq!(prepared.allocated_bytes, 0);
                 }
             }
         }
@@ -469,7 +473,7 @@ fn explicit_attachment_assignment_recovers_declared_straight_codes_before_retagg
         assert_eq!(a[3], b[3]);
     }
     let mut editor = Editor::new(project.document.clone());
-    editor.perform(prepared.edit()).unwrap();
+    editor.perform(edit(&prepared)).unwrap();
     editor.undo().unwrap();
     assert_eq!(
         editor.document().layers[0].raster,
@@ -496,7 +500,7 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
     ] {
         let prepared = prepare_document_color(&project, change, LIMIT, || false).unwrap();
         let mut editor = Editor::new(project.document.clone());
-        editor.validate_edit(&prepared.edit()).unwrap();
+        editor.validate_edit(&edit(&prepared)).unwrap();
         assert_eq!(editor.document(), &project.document);
         assert!(!editor.can_undo());
         let transition = editor
@@ -638,7 +642,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     }
     assert!(Arc::ptr_eq(&root.tiles[&key(RasterPlane::Wetness)].wait_backing().unwrap(), &mask));
     let mut editor = Editor::new(project.document.clone());
-    editor.perform(result.edit()).unwrap(); editor.undo().unwrap();
+    editor.perform(edit(&result)).unwrap(); editor.undo().unwrap();
     assert_eq!(editor.document().color, color); editor.redo().unwrap();
     assert_eq!(editor.document().color.depth, SampleDepth::F32);
     let demote = DocumentColorChange::Depth { depth: SampleDepth::F16, dither: OutputDither::None };

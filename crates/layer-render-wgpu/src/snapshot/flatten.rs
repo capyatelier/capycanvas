@@ -33,15 +33,9 @@ impl SnapshotRenderer {
             },
         )?;
         let project = project.ok_or("The converted copy is incomplete")?;
-        let allocated_bytes = project.document.layers[0]
-            .source
-            .as_ref()
-            .unwrap()
-            .resident_bytes();
         Ok(layer_color::PreparedDocumentColor {
             project,
             statistics,
-            allocated_bytes,
         })
     }
 }

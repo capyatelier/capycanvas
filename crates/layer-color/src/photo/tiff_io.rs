@@ -6,7 +6,7 @@ use tiff::{
     tags::Tag,
 };
 
-pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
+pub(super) fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
     let mut codec_limits = tiff::decoder::Limits::default();
     codec_limits.decoding_buffer_size = limits.codec_bytes;
     codec_limits.intermediate_buffer_size = limits.codec_bytes;

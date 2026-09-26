@@ -47,17 +47,6 @@ impl DocumentColorChange {
 pub struct PreparedDocumentColor {
     pub project: Project,
     pub statistics: OutputStatistics,
-    /// New compressed backing and conservative index/cache allocation charge.
-    /// Unchanged original/document ownership is separate from this job's limit.
-    pub allocated_bytes: usize,
-}
-impl PreparedDocumentColor {
-    pub fn edit(&self) -> Edit {
-        Edit::SetColor {
-            color: self.project.document.color,
-            layers: self.project.document.layers.clone(),
-        }
-    }
 }
 
 struct Converter<'a> {
@@ -283,7 +272,6 @@ pub fn prepare_document_color(
         return Ok(PreparedDocumentColor {
             project: candidate,
             statistics: Default::default(),
-            allocated_bytes: 0,
         });
     }
     // Effect colors retain their defining RGB space. GPU preparation derives
@@ -350,7 +338,6 @@ pub fn prepare_document_color(
     Ok(PreparedDocumentColor {
         project: candidate,
         statistics: converter.statistics,
-        allocated_bytes: converter.bytes,
     })
 }
 

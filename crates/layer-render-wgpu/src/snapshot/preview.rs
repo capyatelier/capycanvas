@@ -141,14 +141,14 @@ impl SnapshotRenderer {
             .ok_or("Gain-map delivery requires HDR artwork")?;
         let control = self.control.clone();
         let mut result = None;
-        let guide = Some(self.local_tone_guide()?);
+        let guide = self.local_tone_guide()?;
         let stats = self.hdr_rows(|extent, working, read| {
-            let (extent, hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows_with_guide(
+            let (extent, hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows(
                 extent,
                 bounds,
                 working,
                 rendition,
-                guide.as_deref(),
+                &guide,
                 format,
                 quality,
                 matte,
@@ -163,14 +163,12 @@ impl SnapshotRenderer {
         let mapper = rendition.mapper(RgbSpace::Srgb, space);
         for (i, p) in hdr.iter_mut().enumerate() {
             if headroom <= 1. {
-                if let Some(guide) = &guide {
-                    let position = [
-                        (i as u32 % extent[0]) as f32 + 0.5,
-                        (i as u32 / extent[0]) as f32 + 0.5,
-                    ];
-                    *p = mapper.map_local_premultiplied(*p,
-                        std::array::from_fn(|c| position[c] * guide.document_extent[c] as f32 / extent[c] as f32),guide);
-                } else { *p = mapper.map_premultiplied(*p); }
+                let position = [
+                    (i as u32 % extent[0]) as f32 + 0.5,
+                    (i as u32 / extent[0]) as f32 + 0.5,
+                ];
+                *p = mapper.map_local_premultiplied(*p,
+                    std::array::from_fn(|c| position[c] * guide.document_extent[c] as f32 / extent[c] as f32),&guide);
                 continue;
             }
             *p = layer_core::color::hdr::map_display_premultiplied(*p, headroom);

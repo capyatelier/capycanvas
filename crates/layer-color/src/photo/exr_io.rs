@@ -70,7 +70,7 @@ fn preflight(input: &mut (impl Read + Seek), budget: usize) -> Result<(), String
     Ok(())
 }
 
-pub fn read_exr(
+pub(super) fn read_exr(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,
     cancelled: &AtomicBool,

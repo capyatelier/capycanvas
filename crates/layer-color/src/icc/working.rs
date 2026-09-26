@@ -204,42 +204,14 @@ impl WorkingDecoder {
     }
 
     /// Validate/decode one source tile, cropping padded samples to transparent.
-    /// No converted full-image copy or mutable source allocation is retained.
-    pub fn decode_tile(
-        &self,
-        source: &SourceImage,
-        coordinate: [u32; 2],
-        output: &mut [[f32; 4]],
-    ) -> Result<(), String> {
-        self.decode_tile_with(source, coordinate, output, |tile, output| {
-            self.decode_pixels(&tile.decode()?, output)
-        })
-    }
-
-    /// Reuse exact encoded samples while retaining this worker's own profile
-    /// transform and the same descriptor, extent and padding validation.
+    /// Exact encoded samples come from the cache; this worker's own profile
+    /// transform applies. No converted full-image copy is retained.
     pub fn decode_tile_cached(
         &self,
         source: &SourceImage,
         coordinate: [u32; 2],
         output: &mut [[f32; 4]],
         cache: &layer_core::raster::DecodedTileCache,
-    ) -> Result<(), String> {
-        self.decode_tile_with(source, coordinate, output, |tile, output| {
-            let samples = cache.decode(tile)?;
-            self.decode_pixels(&samples, output)
-        })
-    }
-
-    fn decode_tile_with(
-        &self,
-        source: &SourceImage,
-        coordinate: [u32; 2],
-        output: &mut [[f32; 4]],
-        decode: impl FnOnce(
-            &std::sync::Arc<layer_core::raster::TileBlob>,
-            &mut [[f32; 4]],
-        ) -> Result<(), String>,
     ) -> Result<(), String> {
         if source.interpretation != self.source || output.len() != (TILE_SIZE * TILE_SIZE) as usize
         {
@@ -249,7 +221,7 @@ impl WorkingDecoder {
         if tile.descriptor != self.source.descriptor() {
             return Err("Source tile has the wrong sample representation".into());
         }
-        decode(tile, output)?;
+        self.decode_pixels(&cache.decode(tile)?, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));
         let [x, y] = [origin[0]?, origin[1]?];

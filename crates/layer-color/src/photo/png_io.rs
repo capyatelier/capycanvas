@@ -1,11 +1,5 @@
 use super::*;
 
-pub fn read_png(
-    input: impl BufRead + Seek,
-    limits: DecodeLimits,
-) -> Result<SourceImage, String> {
-    read_with_cancel(input, limits, &std::sync::atomic::AtomicBool::new(false))
-}
 pub(super) fn read_with_cancel(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,

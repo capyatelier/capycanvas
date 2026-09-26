@@ -11,7 +11,7 @@ use pcs::*;
 
 /// Straight appearance and target-gamut metric before display clipping.
 #[derive(Clone, Copy, Debug)]
-pub struct ProofSample {
+pub(crate) struct ProofSample {
     pub xyz: [f64; 3],
     /// Values above 5 indicate output-gamut loss after inverse-table correction.
     pub gamut_distance: f64,
@@ -82,7 +82,7 @@ impl ProofTransform {
 
     /// Encoded working RGB in [0,1]. Alpha does not enter the color evaluator.
     /// Extended composition is an explicit out-of-domain condition at viewing.
-    pub fn sample(&self, rgb: [f32; 3]) -> Result<ProofSample, String> {
+    pub(crate) fn sample(&self, rgb: [f32; 3]) -> Result<ProofSample, String> {
         if rgb
             .iter()
             .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))

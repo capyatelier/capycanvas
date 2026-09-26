@@ -2,9 +2,6 @@ use super::jpeg_codec::{self, Encoder};
 use super::*;
 use std::io::{BufReader, SeekFrom};
 
-pub fn read_jpeg(input: impl Read + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
-    read_jpeg_with_cancel(input, limits, &std::sync::atomic::AtomicBool::new(false))
-}
 pub(super) fn read_jpeg_with_cancel(mut input: impl Read + Seek, limits: DecodeLimits, cancelled: &std::sync::atomic::AtomicBool) -> Result<SourceImage, String> {
     let origin = input.stream_position().map_err(err)?;
     // Bound preflight work independently of working pixels. The compressed
@@ -80,26 +77,14 @@ impl JpegEncodeOptions {
 }
 
 pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Result<(), String> {
-    write_jpeg_with_options(
-        output,
-        source,
-        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
-    )
-}
-
-pub fn write_jpeg_with_options(
-    output: impl Write,
-    source: &SourceImage,
-    options: JpegEncodeOptions,
-) -> Result<(), String> {
     source.validate()?;
     let mut rows = source.rows();
-    write_jpeg_rows_with_options(
+    write_jpeg_rows(
         output,
         source.extent,
         &source.interpretation,
         source.resolution,
-        options,
+        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
         |y, row| rows.read(y, row),
     )
 }
@@ -109,24 +94,6 @@ pub fn write_jpeg_with_options(
 /// Baseline coding uses full chroma resolution. The Rust backend buffers pixels
 /// within the available-memory budget. Provider errors stop requesting rows.
 pub fn write_jpeg_rows(
-    output: impl Write,
-    extent: [u32; 2],
-    interpretation: &SourceInterpretation,
-    resolution: Option<layer_core::ImageResolution>,
-    quality: u8,
-    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
-) -> Result<(), String> {
-    write_jpeg_rows_with_options(
-        output,
-        extent,
-        interpretation,
-        resolution,
-        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
-        read_row,
-    )
-}
-
-pub fn write_jpeg_rows_with_options(
     output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,

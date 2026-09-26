@@ -371,8 +371,8 @@ pub async fn raster_worker_output(
             // or browser-provided photo decoder is required.
             let cancel = std::sync::atomic::AtomicBool::new(false);
             if metadata.preview {
-                let (size, mut hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows_with_guide(
-                    extent, [512, 384], metadata.color.space, rendition, Some(guide),
+                let (size, mut hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows(
+                    extent, [512, 384], metadata.color.space, rendition, guide,
                     format, options, recipe.background.matte(), &cancel, &mut rows,
                 ).map_err(js)?;
                 let space = layer_core::color::RgbSpace::Srgb;
@@ -392,8 +392,8 @@ pub async fn raster_worker_output(
                 js_sys::Reflect::set(&result, &js("sdr_preview"), &preview_value(&image(sdr))?)?;
                 return Ok(result);
             }
-            let stats = layer_color::photo::write_gainmap_rows_with_guide(
-                output, extent, metadata.color.space, rendition, Some(guide), format,
+            let stats = layer_color::photo::write_gainmap_rows(
+                output, extent, metadata.color.space, rendition, guide, format,
                 options, metadata.resolution, recipe.background.matte(),
                 recipe.format.maps_hdr_range(), &cancel, rows,
             ).map_err(js)?;
@@ -472,7 +472,7 @@ pub async fn raster_worker_output(
                 metadata.resolution,
                 rows,
             ),
-            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows_with_options(
+            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
                 output,
                 extent,
                 target,

@@ -51,7 +51,7 @@ fn encode(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     quality: u8,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
@@ -76,19 +76,6 @@ fn encode(
     let icc = profile_bytes(&profile)?;
     let matrix = hdr::to_bt2020(space);
     let mapper = rendition.mapper(space, RgbSpace::Srgb);
-    let generated = if guide.is_none() {
-        Some(crate::build_local_tone_guide(
-            extent,
-            space,
-            || cancel.load(Ordering::Relaxed),
-            &mut read,
-        )?)
-    } else {
-        None
-    };
-    let guide = guide
-        .or(generated.as_ref())
-        .ok_or("Missing HDR tone guide")?;
     let mut base = Vec::new();
     base.try_reserve_exact(count * 3).map_err(err)?;
     let mut master = Vec::<f32>::new();
@@ -232,7 +219,7 @@ pub(super) fn write(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
@@ -397,7 +384,7 @@ pub(super) fn preview(
     bounds: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
@@ -442,6 +429,7 @@ pub(super) fn preview(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_guide;
     use super::*;
     const EXTENT: [u32; 2] = [48, 32];
     fn pixel(x: u32, y: u32) -> [f32; 4] {
@@ -467,7 +455,7 @@ mod tests {
                 exposure,
                 ..Default::default()
             },
-            None,
+            &test_guide(EXTENT, rows),
             quality,
             Some(layer_core::ImageResolution::ppi(300)),
             None,
@@ -533,12 +521,13 @@ mod tests {
             }
         }
         let c = AtomicBool::new(false);
+        let guide = test_guide(EXTENT, rows);
         let (_, h0, s0, _) = preview(
             EXTENT,
             EXTENT,
             RgbSpace::Srgb,
             Default::default(),
-            None,
+            &guide,
             90,
             None,
             &c,
@@ -553,7 +542,7 @@ mod tests {
                 exposure: -2.,
                 ..Default::default()
             },
-            None,
+            &guide,
             90,
             None,
             &c,
@@ -570,13 +559,14 @@ mod tests {
             row.fill([2., 0.5, 0., 0.5]);
             Ok(())
         };
+        let guide = test_guide([16, 16], transparent);
         let run = |matte, c: &AtomicBool| {
             write(
                 std::io::sink(),
                 [16, 16],
                 RgbSpace::Srgb,
                 Default::default(),
-                None,
+                &guide,
                 90,
                 None,
                 matte,

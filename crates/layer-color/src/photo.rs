@@ -15,17 +15,15 @@ pub use memory::PhotoMemoryBudget;
 mod gainmap;
 mod hdr_png;
 mod exr_io;
-pub use exr_io::{read_exr, write_exr_rows};
+pub use exr_io::write_exr_rows;
 mod metadata;
 #[cfg(test)]
 mod metadata_tests;
 mod orientation;
 mod png_io;
-pub use gainmap::{
-    GainMapEncodeOptions, GainMapFormat, GainMapMetadata, preview_gainmap_rows, write_gainmap_rows,
-};
-pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide};
-pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
+pub(crate) use gainmap::GainMapMetadata;
+pub use gainmap::{GainMapEncodeOptions, GainMapFormat, preview_gainmap_rows, write_gainmap_rows};
+pub use hdr_png::{preview_hdr_rows, write_hdr_png_rows};
 mod bmp_io;
 mod gif_io;
 mod raster_io;
@@ -33,12 +31,9 @@ mod tiff_io;
 #[cfg(test)]
 mod tiff_policy_tests;
 mod webp_io;
-pub use jpeg_io::{
-    JpegEncodeOptions, read_jpeg, write_jpeg, write_jpeg_rows, write_jpeg_rows_with_options,
-    write_jpeg_with_options,
-};
-pub use png_io::{read_png, write_png, write_png_rows};
-pub use tiff_io::{read_tiff, write_tiff, write_tiff_rows};
+pub use jpeg_io::{JpegEncodeOptions, write_jpeg, write_jpeg_rows};
+pub use png_io::{write_png, write_png_rows};
+pub use tiff_io::{write_tiff, write_tiff_rows};
 
 /// Decoder capabilities, also used by file pickers, clipboard and file drops.
 /// These describe implemented readers, not formats merely known to a host OS.
@@ -48,7 +43,7 @@ pub struct PhotoFormat {
     pub extensions: &'static [&'static str],
     pub mime_types: &'static [&'static str],
 }
-pub const PHOTO_FORMATS: &[PhotoFormat] = &[
+const PHOTO_FORMATS: &[PhotoFormat] = &[
     PhotoFormat { name: "OpenEXR", extensions: &["exr"], mime_types: &["image/x-exr"] },
     PhotoFormat {
         name: "TIFF",
@@ -188,23 +183,23 @@ pub fn read_photo_detailed_with_cancel(
 fn read_photo_impl(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,
-    _cancelled: &std::sync::atomic::AtomicBool,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<DecodedPhoto, String> {
     let origin = input.stream_position().map_err(err)?;
     let mut signature = [0; 8];
     input.read_exact(&mut signature).map_err(err)?;
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
     let source = if signature == *b"\x89PNG\r\n\x1a\n" {
-        png_io::read_with_cancel(input, limits, _cancelled)
+        png_io::read_with_cancel(input, limits, cancelled)
     } else if signature[..4] == [0x76, 0x2f, 0x31, 0x01] {
-        read_exr(input, limits, _cancelled)
+        exr_io::read_exr(input, limits, cancelled)
     } else if signature[..2] == [0xff, 0xd8] {
-        jpeg_io::read_jpeg_with_cancel(input, limits, _cancelled)
+        jpeg_io::read_jpeg_with_cancel(input, limits, cancelled)
     } else if matches!(
         &signature[..4],
         b"II\x2a\x00" | b"MM\x00\x2a" | b"II\x2b\x00" | b"MM\x00\x2b"
     ) {
-        read_tiff(input, limits)
+        tiff_io::read_tiff(input, limits)
     } else if &signature[..4] == b"RIFF" {
         return webp_io::read(input, limits);
     } else if matches!(&signature[..6], b"GIF87a" | b"GIF89a") {
@@ -212,10 +207,10 @@ fn read_photo_impl(
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
         bmp_io::read(input, limits)
     } else if &signature[4..8] == b"ftyp" {
-        if avif_io::is_avif(&mut input, _cancelled)? {
-            return avif_io::read(input, limits, _cancelled);
+        if avif_io::is_avif(&mut input, cancelled)? {
+            return avif_io::read(input, limits, cancelled);
         }
-        return avif_io::read_heif(input, limits, _cancelled);
+        return avif_io::read_heif(input, limits, cancelled);
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;

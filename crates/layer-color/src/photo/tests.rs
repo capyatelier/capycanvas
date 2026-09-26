@@ -142,7 +142,7 @@ fn tagged_png(mut info: png::Info<'static>) -> Vec<u8> {
 #[test]
 fn png_color_precedence_and_explicit_unsupported_interpretation() {
     let mut info = png::Info::default();
-    let source = read_png(
+    let source = read_photo(
         Cursor::new(tagged_png(info.clone())),
         DecodeLimits::default(),
     )
@@ -155,7 +155,7 @@ fn png_color_precedence_and_explicit_unsupported_interpretation() {
         matrix_coefficients: 0,
         is_video_full_range_image: true,
     });
-    let source = read_png(
+    let source = read_photo(
         Cursor::new(tagged_png(info.clone())),
         DecodeLimits::default(),
     )
@@ -170,7 +170,7 @@ fn png_color_precedence_and_explicit_unsupported_interpretation() {
         .unwrap()
         .transfer_function = 16;
     assert!(
-        read_png(Cursor::new(tagged_png(info)), DecodeLimits::default())
+        read_photo(Cursor::new(tagged_png(info)), DecodeLimits::default())
             .unwrap_err()
             .contains("HDR")
     );
@@ -181,17 +181,20 @@ fn gamma_only_png_retains_its_actual_interpretation() {
     let mut info = png::Info::default();
     info.gama_chunk = Some(png::ScaledFloat::from_scaled(100000));
     info.source_gamma = info.gama_chunk;
-    let source = read_png(Cursor::new(tagged_png(info)), DecodeLimits::default()).unwrap();
+    let source = read_photo(Cursor::new(tagged_png(info)), DecodeLimits::default()).unwrap();
     assert!(!source.interpretation.profile_assumed);
-    let transform = crate::RgbTransform::new(
-        &source.interpretation.profile,
-        &ColorProfile::default(),
-        Default::default(),
-    )
-    .unwrap();
-    let mut gray = [[0.5, 0.5, 0.5, 1.]];
-    transform.apply(&mut gray);
-    assert!((gray[0][0] - 0.735357).abs() < 0.0002);
+    let interpretation = SourceInterpretation {
+        channels: SourceChannels::Rgb,
+        depth: SampleDepth::U16,
+        ..source.interpretation.clone()
+    };
+    let decoder =
+        crate::WorkingDecoder::new(&interpretation, RgbSpace::Srgb, Default::default()).unwrap();
+    let mut gray = [[0.; 4]];
+    decoder
+        .decode_pixels(&[32768u16; 3].map(u16::to_le_bytes).concat(), &mut gray)
+        .unwrap();
+    assert!((RgbSpace::Srgb.encode(f64::from(gray[0][0])) - 0.735357).abs() < 0.0002);
 }
 
 #[test]
@@ -206,7 +209,7 @@ fn malformed_png_profile_is_not_an_untagged_image() {
     writer.write_image_data(&[64, 128, 192]).unwrap();
     writer.finish().unwrap();
     assert!(
-        read_png(Cursor::new(encoded), DecodeLimits::default())
+        read_photo(Cursor::new(encoded), DecodeLimits::default())
             .unwrap_err()
             .contains("unreadable ICC")
     );
@@ -232,7 +235,7 @@ fn interrupted_output_and_tiny_source_budget_return_errors() {
     let mut encoded = Vec::new();
     write_png(&mut encoded, &source).unwrap();
     assert!(
-        read_png(
+        read_photo(
             Cursor::new(encoded),
             DecodeLimits {
                 source_bytes: 1,

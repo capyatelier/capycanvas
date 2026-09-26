@@ -66,8 +66,7 @@ let budget = PhotoMemoryBudget::from_available_memory(available_bytes);
 let decode = DecodeLimits::from_memory_budget(budget);
 let encode = JpegEncodeOptions::from_memory_budget(95, budget);
 // read_photo(reader, decode)
-// write_jpeg_with_options(writer, &source, encode)
-// write_jpeg_rows_with_options(writer, extent, interpretation, resolution, encode, rows)
+// write_jpeg_rows(writer, extent, interpretation, resolution, encode, rows)
 ```
 
 JPEG preflight accounts for retained input capacity and the backend's estimated

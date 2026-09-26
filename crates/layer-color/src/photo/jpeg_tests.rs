@@ -32,7 +32,7 @@ fn camera_mpf_preview_does_not_replace_primary_pixels_or_profile() {
     let source = pattern(SourceChannels::Rgb, RgbSpace::DisplayP3);
     let mut jpeg = Vec::new();
     write_jpeg(&mut jpeg, &source, 100).unwrap();
-    let expected = read_jpeg(Cursor::new(&jpeg), DecodeLimits::default()).unwrap();
+    let expected = read_photo(Cursor::new(&jpeg), DecodeLimits::default()).unwrap();
     for little in [false, true] {
         let directory = super::jpeg_mpf::tests::directory(little, 0x010002);
         let mut camera = jpeg[..2].to_vec();
@@ -42,7 +42,7 @@ fn camera_mpf_preview_does_not_replace_primary_pixels_or_profile() {
         camera.extend_from_slice(&jpeg[2..]);
         let preview = pattern(SourceChannels::Gray, RgbSpace::Srgb);
         write_jpeg(&mut camera, &preview, 90).unwrap();
-        let actual = read_jpeg(Cursor::new(camera), DecodeLimits::default()).unwrap();
+        let actual = read_photo(Cursor::new(camera), DecodeLimits::default()).unwrap();
         assert_eq!(actual.extent, expected.extent);
         assert_eq!(actual.interpretation, expected.interpretation);
         let mut a = vec![0; actual.row_bytes()];
@@ -63,7 +63,7 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
             for quality in [90, 100] {
                 let mut bytes = Vec::new();
                 write_jpeg(&mut bytes, &source, quality).unwrap();
-                let decoded = read_jpeg(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
+                let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
                 assert_eq!(decoded.extent, source.extent);
                 assert_eq!(decoded.interpretation.channels, channels);
                 assert_eq!(decoded.interpretation.depth, SampleDepth::U8);
@@ -127,7 +127,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
                 source.extent,
                 &target,
                 None,
-                quality,
+                JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
                 |_, _| panic!("invalid output requested pixels")
             )
             .is_err()
@@ -141,7 +141,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
         source.extent,
         &source.interpretation,
         None,
-        90,
+        JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()),
         |y, row| {
             assert_eq!(y, calls);
             calls += 1;
@@ -156,16 +156,16 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
     .unwrap_err();
     assert_eq!(calls, 4);
     assert_eq!(error, "cancelled row provider");
-    assert!(read_jpeg(Cursor::new(bytes), DecodeLimits::default()).is_err());
+    assert!(read_photo(Cursor::new(bytes), DecodeLimits::default()).is_err());
     let mut bytes = Vec::new();
     write_jpeg(&mut bytes, &source, 100).unwrap();
     for length in [0, 1, 10, bytes.len() / 2, bytes.len() - 2] {
-        assert!(read_jpeg(Cursor::new(&bytes[..length]), DecodeLimits::default()).is_err());
+        assert!(read_photo(Cursor::new(&bytes[..length]), DecodeLimits::default()).is_err());
     }
     let mut prefixed = Cursor::new([b"prefix".as_slice(), &bytes].concat());
     prefixed.set_position(6);
     assert_eq!(
-        read_jpeg(prefixed, DecodeLimits::default()).unwrap().extent,
+        read_photo(prefixed, DecodeLimits::default()).unwrap().extent,
         source.extent
     );
 }
@@ -224,7 +224,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
         profile_assumed: false,
     };
     let mut bytes = Vec::new();
-    write_jpeg_rows_with_options(
+    write_jpeg_rows(
         &mut bytes,
         extent,
         &interpretation,
@@ -241,7 +241,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
         },
     )
     .unwrap();
-    let error = read_jpeg(
+    let error = read_photo(
         Cursor::new(&bytes),
         DecodeLimits {
             codec_bytes: 8 * 1024 * 1024,
@@ -250,7 +250,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
     )
     .unwrap_err();
     assert!(error.contains("codec memory budget"), "{error}");
-    let source = read_jpeg(
+    let source = read_photo(
         Cursor::new(bytes),
         DecodeLimits {
             source_bytes: 16 * 1024 * 1024,
@@ -280,7 +280,7 @@ fn external_cmyk_jpeg_variants_match_reference_ink_samples() {
     );
     for name in ["cmyk", "ycck"] {
         let expected = std::fs::read(dir.join(format!("{name}.raw"))).unwrap();
-        let decoded = read_jpeg(
+        let decoded = read_photo(
             std::io::BufReader::new(std::fs::File::open(dir.join(format!("{name}.jpg"))).unwrap()),
             DecodeLimits::default(),
         )
@@ -304,7 +304,7 @@ fn external_cmyk_jpeg_variants_match_reference_ink_samples() {
         let mut output = Vec::new();
         write_jpeg(&mut output, &decoded, 100).unwrap();
         std::fs::write(dir.join(format!("capy-{name}.jpg")), &output).unwrap();
-        let restored = read_jpeg(Cursor::new(output), DecodeLimits::default()).unwrap();
+        let restored = read_photo(Cursor::new(output), DecodeLimits::default()).unwrap();
         assert_eq!(
             restored.interpretation.profile,
             decoded.interpretation.profile
@@ -325,7 +325,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
         ("oriented", [259, 513], SourceChannels::Rgb, false),
     ] {
         let bytes = std::fs::read(dir.join(format!("{name}.jpg"))).unwrap();
-        let decoded = read_jpeg(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
+        let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
         assert_eq!(decoded.extent, extent);
         assert_eq!(decoded.interpretation.channels, channels);
         assert_eq!(decoded.interpretation.profile_assumed, assumed);
@@ -345,7 +345,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
             );
         }
         assert!(maximum <= 1, "{name}: maximum code difference {maximum}");
-        let error = read_jpeg(
+        let error = read_photo(
             Cursor::new(&bytes),
             DecodeLimits {
                 codec_bytes: 1024,
@@ -357,7 +357,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
     }
     let file =
         || std::io::BufReader::new(std::fs::File::open(dir.join("progressive-60mp.jpg")).unwrap());
-    let error = read_jpeg(
+    let error = read_photo(
         file(),
         DecodeLimits {
             codec_bytes: 512 * 1024 * 1024,
@@ -366,7 +366,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
     )
     .unwrap_err();
     assert!(error.contains("codec memory budget"), "{error}");
-    let source = read_jpeg(
+    let source = read_photo(
         file(),
         DecodeLimits {
             source_bytes: 16 * 1024 * 1024,
@@ -394,7 +394,7 @@ fn export_budget_rejects_before_requesting_rows_or_writing_output() {
     let options =
         JpegEncodeOptions::from_memory_budget(100, PhotoMemoryBudget::from_available_memory(1024));
     let mut output = Vec::new();
-    let error = write_jpeg_rows_with_options(
+    let error = write_jpeg_rows(
         &mut output,
         source.extent,
         &source.interpretation,

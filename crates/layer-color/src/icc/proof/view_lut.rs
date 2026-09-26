@@ -53,22 +53,12 @@ impl ProofLut {
     /// Host-worker transport only, never a persisted or trusted ICC cache.
     /// Bounds and finite values are checked before GPU publication. The sender
     /// must have built these samples using `build` in the same app version.
-    pub fn from_worker(space: RgbSpace, edge: u32, dark_grid: bool, bytes: &[u8]) -> Result<Self, String> {
-        if !matches!(edge, 65 | 129) || (dark_grid && edge != 129) || bytes.len() != (edge as usize).pow(3) * 20 {
-            return Err("Invalid proof worker sample dimensions".into());
-        }
-        let samples: Vec<[f32; 5]> = bytes.chunks_exact(20).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i*4..i*4+4].try_into().unwrap()))).collect();
-        Self::from_worker_samples(space, edge, dark_grid, samples.into_boxed_slice())
-    }
     pub fn from_worker_samples(space: RgbSpace, edge: u32, dark_grid: bool, samples: Box<[[f32; 5]]>) -> Result<Self, String> {
         if !matches!(edge, 65 | 129) || (dark_grid && edge != 129) || samples.len() != (edge as usize).pow(3) {
             return Err("Invalid proof worker sample dimensions".into());
         }
         if samples.iter().flatten().any(|v| !v.is_finite()) { return Err("Invalid proof worker samples".into()); }
         Ok(Self { space, edge: edge as usize, dark_grid, samples })
-    }
-    pub fn worker_bytes(&self) -> Vec<u8> {
-        self.samples.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
     }
 
     fn at_resolution(
@@ -140,38 +130,6 @@ impl ProofLut {
             previous = next;
         }
         Ok(result)
-    }
-
-    /// Straight color transformation followed by reassociation with the original
-    /// coverage. Transparent pixels never show a warning. This CPU path is also
-    /// the reference for managed UI patches and the presenter shader.
-    pub fn apply_premultiplied(&self, rgba: [f32; 4], proof: bool, warnings: bool) -> [f32; 4] {
-        let alpha = rgba[3];
-        if alpha <= 0. || (!proof && !warnings) {
-            return rgba;
-        }
-        let encoded: [f32; 3] =
-            std::array::from_fn(|i| self.space.encode(f64::from(rgba[i] / alpha)) as f32);
-        let outside = encoded.iter().any(|v| !(0. ..=1.).contains(v));
-        let bounded = encoded.map(|v| v.clamp(0., 1.));
-        let Ok(sample) = self.sample(bounded) else {
-            return rgba;
-        };
-        let mut linear = if proof {
-            [sample[0], sample[1], sample[2]]
-        } else {
-            [rgba[0] / alpha, rgba[1] / alpha, rgba[2] / alpha]
-        };
-        if warnings && (outside || gamut_score(sample) > 5.) {
-            // A neutral warning has the same meaning in every managed space.
-            linear = [0.5; 3];
-        }
-        [
-            linear[0] * alpha,
-            linear[1] * alpha,
-            linear[2] * alpha,
-            alpha,
-        ]
     }
 
     fn quality(
@@ -275,25 +233,16 @@ mod tests {
         let lut = ProofLut::build(RgbSpace::Srgb, &recipe, || false).unwrap();
         assert_eq!(lut.edge(), 65);
         assert_eq!(lut.byte_len(), 65usize.pow(3) * 20);
-        let bytes = lut.worker_bytes();
-        let transported = ProofLut::from_worker(RgbSpace::Srgb, lut.edge(), lut.dark_grid(), &bytes).unwrap();
+        let transport = |edge, dark_grid, samples: &[[f32; 5]]| {
+            ProofLut::from_worker_samples(RgbSpace::Srgb, edge, dark_grid, samples.into())
+        };
+        let transported = transport(lut.edge(), lut.dark_grid(), lut.samples()).unwrap();
         assert_eq!(transported.samples(), lut.samples());
-        assert!(ProofLut::from_worker(RgbSpace::Srgb, 129, false, &bytes).is_err());
-        assert!(ProofLut::from_worker(RgbSpace::Srgb, 65, true, &bytes).is_err());
-        let mut invalid = bytes;
-        invalid[..4].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert!(ProofLut::from_worker(RgbSpace::Srgb, 65, false, &invalid).is_err());
-        for alpha in [0., f32::MIN_POSITIVE, 0.001, 0.125, 0.5, 1.] {
-            let input = [0.02 * alpha, 0.25 * alpha, 0.75 * alpha, alpha];
-            let output = lut.apply_premultiplied(input, true, true);
-            assert_eq!(output[3].to_bits(), alpha.to_bits());
-            assert_eq!(lut.apply_premultiplied(input, false, false), input);
-            if alpha > 0. {
-                for i in 0..3 {
-                    assert!((output[i] - input[i]).abs() <= 0.0002 * alpha);
-                }
-            }
-        }
+        assert!(transport(129, false, lut.samples()).is_err());
+        assert!(transport(65, true, lut.samples()).is_err());
+        let mut invalid = lut.samples().to_vec();
+        invalid[0][0] = f32::NAN;
+        assert!(transport(65, false, &invalid).is_err());
         assert!(lut.sample([f32::NAN, 0., 0.]).is_err());
         assert!(lut.sample([2., 0., 0.]).is_err());
     }

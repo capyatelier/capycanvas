@@ -15,9 +15,7 @@ pub struct WorkingEncoder {
     destination: SourceInterpretation,
     kind: OutputKind,
     dither: OutputDither,
-    hdr_proof_input: bool,
-    photographic_gamut: bool,
-    unified_color: Option<f32>,
+    sdr_highlight: Option<f32>,
     source_luma: [f32; 3],
     output_luma: [f32; 3],
 }
@@ -93,33 +91,15 @@ impl WorkingEncoder {
             destination,
             kind,
             dither: encoding.dither,
-            hdr_proof_input: false,
-            photographic_gamut: false,
-            unified_color: None,
+            sdr_highlight: None,
         })
     }
 
-    /// HDR print proof LUTs and ICC delivery share a bounded working-RGB input.
-    /// Ordinary SDR conversion and native backing keep their existing contract.
-    pub fn with_hdr_proof_input(mut self, enabled: bool) -> Self {
-        self.hdr_proof_input = enabled;
-        self
-    }
     /// Compress HDR rendition color before alpha/matte compositing. Builtin RGB
     /// uses the destination gamut; ICC delivery shares the proof LUT input gamut.
-    pub fn with_photographic_gamut(mut self, enabled: bool) -> Self {
-        self.photographic_gamut = enabled;
-        self
-    }
-
     pub fn with_sdr_gamut(mut self, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Self {
-        self.photographic_gamut = rendition.is_some();
-        self.unified_color = rendition.map(|r| r.highlight_color);
+        self.sdr_highlight = rendition.map(|r| r.highlight_color);
         self
-    }
-    fn map_gamut(&self, rgb: [f32; 3], weights: [f32; 3]) -> [f32; 3] {
-        if let Some(color) = self.unified_color { layer_core::color::hdr::unified_sdr_gamut(rgb, weights, color) }
-        else { layer_core::color::hdr::compress_sdr_gamut(rgb, weights) }
     }
 
     /// Use this interpretation for the written file, including any generated
@@ -176,7 +156,7 @@ impl WorkingEncoder {
             return Err("Opaque output requires an explicit matte for transparency".into());
         }
         let matte = matte.map(|m| {
-            if self.photographic_gamut && let OutputKind::Builtin { matrix, .. } = &self.kind {
+            if self.sdr_highlight.is_some() && let OutputKind::Builtin { matrix, .. } = &self.kind {
                 layer_core::color::rgb::apply(*matrix, m.map(f64::from)).map(|v| v as f32)
             } else { m }
         });
@@ -199,12 +179,13 @@ impl WorkingEncoder {
                 } else {
                     [p[0], p[1], p[2]]
                 };
-                let rgb = if self.photographic_gamut {
-                    match &self.kind {
-                        OutputKind::Builtin { matrix, .. } => self.map_gamut(
+                let rgb = if let Some(color) = self.sdr_highlight {
+                    let (rgb, weights) = match &self.kind {
+                        OutputKind::Builtin { matrix, .. } => (
                             layer_core::color::rgb::apply(*matrix, rgb.map(f64::from)).map(|v| v as f32), self.output_luma),
-                        _ => self.map_gamut(rgb, self.source_luma),
-                    }
+                        _ => (rgb, self.source_luma),
+                    };
+                    layer_core::color::hdr::unified_sdr_gamut(rgb, weights, color)
                 } else { rgb };
                 let (rgb, alpha) = if let Some(matte) = matte {
                     (
@@ -217,7 +198,7 @@ impl WorkingEncoder {
                 if rgb.iter().any(|v| !v.is_finite()) {
                     return Err("Working RGB exceeds finite output precision".into());
                 }
-                let rgb = if self.hdr_proof_input && !matches!(self.kind, OutputKind::Builtin { .. }) {
+                let rgb = if self.sdr_highlight.is_some() && !matches!(self.kind, OutputKind::Builtin { .. }) {
                     {
                         statistics.clipped_channels += rgb.iter().filter(|v| **v < 0. || **v > 1.).count() as u64;
                         rgb.map(|v| v.clamp(0.,1.))
@@ -243,7 +224,7 @@ impl WorkingEncoder {
                         identity,
                     } => {
                         let linear = [values[i][0], values[i][1], values[i][2]].map(f64::from);
-                        let rgb = if *identity || self.photographic_gamut {
+                        let rgb = if *identity || self.sdr_highlight.is_some() {
                             linear
                         } else {
                             layer_core::color::rgb::apply(*matrix, linear)

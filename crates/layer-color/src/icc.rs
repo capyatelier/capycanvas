@@ -17,7 +17,7 @@ pub use output::{OutputStatistics, WorkingEncoder};
 pub use profiles::{gray_profile, profile_bytes, profile_channels};
 pub use working::WorkingDecoder;
 mod proof;
-pub use proof::{ProofLut, ProofSample, ProofTransform};
+pub use proof::{ProofLut, ProofTransform};
 
 type FloatTransform<const N: usize> = CompiledTransform<N, 4>;
 
@@ -136,19 +136,6 @@ impl<const N: usize, const M: usize> CompiledTransform<N, M> {
             }
         }
     }
-    fn transform_in_place(&self, pixels: &mut [[f32; N]])
-    where
-        Self: Sized,
-    {
-        assert_eq!(N, M);
-        for pixels in pixels.chunks_mut(256) {
-            let mut output = [[0.; M]; 256];
-            self.transform_pixels(pixels, &mut output[..pixels.len()]);
-            for (pixel, out) in pixels.iter_mut().zip(output) {
-                pixel.copy_from_slice(&out);
-            }
-        }
-    }
 }
 
 /// Explicit requests for unsupported conversion policy must not become a no-op.
@@ -161,94 +148,6 @@ fn validate_options(options: ConversionOptions) -> Result<(), String> {
     Ok(())
 }
 
-/// Straight encoded RGB in/out. Identity conversions preserve all sample bits,
-/// including hidden RGB; alpha is never sent through a color conversion.
-pub struct RgbTransform {
-    transform: Option<FloatTransform<4>>,
-}
-impl RgbTransform {
-    pub fn new(
-        source: &ColorProfile,
-        destination: &ColorProfile,
-        options: ConversionOptions,
-    ) -> Result<Self, String> {
-        validate_options(options)?;
-        let input = open(source)?;
-        let output = open(destination)?;
-        if channels(&input)? != ProfileChannels::Rgb || channels(&output)? != ProfileChannels::Rgb {
-            return Err("RGB conversion requires two RGB profiles".into());
-        }
-        let compiled = CompiledTransform::new(&input, &output, options)?;
-        Ok(Self {
-            transform: (source != destination).then_some(compiled),
-        })
-    }
-    pub fn apply(&self, pixels: &mut [[f32; 4]]) {
-        if let Some(transform) = &self.transform {
-            transform.transform_in_place(pixels);
-        }
-    }
-}
-
-/// Gray/CMYK conversion with independent alpha. The public CMYK adapter retains
-/// its percent convention; the portable backend receives normalized ink values.
-pub struct InputTransform {
-    transform: InputKind,
-}
-enum InputKind {
-    Gray(FloatTransform<1>),
-    Cmyk(FloatTransform<4>),
-}
-impl InputTransform {
-    pub fn new(
-        source: &ColorProfile,
-        destination: &ColorProfile,
-        options: ConversionOptions,
-    ) -> Result<Self, String> {
-        validate_options(options)?;
-        let input = open(source)?;
-        let output = open(destination)?;
-        if channels(&output)? != ProfileChannels::Rgb {
-            return Err("The editing destination must be RGB".into());
-        }
-        let transform = match channels(&input)? {
-            ProfileChannels::Gray => {
-                InputKind::Gray(CompiledTransform::new(&input, &output, options)?)
-            }
-            ProfileChannels::Cmyk => {
-                InputKind::Cmyk(CompiledTransform::new(&input, &output, options)?)
-            }
-            ProfileChannels::Rgb => return Err("Use RGB conversion for an RGB source".into()),
-        };
-        Ok(Self { transform })
-    }
-    pub fn gray(&self, source: &[[f32; 1]], output: &mut [[f32; 4]]) -> Result<(), String> {
-        let InputKind::Gray(transform) = &self.transform else {
-            return Err("Source is not grayscale".into());
-        };
-        if source.len() != output.len() {
-            return Err("Incomplete grayscale strip".into());
-        }
-        transform.transform_pixels(source, output);
-        for pixel in output {
-            pixel[3] = 1.;
-        }
-        Ok(())
-    }
-    pub fn cmyk_percent(&self, source: &[[f32; 4]], output: &mut [[f32; 4]]) -> Result<(), String> {
-        let InputKind::Cmyk(transform) = &self.transform else {
-            return Err("Source is not CMYK".into());
-        };
-        if source.len() != output.len() {
-            return Err("Incomplete CMYK strip".into());
-        }
-        transform.transform_pixels(source, output);
-        for pixel in output {
-            pixel[3] = 1.;
-        }
-        Ok(())
-    }
-}
 fn intent(value: RenderingIntent) -> moxcms::RenderingIntent {
     match value {
         RenderingIntent::Perceptual => moxcms::RenderingIntent::Perceptual,

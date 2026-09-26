@@ -12,13 +12,8 @@ pub fn assume_source_profile(
     mut source: SourceImage,
     profile: layer_core::color::ColorProfile,
 ) -> Result<SourceImage, String> {
-    source.interpretation.profile = profile;
-    source.interpretation.profile_assumed = false;
-    crate::WorkingDecoder::new(
-        &source.interpretation,
-        RgbSpace::ProPhoto,
-        Default::default(),
-    )?;
+    source.interpretation =
+        crate::repair_source_interpretation(source.interpretation, RgbSpace::ProPhoto, profile)?;
     source.validate()?;
     Ok(source)
 }

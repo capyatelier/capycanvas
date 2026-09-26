@@ -120,13 +120,20 @@ fn gray_profiles_alpha_and_source_edge_padding_are_independent() {
     builder.push_row(&bytes).unwrap();
     let image = builder.finish().unwrap();
     let mut output = vec![[0.; 4]; (TILE_SIZE * TILE_SIZE) as usize];
-    decoder.decode_tile(&image, [0, 0], &mut output).unwrap();
+    let cache = layer_core::raster::DecodedTileCache::new(0);
+    decoder
+        .decode_tile_cached(&image, [0, 0], &mut output, &cache)
+        .unwrap();
     for value in &output[0][..3] {
         assert!((*value - (32768. / 65535f32).powi(2)).abs() < 0.00003);
     }
     assert_eq!(output[0][3], 257. / 65535.);
     assert!(output[1..].iter().all(|p| *p == [0.; 4]));
-    assert!(decoder.decode_tile(&image, [1, 0], &mut output).is_err());
+    assert!(
+        decoder
+            .decode_tile_cached(&image, [1, 0], &mut output, &cache)
+            .is_err()
+    );
     assert!(
         decoder
             .decode_pixels(&bytes[..3], &mut output[..1])
@@ -134,5 +141,9 @@ fn gray_profiles_alpha_and_source_edge_padding_are_independent() {
     );
     let mut changed = image.clone();
     changed.interpretation.profile = ColorProfile::default();
-    assert!(decoder.decode_tile(&changed, [0, 0], &mut output).is_err());
+    assert!(
+        decoder
+            .decode_tile_cached(&changed, [0, 0], &mut output, &cache)
+            .is_err()
+    );
 }

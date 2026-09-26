@@ -2,7 +2,6 @@
 use super::*;
 use crate::photo::GainMapMetadata;
 use layer_core::color::{hdr, rgb};
-use std::sync::atomic::Ordering;
 
 const MEMORY: &str =
     "HDR AVIF output exceeds the available memory budget. Choose a smaller export size.";
@@ -124,7 +123,7 @@ fn encode(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: hdr::SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     quality: u8,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
@@ -143,19 +142,6 @@ fn encode(
     }
     let layout = Layout::new(extent)?;
     let count = admit(layout, budget)?;
-    let generated = if guide.is_none() {
-        Some(crate::build_local_tone_guide(
-            extent,
-            space,
-            || cancel.load(Ordering::Relaxed),
-            &mut read,
-        )?)
-    } else {
-        None
-    };
-    let guide = guide
-        .or(generated.as_ref())
-        .ok_or("Missing HDR tone guide")?;
     let matrix = hdr::to_bt2020(space);
     let mapper = rendition.mapper(space, RgbSpace::Srgb);
     let mut master = buffer::<[f32; 3]>(count)?;
@@ -324,7 +310,7 @@ pub(in crate::photo) fn write(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: hdr::SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
@@ -398,7 +384,7 @@ pub(in crate::photo) fn preview(
     bounds: [u32; 2],
     space: RgbSpace,
     rendition: hdr::SdrRendition,
-    guide: Option<&hdr::LocalToneGuide>,
+    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,

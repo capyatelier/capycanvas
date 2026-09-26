@@ -16,14 +16,14 @@ impl SnapshotRenderer {
             .ok_or("Gain-map delivery requires an HDR document")?;
         let control = self.control.clone();
         let resolution = self.output_resolution;
-        let guide = Some(self.local_tone_guide()?);
+        let guide = self.local_tone_guide()?;
         self.hdr_rows(|extent, space, read| {
-            layer_color::photo::write_gainmap_rows_with_guide(
+            layer_color::photo::write_gainmap_rows(
                 output,
                 extent,
                 space,
                 rendition,
-                guide.as_deref(),
+                &guide,
                 format,
                 quality,
                 resolution,
@@ -179,7 +179,17 @@ impl SnapshotRenderer {
     ) -> Result<layer_color::OutputStatistics, String> {
         let resolution = self.output_resolution;
         self.write_rows(target, options, Some(matte), |extent, target, row| {
-            layer_color::photo::write_jpeg_rows(output, extent, target, resolution, quality, row)
+            layer_color::photo::write_jpeg_rows(
+                output,
+                extent,
+                target,
+                resolution,
+                layer_color::photo::JpegEncodeOptions::from_memory_budget(
+                    quality,
+                    layer_color::photo::PhotoMemoryBudget::current(),
+                ),
+                row,
+            )
         })
     }
     pub(super) fn write_rows(

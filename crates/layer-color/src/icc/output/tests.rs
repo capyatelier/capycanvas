@@ -231,9 +231,9 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
                     },
                 )
                 .unwrap();
-                let reference = RgbTransform::new(
-                    &ColorProfile::Builtin(source),
-                    &destination.profile,
+                let reference = CompiledTransform::<4, 4>::new(
+                    &open(&ColorProfile::Builtin(source)).unwrap(),
+                    &open(&destination.profile).unwrap(),
                     options,
                 )
                 .unwrap();
@@ -258,8 +258,8 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
                         ]
                     })
                     .collect();
-                let mut expected = original;
-                reference.apply(&mut expected);
+                let mut expected = vec![[0.; 4]; original.len()];
+                reference.transform_pixels(&original, &mut expected);
                 let mut output = vec![0; linear.len() * 8];
                 encoder
                     .encode_straight(&linear, &mut output, None, [0, 0])
@@ -351,14 +351,13 @@ fn cmyk_output_matches_independent_reference_samples() {
             .fold(0f32, f32::max);
         eprintln!("{intent:?} maximum ink difference: {max}");
         assert!(max < 0.02, "{intent:?} maximum ink difference: {max}");
-        let input: Vec<[f32; 4]> = (0..625)
-            .map(|i| std::array::from_fn(|c| ((i / 5usize.pow(c as u32)) % 5) as f32 * 25.))
+        let input: Vec<u8> = (0..625)
+            .flat_map(|i| (0..4).map(move |c| (((i / 5usize.pow(c)) % 5) * 65535 / 4) as u16))
+            .flat_map(u16::to_le_bytes)
             .collect();
-        let decoder =
-            InputTransform::new(&destination.profile, &ColorProfile::default(), conversion)
-                .unwrap();
-        let mut rgb = vec![[0.; 4]; input.len()];
-        decoder.cmyk_percent(&input, &mut rgb).unwrap();
+        let decoder = WorkingDecoder::new(&destination, RgbSpace::Srgb, conversion).unwrap();
+        let mut rgb = vec![[0.; 4]; 625];
+        decoder.decode_pixels(&input, &mut rgb).unwrap();
         let expected = reference(&format!("cmyk-to-rgb-{id}.f32le"), 625 * 3);
         // Compare extended linear RGB: encoded sRGB magnifies negative
         // out-of-gamut differences by 12.92. Different CMMs also implement
@@ -376,7 +375,7 @@ fn cmyk_output_matches_independent_reference_samples() {
                         ((f64::from(v) + 0.055) / 1.055).powf(2.4)
                     }
                 };
-                (linear(*a) - linear(b)).abs()
+                (f64::from(*a) - linear(b)).abs()
             })
             .fold(0f64, f64::max);
         eprintln!("{intent:?} maximum linear RGB difference: {max}");

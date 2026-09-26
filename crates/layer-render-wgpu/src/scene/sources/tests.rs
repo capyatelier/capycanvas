@@ -192,7 +192,12 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                         .unwrap();
                         let mut reference = vec![[0.; 4]; (PAGE_SIZE * PAGE_SIZE) as usize];
                         decoder
-                            .decode_tile(&source, [0, 0], &mut reference)
+                            .decode_tile_cached(
+                                &source,
+                                [0, 0],
+                                &mut reference,
+                                &layer_core::raster::DecodedTileCache::new(0),
+                            )
                             .unwrap();
                         let mut max_error = 0f32;
                         let mut code_error = 0f64;

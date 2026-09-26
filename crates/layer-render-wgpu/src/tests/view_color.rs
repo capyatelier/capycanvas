@@ -69,6 +69,35 @@ fn bytes(rgb: [f64; 3], alpha: f64) -> [u8; 4] {
     out[3] = (alpha * 255.).round() as u8;
     out
 }
+/// Straight color transformation followed by reassociation with the original
+/// coverage. Transparent pixels never show a warning. This CPU path is the
+/// reference for managed UI patches and the presenter shader.
+fn apply_proof(
+    lut: &layer_color::ProofLut,
+    rgba: [f32; 4],
+    proof: bool,
+    warnings: bool,
+) -> [f32; 4] {
+    let alpha = rgba[3];
+    if alpha <= 0. || (!proof && !warnings) {
+        return rgba;
+    }
+    let encoded: [f32; 3] =
+        std::array::from_fn(|i| lut.space().encode(f64::from(rgba[i] / alpha)) as f32);
+    let outside = encoded.iter().any(|v| !(0. ..=1.).contains(v));
+    let Ok(sample) = lut.sample(encoded.map(|v| v.clamp(0., 1.))) else {
+        return rgba;
+    };
+    let gamut_score = if sample[4] < 5. { sample[3] } else { sample[3] / sample[4] };
+    let linear = if warnings && (outside || gamut_score > 5.) {
+        [0.5; 3]
+    } else if proof {
+        [sample[0], sample[1], sample[2]]
+    } else {
+        [rgba[0] / alpha, rgba[1] / alpha, rgba[2] / alpha]
+    };
+    [linear[0] * alpha, linear[1] * alpha, linear[2] * alpha, alpha]
+}
 fn close(actual: &[u8], expected: [u8; 4], context: &str) {
     assert!(
         actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
@@ -557,7 +586,7 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
                         presenter.set_proof(&r, Some(lut.clone()), proof, warning).unwrap();
                         presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
                         let actual = crate::layer_tests::page_bytes(&r, &target);
-                        let expected = lut.apply_premultiplied(input, proof, warning);
+                        let expected = apply_proof(&lut, input, proof, warning);
                         let expected = rgb::apply(space.linear_transform(surface.primaries()),
                             [expected[0] as f64, expected[1] as f64, expected[2] as f64])
                             .map(|v| v + 0.94 * (1. - alpha as f64));
@@ -611,7 +640,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
                             let mut expected=if compositor && !proof {[p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]]}
                             else if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
                             else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
-                            if proof {expected=lut.apply_premultiplied(expected,true,false);}
+                            if proof {expected=apply_proof(&lut,expected,true,false);}
                             let rgb=if headroom==1. && !proof && !compositor {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
                             let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
                             let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
@@ -756,7 +785,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
                             layer_core::color::hdr::map_display_premultiplied(p, headroom)
                         };
                         if proof {
-                            expected = lut.apply_premultiplied(expected, true, false);
+                            expected = apply_proof(&lut, expected, true, false);
                         }
                         let rgb = if headroom == 1. && !proof {
                             [expected[0], expected[1], expected[2]].map(f64::from)

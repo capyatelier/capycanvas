@@ -1,5 +1,7 @@
 use super::*;
+use crate::photo::gainmap::test_guide;
 use std::io::Cursor;
+use std::sync::atomic::Ordering;
 
 fn sample(x: u32, y: u32) -> [f32; 4] {
     let a = ((x * 389 + y * 601) % 4096) as f32 / 4095.;
@@ -34,7 +36,7 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
                 extent,
                 RgbSpace::Srgb,
                 Default::default(),
-                None,
+                &test_guide(extent, rows),
                 quality,
                 Some(layer_core::ImageResolution::ppi(300)),
                 None,
@@ -124,12 +126,13 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
 #[test]
 fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
     let cancel = AtomicBool::new(false);
+    let guide = test_guide([23, 17], rows);
     let attempt = |budget, read| {
         encode(
             [23, 17],
             RgbSpace::Srgb,
             Default::default(),
-            None,
+            &guide,
             90,
             None,
             None,
@@ -157,7 +160,7 @@ fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
             [8, 8],
             RgbSpace::Srgb,
             Default::default(),
-            None,
+            &test_guide([8, 8], rows),
             90,
             None,
             None,
@@ -183,7 +186,7 @@ fn rust_avif_preview_preserves_hdr_when_the_authored_sdr_changes() {
                 exposure,
                 ..Default::default()
             },
-            None,
+            &test_guide(extent, rows),
             quality,
             None,
             &cancel,

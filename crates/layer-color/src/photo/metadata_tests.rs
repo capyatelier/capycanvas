@@ -68,8 +68,8 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
     source.resolution = Some(density);
     let mut tagged = Vec::new();
     write_jpeg(&mut tagged, &source, 93).unwrap();
-    let a = read_jpeg(Cursor::new(plain), Default::default()).unwrap();
-    let b = read_jpeg(Cursor::new(&tagged), Default::default()).unwrap();
+    let a = read_photo(Cursor::new(plain), Default::default()).unwrap();
+    let b = read_photo(Cursor::new(&tagged), Default::default()).unwrap();
     assert!(a.resolution.is_none());
     assert_eq!(b.resolution, Some(density));
     let mut ar = a.rows();
@@ -111,7 +111,7 @@ fn png_density_precedes_exif_and_orientation_swaps_density_axes() {
         .unwrap()
         .write_image_data(&[100; 18])
         .unwrap();
-    let image = read_png(Cursor::new(bytes), Default::default()).unwrap();
+    let image = read_photo(Cursor::new(bytes), Default::default()).unwrap();
     assert_eq!(image.extent, [2, 3]);
     assert_eq!(
         image.resolution,
@@ -152,7 +152,7 @@ fn gray_and_cmyk_jpeg_resolution_is_retained_with_the_delivery_profile() {
         source.resolution = Some(ImageResolution::ppi(300));
         let mut encoded = Vec::new();
         write_jpeg(&mut encoded, &source, 95).unwrap();
-        let decoded = read_jpeg(Cursor::new(encoded), Default::default()).unwrap();
+        let decoded = read_photo(Cursor::new(encoded), Default::default()).unwrap();
         assert_eq!(decoded.resolution, source.resolution);
         assert_eq!(decoded.interpretation, interpretation);
     }

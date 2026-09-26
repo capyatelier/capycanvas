@@ -3,45 +3,6 @@
 use crate::{OutputStatistics, RowResampler, WorkingEncoder};
 use layer_core::color::{OutputEncoding, RgbSpace, source::SourceInterpretation};
 
-pub fn encode_working_rows(
-    working: RgbSpace,
-    source_extent: [u32; 2],
-    extent: [u32; 2],
-    target: &SourceInterpretation,
-    options: OutputEncoding,
-    matte: Option<[f32; 3]>,
-    rendition: Option<layer_core::color::hdr::SdrRendition>,
-    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-    write: impl FnOnce(
-        [u32; 2],
-        &SourceInterpretation,
-        &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>,
-    ) -> Result<(), String>,
-) -> Result<OutputStatistics, String> {
-    let guide = if rendition.is_some() {
-        Some(build_local_tone_guide(
-            source_extent,
-            working,
-            || false,
-            &mut read,
-        )?)
-    } else {
-        None
-    };
-    encode_working_rows_with_guide(
-        working,
-        source_extent,
-        extent,
-        target,
-        options,
-        matte,
-        rendition,
-        guide.as_ref(),
-        read,
-        write,
-    )
-}
-
 pub fn build_local_tone_guide(
     extent: [u32; 2],
     space: RgbSpace,
@@ -82,9 +43,7 @@ pub fn encode_working_rows_with_guide(
     if rendition.is_some() && guide.is_none() {
         return Err("Local SDR rendition requires image analysis".into());
     }
-    let encoder = WorkingEncoder::new(working, target, options)?
-        .with_hdr_proof_input(rendition.is_some())
-        .with_sdr_gamut(rendition);
+    let encoder = WorkingEncoder::new(working, target, options)?.with_sdr_gamut(rendition);
     let mapper = rendition.map(|r| r.mapper(working, working));
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
@@ -161,7 +120,15 @@ mod tests {
             profile_assumed: false,
         };
         let mut bytes = vec![0; pixels.len() * 8];
-        let _stats = encode_working_rows(
+        let read = |_, row: &mut [[f32; 4]]| {
+            row.copy_from_slice(pixels);
+            Ok(())
+        };
+        let guide = rendition
+            .map(|_| build_local_tone_guide([pixels.len() as u32, 1], space, || false, read))
+            .transpose()
+            .unwrap();
+        let _stats = encode_working_rows_with_guide(
             space,
             [pixels.len() as u32, 1],
             [pixels.len() as u32, 1],
@@ -169,10 +136,8 @@ mod tests {
             Default::default(),
             None,
             rendition,
-            |_, row| {
-                row.copy_from_slice(pixels);
-                Ok(())
-            },
+            guide.as_ref(),
+            read,
             |_, _, read| read(0, &mut bytes),
         )
         .unwrap();
