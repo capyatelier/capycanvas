@@ -23,15 +23,6 @@ import SwiftUI
     var tabs: [JSON] = []
     var zenButton: CGRect? { didSet { if zenButton != oldValue { refreshChrome() } } }
     var sourceInstances: [String: WorkspaceSource] = [:] { didSet { inputState?.validate() } }
-    // Aggregate lookup remains useful for geometry checks; native hit testing
-    // keeps every presentation, including a column icon and its open drawer tab.
-    var sources: [String: WorkspaceSource] {
-        sourceInstances.values.reduce(into: [:]) { result, source in
-            if let current = result[source.item], current.layer > source.layer
-                || current.layer == source.layer && current.bounds.width * current.bounds.height >= source.bounds.width * source.bounds.height { return }
-            result[source.item] = source
-        }
-    }
     private var inputState: WorkspaceReorderInteraction?
     var input: WorkspaceReorderInteraction {
         if inputState == nil { inputState = WorkspaceReorderInteraction(workspace: self, store: store) }

@@ -65,8 +65,6 @@ internal object Native {
     @JvmStatic external fun recoveryUpdate(state: String, event: String): String
     @JvmStatic external fun profileLibrary(request: String, bytes: ByteArray): String
     @JvmStatic external fun paletteFile(request: String, bytes: ByteArray): Array<Any>
-    @JvmStatic external fun inspectProfileSummary(bytes: ByteArray): String
-    @JvmStatic external fun inspectProfile(bytes: ByteArray): String
     @JvmStatic external fun projectProfilePrompt(task: Long): String
     @JvmStatic external fun projectAssumeProfile(task: Long, profile: String)
     @JvmStatic external fun projectOptions(task: Long, options: String)
@@ -96,7 +94,6 @@ internal object Native {
     @JvmStatic external fun proofControl(handle: Long, action: String)
     @JvmStatic external fun toneStatus(handle: Long): String
     @JvmStatic external fun toneTask(handle: Long, control: Long): Long
-    @JvmStatic external fun toneReferenceDifference(task: Long): String
     @JvmStatic external fun toneWork(task: Long)
     @JvmStatic external fun toneApply(handle: Long, task: Long): Boolean
     @JvmStatic external fun toneFailed(handle: Long, generation: Int, error: String)
@@ -126,7 +123,6 @@ internal object Native {
     @JvmStatic external fun automaticTabNames(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String
-    @JvmStatic external fun colorPanelLayout(size: Float): String
     @JvmStatic external fun colorHueStops(shape: String, space: String): String
     /** Shared sRGB field raster as Android ARGB pixels; no session access. */
     @JvmStatic external fun colorFieldMapped(size: Int, state: String, rendition: String): IntArray

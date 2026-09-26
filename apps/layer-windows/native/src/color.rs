@@ -173,21 +173,21 @@ mod tests {
     #[test]
     fn invalid_raster_requests_leave_the_callers_buffer_untouched() {
         let mut bytes = [93; 16];
-        for (side, hue, projection, length) in [
-            (0, 60., 2, 16),
-            (2049, 60., 2, 16),
-            (2, f32::NAN, 2, 16),
-            (2, 60., 2, 15),
-            (2, 60., 0, 16),
-            (2, 60., 3, 16),
+        for (side, hue, projection, space, length) in [
+            (0, 60., 2, 0, 16),
+            (2049, 60., 2, 0, 16),
+            (2, f32::NAN, 2, 0, 16),
+            (2, 60., 2, 0, 15),
+            (2, 60., 3, 0, 16),
+            (2, 60., 2, u32::MAX, 16),
         ] {
             assert!(!unsafe {
-                capy_color_field(side, hue, projection, bytes.as_mut_ptr(), length)
+                capy_color_raster(side, hue, projection, space, false, bytes.as_mut_ptr(), length)
             });
             assert_eq!(bytes, [93; 16]);
         }
-        assert!(!unsafe { capy_color_field(2, 60., 2, std::ptr::null_mut(), 16) });
-        assert!(unsafe { capy_color_field(2, 60., 2, bytes.as_mut_ptr(), 16) });
+        assert!(!unsafe { capy_color_raster(2, 60., 2, 0, false, std::ptr::null_mut(), 16) });
+        assert!(unsafe { capy_color_raster(2, 60., 2, 0, false, bytes.as_mut_ptr(), 16) });
         assert!(bytes.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 }

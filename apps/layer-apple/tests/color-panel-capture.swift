@@ -104,9 +104,7 @@ enum ColorPanelCaptures {
                                 precondition(store.failure == nil, store.failure ?? "")
                                 let wheel = geometry.panel["wheel"]!
                                 let shapeID = ColorWheelShape(shape)
-                                let resourcePointer = capy_apple_color_layout(Float(width))!
-                                let resources = try JSON.decode(String(cString: resourcePointer))
-                                capy_apple_string_free(resourcePointer)
+                                let resources = ColorUI.resolve(["type": "picker_layout", "size": width, "hdr": false])["layout"]
                                 for key in ["wheel", "foreground", "background", "transparent", "swap", "readout"] {
                                     let expected = resources[key], actual = geometry.panel[key]!
                                     for (a, b) in zip([actual.minX, actual.minY, actual.width, actual.height], expected.array.map(\.number)) {

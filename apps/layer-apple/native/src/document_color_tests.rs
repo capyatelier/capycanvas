@@ -59,7 +59,7 @@ fn complete(app: &App) {
 }
 fn preview(job: &ProjectJob, after: bool) -> Vec<u8> {
     let mut output = CapyProjectPreview { width:0, height:0, pixels:std::ptr::null(), count:0 };
-    assert_eq!(unsafe { capy_project_preview(job.0, after, &mut output) }, 0);
+    assert_eq!(unsafe { capy_project_preview_at(job.0, u32::from(after), &mut output) }, 0);
     assert!(output.width > 0 && output.width <= 512 && output.height > 0 && output.height <= 384);
     assert_eq!(output.count, (output.width * output.height * 4) as usize);
     unsafe { std::slice::from_raw_parts(output.pixels, output.count) }.to_vec()

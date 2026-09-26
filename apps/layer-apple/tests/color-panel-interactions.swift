@@ -84,9 +84,7 @@ import SwiftUI
                 let scale = CGFloat(bitmap.pixelsWide) / width
                 try bitmap.representation(using: .png, properties: [:])!.write(
                     to: directory.appendingPathComponent("native-\(name).png"))
-                let resourcePointer = capy_apple_color_layout(Float(width))!
-                let resources = try JSON.decode(String(cString: resourcePointer))
-                capy_apple_string_free(resourcePointer)
+                let resources = ColorUI.resolve(["type": "picker_layout", "size": width, "hdr": false])["layout"]
                 let side = UInt32(ceil(wheel.width))
                 var bytes = Data(count: Int(side * side * 4))
                 try require(

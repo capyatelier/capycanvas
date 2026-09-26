@@ -390,7 +390,7 @@ class AndroidColorPanelTest {
                 val wheel = bounds("color-wheel")
                 assertTrue("Wheel and footer at $width", stage.height >= stage.width)
                 assertTrue("Whole picker fits $width", stage.width <= (width - 16) * density + 1.5f && stage.width >= 128 * density - 1.5f)
-                val layout = JSONObject(Native.colorPanelLayout(stage.width / density))
+                val layout = JSONObject(Native.colorUi(obj("type" to "layout", "size" to stage.width / density).toString()))
                 for (slot in listOf("foreground", "background", "transparent", "black", "white", "swap", "wheel")) {
                     val b = bounds(when (slot) { "wheel", "swap" -> "color-$slot"; "black", "white" -> "color-quick-$slot"; else -> "color-swatch-$slot" })
                     val expected = layout.getJSONArray(slot)

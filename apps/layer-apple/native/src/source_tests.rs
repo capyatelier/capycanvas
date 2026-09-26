@@ -34,7 +34,7 @@ fn details(task:&ProjectJob) -> Value {
 }
 fn preview(task:&ProjectJob,after:bool) -> Vec<u8> {
     let mut output=CapyProjectPreview {width:0,height:0,pixels:std::ptr::null(),count:0};
-    assert_eq!(unsafe{capy_project_preview(task.0,after,&mut output)},0);
+    assert_eq!(unsafe{capy_project_preview_at(task.0,u32::from(after),&mut output)},0);
     unsafe{std::slice::from_raw_parts(output.pixels,output.count)}.to_vec()
 }
 fn check(app:&App,mut expected:Document) {

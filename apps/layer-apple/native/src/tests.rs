@@ -163,9 +163,7 @@ fn color_raster_ffi_validates_buffer_and_matches_shared_spaces() {
 }
 
 #[test]
-fn compact_color_layout_and_circle_picking_use_shared_shapes() {
-    assert!(capy_apple_color_layout(127.).is_null());
-    assert!(capy_apple_color_layout(f32::NAN).is_null());
+fn compact_color_circle_picking_uses_shared_shapes() {
     // A circular field includes its horizontal rim, outside the HSV square.
     assert_eq!(capy_apple_color_hit(80., 50., 100., 0), 2);
     assert_eq!(capy_apple_color_hit(80., 50., 100., 1), 0);
@@ -175,22 +173,6 @@ fn compact_color_layout_and_circle_picking_use_shared_shapes() {
         layer_ui::ColorShape::Triangle,
     ]
     {
-        let pointer = capy_apple_color_layout(226.);
-        assert!(!pointer.is_null());
-        let resources: Value =
-            unsafe { serde_json::from_slice(CStr::from_ptr(pointer).to_bytes()).unwrap() };
-        unsafe { capy_apple_string_free(pointer) };
-        let layout = layer_ui::ColorPanelLayout::new(226.).unwrap();
-        fn same_f32(actual: &Value, expected: &Value) -> bool {
-            match (actual, expected) {
-                (Value::Number(a), Value::Number(b)) => a.as_f64().unwrap() as f32 == b.as_f64().unwrap() as f32,
-                (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_f32(a, b)),
-                (Value::Object(a), Value::Object(b)) => a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| same_f32(v, w))),
-                _ => actual == expected,
-            }
-        }
-        let expected = serde_json::to_value(layout).unwrap();
-        assert!(same_f32(&resources, &expected), "{resources} != {expected}");
         for platform in [0, 1] {
             let app = App::new(platform);
             app.action(json!({"type":"color","action":{"op":"shape","shape":shape}}));

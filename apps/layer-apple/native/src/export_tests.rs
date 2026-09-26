@@ -86,7 +86,7 @@ fn profiled_apple_export_keeps_u16_hidden_rgb_retries_and_survives_owner_closure
             assert_eq!(unsafe { capy_project_compare(job.0) },0,"{:?}",job.error());
             for after in [false,true] {
                 let mut preview = CapyProjectPreview {width:0,height:0,pixels:std::ptr::null(),count:0};
-                assert_eq!(unsafe { capy_project_preview(job.0,after,&mut preview) },0);
+                assert_eq!(unsafe { capy_project_preview_at(job.0,u32::from(after),&mut preview) },0);
                 assert!(preview.width > 0 && preview.height > 0 && preview.count > 0);
             }
             assert_project_document(unsafe { &*app.0 }.host.session.engine().document(),&master);
