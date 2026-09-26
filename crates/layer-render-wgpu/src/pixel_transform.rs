@@ -7,8 +7,8 @@ use std::hash::{Hash, Hasher};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
-/// Destination-to-source rows, origins and options of one drawn region.
-const REGION_BYTES: u64 = 80;
+/// Destination-to-source rows, attachment origin and options of one region.
+const REGION_BYTES: u64 = 64;
 /// Enough source neighborhoods for every job of a large layer's frame, so a
 /// continuous drag reuses them instead of cycling through a smaller cache.
 const BINDING_CAPACITY: usize = 4096;
@@ -479,7 +479,6 @@ impl PixelTransform {
             for unmoved in [false, true] {
                 let values = region_record(
                     rows,
-                    [0.; 2],
                     job.target.map(|v| (v * super::PAGE_SIZE) as f32),
                     filter_flags(transform.interpolation)
                         + 2. * f32::from(unmoved || identity)
@@ -647,23 +646,17 @@ fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static st
     Ok([[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]])
 }
 
-/// Uniform values of one region. Source positions are relative to
-/// `source_origin`, destination pixels to `target_origin`.
+/// Uniform values of one region drawn into an attachment whose origin is
+/// `target` in layer pixels.
 fn region_record(
-    rows: [[f32; 3]; 3],
-    source_origin: [f32; 2],
-    target_origin: [f32; 2],
+    [x, y, w]: [[f32; 3]; 3],
+    target: [f32; 2],
     flags: f32,
     background: f32,
 ) -> [f32; REGION_BYTES as usize / 4] {
-    let [x, y, w] = rows;
-    let shifted =
-        |row: [f32; 3], origin: f32| std::array::from_fn::<f32, 3, _>(|i| row[i] - origin * w[i]);
-    let [x, y] = [shifted(x, source_origin[0]), shifted(y, source_origin[1])];
     [
-        x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0.,
-        source_origin[0], source_origin[1], target_origin[0], target_origin[1],
-        flags, background, 0., 0.,
+        x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
+        flags, background,
     ]
 }
 

@@ -1,7 +1,8 @@
 // Original premultiplied layer pixels are immutable for the whole transaction.
 // Sample color * selection together, never filter them independently (halos).
 // Rows x, y and w map a destination pixel to homogeneous source coordinates.
-struct Transform { x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, origins:vec4<f32>, options:vec4<f32> }
+// attachment holds its origin in layer pixels, the flags and the background.
+struct Transform { x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, attachment:vec4<f32> }
 override scalar:bool=false;
 override visibility:bool=false;
 @group(0) @binding(0) var<uniform> transform:Transform;
@@ -17,8 +18,8 @@ const NO_VIEW=16u;
     let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));
     return vec4(p[index],0.,1.);
 }
-fn flags()->u32 {return u32(transform.options.x);}
-fn background()->f32 {return transform.options.y;}
+fn flags()->u32 {return u32(transform.attachment.z);}
+fn background()->f32 {return transform.attachment.w;}
 fn original(p:vec2<i32>)->vec4<f32> {
     if any(p<source_info.bounds.xy) || any(p>=source_info.bounds.xy+source_info.bounds.zw) {return vec4(background());}
     for (var i=0u;i<16u;i++) {
@@ -35,7 +36,7 @@ fn original(p:vec2<i32>)->vec4<f32> {
 fn covered(value:vec4<f32>,p:vec2<i32>)->vec4<f32> {
     var v=value;
     if visibility {v.a=1.;}
-    return v*brush_selection_at(vec2<f32>(p)+transform.origins.xy+vec2(.5));
+    return v*brush_selection_at(vec2<f32>(p)+vec2(.5));
 }
 fn selected(p:vec2<i32>)->vec4<f32> {return covered(original(p),p);}
 // The one view holding every texel from low to high inclusive, inside the
@@ -70,11 +71,11 @@ fn far(local:vec2<f32>,margin:f32)->bool {
         || any(local>vec2<f32>(source_info.bounds.xy+source_info.bounds.zw)+margin);
 }
 fn nearest(local:vec2<f32>)->vec4<f32> {
-    if far(local,.5) {return outside(brush_selection_at(local+transform.origins.xy));}
+    if far(local,.5) {return outside(brush_selection_at(local));}
     return selected(vec2<i32>(floor(local)));
 }
 fn bilinear(local:vec2<f32>)->vec4<f32> {
-    if far(local,.5) {return outside(brush_selection_at(local+transform.origins.xy));}
+    if far(local,.5) {return outside(brush_selection_at(local));}
     let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
     let view=view_of(base,base+vec2(1));
     return mix(mix(tap(view,base),tap(view,base+vec2(1,0)),t.x),
@@ -87,7 +88,7 @@ fn catmull_rom(t:f32)->vec4<f32> {
 // Catmull-Rom with overshoot clamped to the nearest four taps, whose brightest
 // straight color also bounds the result's.
 fn bicubic(local:vec2<f32>)->vec4<f32> {
-    if far(local,2.) {return outside(brush_selection_at(local+transform.origins.xy));}
+    if far(local,2.) {return outside(brush_selection_at(local));}
     let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
     let wx=catmull_rom(t.x);let wy=catmull_rom(t.y);
     let view=view_of(base-vec2(1),base+vec2(2));
@@ -143,9 +144,8 @@ fn transformed(world:vec2<f32>)->vec4<f32> {
     return bilinear(s.xy);
 }
 @fragment fn fragment_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
-    let world=position.xy+transform.origins.zw;
-    let local=world-transform.origins.xy;
-    let base=original(vec2<i32>(floor(local)));
+    let world=position.xy+transform.attachment.xy;
+    let base=original(vec2<i32>(floor(world)));
     // Exact no-op must not cut and recomposite fractional selection coverage.
     if (flags()&UNMOVED)!=0u {return base;}
     let moved=transformed(world);
