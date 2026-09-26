@@ -362,47 +362,6 @@ fn sqlite_full_preserves_protected_records_and_retries_the_same_delivery() {
 }
 
 #[test]
-fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
-    let mut f = Fixture::new();
-    let entity = f.create("Legacy Database");
-    let hashes: Vec<(String, String)> = f
-        .store
-        .connection
-        .prepare("SELECT id,hash FROM receipts")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    f.store
-        .connection
-        .execute_batch("DROP TABLE cancelled_operations; DROP TABLE workspace_switcher; DROP TABLE workspace_order; PRAGMA user_version=1;")
-        .unwrap();
-    let mut upgraded = f.connection();
-    assert_eq!(
-        upgraded.load(&entity.entity.id).unwrap().entity,
-        entity.entity
-    );
-    assert_eq!(
-        upgraded
-            .connection
-            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
-            .unwrap(),
-        SQLITE_SCHEMA_VERSION
-    );
-    for (id, hash) in hashes {
-        assert_eq!(
-            upgraded
-                .connection
-                .query_row("SELECT hash FROM receipts WHERE id=?1", [id], |r| r
-                    .get::<_, String>(0))
-                .unwrap(),
-            hash
-        );
-    }
-}
-
-#[test]
 fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     let mut f = Fixture::new();
     let current = f.create("Retained");
@@ -888,7 +847,7 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
     );
     f.store
         .connection
-        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION + 1)
+        .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
         .unwrap();
     assert!(matches!(
         SqliteStore::open(&f.directory.join("workspaces.sqlite3")),
@@ -902,7 +861,30 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
         .connection
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, SQLITE_SCHEMA_VERSION + 1);
+    assert_eq!(version, SCHEMA_VERSION + 1);
+}
+
+#[test]
+fn older_schema_is_rejected_and_preserved() {
+    let mut f = Fixture::new();
+    f.create("Older");
+    f.store
+        .connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .unwrap();
+    assert_eq!(
+        SqliteStore::open(&f.directory.join("workspaces.sqlite3"))
+            .err()
+            .unwrap()
+            .kind,
+        ErrorKind::UnsupportedSchema
+    );
+    let version: u32 = f
+        .store
+        .connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION - 1);
 }
 
 #[test]
@@ -1450,30 +1432,4 @@ fn failed_worker_open_can_be_retried_after_storage_becomes_available() {
     );
     drop(worker);
     let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn schema_three_upgrade_preserves_workspaces_and_switcher_order() {
-    let mut f = Fixture::new();
-    let entity = f.create("Existing workspace");
-    let pins = vec![entity.entity.id.clone()];
-    f.store
-        .handle(StoreRequest::UpdateSwitcher {
-            expected: None,
-            ids: pins.clone(),
-        })
-        .unwrap();
-    f.store
-        .connection
-        .execute_batch("DROP TABLE workspace_order; PRAGMA user_version=3;")
-        .unwrap();
-    let mut upgraded = f.connection();
-    assert_eq!(upgraded.load(&entity.entity.id).unwrap(), entity);
-    assert!(
-        matches!(upgraded.handle(StoreRequest::Switcher).unwrap(), StoreResponse::Switcher(Some(ids)) if ids == pins)
-    );
-    assert!(matches!(
-        upgraded.handle(StoreRequest::WorkspaceOrder).unwrap(),
-        StoreResponse::WorkspaceOrder(None)
-    ));
 }

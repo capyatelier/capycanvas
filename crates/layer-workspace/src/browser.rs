@@ -13,17 +13,13 @@ pub struct BrowserDatabase {
     schema: u32,
     items: BTreeMap<String, BrowserRecord>,
     fences: BTreeMap<String, String>,
-    #[serde(with = "crate::component_text")]
-    components: BTreeMap<String, Vec<u8>>,
     receipts: BTreeMap<String, (String, CommitReceipt)>,
     acknowledged: Vec<String>,
     pending: BTreeMap<String, CommitBatch>,
     bindings: BTreeMap<String, String>,
     tombstones: BTreeSet<String>,
     cancelled: BTreeSet<String>,
-    #[serde(default)]
     switcher: Option<Vec<String>>,
-    #[serde(default)]
     workspace_order: Option<Vec<String>>,
 }
 /// Keep each entity opaque until it is opened, like SQLite's JSON columns.
@@ -60,7 +56,6 @@ impl Default for BrowserDatabase {
             schema: SCHEMA_VERSION,
             items: Default::default(),
             fences: Default::default(),
-            components: Default::default(),
             receipts: Default::default(),
             acknowledged: Vec::new(),
             pending: Default::default(),
@@ -76,6 +71,15 @@ fn advance(n: u64) -> Result<u64> {
     n.checked_add(1)
         .ok_or_else(|| StoreError::invalid("Workspace generation exhausted."))
 }
+fn content(text: &str, batch: &CommitBatch) -> Result<ItemContent> {
+    protocol::unpack(text, |id| {
+        batch
+            .components
+            .get(id)
+            .cloned()
+            .ok_or_else(|| StoreError::invalid("A referenced workspace resource is missing."))
+    })
+}
 fn check_owner(item: &StoredEntity, owner: &Owner, fence: u64, now: u64) -> Result<()> {
     if item
         .claim
@@ -88,15 +92,13 @@ fn check_owner(item: &StoredEntity, owner: &Owner, fence: u64, now: u64) -> Resu
 }
 impl BrowserDatabase {
     pub fn decode(text: &str) -> Result<Self> {
-        let mut value: serde_json::Value = serde_json::from_str(text)?;
-        let version = value.get("schema").and_then(|v| v.as_u64());
-        if !version.is_some_and(|v| (2..=SCHEMA_VERSION as u64).contains(&v)) {
+        let value: serde_json::Value = serde_json::from_str(text)?;
+        if value.get("schema").and_then(|v| v.as_u64()) != Some(SCHEMA_VERSION.into()) {
             return Err(StoreError::new(
                 ErrorKind::UnsupportedSchema,
                 "This workspace database uses an unsupported version. Its data has been preserved.",
             ));
         }
-        value["schema"] = serde_json::json!(SCHEMA_VERSION);
         Ok(serde_json::from_value(value)?)
     }
     pub fn encoded(&self) -> Result<String> {
@@ -215,8 +217,8 @@ impl BrowserDatabase {
                 "An operation ID is already bound to another payload.",
             ));
         }
-        for (id, bytes) in &batch.components {
-            if content_id(bytes) != *id {
+        for (id, json) in &batch.components {
+            if content_id(json.as_bytes()) != *id {
                 return Err(StoreError::invalid("Invalid workspace component."));
             }
         }
@@ -234,20 +236,10 @@ impl BrowserDatabase {
                 }
             }
             if let Some(c) = &w.content_json {
-                self.content(c, batch)?;
+                content(c, batch)?;
             }
         }
         Ok(hash)
-    }
-    fn content(&self, text: &str, batch: &CommitBatch) -> Result<ItemContent> {
-        protocol::unpack(text, |id| {
-            batch
-                .components
-                .get(id)
-                .or_else(|| self.components.get(id))
-                .cloned()
-                .ok_or_else(|| StoreError::invalid("A referenced workspace resource is missing."))
-        })
     }
     /// Persist this in a separate completed transaction before publication. If
     /// publication aborts or the tab disappears, the immutable delivery survives.
@@ -466,7 +458,6 @@ impl BrowserDatabase {
                 )?;
                 let mut report = plan.report;
                 report.database_bytes = self.encoded()?.len() as u64;
-                report.component_bytes = self.components.values().map(|v| v.len() as u64).sum();
                 if apply {
                     // execute() publishes this cloned transaction only on success.
                     // Vacate all renamed labels before ordinary collision resolution.
@@ -489,12 +480,6 @@ impl BrowserDatabase {
                     }
                     for id in plan.expired {
                         self.remove(&id);
-                    }
-                    // Item content is stored expanded. Only interrupted deliveries
-                    // still reference the interned components.
-                    self.components.clear();
-                    for batch in self.pending.values() {
-                        self.components.extend(batch.components.clone());
                     }
                 }
                 StoreResponse::Storage(report)
@@ -579,7 +564,7 @@ impl BrowserDatabase {
                     &w.id,
                     w.name_policy,
                 )?;
-                let content = self.content(
+                let content = content(
                     w.content_json
                         .as_ref()
                         .ok_or_else(|| StoreError::invalid("A new item needs content."))?,
@@ -637,7 +622,7 @@ impl BrowserDatabase {
                     s.generations.metadata = advance(s.generations.metadata)?;
                 }
                 if let Some(c) = &w.content_json {
-                    s.entity.content = self.content(c, &batch)?;
+                    s.entity.content = content(c, &batch)?;
                     s.generations.layout = advance(s.generations.layout)?;
                 }
                 if let Some(j) = &w.working_json {
@@ -683,7 +668,6 @@ impl BrowserDatabase {
                 self.bindings.remove(key);
             }
         }
-        self.components.extend(batch.components);
         self.receipts
             .insert(batch.operation_id, (hash, receipt.clone()));
         Ok(receipt)

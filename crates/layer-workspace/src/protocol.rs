@@ -97,7 +97,7 @@ pub struct CommitBatch {
     pub operation_id: String,
     pub owner: Owner,
     pub(crate) writes: Vec<PreparedWrite>,
-    pub(crate) components: BTreeMap<String, Vec<u8>>,
+    pub(crate) components: BTreeMap<String, String>,
     pub bindings: Vec<(String, Option<String>)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub abandon_operations: Vec<String>,
@@ -222,15 +222,15 @@ impl CommitBatch {
         Ok(text)
     }
 }
-fn intern(value: Value, components: &mut BTreeMap<String, Vec<u8>>) -> Result<Value, StoreError> {
-    let bytes = serde_json::to_vec(&value)?;
-    let id = content_id(&bytes);
-    components.entry(id.clone()).or_insert(bytes);
+fn intern(value: Value, components: &mut BTreeMap<String, String>) -> Result<Value, StoreError> {
+    let json = serde_json::to_string(&value)?;
+    let id = content_id(json.as_bytes());
+    components.entry(id.clone()).or_insert(json);
     Ok(serde_json::json!({ "$workspace_component": id }))
 }
 pub(crate) fn pack(
     value: Value,
-    components: &mut BTreeMap<String, Vec<u8>>,
+    components: &mut BTreeMap<String, String>,
 ) -> Result<Value, StoreError> {
     match value {
         Value::Object(mut object) => {
@@ -264,11 +264,11 @@ pub(crate) fn pack(
 }
 pub(crate) fn unpack(
     text: &str,
-    mut read: impl FnMut(&str) -> Result<Vec<u8>, StoreError>,
+    mut read: impl FnMut(&str) -> Result<String, StoreError>,
 ) -> Result<ItemContent, StoreError> {
     fn resolve(
         value: Value,
-        read: &mut impl FnMut(&str) -> Result<Vec<u8>, StoreError>,
+        read: &mut impl FnMut(&str) -> Result<String, StoreError>,
         depth: usize,
         remaining: &mut usize,
     ) -> Result<Value, StoreError> {
@@ -282,14 +282,14 @@ pub(crate) fn unpack(
                 if object.len() == 1
                     && let Some(id) = object.get("$workspace_component").and_then(Value::as_str)
                 {
-                    let bytes = read(id)?;
-                    *remaining = remaining.checked_sub(bytes.len()).ok_or_else(|| {
+                    let json = read(id)?;
+                    *remaining = remaining.checked_sub(json.len()).ok_or_else(|| {
                         StoreError::invalid("Workspace content exceeds supported limits.")
                     })?;
-                    if content_id(&bytes) != id {
+                    if content_id(json.as_bytes()) != id {
                         return Err(StoreError::invalid("A workspace resource is corrupt."));
                     }
-                    return resolve(serde_json::from_slice(&bytes)?, read, depth + 1, remaining);
+                    return resolve(serde_json::from_str(&json)?, read, depth + 1, remaining);
                 }
                 for v in object.values_mut() {
                     *v = resolve(v.take(), read, depth + 1, remaining)?;

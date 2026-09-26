@@ -34,7 +34,7 @@ impl SqliteStore {
         let page_size: i64 = tx.pragma_query_value(None, "page_size", |r| r.get(0))?;
         plan.report.database_bytes = pages.saturating_mul(page_size) as u64;
         plan.report.component_bytes = tx.query_row(
-            "SELECT coalesce(sum(length(bytes)),0) FROM components",
+            "SELECT coalesce(sum(length(json)),0) FROM components",
             [],
             |r| r.get::<_, i64>(0),
         )? as u64;
@@ -67,10 +67,10 @@ impl SqliteStore {
                     let mut components = BTreeMap::new();
                     let packed =
                         protocol::pack(serde_json::to_value(entity.content)?, &mut components)?;
-                    for (id, bytes) in components {
+                    for (id, json) in components {
                         tx.execute(
-                            "INSERT OR IGNORE INTO components(id,bytes) VALUES(?1,?2)",
-                            params![id, bytes],
+                            "INSERT OR IGNORE INTO components(id,json) VALUES(?1,?2)",
+                            params![id, json],
                         )?;
                     }
                     tx.execute(
@@ -147,13 +147,8 @@ fn collect_components(connection: &Connection) -> Result<()> {
             serde_json::Value::Object(object) => {
                 if let Some(id) = object.get("$workspace_component").and_then(|v| v.as_str()) {
                     if used.insert(id.into()) {
-                        let bytes = component(connection, id)?;
-                        visit(
-                            &serde_json::from_slice(&bytes)?,
-                            connection,
-                            used,
-                            depth + 1,
-                        )?;
+                        let json = component(connection, id)?;
+                        visit(&serde_json::from_str(&json)?, connection, used, depth + 1)?;
                     }
                 } else {
                     for value in object.values() {

@@ -40,8 +40,7 @@ struct Package {
     metadata: Metadata,
     content: serde_json::Value,
     working: Option<layer_ui::WorkspaceWorkingState>,
-    #[serde(with = "crate::component_text")]
-    components: BTreeMap<String, Vec<u8>>,
+    components: BTreeMap<String, String>,
 }
 pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
     entity.validate()?;
@@ -84,7 +83,7 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
     }
     let header: serde_json::Value = serde_json::from_slice(bytes)?;
     if header.get("format").and_then(|v| v.as_str()) != Some("capycanvas-workspace")
-        || !matches!(header.get("version").and_then(|v| v.as_u64()), Some(1 | 2))
+        || header.get("version").and_then(|v| v.as_u64()) != Some(2)
     {
         return Err(StoreError::new(
             ErrorKind::UnsupportedSchema,
@@ -98,8 +97,8 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
             expected.label()
         )));
     }
-    for (id, bytes) in &package.components {
-        if content_id(bytes) != *id {
+    for (id, json) in &package.components {
+        if content_id(json.as_bytes()) != *id {
             return Err(StoreError::invalid("A packaged resource is corrupt."));
         }
     }

@@ -344,15 +344,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             .map(|v| {
                 let current = v.id == capture.history.current;
                 self.ui.layouts.insert(v.id.clone(), v.layout);
-                let title = if v.description == "Starting configuration" {
-                    "Starting layout".into()
-                } else {
-                    v.description
-                };
                 let date = layer_workspace::date(v.timestamp_ms);
                 Row {
                     id: v.id,
-                    title,
+                    title: v.description,
                     subtitle: if current {
                         format!("Current layout · {date}")
                     } else {

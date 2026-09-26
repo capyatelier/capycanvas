@@ -33,11 +33,9 @@ the owning GTK window where available. A stale SwitchToWindow menu action uses
 the same path; if the external owner disappeared during the attempt, it retries
 the claim rather than retaining the stale error.
 
-SQLite's native protocol version is now 5; browser/package schema remains 4.
-Saved layouts/working state are preserved. Older native builds reject the newer
-store. Close all older app instances before first launching this development
-build: already-running pre-lock binaries cannot participate in the new protocol.
-Lock failures fail closed; database export refuses paths inside the lock store.
+SQLite and browser stores share `SCHEMA_VERSION`; any other version is rejected
+with its data preserved. Lock failures fail closed; database export refuses
+paths inside the lock store.
 
 ## Verification
 

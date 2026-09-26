@@ -8,9 +8,6 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, StoreError>;
-// Native ownership protocol changed without changing browser/package data.
-// Older native binaries must not reopen this store with timer-only ownership.
-const SQLITE_SCHEMA_VERSION: u32 = 5;
 #[path = "sqlite_ownership.rs"]
 pub(crate) mod ownership;
 pub trait Clock: Send + Sync {
@@ -86,25 +83,12 @@ impl SqliteStore {
         options.open(path).map_err(unavailable)?;
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SQLITE_SCHEMA_VERSION {
-            return Err(StoreError::new(
-                ErrorKind::UnsupportedSchema,
-                "This workspace database needs a newer version of Capy Canvas. Its contents have been preserved.",
-            ));
-        }
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SQLITE_SCHEMA_VERSION {
-            return Err(StoreError::new(
-                ErrorKind::UnsupportedSchema,
-                "This workspace database needs a newer version of Capy Canvas. Its contents have been preserved.",
-            ));
-        }
         if version == 0 {
             let tables: u32 = tx.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0))?;
             if tables != 0 {
@@ -120,23 +104,22 @@ impl SqliteStore {
                 deleted_at TEXT, builtin INTEGER NOT NULL,
                 fence TEXT NOT NULL DEFAULT '0', owner TEXT, epoch TEXT, lease_until TEXT);
                 CREATE UNIQUE INDEX item_names ON items(kind,name_key) WHERE deleted_at IS NULL;
-                CREATE TABLE components (id TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+                CREATE TABLE components (id TEXT PRIMARY KEY, json TEXT NOT NULL);
                 CREATE TABLE receipts (id TEXT PRIMARY KEY, hash TEXT NOT NULL, receipt TEXT NOT NULL,
                     owner TEXT NOT NULL, epoch TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE pending (id TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE bindings (key TEXT PRIMARY KEY, item_id TEXT NOT NULL);
-                CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);")?;
+                CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);
+                CREATE TABLE cancelled_operations (id TEXT PRIMARY KEY);
+                CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
+                CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);")?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        } else if version != SCHEMA_VERSION {
+            return Err(StoreError::new(
+                ErrorKind::UnsupportedSchema,
+                "This workspace database uses an unsupported version. Its data has been preserved.",
+            ));
         }
-        if version < 2 {
-            tx.execute_batch("CREATE TABLE cancelled_operations(id TEXT PRIMARY KEY)")?;
-        }
-        if version < 3 {
-            tx.execute_batch("CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
-        }
-        if version < 4 {
-            tx.execute_batch("CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
-        }
-        tx.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(Self {
             connection,
@@ -516,8 +499,8 @@ impl SqliteStore {
                 ))
             };
         }
-        for (id, bytes) in &batch.components {
-            if content_id(bytes) != *id {
+        for (id, json) in &batch.components {
+            if content_id(json.as_bytes()) != *id {
                 return Err(StoreError::invalid("Invalid workspace component."));
             }
         }
@@ -580,10 +563,10 @@ impl SqliteStore {
                 Err(StoreError::invalid("Conflicting operation receipt."))
             };
         }
-        for (id, bytes) in &batch.components {
+        for (id, json) in &batch.components {
             tx.execute(
-                "INSERT INTO components(id,bytes) VALUES(?1,?2) ON CONFLICT(id) DO NOTHING",
-                params![id, bytes],
+                "INSERT INTO components(id,json) VALUES(?1,?2) ON CONFLICT(id) DO NOTHING",
+                params![id, json],
             )?;
         }
         let mut result = CommitReceipt {
@@ -728,9 +711,9 @@ fn header(connection: &Connection, id: &str) -> Result<Header> {
         claim,
     })
 }
-fn component(connection: &Connection, id: &str) -> Result<Vec<u8>> {
+fn component(connection: &Connection, id: &str) -> Result<String> {
     connection
-        .query_row("SELECT bytes FROM components WHERE id=?1", [id], |r| {
+        .query_row("SELECT json FROM components WHERE id=?1", [id], |r| {
             r.get(0)
         })
         .optional()?
