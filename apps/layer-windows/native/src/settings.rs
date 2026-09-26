@@ -35,7 +35,6 @@ pub(crate) fn data_directory() -> Result<PathBuf, String> {
 
 pub(crate) struct SettingsFile {
     directory: PathBuf,
-    preserve_existing: bool,
 }
 impl SettingsFile {
     fn environment() -> Result<Self, String> {
@@ -45,17 +44,9 @@ impl SettingsFile {
         if !directory.is_absolute() {
             return Err("The preferences directory must be an absolute path.".into());
         }
-        Ok(Self {
-            directory,
-            preserve_existing: false,
-        })
+        Ok(Self { directory })
     }
-    fn load(&mut self) -> Result<Option<Settings>, String> {
-        let result = self.read();
-        self.preserve_existing = result.is_err();
-        result
-    }
-    fn read(&self) -> Result<Option<Settings>, String> {
+    fn load(&self) -> Result<Option<Settings>, String> {
         let file = match File::open(self.directory.join("settings.json")) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -85,21 +76,12 @@ impl SettingsFile {
         let directory =
             fs::canonicalize(&self.directory).map_err(|error| io_error("locate", error))?;
         let target = directory.join("settings.json");
-        let (temporary, mut file) = reserve(&directory, "pending")?;
+        let (temporary, mut file) = reserve(&directory)?;
         let result = (|| {
             file.write_all(bytes)
                 .map_err(|error| io_error("write", error))?;
             file.sync_all().map_err(|error| io_error("flush", error))?;
             drop(file);
-            if self.preserve_existing && target.is_file() {
-                let (recovery, reserved) = reserve(&directory, "recovery")?;
-                drop(reserved);
-                if let Err(error) = replace(&target, &recovery) {
-                    let _ = fs::remove_file(&recovery); // Only our reserved placeholder.
-                    return Err(io_error("preserve unreadable", error));
-                }
-                self.preserve_existing = false;
-            }
             replace(&temporary, &target).map_err(|error| io_error("replace saved", error))
         })();
         if result.is_err() {
@@ -108,10 +90,10 @@ impl SettingsFile {
         result
     }
 }
-fn reserve(directory: &Path, kind: &str) -> Result<(PathBuf, File), String> {
+fn reserve(directory: &Path) -> Result<(PathBuf, File), String> {
     for _ in 0..32 {
         let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = directory.join(format!("settings.{kind}.{}.{id}.json", std::process::id()));
+        let path = directory.join(format!("settings.pending.{}.{id}.json", std::process::id()));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

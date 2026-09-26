@@ -217,8 +217,6 @@ try {
     Edit 'Dark theme base color' '#506070'
     Commit-Color
     Wait-Until {(Saved).dark_base -eq '#506070' -and !(Model).error} 'Could not save valid preferences after an unreadable file'
-    $recovery=@(Get-ChildItem -LiteralPath $settingsProfile -Filter 'settings.recovery.*.json')
-    if($recovery.Count -ne 1 -or [IO.File]::ReadAllText($recovery[0].FullName) -ne $invalid){throw 'Unreadable settings were not preserved exactly'}
     Close-App
 
     Start-App

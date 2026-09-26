@@ -76,35 +76,6 @@ fn settings_round_trip_uses_shared_validation() {
 }
 
 #[test]
-fn invalid_file_is_preserved_when_valid_preferences_are_saved() {
-    for invalid in [
-        br#"{"version":999,"custom_data":"retain this"}"#.as_slice(),
-        b"{truncated",
-    ] {
-        let directory = Directory::new();
-        let path = directory.path.join("settings.json");
-        fs::write(&path, invalid).unwrap();
-        let mut file = directory.file();
-        assert!(file.load().is_err());
-        assert_eq!(fs::read(&path).unwrap(), invalid);
-        file.write(&encode(&edited(1.5)).unwrap()).unwrap();
-        assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
-        let recovered: Vec<_> = fs::read_dir(&directory.path)
-            .unwrap()
-            .flatten()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.recovery.")
-            })
-            .collect();
-        assert_eq!(recovered.len(), 1);
-        assert_eq!(fs::read(recovered[0].path()).unwrap(), invalid);
-    }
-}
-
-#[test]
 fn oversized_saved_preferences_are_bounded_and_not_rewritten_on_load() {
     let directory = Directory::new();
     let path = directory.path.join("settings.json");

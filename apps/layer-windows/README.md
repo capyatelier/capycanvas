@@ -184,8 +184,8 @@ input, lifecycle, packaging and performance acceptance gates remain separate.
 Settings live in `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`.
 Windows uses the shared settings schema and migration rules. Writes run on a
 dedicated worker and replace the previous file atomically after flushing. An
-unreadable file is preserved as `settings.recovery.*.json` when a later change
-is saved. Save failures appear in the window and Preferences; drawing continues.
+unreadable file is reported and defaults are used until the next saved change
+replaces it. Save failures appear in the window and Preferences; drawing continues.
 Closing waits for accepted preference writes before releasing the workspace.
 If a write fails, the native recovery dialog offers Retry, Keep open, or Close
 without saving. Keep open retains the live preferences and workspace; Retry
@@ -201,7 +201,7 @@ The header settings fixture refuses a profile without this override.
 
 The restart/failure fixture creates and owns its isolated profiles and review
 processes. Pass a built app executable; it validates close-time drafts, restart,
-locked-file recovery and preservation of unreadable files:
+locked-file recovery and the reset of unreadable files:
 
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-settings-storage.ps1 -Executable ./artifacts/windows/Review/CapyCanvas.exe

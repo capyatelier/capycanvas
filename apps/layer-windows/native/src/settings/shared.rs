@@ -17,7 +17,7 @@ struct State {
     listeners: Vec<Weak<Wake>>,
 }
 impl Hub {
-    pub(super) fn open(mut file: SettingsFile, defaults: Settings) -> Result<Arc<Self>, String> {
+    pub(super) fn open(file: SettingsFile, defaults: Settings) -> Result<Arc<Self>, String> {
         static PROFILES: OnceLock<Mutex<HashMap<PathBuf, Weak<Hub>>>> = OnceLock::new();
         let mut profiles = PROFILES.get_or_init(Default::default).lock().unwrap();
         profiles.retain(|_, value| value.strong_count() != 0);
@@ -29,7 +29,7 @@ impl Hub {
             Err(error) => (
                 defaults,
                 Some(format!(
-                    "{error} Defaults are in use; the saved file will be preserved on the next change."
+                    "{error} Defaults are in use; the next change replaces the saved file."
                 )),
             ),
         };
