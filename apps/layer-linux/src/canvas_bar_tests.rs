@@ -71,6 +71,24 @@ fn anchor_in_window(w: &Workspace) -> [f32; 4] {
     ]
 }
 
+fn shown(w: &Workspace) -> bool {
+    w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()
+}
+
+fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+    if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(found) = mapped_label(&widget, text) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn transforming(w: &Workspace) -> bool {
     state(w).layer_tools.tool == LayerCanvasTool::Transform
 }
@@ -119,14 +137,14 @@ fn native_canvas_bar_input() {
     };
     let kind = |w: &Workspace| state(w).canvas_bar.map(|b| b.context.kind);
     until(
-        || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()),
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && shown(&w),
         "the selection bar appears beside the new selection",
     );
     let mut native = Native::start();
     let transform = bar_widget(&w, "canvas-bar-ScaleRotate");
     native.events(json!([{"point": center(&w, &transform)}, {"down": true}, {"down": false}]));
     until(
-        || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()),
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
         "Transform on the selection bar opens the transform bar",
     );
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
@@ -146,6 +164,8 @@ fn native_canvas_bar_input() {
         },
         "the bar registers its glass region",
     );
+    let dir = "../../artifacts/canvas-action-bar";
+    std::fs::create_dir_all(dir).unwrap();
     let before = revision();
     let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
     let segment = |index: usize| {
@@ -165,6 +185,33 @@ fn native_canvas_bar_input() {
     until(|| !aspect(&w), "a finger tap on Free releases them");
     assert!(transforming(&w));
     assert_eq!(revision(), before, "bar taps never paint or commit");
+    let perspective = |w: &Workspace| find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-TransformPerspective").is_some();
+    native.events(json!([{"point": center(&w, &segment(2))}, {"down": true}, {"down": false}]));
+    until(|| perspective(&w), "Distort offers Perspective");
+    let corner = [anchor[2], anchor[3]];
+    native.events(json!([
+        {"point": corner}, {"down": true}, {"wait_ms": 40},
+        {"point": [corner[0] + 30., corner[1] + 15.]}, {"wait_ms": 20},
+        {"point": [corner[0] + 60., corner[1] + 30.]}, {"wait_ms": 20}, {"down": false}
+    ]));
+    until(|| w.canvas_bar.visible_bounds().is_some(), "the bar returns after the corner drag");
+    let distorted = anchor_in_window(&w);
+    assert!(
+        (distorted[2] - anchor[2] - 60.).abs() < 3. && (distorted[3] - anchor[3] - 30.).abs() < 3.,
+        "a Distort corner drag moves that corner: {anchor:?} {distorted:?}"
+    );
+    assert!((distorted[0] - anchor[0]).abs() < 1. && (distorted[1] - anchor[1]).abs() < 1., "the opposite corner stays");
+    capture_reference(&w, &format!("{dir}/distort.png"), 1.);
+    assert!(!bar_widget(&w, "canvas-bar-ResetTransform").is_mapped(), "Reset overflows while distorting");
+    native.events(json!([{"point": center(&w, &bar_widget(&w, "canvas-bar-more"))}, {"down": true}, {"down": false}]));
+    until(|| w.canvas_bar.menu_open(), "More opens with the overflowed items");
+    let reset = mapped_label(w.canvas_bar.root.upcast_ref(), "Reset transform").expect("More lists Reset");
+    native.events(json!([{"point": center(&w, &reset)}, {"down": true}, {"down": false}]));
+    until(
+        || !perspective(&w) && anchor_in_window(&w).iter().zip(anchor).all(|(a, b)| (a - b).abs() < 1.),
+        "Reset returns to Free and the starting box",
+    );
+    assert_eq!(revision(), before, "distorting and resetting never commit");
     let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
     native.events(json!([
         {"point": inside}, {"down": true}, {"wait_ms": 40},
@@ -188,14 +235,12 @@ fn native_canvas_bar_input() {
         command: CommandId::ZenMode,
     });
     pump(300);
-    assert!((w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "the bar stays visible in Zen");
+    assert!(shown(&w), "the bar stays visible in Zen");
     assert!(!w.canvas_bar.root.has_css_class("zen-hidden"));
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
     });
     pump(300);
-    let dir = "../../artifacts/canvas-action-bar";
-    std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(300);
@@ -217,7 +262,7 @@ fn native_canvas_bar_input() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::ScaleRotate,
     });
-    until(|| (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "completion stays available while the bar is off");
+    until(|| shown(&w), "completion stays available while the bar is off");
     assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-choice-transform-mode").is_none());
     let cancel = bar_widget(&w, "canvas-bar-CancelTransform");
     native.events(json!([{"point": center(&w, &cancel)}, {"down": true}, {"down": false}]));
@@ -257,7 +302,7 @@ fn native_canvas_bar_polygon_input() {
     for p in [[600., 400.], [1200., 400.], [1200., 900.]] {
         click(&mut native, canvas_point(&w, p));
     }
-    until(|| (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "the polygon bar appears");
+    until(|| shown(&w), "the polygon bar appears");
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let area = w.area.compute_bounds(&w.window).unwrap();
     assert!(

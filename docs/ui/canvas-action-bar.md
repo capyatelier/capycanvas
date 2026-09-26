@@ -4,7 +4,7 @@
 
 The canvas action bar shows the next steps for the object being edited, beside it. It is an accelerator: every item is an ordinary command, so the menus, Tool Options and command search stay complete, and each item keeps its shared validation and one-step history.
 
-Status: shared model and GTK host implemented. Web and Android are in progress; Apple and Windows keep their earlier placement controls until they adopt the bar.
+Status: shared model, GTK and Web hosts implemented. Android is in progress; Apple and Windows keep their earlier placement controls until they adopt the bar.
 
 ## Contexts
 
@@ -60,6 +60,9 @@ Status: shared model and GTK host implemented. Web and Android are in progress; 
 
 - **Shared model:** `crates/layer-ui/src/canvas_bar.rs` holds the context derivation, items, `CanvasBarEdit` validation, fitting, placement and the More menu. Transform geometry and modes live in `crates/layer-ui/src/operation.rs`.
 - **GTK host:** `apps/layer-linux/src/canvas_bar.rs` is a `DockSurface` slot.
+- **Web host:** `apps/layer-web/canvas-bar.js` is a glass toolbar in `#workspace`, built from the Tool Options field builders in `toolbar-components.js`. It measures its controls once per bar and moves with a transform.
+- **Narrow windows:** when docks leave the work area narrower than the smallest bar, placement uses the window width.
 - **Tests:**
   - shared: `crates/layer-ui/src/canvas_bar_tests.rs`;
-  - GTK native: `native_canvas_bar_input` and `native_canvas_bar_polygon_input` in `apps/layer-linux/src/canvas_bar_tests.rs`.
+  - GTK native: `native_canvas_bar_input` and `native_canvas_bar_polygon_input` in `apps/layer-linux/src/canvas_bar_tests.rs`;
+  - Web: `node --test apps/layer-web/canvas-bar.test.mjs`, `node apps/layer-web/test.mjs --headless --canvas-bar`, and `device.test.mjs --canvas-bar` on a tablet.

@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Drag convention](../ui/drag-and-reorder.md) · [Panel transparency](../ui/panel-transparency.md)
 
-Status: **in progress.** Done and pushed: A1, A2, A3, B1–B3, C1 (GTK), D1, D2, D4, D5, E1, E2 and finger-touch handles for every transform. Distort (D3, D8) is ready on GTK and ships with the renderer's projective support (D6). The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
+Status: **in progress.** Done and pushed: A1–A3, B1–B3, C1 (GTK), D1–D6, D8, E1, E2, F1 (Web) and finger-touch handles for every transform. D7 is done in the renderer; its Interpolation choice is next. The Web journey still has to run in Chrome on the MovinkPad 11. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
 
 Two refinements made during implementation:
 - **More opens a menu,** not the Tool Options drawer: the items that did not fit (mode choices as submenus), then the context's own menu and the bar toggle. Bar items are commands and choices that menus can represent, so no new drawer anchor was needed on any host.
