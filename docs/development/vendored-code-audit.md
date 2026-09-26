@@ -323,22 +323,15 @@ integration and tests; do not count the entire containing files as copied code.
 | --- | --- | --- | --- | --- |
 | **9. Oklab**, GPU [working_color.wgsl](../../crates/layer-render-wgpu/src/working_color.wgsl), CPU primitives in [okhsv.rs](../../crates/layer-ui/src/color/okhsv.rs) | Perceptual color operations with WGSL vectors, signed cube roots, and document-primary conversion | Use a registry color crate for CPU operations; obtain shader routines from an upstream shader package; independently implement the published equations | CPU replacement is plausible after numerical checks. A CPU library does not eliminate the GPU shader implementation; replacing tiny stable math can add more infrastructure than it removes | Use RGB interpolation/operations instead, changing perceptual appearance and possibly existing brush/gradient results |
 | **10. Okhsv**, [okhsv.rs](../../crates/layer-ui/src/color/okhsv.rs) with project-specific [gamut.rs](../../crates/layer-ui/src/color/gamut.rs) | Smooth perceptual picker, stable double-precision edge handling, cached hue terms, and document-gamut boundaries | `palette::Okhsv` from crates.io; retain only the application-specific integration | Not equivalent for current wide-gamut picking: Palette documents its Okhsv as sRGB-based. Our gamut code derives boundaries for the selected RGB space and handles the blue reentry boundary | Make the perceptual picker explicitly sRGB-only, or replace it with RGB/HSV/native pickers. This changes gamut coverage or picking behavior |
-| **11. Skia RWTMO**, [sdr.rs](../../crates/layer-core/src/color/hdr/sdr.rs), [hdr_mapping.wgsl](../../crates/layer-render-wgpu/src/hdr_mapping.wgsl), and copied [C++ oracle](../../tools/validation/rwtmo_reference.cpp) | Consistent reference-white HDR-to-SDR rendering/export/proof behavior across CPU/GPU, with an independent numerical reference | Depend on a suitable upstream implementation; execute full Skia only in reference tooling; use an alternate tone map; or implement the standard independently | No smaller equivalent drop-in established. Full Skia is a much larger dependency and does not directly replace WGSL. Keeping only generated oracle values removes C++ maintenance but weakens convenient regeneration | Change the default tone-mapping appearance, drop browser/Skia matching, simplify to clipping/exposure, or remove HDR-to-SDR behavior. Existing documents/exports can look different |
-| **12. SplitMix64 finalizer**, [quantize.rs](../../crates/layer-color/src/icc/output/quantize.rs) | Repeatable coordinate-based output dithering, independent of strip processing order | Use `rand_xoshiro::SplitMix64`, seed from the packed pixel coordinate, take one 64-bit output, and retain the existing threshold conversion | **Algorithmically equivalent route identified**, provided seed/first-output semantics match. It adds dependency surface to replace a handful of arithmetic lines; no migration/performance test was performed | No product change needed for exact replacement. Removing dithering can restore visible banding; changing its pattern changes exported samples |
+| **11. SplitMix64 finalizer**, [quantize.rs](../../crates/layer-color/src/icc/output/quantize.rs) | Repeatable coordinate-based output dithering, independent of strip processing order | Use `rand_xoshiro::SplitMix64`, seed from the packed pixel coordinate, take one 64-bit output, and retain the existing threshold conversion | **Algorithmically equivalent route identified**, provided seed/first-output semantics match. It adds dependency surface to replace a handful of arithmetic lines; no migration/performance test was performed | No product change needed for exact replacement. Removing dithering can restore visible banding; changing its pattern changes exported samples |
 
 Research: [Ottosson's Oklab reference](https://bottosson.github.io/posts/oklab/),
 [Okhsv reference](https://bottosson.github.io/posts/colorpicker/),
 [Palette's Okhsv API](https://docs.rs/palette/latest/palette/struct.Okhsv.html),
-[upstream Skia implementation](https://github.com/google/skia/blob/main/src/codec/SkHdrAgtm.cpp),
-[local RWTMO rationale](../history/color-management-sdr-proof-update.md),
 [Vigna's finalizer](https://prng.di.unimi.it/splitmix64.c), and
 [rand_xoshiro's implementation](https://docs.rs/rand_xoshiro/latest/src/rand_xoshiro/splitmix64.rs.html).
-The exact historical Skia revision is recorded in
-[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md); the web fetch of that
-historical revision failed, so upstream inspection used current main plus the
-committed pinned oracle, not a verified historical-source comparison.
 
-**13. Gradle wrapper: build-time vendored code.**
+**12. Gradle wrapper: build-time vendored code.**
 
 1. **Why included:** reproducible Android build entry point without requiring
    contributors to preinstall the matching Gradle. The committed wrapper JAR is
