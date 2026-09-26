@@ -134,6 +134,9 @@ impl TileSnapshot {
     }
 }
 
+/// Source pixels on each side of a sample that interpolation can read.
+const SUPPORT: u32 = 1;
+
 /// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
 pub(crate) fn region_jobs(
     bounds: PixelRect,
@@ -142,15 +145,7 @@ pub(crate) fn region_jobs(
     regions: &[PixelRect],
     contains: impl Fn([u32; 2]) -> bool,
 ) -> Result<Vec<RegionJob>, GpuRasterError> {
-    let affine = transform
-        .as_affine()
-        .ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
-    let inverse = affine
-        .inverse()
-        .ok_or(GpuRasterError::InvalidTransform(
-            "Transform must be finite and invertible",
-        ))?
-        .0;
+    let map = SourceMap::new(transform, bounds)?;
     let mut jobs = Vec::new();
     for coordinate in coordinates {
         let region = regions
@@ -167,32 +162,13 @@ pub(crate) fn region_jobs(
             if contains(coordinate) {
                 required.push(coordinate);
             }
-            if affine != layer_core::Affine::IDENTITY {
-                let mut low = [f64::INFINITY; 2];
-                let mut high = [f64::NEG_INFINITY; 2];
-                for x in [region.min_x() as f64 + 0.5, region.max_x() as f64 - 0.5] {
-                    for y in [region.min_y() as f64 + 0.5, region.max_y() as f64 - 0.5] {
-                        for axis in 0..2 {
-                            let terms = [
-                                f64::from(inverse[axis]) * x,
-                                f64::from(inverse[axis + 2]) * y,
-                                f64::from(inverse[axis + 4]),
-                            ];
-                            let value = terms.into_iter().sum::<f64>();
-                            // Include separate-operation/fused Float32 rounding.
-                            let error = terms.into_iter().map(f64::abs).sum::<f64>()
-                                * f64::from(f32::EPSILON)
-                                * 4.;
-                            low[axis] = low[axis].min(value - error - 1.);
-                            high[axis] = high[axis].max(value + error + 1.);
-                        }
-                    }
-                }
+            if let Some([x0, y0, x1, y1]) = map.footprint(region) {
+                let support = f64::from(SUPPORT);
                 let footprint = PixelRect::new(
-                    low[0].floor().max(0.) as u32,
-                    low[1].floor().max(0.) as u32,
-                    high[0].ceil().max(0.) as u32,
-                    high[1].ceil().max(0.) as u32,
+                    (x0 - support).floor().max(0.) as u32,
+                    (y0 - support).floor().max(0.) as u32,
+                    (x1 + support).ceil().max(0.) as u32,
+                    (y1 + support).ceil().max(0.) as u32,
                 )
                 .intersect(bounds);
                 if !footprint.is_empty() {
@@ -254,4 +230,313 @@ pub(crate) fn region_jobs(
         }
     }
     Ok(jobs)
+}
+
+/// How a destination region reaches back into its source, for choosing the
+/// source pages its samples read.
+enum SourceMap {
+    Identity,
+    Affine([f32; 6]),
+    /// The destination-to-source matrix, and the smallest w' that can still
+    /// reach the source bounds.
+    Projective {
+        inverse: [f64; 9],
+        floor: f64,
+        bounds: [f64; 4],
+    },
+}
+impl SourceMap {
+    fn new(
+        transform: &layer_core::ImageTransform,
+        bounds: PixelRect,
+    ) -> Result<Self, GpuRasterError> {
+        let invalid = GpuRasterError::InvalidTransform("Transform must be finite and invertible");
+        if transform.is_identity() {
+            return Ok(Self::Identity);
+        }
+        let projective = match &transform.map {
+            layer_core::TransformMap::Affine(affine) => {
+                layer_core::Projective::from_affine(*affine)
+            }
+            layer_core::TransformMap::Projective(projective) => *projective,
+            layer_core::TransformMap::Mesh(_) => {
+                return Err(GpuRasterError::InvalidTransform("Unsupported transform"));
+            }
+        };
+        if let Some(affine) = projective.as_affine() {
+            return Ok(Self::Affine(affine.inverse().ok_or(invalid)?.0));
+        }
+        let forward = projective.0.map(f64::from);
+        let inverse = invert(forward).ok_or(invalid)?;
+        let reach = f64::from(SUPPORT) + 1.;
+        let bounds = [
+            f64::from(bounds.min_x()) - reach,
+            f64::from(bounds.min_y()) - reach,
+            f64::from(bounds.max_x()) + reach,
+            f64::from(bounds.max_y()) + reach,
+        ];
+        let largest = [[0, 1], [2, 1], [2, 3], [0, 3]]
+            .map(|[x, y]| forward[6] * bounds[x] + forward[7] * bounds[y] + forward[8])
+            .into_iter()
+            .fold(f64::NEG_INFINITY, f64::max);
+        Ok(Self::Projective {
+            inverse,
+            floor: if largest > 0. {
+                1. / largest
+            } else {
+                f64::INFINITY
+            },
+            bounds,
+        })
+    }
+
+    /// Conservative source bounds of every sample the region's pixels take,
+    /// including Float32 evaluation error but not interpolation support.
+    fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
+        let centers = [
+            region.min_x() as f64 + 0.5,
+            region.min_y() as f64 + 0.5,
+            region.max_x() as f64 - 0.5,
+            region.max_y() as f64 - 0.5,
+        ];
+        match self {
+            Self::Identity => None,
+            Self::Affine(inverse) => {
+                let mut low = [f64::INFINITY; 2];
+                let mut high = [f64::NEG_INFINITY; 2];
+                for x in [centers[0], centers[2]] {
+                    for y in [centers[1], centers[3]] {
+                        for axis in 0..2 {
+                            let terms = [
+                                f64::from(inverse[axis]) * x,
+                                f64::from(inverse[axis + 2]) * y,
+                                f64::from(inverse[axis + 4]),
+                            ];
+                            let value = terms.into_iter().sum::<f64>();
+                            // Include separate-operation/fused Float32 rounding.
+                            let error = terms.into_iter().map(f64::abs).sum::<f64>()
+                                * f64::from(f32::EPSILON)
+                                * 4.;
+                            low[axis] = low[axis].min(value - error);
+                            high[axis] = high[axis].max(value + error);
+                        }
+                    }
+                }
+                Some([low[0], low[1], high[0], high[1]])
+            }
+            Self::Projective {
+                inverse: m,
+                floor,
+                bounds,
+            } => {
+                let weight = |p: [f64; 2]| m[6] * p[0] + m[7] * p[1] + m[8];
+                let corners =
+                    [[0, 1], [2, 1], [2, 3], [0, 3]].map(|[x, y]| [centers[x], centers[y]]);
+                let visible = clip(&corners, |p| weight(p) - floor);
+                let nearest = visible
+                    .iter()
+                    .map(|p| weight(*p))
+                    .fold(f64::INFINITY, f64::min);
+                if visible.is_empty() || !(nearest > 0.) {
+                    return None;
+                }
+                let mapped: Vec<_> = visible
+                    .iter()
+                    .map(|p| {
+                        let w = weight(*p);
+                        [0, 3].map(|row| (m[row] * p[0] + m[row + 1] * p[1] + m[row + 2]) / w)
+                    })
+                    .collect();
+                let [x0, y0, x1, y1] = *bounds;
+                let mut inside = mapped;
+                for (axis, edge, sign) in [(0, x0, 1.), (1, y0, 1.), (0, x1, -1.), (1, y1, -1.)] {
+                    inside = clip(&inside, |p| (p[axis] - edge) * sign);
+                }
+                if inside.is_empty() {
+                    return None;
+                }
+                // Float32 rows over world positions, for every point mapping
+                // inside the source bounds: numerator and denominator error
+                // divided by the smallest visible w'.
+                let scale = [
+                    centers[0].abs().max(centers[2].abs()),
+                    centers[1].abs().max(centers[3].abs()),
+                    1.,
+                ];
+                let size = |row: usize| (0..3).map(|i| m[row + i].abs() * scale[i]).sum::<f64>();
+                let reach = [x0.abs().max(x1.abs()), y0.abs().max(y1.abs())];
+                let error = [0, 1].map(|axis| {
+                    (size(axis * 3) + reach[axis] * size(6)) * f64::from(f32::EPSILON) * 4.
+                        / nearest
+                });
+                let low = [0, 1].map(|axis| {
+                    inside.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min) - error[axis]
+                });
+                let high = [0, 1].map(|axis| {
+                    inside
+                        .iter()
+                        .map(|p| p[axis])
+                        .fold(f64::NEG_INFINITY, f64::max)
+                        + error[axis]
+                });
+                Some([low[0], low[1], high[0], high[1]])
+            }
+        }
+    }
+}
+
+/// Keep the part of a convex polygon where `side` is non-negative.
+fn clip(polygon: &[[f64; 2]], side: impl Fn([f64; 2]) -> f64) -> Vec<[f64; 2]> {
+    let mut kept = Vec::with_capacity(polygon.len() + 2);
+    for (i, p) in polygon.iter().enumerate() {
+        let q = polygon[(i + 1) % polygon.len()];
+        let [a, b] = [side(*p), side(q)];
+        if a >= 0. {
+            kept.push(*p);
+        }
+        if (a >= 0.) != (b >= 0.) {
+            let t = a / (a - b);
+            kept.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+        }
+    }
+    kept
+}
+
+fn invert(m: [f64; 9]) -> Option<[f64; 9]> {
+    let [a, b, c, d, e, f, g, h, i] = m;
+    let adjugate = [
+        e * i - f * h,
+        c * h - b * i,
+        b * f - c * e,
+        f * g - d * i,
+        a * i - c * g,
+        c * d - a * f,
+        d * h - e * g,
+        b * g - a * h,
+        a * e - b * d,
+    ];
+    let determinant = a * adjugate[0] + b * adjugate[3] + c * adjugate[6];
+    (determinant != 0. && determinant.is_finite()).then(|| adjugate.map(|v| v / determinant))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layer_core::{ImageTransform, Point, Projective, Rect, TransformMap};
+
+    const EXTENT: [u32; 2] = [6000, 4000];
+
+    fn perspective(quad: [[f32; 2]; 4]) -> (ImageTransform, [f64; 9]) {
+        let source = Rect {
+            min: Point::default(),
+            max: Point {
+                x: EXTENT[0] as f32,
+                y: EXTENT[1] as f32,
+            },
+        };
+        let map = Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap();
+        let transform = ImageTransform {
+            map: TransformMap::Projective(map),
+            ..Default::default()
+        };
+        (transform, map.0.map(f64::from))
+    }
+
+    /// Solve H(u, v) = (x, y) directly; None without a preimage where w > 0.
+    fn preimage(h: [f64; 9], x: f64, y: f64) -> Option<[f64; 2]> {
+        let [a, b, c, d] = [
+            h[0] - x * h[6],
+            h[1] - x * h[7],
+            h[3] - y * h[6],
+            h[4] - y * h[7],
+        ];
+        let [e, f] = [x * h[8] - h[2], y * h[8] - h[5]];
+        let det = a * d - b * c;
+        let [u, v] = [(e * d - b * f) / det, (a * f - e * c) / det];
+        (h[6] * u + h[7] * v + h[8] > 0.).then_some([u, v])
+    }
+
+    /// Every job binds at most TRANSFORM_SLOTS pages, the jobs of a page cover
+    /// its region exactly once, and every bilinear tap lies in a bound page.
+    fn check(quad: [[f32; 2]; 4]) -> Vec<RegionJob> {
+        let bounds = PixelRect::full(EXTENT);
+        let (transform, h) = perspective(quad);
+        let jobs = region_jobs(
+            bounds,
+            &transform,
+            page_coordinates(bounds),
+            &[bounds],
+            |_| true,
+        )
+        .unwrap();
+        let mut area = std::collections::HashMap::new();
+        for job in &jobs {
+            assert!(job.sources.len() <= TRANSFORM_SLOTS);
+            *area.entry(job.coordinate).or_insert(0) += job.region.area();
+            let origin = job.coordinate.map(|v| v * PAGE_SIZE);
+            let [x0, y0] = [job.region.min_x(), job.region.min_y()];
+            let [x1, y1] = [job.region.max_x() - 1, job.region.max_y() - 1];
+            for x in (x0..=x1).step_by(7).chain([x1]) {
+                for y in (y0..=y1).step_by(7).chain([y1]) {
+                    let world = [(origin[0] + x) as f64 + 0.5, (origin[1] + y) as f64 + 0.5];
+                    let Some([u, v]) = preimage(h, world[0], world[1]) else {
+                        continue;
+                    };
+                    for [tx, ty] in [
+                        [u - 0.5, v - 0.5],
+                        [u + 0.5, v + 0.5],
+                        [u - 0.5, v + 0.5],
+                        [u + 0.5, v - 0.5],
+                    ] {
+                        let [tx, ty] = [tx.floor(), ty.floor()];
+                        if tx < 0. || ty < 0. || tx >= EXTENT[0] as f64 || ty >= EXTENT[1] as f64 {
+                            continue;
+                        }
+                        let page = [tx as u32 / PAGE_SIZE, ty as u32 / PAGE_SIZE];
+                        assert!(
+                            job.sources.contains(&page),
+                            "{quad:?}: pixel {world:?} reads {page:?}"
+                        );
+                    }
+                }
+            }
+        }
+        for c in page_coordinates(bounds) {
+            assert_eq!(area[&c], page_rect(c).intersect(bounds).area(), "{c:?}");
+        }
+        jobs
+    }
+
+    #[test]
+    fn perspective_jobs_bind_every_sampled_page_within_the_view_limit() {
+        let keystone = check([[300., 200.], [5700., 400.], [5900., 3900.], [100., 3700.]]);
+        let deep = check([[2900., 100.], [3100., 100.], [5990., 3990.], [10., 3990.]]);
+        let mirrored = check([[5700., 400.], [300., 200.], [100., 3700.], [5900., 3900.]]);
+        for jobs in [&keystone, &deep, &mirrored] {
+            assert!(jobs.len() < 4096, "{} jobs", jobs.len());
+        }
+        assert!(
+            deep.len() > keystone.len(),
+            "foreshortened regions split further"
+        );
+    }
+
+    #[test]
+    fn regions_beyond_the_horizon_bind_only_their_own_page() {
+        let quad = [[2950., 2000.], [3050., 2000.], [5990., 3990.], [10., 3990.]];
+        let jobs = check(quad);
+        let (_, h) = perspective(quad);
+        let mut beyond = 0;
+        for job in &jobs {
+            let corner = job.coordinate.map(|v| (v * PAGE_SIZE) as f64);
+            let unmapped = [[0., 0.], [256., 0.], [0., 256.], [256., 256.]]
+                .iter()
+                .all(|[x, y]| preimage(h, corner[0] + x, corner[1] + y).is_none());
+            if unmapped {
+                assert_eq!(job.sources, [job.coordinate]);
+                beyond += 1;
+            }
+        }
+        assert!(beyond > 0, "some pages lie wholly beyond the horizon");
+    }
 }

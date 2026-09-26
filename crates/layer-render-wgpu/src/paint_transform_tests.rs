@@ -652,6 +652,124 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
 }
 
 #[test]
+fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
+    use layer_core::DefaultBrushPreset::*;
+    use layer_core::Projective;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut reference = WgpuRasterizer::new_headless().unwrap();
+    let extent = [640, 384];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let frame =
+        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view,
+                document_extent: extent,
+                layers,
+                dabs,
+                dab_batches: batches,
+                time_seconds: 0.,
+                restore_rasters: &[],
+                reset_layers: reset,
+                composite_all: false,
+            })
+            .unwrap();
+        };
+    let source = Rect {
+        min: Point { x: 60., y: 60. },
+        max: Point { x: 300., y: 300. },
+    };
+    let quads = [
+        [[90., 40.], [420., 90.], [460., 330.], [40., 250.]],
+        [[260., 70.], [300., 70.], [600., 370.], [10., 370.]],
+        [[300., 300.], [60., 300.], [60., 60.], [300., 60.]],
+    ];
+    for preset in [GPen, WatercolorWash] {
+        let mut layer = Layer::paint(LayerId(1), "live perspective");
+        layer.properties.offset = Point { x: 5., y: 7. };
+        let mut b = batch(1);
+        b.style = preset_style(preset);
+        b.damage = Rect {
+            min: Point { x: 70., y: 70. },
+            max: Point { x: 280., y: 280. },
+        };
+        let mut d = dab([0.8, 0.1, 0.6, 0.7]);
+        d.center = Point { x: 175., y: 175. };
+        d.radii = [100.; 2];
+        d.material = [0.5, 0.8, 1., 0.8];
+        let layers = std::slice::from_ref(&layer);
+        frame(&mut r, layers, &[d], &[b.clone()], true);
+        let original = r.readback_srgb_rgba8().unwrap();
+        let selection = Selection::polygon(vec![
+            Point { x: 60., y: 60. },
+            Point { x: 300., y: 60. },
+            Point { x: 300., y: 300. },
+            Point { x: 60., y: 300. },
+        ])
+        .unwrap();
+        let mut preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer: layer.id,
+            selection: Some(selection.clone()),
+            transform: ImageTransform::default(),
+        };
+        for quad in quads {
+            let map = Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap();
+            preview.transform = ImageTransform {
+                map: TransformMap::Projective(map),
+                interpolation: Interpolation::Linear,
+            };
+            r.set_transform_preview(Some(&preview)).unwrap();
+            frame(&mut r, layers, &[], &[], false);
+            let mut expected = layer.clone();
+            let mut op = operation(20, Affine::IDENTITY, Some(selection.clone()));
+            op.kind = LayerOperationKind::Transform(preview.transform.clone());
+            expected.pending_operations.push(op.clone());
+            let operation = DabBatch {
+                damage: op.bounds(extent),
+                ..op_batch(0, &op)
+            };
+            frame(&mut reference, &[expected], &[d], &[b.clone(), operation], true);
+            assert_eq!(
+                r.readback_srgb_rgba8().unwrap(),
+                reference.readback_srgb_rgba8().unwrap(),
+                "{preset:?} {quad:?}"
+            );
+        }
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} cancel");
+        preview.transaction += 1;
+        r.set_transform_preview(Some(&preview)).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        let before_commit = r.readback_srgb_rgba8().unwrap();
+        let captures = r.transforms.as_ref().unwrap().source_captures();
+        let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
+        op.kind = LayerOperationKind::Transform(preview.transform.clone());
+        let operation = DabBatch {
+            damage: op.bounds(extent),
+            ..op_batch(0, &op)
+        };
+        layer.pending_operations.push(op);
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, &[layer], &[], &[operation], false);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            before_commit,
+            "{preset:?} apply must not jump"
+        );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().source_captures(),
+            captures,
+            "apply reuses the matching preview result"
+        );
+    }
+}
+
+#[test]
 fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_headless().unwrap();

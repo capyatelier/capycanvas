@@ -1,11 +1,14 @@
-//! Affine cut-and-place over a bounded set of immutable source views. Manual
-//! Float32 interpolation applies selection and premultiplied color together.
+//! Affine and perspective cut-and-place over a bounded set of immutable source
+//! views. Manual Float32 interpolation applies selection and premultiplied
+//! color together.
 use super::{Deferred, PipelineDevice, Uploads};
-use layer_core::{Affine, ImageTransform, Interpolation};
+use layer_core::{ImageTransform, Interpolation, Projective, TransformMap};
 use std::hash::{Hash, Hasher};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
+/// Destination-to-source rows, origins and options of one drawn region.
+const REGION_BYTES: u64 = 80;
 /// Enough source neighborhoods for every job of a large layer's frame, so a
 /// continuous drag reuses them instead of cycling through a smaller cache.
 const BINDING_CAPACITY: usize = 4096;
@@ -90,7 +93,7 @@ impl PixelTransform {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(48),
+                    min_binding_size: wgpu::BufferSize::new(REGION_BYTES),
                 },
                 count: None,
             }],
@@ -216,8 +219,8 @@ impl PixelTransform {
             binding_count: 0,
             binding_frame: 0,
             uniforms: None,
-            stride: 48_u32.div_ceil(device.limits().min_uniform_buffer_offset_alignment)
-                * device.limits().min_uniform_buffer_offset_alignment,
+            stride: (REGION_BYTES as u32)
+                .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment),
             capacity: 0,
             records: Vec::new(),
             next_record: 0,
@@ -405,7 +408,7 @@ impl PixelTransform {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &buffer,
                         offset: 0,
-                        size: wgpu::BufferSize::new(48),
+                        size: wgpu::BufferSize::new(REGION_BYTES),
                     }),
                 }],
             });
@@ -423,11 +426,8 @@ impl PixelTransform {
         transform: &ImageTransform,
         jobs: &[TiledTransformRecord<'_>],
     ) -> Result<[u32; 2], &'static str> {
-        let affine = transform.as_affine().ok_or("Unsupported transform")?;
-        let inverse = affine
-            .inverse()
-            .ok_or("Transform must be finite and invertible")?
-            .0;
+        let rows = inverse_rows(transform)?;
+        let identity = transform.is_identity();
         let source_stride = self.source_stride;
         let bytes = jobs.len() as u64 * 2 * u64::from(self.stride);
         let source_bytes = jobs.len() as u64 * u64::from(source_stride);
@@ -477,25 +477,20 @@ impl PixelTransform {
             {
                 *dst = value.to_le_bytes();
             }
-            for identity in [false, true] {
-                let values = [
-                    inverse[0],
-                    inverse[1],
-                    inverse[2],
-                    inverse[3],
-                    inverse[4],
-                    inverse[5],
-                    0.,
-                    0.,
-                    (job.target[0] * super::PAGE_SIZE) as f32 - job.slot[0] as f32,
-                    (job.target[1] * super::PAGE_SIZE) as f32 - job.slot[1] as f32,
+            for unmoved in [false, true] {
+                let values = region_record(
+                    rows,
+                    [0.; 2],
+                    [0, 1].map(|axis| {
+                        (job.target[axis] * super::PAGE_SIZE) as f32 - job.slot[axis] as f32
+                    }),
                     f32::from(transform.interpolation == Interpolation::Linear)
-                        + 2. * f32::from(identity || affine == Affine::IDENTITY)
+                        + 2. * f32::from(unmoved || identity)
                         + 4. * f32::from(self.placement),
                     background,
-                ];
-                let offset = (i * 2 + usize::from(identity)) * self.stride as usize;
-                for (dst, value) in self.records[offset..][..48]
+                );
+                let offset = (i * 2 + usize::from(unmoved)) * self.stride as usize;
+                for (dst, value) in self.records[offset..][..REGION_BYTES as usize]
                     .as_chunks_mut::<4>()
                     .0
                     .iter_mut()
@@ -625,6 +620,43 @@ impl PixelTransform {
         self.capacity + 48 + self.source_capacity
     }
 }
+/// Rows mapping a destination pixel to homogeneous source coordinates. An
+/// affine map keeps w' = 1, so its perspective form draws identically.
+fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
+    let invalid = "Transform must be finite and invertible";
+    let projective = match &transform.map {
+        TransformMap::Affine(affine) => Projective::from_affine(*affine),
+        TransformMap::Projective(projective) => *projective,
+        TransformMap::Mesh(_) => return Err("Unsupported transform"),
+    };
+    if let Some(affine) = projective.as_affine() {
+        let [a, b, c, d, x, y] = affine.inverse().ok_or(invalid)?.0;
+        return Ok([[a, c, x], [b, d, y], [0., 0., 1.]]);
+    }
+    let m = projective.inverse().ok_or(invalid)?.0;
+    Ok([[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]])
+}
+
+/// Uniform values of one region. Source positions are relative to
+/// `source_origin`, destination pixels to `target_origin`.
+fn region_record(
+    rows: [[f32; 3]; 3],
+    source_origin: [f32; 2],
+    target_origin: [f32; 2],
+    flags: f32,
+    background: f32,
+) -> [f32; REGION_BYTES as usize / 4] {
+    let [x, y, w] = rows;
+    let shifted =
+        |row: [f32; 3], origin: f32| std::array::from_fn::<f32, 3, _>(|i| row[i] - origin * w[i]);
+    let [x, y] = [shifted(x, source_origin[0]), shifted(y, source_origin[1])];
+    [
+        x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0.,
+        source_origin[0], source_origin[1], target_origin[0], target_origin[1],
+        flags, background, 0., 0.,
+    ]
+}
+
 fn source_metadata(
     bounds: [i32; 4],
     tiles: impl Iterator<Item = ([i32; 2], [u32; 2])>,

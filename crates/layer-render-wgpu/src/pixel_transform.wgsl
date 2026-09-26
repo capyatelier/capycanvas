@@ -1,6 +1,7 @@
 // Original premultiplied layer pixels are immutable for the whole transaction.
 // Sample color * selection together, never filter them independently (halos).
-struct Transform { linear:vec4<f32>, translation_source_origin:vec4<f32>, target_flags:vec4<f32> }
+// Rows x, y and w map a destination pixel to homogeneous source coordinates.
+struct Transform { x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, origins:vec4<f32>, options:vec4<f32> }
 override scalar:bool=false;
 override visibility:bool=false;
 @group(0) @binding(0) var<uniform> transform:Transform;
@@ -11,8 +12,10 @@ override visibility:bool=false;
     let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));
     return vec4(p[index],0.,1.);
 }
+fn flags()->u32 {return u32(transform.options.x);}
+fn background()->f32 {return transform.options.y;}
 fn original(p:vec2<i32>)->vec4<f32> {
-    if any(p<source_info.bounds.xy) || any(p>=source_info.bounds.xy+source_info.bounds.zw) {return vec4(transform.target_flags.w);}
+    if any(p<source_info.bounds.xy) || any(p>=source_info.bounds.xy+source_info.bounds.zw) {return vec4(background());}
     for (var i=0u;i<16u;i++) {
         let view=source_info.views[i];
         let local=p-view.xy;
@@ -22,39 +25,43 @@ fn original(p:vec2<i32>)->vec4<f32> {
             return color;
         }
     }
-    return vec4(transform.target_flags.w);
+    return vec4(background());
 }
 fn selected(p:vec2<i32>)->vec4<f32> {
     var value=original(p);
     if visibility {value.a=1.;}
-    return value*brush_selection_at(vec2<f32>(p)+transform.translation_source_origin.zw+vec2(.5));
+    return value*brush_selection_at(vec2<f32>(p)+transform.origins.xy+vec2(.5));
+}
+// A pixel whose source lies beyond the horizon, or beyond the finite source.
+fn outside(selection:f32)->vec4<f32> {
+    if (flags()&4u)!=0u {return vec4(background());}
+    if visibility {return vec4(vec3(background()),1.)*selection;}
+    return vec4(0.);
 }
 fn transformed(local:vec2<f32>)->vec4<f32> {
     // Test before float->integer conversion; arbitrarily distant transforms
     // never create out-of-range integer coordinates or repeat edge texels.
     if any(local<vec2<f32>(source_info.bounds.xy)-vec2(.5)) || any(local>vec2<f32>(source_info.bounds.xy+source_info.bounds.zw)+vec2(.5)) {
-        if (u32(transform.target_flags.z)&4u)!=0u {return vec4(transform.target_flags.w);}
-        if visibility {return vec4(vec3(transform.target_flags.w),1.)*brush_selection_at(local+transform.translation_source_origin.zw);}
-        return vec4(0.);
+        return outside(brush_selection_at(local+transform.origins.xy));
     }
-    if (u32(transform.target_flags.z)&1u)==0u {return selected(vec2<i32>(floor(local)));}
+    if (flags()&1u)==0u {return selected(vec2<i32>(floor(local)));}
     let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
     return mix(mix(selected(base),selected(base+vec2(1,0)),t.x),
         mix(selected(base+vec2(0,1)),selected(base+vec2(1,1)),t.x),t.y);
 }
 @fragment fn fragment_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
-    let world=position.xy+transform.target_flags.xy;
-    let local=world-transform.translation_source_origin.zw;
+    let world=position.xy+transform.origins.zw;
+    let local=world-transform.origins.xy;
     let base=original(vec2<i32>(floor(local)));
     // Exact no-op must not cut and recomposite fractional selection coverage.
-    if (u32(transform.target_flags.z)&2u)!=0u {return base;}
-    let m=transform.linear;
-    let source_position=vec2(m.x*world.x+m.z*world.y,m.y*world.x+m.w*world.y)
-        +transform.translation_source_origin.xy-transform.translation_source_origin.zw;
-    let moved=transformed(source_position);
-    if (u32(transform.target_flags.z)&4u)!=0u {return moved;}
+    if (flags()&2u)!=0u {return base;}
+    let h=vec3(world,1.);
+    let w=dot(transform.w.xyz,h);
+    var moved=outside(select(0.,1.,brush_selection.info.y==0u || brush_selection.info.x!=0u));
+    if w>0. {moved=transformed(vec2(dot(transform.x.xyz,h),dot(transform.y.xyz,h))/w);}
+    if (flags()&4u)!=0u {return moved;}
     if visibility {
-        let remainder=mix(base.r,transform.target_flags.w,brush_selection_at(world));
+        let remainder=mix(base.r,background(),brush_selection_at(world));
         return vec4(moved.r+remainder*(1.-moved.a));
     }
     let remainder=base*(1.-brush_selection_at(world));

@@ -2,7 +2,7 @@
 //! transform every frame, with CPU submission and GPU completion kept apart.
 use super::*;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
-use layer_core::{Affine, ImageTransform, Interpolation, TransformMap};
+use layer_core::{Affine, ImageTransform, Interpolation, Projective, TransformMap};
 use std::time::Instant;
 
 const EXTENT: [u32; 2] = [6000, 4000];
@@ -28,13 +28,47 @@ fn cases() -> Vec<(&'static str, Box<dyn Fn(f32) -> ImageTransform>)> {
             },
         )
     };
-    vec![(
-        "affine bilinear",
-        Box::new(move |t| ImageTransform {
-            map: TransformMap::Affine(affine(t)),
-            interpolation: Interpolation::Linear,
-        }),
-    )]
+    let quad = |t: f32, depth: f32| {
+        let [w, h] = EXTENT.map(|v| v as f32);
+        let inset = w * depth * 0.5;
+        Projective::rect_to_quad(
+            layer_core::Rect {
+                min: Point::default(),
+                max: Point { x: w, y: h },
+            },
+            [
+                [inset + t.sin() * 60., 150.],
+                [w - inset + t.cos() * 40., 100. + t.sin() * 50.],
+                [w - 100., h - 80.],
+                [120. + t.cos() * 30., h - 60.],
+            ]
+            .map(|[x, y]| Point { x, y }),
+        )
+        .unwrap()
+    };
+    vec![
+        (
+            "affine bilinear",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Affine(affine(t)),
+                interpolation: Interpolation::Linear,
+            }),
+        ),
+        (
+            "perspective bilinear",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Projective(quad(t, 0.3)),
+                interpolation: Interpolation::Linear,
+            }),
+        ),
+        (
+            "deep perspective bilinear",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Projective(quad(t, 0.9)),
+                interpolation: Interpolation::Linear,
+            }),
+        ),
+    ]
 }
 
 fn submit(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
