@@ -2949,3 +2949,17 @@ clean exit. The MSIX passes archive inventory, MakeAppx extraction, the
 activation manifest, repeated logos, normalization, ZIP32, signed-package
 refusal, invalid inputs and lock handling. No signing, installation,
 update/uninstall or clean-machine test occurred.
+
+### Fixture sweep at 4d581f4 (2026-09-26)
+
+All 44 Windows fixtures ran on one Release build. 42 passed on the first run,
+including command search, HDR and layer pickup. The lifecycle fixture looked up
+its smoke-test button once, before startup had published it; it now waits up to
+ten seconds and passes three consecutive runs.
+
+Layer pickup failed because the three-row Paint Layers list edge-scrolls during
+drags near its bottom, as on Web. The fixture now scrolls hidden rows into view
+and accepts the equivalent slot above the next sibling. Touch tab pickup of the
+single-panel Layers group remains open: after the group becomes floating, the
+injected contact reaches neither XAML, the canvas input source nor the UI
+thread's pointer messages, so no handoff can finish the drag.

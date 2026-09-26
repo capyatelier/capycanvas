@@ -82,7 +82,8 @@ if($Action -eq 'Close') {
 } elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
     $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Action)
-    $button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    do{$button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition);if(!$button){Start-Sleep -Milliseconds 100}}while(!$button -and $watch.Elapsed.TotalSeconds -lt 10)
     if(!$button){throw 'Command button is missing.'}
     $pattern=$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     $pattern.Invoke()
