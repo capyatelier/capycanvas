@@ -54,8 +54,19 @@ class MainActivity : ComponentActivity() {
         super.onConfigurationChanged(newConfig)
         updateTheme(newConfig)
     }
+    private val devices = object : android.hardware.input.InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(id: Int) {}
+        override fun onInputDeviceChanged(id: Int) {}
+        override fun onInputDeviceRemoved(id: Int) {
+            host.input(obj("type" to "axes", "pan" to org.json.JSONArray(listOf(0, 0)), "zoom" to 0))
+            for (code in KeyEvent.KEYCODE_BUTTON_A..KeyEvent.KEYCODE_BUTTON_MODE) deviceKey(code)?.let { key ->
+                host.input(obj("type" to "key", "key" to key, "pressed" to false, "repeat" to false))
+            }
+        }
+    }
     override fun onStart() {
         super.onStart()
+        getSystemService(android.hardware.input.InputManager::class.java).registerInputDeviceListener(devices, null)
         host.filterPreviewCache.resume()
         if (!host.restartingWindow) host.workspaceInput(obj("type" to "resume"))
         host.restartingWindow = false
@@ -65,6 +76,7 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
     override fun onStop() {
+        getSystemService(android.hardware.input.InputManager::class.java).unregisterInputDeviceListener(devices)
         host.filterPreviewCache.pause()
         host.recovery.capture()
         host.restartingWindow = isChangingConfigurations
@@ -86,6 +98,11 @@ class MainActivity : ComponentActivity() {
         if (event.action == KeyEvent.ACTION_DOWN && (event.isCtrlPressed || event.isMetaPressed))
             host.dispatch(obj("type" to "command_search", "action" to obj("type" to "focus",
                 "focus" to host.commandFocus())))
+        if (host.claimsDeviceKey(event)) {
+            host.key(event)
+            return true
+        }
+        if (deviceKey(event.keyCode) != null) return super.dispatchKeyEvent(event)
         host.key(event)
         return super.dispatchKeyEvent(event)
     }
@@ -95,6 +112,15 @@ class MainActivity : ComponentActivity() {
     }
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
         host.shaderInput()
+        if (event.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK) && event.actionMasked == android.view.MotionEvent.ACTION_MOVE) {
+            fun axis(axis: Int): Double {
+                val flat = event.device?.getMotionRange(axis, event.source)?.flat ?: 0f
+                return event.getAxisValue(axis).let { if (kotlin.math.abs(it) > flat) it.toDouble() else 0.0 }
+            }
+            host.input(obj("type" to "axes", "pan" to org.json.JSONArray(listOf(axis(android.view.MotionEvent.AXIS_X), axis(android.view.MotionEvent.AXIS_Y))),
+                "zoom" to -axis(android.view.MotionEvent.AXIS_RZ)))
+            return true
+        }
         return super.dispatchGenericMotionEvent(event)
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -111,6 +137,38 @@ internal fun android.view.Window.enterCanvasFullscreen() {
     WindowCompat.getInsetsController(this, decorView).apply {
         systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         hide(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
+internal fun deviceKey(code: Int): String? = when (code) {
+    KeyEvent.KEYCODE_VOLUME_UP -> "volumeup"
+    KeyEvent.KEYCODE_VOLUME_DOWN -> "volumedown"
+    KeyEvent.KEYCODE_VOLUME_MUTE -> "volumemute"
+    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "mediaplaypause"
+    KeyEvent.KEYCODE_MEDIA_NEXT -> "mediatracknext"
+    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "mediatrackprevious"
+    KeyEvent.KEYCODE_BUTTON_A -> "gamepad_a"
+    KeyEvent.KEYCODE_BUTTON_B -> "gamepad_b"
+    KeyEvent.KEYCODE_BUTTON_X -> "gamepad_x"
+    KeyEvent.KEYCODE_BUTTON_Y -> "gamepad_y"
+    KeyEvent.KEYCODE_BUTTON_L1 -> "gamepad_l1"
+    KeyEvent.KEYCODE_BUTTON_R1 -> "gamepad_r1"
+    KeyEvent.KEYCODE_BUTTON_L2 -> "gamepad_l2"
+    KeyEvent.KEYCODE_BUTTON_R2 -> "gamepad_r2"
+    KeyEvent.KEYCODE_BUTTON_SELECT -> "gamepad_select"
+    KeyEvent.KEYCODE_BUTTON_START -> "gamepad_start"
+    KeyEvent.KEYCODE_BUTTON_THUMBL -> "gamepad_l3"
+    KeyEvent.KEYCODE_BUTTON_THUMBR -> "gamepad_r3"
+    KeyEvent.KEYCODE_BUTTON_MODE -> "gamepad_home"
+    else -> null
+}
+
+/** Device keys keep their system meaning unless a shortcut claims them. */
+internal fun CanvasHost.claimsDeviceKey(event: KeyEvent): Boolean {
+    val name = deviceKey(event.keyCode) ?: return false
+    val shortcuts = snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optJSONObject("shortcuts") ?: return false
+    return shortcuts.keys().asSequence().any { id ->
+        shortcuts.optJSONArray(id)?.objects()?.any { it.optString("key") == name } == true
     }
 }
 
@@ -141,7 +199,7 @@ internal fun CanvasHost.key(event: KeyEvent) {
             KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
             KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
             KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
-            else -> event.getUnicodeChar(event.metaState and (KeyEvent.META_SHIFT_MASK or KeyEvent.META_CAPS_LOCK_ON))
+            else -> deviceKey(event.keyCode) ?: event.getUnicodeChar(event.metaState and (KeyEvent.META_SHIFT_MASK or KeyEvent.META_CAPS_LOCK_ON))
                 .takeIf { it > 0 && Character.isValidCodePoint(it) }?.let { String(Character.toChars(it)) }
         }
         if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),

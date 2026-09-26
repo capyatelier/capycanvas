@@ -118,6 +118,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var colorPreview by mutableStateOf<JSONObject?>(null)
         private set
+    internal var keymapFile by mutableStateOf<JSONObject?>(null)
     private var modelSnapshot: JSONObject? = null // Native owner only.
     var surfaceReady by mutableStateOf(false)
         private set
@@ -760,6 +761,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             when (kind.getString("type")) {
                 "save_settings" -> {
                     saved.edit().putString("settings", kind.getJSONObject("settings").toString()).apply()
+                    Native.dispatch(handle, obj("type" to "complete_request", "id" to request.getLong("id"), "error" to null).toString())
+                }
+                "export_keymap", "import_keymap" -> {
+                    main.post { keymapFile = kind }
                     Native.dispatch(handle, obj("type" to "complete_request", "id" to request.getLong("id"), "error" to null).toString())
                 }
             }

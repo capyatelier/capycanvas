@@ -213,3 +213,98 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
     press(&mut s, PenButton::Primary, false);
     assert_ne!(s.engine.document(), &before);
 }
+
+#[test]
+fn remote_and_gamepad_keys_share_canonical_names() {
+    for (native, canonical, label) in [
+        ("AudioVolumeUp", "volumeup", "Volume Up"),
+        ("AudioRaiseVolume", "volumeup", "Volume Up"),
+        ("XF86AudioRaiseVolume", "volumeup", "Volume Up"),
+        ("XF86AudioPlay", "mediaplaypause", "Play/Pause"),
+        ("AudioLowerVolume", "volumedown", "Volume Down"),
+        ("MediaPlayPause", "mediaplaypause", "Play/Pause"),
+        ("AudioNext", "mediatracknext", "Next Track"),
+        ("gamepad_a", "gamepad_a", "Gamepad A"),
+        ("gamepad_l2", "gamepad_l2", "Gamepad L2"),
+        ("gamepad_up", "gamepad_up", "Gamepad ↑"),
+        ("gamepad_start", "gamepad_start", "Gamepad Start"),
+        ("F13", "f13", "F13"),
+    ] {
+        let chord = KeyChord::new(native, Modifiers::default());
+        assert_eq!(chord.key, canonical);
+        assert_eq!(chord.label(Platform::Android), label);
+        chord.validate().unwrap();
+    }
+    assert!(KeyChord::new("gamepad_z", Modifiers::default()).validate().is_err());
+    let mut s = session(Platform::Android);
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    preference(&mut s, PreferenceAction::BeginShortcut { id: CommandId::Undo.shortcut_id() });
+    key(&mut s, "volumeup", true, false, false);
+    preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+    key(&mut s, "volumeup", false, false, false);
+    preference(&mut s, PreferenceAction::BeginShortcut { id: "tool_setting.size.increase".into() });
+    key(&mut s, "gamepad_r1", true, false, false);
+    preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+    key(&mut s, "gamepad_r1", false, false, false);
+    s.dispatch(UiAction::CloseSettings).unwrap();
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
+    s.frame(3, 3).unwrap();
+    let size = s.state.brush.diameter;
+    let press = |s: &mut UiSession<Recorder>, name: &str, repeat: bool| {
+        s.input(UiInput::Key {
+            key: name.into(),
+            pressed: true,
+            repeat,
+            modifiers: Modifiers::default(),
+            editing: false,
+            divider: None,
+        })
+        .unwrap()
+    };
+    assert!(press(&mut s, "gamepad_r1", false).handled);
+    assert!(press(&mut s, "gamepad_r1", true).handled);
+    key(&mut s, "gamepad_r1", false, false, false);
+    assert!(s.state.brush.diameter > size, "repeats step while the button is held");
+    assert!(press(&mut s, "AudioVolumeUp", false).handled);
+    assert!(!s.command(CommandId::Undo).enabled);
+    assert!(!press(&mut s, "volumedown", false).handled, "unbound device keys stay with the system");
+}
+
+#[test]
+fn stick_axes_navigate_with_dead_zones_and_stop_on_blur() {
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    let axes = |s: &mut UiSession<Recorder>, pan: [f32; 2], zoom: f32| {
+        s.input(UiInput::Axes { pan, zoom }).unwrap()
+    };
+    let camera = s.state.camera.clone();
+    assert!(!axes(&mut s, [0.1, -0.1], 0.12).change.canvas_wake, "drift inside the dead zone");
+    assert!(!s.wants_continuous_frames());
+    assert!(axes(&mut s, [1., 0.], 0.).change.canvas_wake);
+    assert!(s.wants_continuous_frames());
+    s.frame(1_000_000_000, 1_000_000_000).unwrap();
+    let change = s.frame(1_016_000_000, 1_016_000_000).unwrap();
+    assert!(change.regions & regions::CAMERA != 0 && change.canvas_wake);
+    let moved = s.state.camera.clone();
+    assert!(moved.translation[0] < camera.translation[0], "right stick deflection pans toward the right");
+    assert_eq!(moved.zoom, camera.zoom);
+    s.frame(1_500_000_000, 1_500_000_000).unwrap();
+    let step = camera.translation[0] - moved.translation[0];
+    assert!(moved.translation[0] - s.state.camera.translation[0] < step * 10., "long frame gaps are clamped");
+    axes(&mut s, [0., 0.], 1.);
+    s.frame(2_000_000_000, 2_000_000_000).unwrap();
+    s.frame(2_100_000_000, 2_100_000_000).unwrap();
+    assert!(s.state.camera.zoom > moved.zoom, "positive zoom deflection zooms in");
+    s.input(UiInput::Blur).unwrap();
+    assert!(!s.wants_continuous_frames());
+    let stopped = s.state.camera.clone();
+    s.frame(2_200_000_000, 2_200_000_000).unwrap();
+    assert_eq!(s.state.camera, stopped);
+    assert!(s.input(UiInput::Axes { pan: [2., 0.], zoom: 0. }).is_err());
+    axes(&mut s, [1., 0.], 0.);
+    s.pen(event(&s, 5, PenPhase::Down, 1.)).unwrap();
+    s.frame(3_000_000_000, 3_000_000_000).unwrap();
+    s.frame(3_050_000_000, 3_050_000_000).unwrap();
+    assert_eq!(s.state.camera.translation, stopped.translation, "a stroke keeps the view still");
+}

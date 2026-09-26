@@ -282,6 +282,82 @@ class AndroidCommandSearchTest {
         action(obj("type" to "invoke", "command" to "undo"))
     }
 
+    @Test fun remoteKeysGamepadButtonsAndSticks() {
+        fun enabled(id: String) = state().array("commands").objects().first { it.getString("id") == id }.getBoolean("enabled")
+        fun record(id: String, key: String) {
+            action(obj("type" to "invoke", "command" to "keyboard_shortcuts"))
+            action(obj("type" to "preferences", "action" to obj("type" to "begin_shortcut", "id" to id)))
+            main { host.input(obj("type" to "key", "key" to key, "pressed" to true, "repeat" to false)) }
+            main { host.input(obj("type" to "key", "key" to key, "pressed" to false, "repeat" to false)) }
+            SystemClock.sleep(150)
+            action(obj("type" to "preferences", "action" to obj("type" to "confirm_shortcut", "replace" to true)))
+            action(obj("type" to "close_settings"))
+        }
+        fun device(code: Int, source: Int) {
+            val now = SystemClock.uptimeMillis()
+            for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                instrumentation.sendKeySync(KeyEvent(now, now, action, code, 0, 0, -1, 0, 0, source))
+        }
+        lateinit var activity: MainActivity
+        scenario.onActivity { activity = it }
+        record("command.Undo", "volumedown")
+        record("tool_setting.size.increase", "gamepad_r1")
+        action(obj("type" to "invoke", "command" to "brush"))
+        action(obj("type" to "invoke", "command" to "add_layer"))
+        waitFor("undoable edit") { enabled("undo") && !enabled("redo") }
+        val audio = activity.getSystemService(android.media.AudioManager::class.java)
+        val volume = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+        device(KeyEvent.KEYCODE_VOLUME_DOWN, InputDevice.SOURCE_KEYBOARD)
+        waitFor("a claimed volume key undoes") { enabled("redo") }
+        assertEquals("the claimed key leaves the volume alone", volume, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+        val size = state().getJSONObject("brush").getDouble("diameter")
+        device(KeyEvent.KEYCODE_BUTTON_R1, InputDevice.SOURCE_GAMEPAD)
+        waitFor("gamepad button steps the brush") { state().getJSONObject("brush").getDouble("diameter") > size }
+        val camera = state().getJSONObject("camera").getJSONArray("translation").getDouble(0)
+        fun stick(x: Float) {
+            val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_UNKNOWN })
+            val coordinates = arrayOf(MotionEvent.PointerCoords().apply { setAxisValue(MotionEvent.AXIS_X, x) })
+            val event = MotionEvent.obtain(0, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE, 1, properties, coordinates, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_JOYSTICK, 0)
+            try { main { activity.dispatchGenericMotionEvent(event) } } finally { event.recycle() }
+        }
+        stick(.9f)
+        waitFor("the left stick pans") { state().getJSONObject("camera").getJSONArray("translation").getDouble(0) < camera - 20 }
+        stick(0f)
+        SystemClock.sleep(100)
+        val stopped = state().getJSONObject("camera").getJSONArray("translation").getDouble(0)
+        SystemClock.sleep(250)
+        assertEquals("a centered stick stops", stopped, state().getJSONObject("camera").getJSONArray("translation").getDouble(0), 0.0)
+        for (id in listOf("command.Undo", "tool_setting.size.increase"))
+            action(obj("type" to "preferences", "action" to obj("type" to "reset_shortcut", "id" to id)))
+    }
+
+    @Test fun keymapPresetsImportAndEditor() {
+        fun press(tag: String) {
+            waitFor(tag) { tagged(tag) != null }
+            main { tagged(tag)!!.second.config[SemanticsActions.OnClick].action!!() }
+            SystemClock.sleep(150)
+        }
+        fun keymap() = state().getJSONObject("settings").optJSONObject("keymap")?.getString("id")
+        action(obj("type" to "invoke", "command" to "keyboard_shortcuts"))
+        press("keymap-preset")
+        press("keymap-choice-krita")
+        waitFor("Krita keymap") { keymap() == "krita" }
+        press("keymap-differences")
+        waitFor("differences") { labelled("5") != null }
+        val text = obj("format" to "capycanvas-keymap", "version" to 1, "keymap" to obj("id" to "photoshop", "revision" to 1)).toString()
+        main { host.preference(obj("type" to "import_keymap", "text" to text)) }
+        press("keymap-confirm-import")
+        waitFor("imported keymap") { keymap() == "photoshop" }
+        action(obj("type" to "preferences", "action" to obj("type" to "edit_shortcut", "id" to "command.Move")))
+        waitFor("editor context") {
+            tagged("shortcut-editor-context")?.second?.config?.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("Photoshop-inspired") } == true
+        }
+        action(obj("type" to "preferences", "action" to obj("type" to "close_shortcut_editor")))
+        action(obj("type" to "preferences", "action" to obj("type" to "select_keymap", "id" to "capy")))
+        waitFor("default keymap") { keymap() == null }
+        action(obj("type" to "close_settings"))
+    }
+
     @Test fun panelGlassAndPlacement() {
         val (width, height) = 2048 to 1536
         val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || i / 4 % width / 8 % 2 == 0) -1 else 0 }

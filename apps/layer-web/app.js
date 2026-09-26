@@ -884,6 +884,23 @@ function update(regions) {
               continue;
             }
             else if (request.kind.type === "open_link") { window.open(app.application_link(request.kind.link), "_blank", "noopener"); }
+            else if (request.kind.type === "export_keymap") {
+              const link = Object.assign(document.createElement("a"), {
+                href: URL.createObjectURL(new Blob([request.kind.text], { type: "application/json" })),
+                download: request.kind.name,
+              });
+              link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0);
+            }
+            else if (request.kind.type === "import_keymap") {
+              const input = Object.assign(document.createElement("input"), { type: "file", accept: ".json,application/json" });
+              input.addEventListener("change", async () => {
+                const file = input.files?.[0];
+                if (!file) return;
+                if (file.size > 1 << 20) { message("The keymap file is too large"); return; }
+                dispatch({ type: "preferences", action: { type: "import_keymap", text: await file.text() } });
+              });
+              input.click();
+            }
             else if (request.kind.type === "workspace") { workspaceManager?.handle(request); }
             else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
             else
@@ -1575,6 +1592,54 @@ window.addEventListener("keydown", (e) => {
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));
+const GAMEPAD_BUTTONS = ["a", "b", "x", "y", "l1", "r1", "l2", "r2", "select", "start", "l3", "r3", "up", "down", "left", "right", "home"];
+const gamepads = new Map();
+let gamepadFrame = 0;
+function gamepadKey(name, pressed, repeat) {
+  input({ type: "key", key: `gamepad_${name}`, pressed, repeat, modifiers: { command: false, shift: false, alt: false }, editing: false, divider: null });
+}
+function releaseGamepad(index) {
+  const pad = gamepads.get(index);
+  if (!pad) return;
+  for (const [button, held] of pad.held) { clearTimeout(held); gamepadKey(GAMEPAD_BUTTONS[button], false, false); }
+  pad.held.clear();
+  if (pad.axes) input({ type: "axes", pan: [0, 0], zoom: 0 });
+  pad.axes = null;
+}
+function pollGamepads() {
+  gamepadFrame = 0;
+  for (const pad of navigator.getGamepads?.() ?? []) {
+    if (!pad?.connected || pad.mapping !== "standard") continue;
+    const state = gamepads.get(pad.index) ?? { held: new Map(), axes: null };
+    gamepads.set(pad.index, state);
+    pad.buttons.slice(0, GAMEPAD_BUTTONS.length).forEach((button, index) => {
+      const name = GAMEPAD_BUTTONS[index];
+      if (button.pressed && !state.held.has(index)) {
+        gamepadKey(name, true, false);
+        const repeat = () => { gamepadKey(name, true, true); state.held.set(index, setTimeout(repeat, 50)); };
+        state.held.set(index, setTimeout(repeat, 500));
+      } else if (!button.pressed && state.held.has(index)) {
+        clearTimeout(state.held.get(index));
+        state.held.delete(index);
+        gamepadKey(name, false, false);
+      }
+    });
+    const axes = [pad.axes[0] ?? 0, pad.axes[1] ?? 0, -(pad.axes[3] ?? 0)].map(v => Math.round(Math.max(-1, Math.min(1, v)) * 100) / 100);
+    if (String(axes) !== String(state.axes)) {
+      state.axes = axes;
+      input({ type: "axes", pan: axes.slice(0, 2), zoom: axes[2] });
+    }
+  }
+  if (gamepads.size) gamepadFrame = requestAnimationFrame(pollGamepads);
+}
+window.addEventListener("gamepadconnected", () => { gamepadFrame ||= requestAnimationFrame(pollGamepads); });
+window.addEventListener("gamepaddisconnected", (e) => {
+  releaseGamepad(e.gamepad.index);
+  gamepads.delete(e.gamepad.index);
+});
+window.addEventListener("blur", () => {
+  for (const pad of gamepads.values()) { for (const held of pad.held.values()) clearTimeout(held); pad.held.clear(); pad.axes = null; }
+});
 window.addEventListener("blur", () => {
   endWorkspaceGesture(null, true);
   cursorInput(null);

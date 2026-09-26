@@ -46,6 +46,22 @@ pub enum ToolCategory {
     ColorSampling,
     Navigation,
 }
+impl ToolCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Drawing => "Drawing",
+            Self::Erasing => "Erasing",
+            Self::Blending => "Blending",
+            Self::Warping => "Warping",
+            Self::Selection => "Selection",
+            Self::FillGradient => "Fill and gradient",
+            Self::ShapesRulers => "Shape and ruler",
+            Self::MoveTransform => "Move and transform",
+            Self::ColorSampling => "Color sampling",
+            Self::Navigation => "Navigation",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

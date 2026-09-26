@@ -54,6 +54,7 @@ pub struct KeyChord {
 impl KeyChord {
     pub fn new(key: &str, modifiers: Modifiers) -> Self {
         let key = key.to_lowercase();
+        let key = Self::device_key(&key).map_or(key, str::to_owned);
         match Self::modifier_name(&key) {
             Some(name) => Self {
                 key: name.into(),
@@ -78,6 +79,41 @@ impl KeyChord {
             _ => return None,
         })
     }
+    pub fn device_key(key: &str) -> Option<&'static str> {
+        Some(match key.strip_prefix("xf86").unwrap_or(key) {
+            "volumeup" | "audiovolumeup" | "audioraisevolume" => "volumeup",
+            "volumedown" | "audiovolumedown" | "audiolowervolume" => "volumedown",
+            "volumemute" | "audiovolumemute" | "audiomute" => "volumemute",
+            "mediaplaypause" | "audioplay" | "audiopause" => "mediaplaypause",
+            "mediatracknext" | "audionext" => "mediatracknext",
+            "mediatrackprevious" | "audioprev" => "mediatrackprevious",
+            _ => return None,
+        })
+    }
+    fn device_label(key: &str) -> Option<String> {
+        if let Some(button) = key.strip_prefix("gamepad_") {
+            return GAMEPAD_BUTTONS
+                .contains(&key)
+                .then(|| format!("Gamepad {}", match button {
+                    "up" => "↑".into(),
+                    "down" => "↓".into(),
+                    "left" => "←".into(),
+                    "right" => "→".into(),
+                    "select" | "start" | "home" => button[..1].to_uppercase() + &button[1..],
+                    _ => button.to_uppercase(),
+                }));
+        }
+        Some(match key {
+            "volumeup" => "Volume Up",
+            "volumedown" => "Volume Down",
+            "volumemute" => "Mute",
+            "mediaplaypause" => "Play/Pause",
+            "mediatracknext" => "Next Track",
+            "mediatrackprevious" => "Previous Track",
+            _ => return None,
+        }
+        .into())
+    }
     pub fn validate_for(&self, held: bool) -> Result<(), String> {
         if held && matches!(self.key.as_str(), "shift" | "control" | "alt") && !self.command && !self.shift && !self.alt {
             return Ok(());
@@ -101,7 +137,8 @@ impl KeyChord {
                 | "arrowright"
                 | "arrowup"
                 | "arrowdown"
-        ) || self
+        ) || Self::device_label(&self.key).is_some()
+            || self
             .key
             .strip_prefix('f')
             .and_then(|n| n.parse::<u8>().ok())
@@ -167,6 +204,7 @@ impl KeyChord {
             "arrowup" => "↑".into(),
             "arrowdown" => "↓".into(),
             key if key.len() == 1 => key.to_uppercase(),
+            key if let Some(label) = Self::device_label(key) => label,
             key => {
                 let mut chars = key.chars();
                 chars.next().map_or_else(String::new, |c| {
@@ -230,6 +268,25 @@ impl BindingScope {
         }
     }
 }
+pub const GAMEPAD_BUTTONS: [&str; 17] = [
+    "gamepad_a",
+    "gamepad_b",
+    "gamepad_x",
+    "gamepad_y",
+    "gamepad_l1",
+    "gamepad_r1",
+    "gamepad_l2",
+    "gamepad_r2",
+    "gamepad_select",
+    "gamepad_start",
+    "gamepad_l3",
+    "gamepad_r3",
+    "gamepad_up",
+    "gamepad_down",
+    "gamepad_left",
+    "gamepad_right",
+    "gamepad_home",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GestureTrigger {
     pub id: &'static str,
@@ -461,6 +518,22 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
             ));
         }
     }
+    for (id, label, action, group) in [
+        ("color.swap", "Swap colors", UiAction::Color { action: ColorAction::Swap }, "Colors"),
+        ("layer.duplicate", "Duplicate layer", UiAction::Layer { action: LayerAction::DuplicateSelected }, "Layers"),
+        ("layer.group", "Group layers", UiAction::Layer { action: LayerAction::GroupSelected }, "Layers"),
+    ] {
+        rows.push((
+            ShortcutDefinition {
+                id: id.into(),
+                label: label.into(),
+                action: ShortcutAction::Action { action: Box::new(action) },
+                repeat: false,
+                scope: BindingScope::Application,
+            },
+            group,
+        ));
+    }
     rows.extend(brush_catalog().map(|brush| {
         (
             ShortcutDefinition {
@@ -512,6 +585,9 @@ impl Settings {
             UiAction::Invoke { command } => Some(command.shortcut_id()),
             UiAction::SelectBrush { id } => Some(format!("brush.{id}")),
             UiAction::SetBrushSize { value } => Some(format!("size.{value}")),
+            UiAction::Color { action: ColorAction::Swap } => Some("color.swap".into()),
+            UiAction::Layer { action: LayerAction::DuplicateSelected } => Some("layer.duplicate".into()),
+            UiAction::Layer { action: LayerAction::GroupSelected } => Some("layer.group".into()),
             UiAction::StepToolSetting { id, steps } if steps.abs() == 1. => {
                 Some(format!("tool_setting.{id}.{}", if *steps < 0. { "decrease" } else { "increase" }))
             }
@@ -538,13 +614,26 @@ impl Settings {
             format!("{label} ({shortcut})")
         }
     }
+    pub(crate) fn keymap_preset(&self) -> Option<&'static crate::keymaps::ParsedPreset> {
+        self.keymap.as_ref().and_then(|keymap| crate::keymaps::preset(&keymap.id))
+    }
+    pub(crate) fn base_keys(&self, id: &str) -> Vec<KeyChord> {
+        let preset = self.keymap_preset();
+        if let Some(keys) = preset.and_then(|p| p.keys_for(id)) {
+            return keys.to_vec();
+        }
+        defaults(id)
+            .into_iter()
+            .filter(|key| !preset.is_some_and(|p| p.binds(key)))
+            .collect()
+    }
     pub(crate) fn keys(&self, id: &str) -> Vec<KeyChord> {
         if let Some(keys) = self.shortcuts.get(id) {
             return keys.clone();
         }
         // An upgrade may add defaults on keys the artist already assigned.
         // Explicit saved bindings win; two explicit bindings still conflict.
-        defaults(id)
+        self.base_keys(id)
             .into_iter()
             .filter(|key| !self.shortcuts.values().any(|keys| keys.contains(key)))
             .collect()
@@ -570,7 +659,7 @@ impl Settings {
     }
     pub(crate) fn shortcut_modified(&self, id: &str) -> bool {
         let keys = self.keys(id);
-        let defaults = defaults(id);
+        let defaults = self.base_keys(id);
         keys.len() != defaults.len() || keys.iter().any(|key| !defaults.contains(key))
     }
     pub(crate) fn shortcut_match(
@@ -587,6 +676,42 @@ impl Settings {
             .map(|(definition, _)| definition)
             .filter(|definition| definition.scope.applies(canvas) && self.keys(&definition.id).contains(chord))
             .max_by_key(|definition| definition.scope.specificity())
+    }
+    pub(crate) fn shortcut_scope(&self, id: &str, platform: Platform) -> (String, Vec<String>) {
+        let all = definitions(platform);
+        let Some((definition, _)) = all.iter().find(|(d, _)| d.id == id) else {
+            return (String::new(), Vec::new());
+        };
+        let describe = |scope: &BindingScope| match scope {
+            BindingScope::Application => "everywhere".to_string(),
+            BindingScope::Canvas => "on the canvas".to_string(),
+            BindingScope::Tools { categories } => {
+                let names: Vec<_> = categories.iter().map(|c| c.label().to_lowercase()).collect();
+                format!("with {} tools", match names.as_slice() {
+                    [one] => one.clone(),
+                    [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+                    [] => String::new(),
+                })
+            }
+        };
+        let mut overlaps = Vec::new();
+        for chord in self.keys(id) {
+            for (other, _) in &all {
+                if other.id != definition.id
+                    && other.scope.overlaps(&definition.scope)
+                    && other.scope.specificity() != definition.scope.specificity()
+                    && self.keys(&other.id).contains(&chord)
+                {
+                    overlaps.push(if other.scope.specificity() > definition.scope.specificity() {
+                        format!("{} does {} {} instead", chord.label(platform), other.label, describe(&other.scope))
+                    } else {
+                        format!("{} does {} elsewhere", chord.label(platform), other.label)
+                    });
+                }
+            }
+        }
+        let scope = describe(&definition.scope);
+        (scope[..1].to_uppercase() + &scope[1..], overlaps)
     }
     pub(crate) fn held_shortcut(&self, id: &str, platform: Platform) -> bool {
         definitions(platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
@@ -607,11 +732,15 @@ impl Settings {
             .then_some(definition)
         })
     }
+    pub(crate) fn gesture_default(&self, trigger: &str) -> &'static str {
+        self.keymap_preset()
+            .and_then(|p| p.preset.gestures.iter().find(|(t, _)| *t == trigger))
+            .map(|(_, id)| *id)
+            .or_else(|| GESTURE_TRIGGERS.iter().find(|t| t.id == trigger).map(|t| t.default))
+            .unwrap_or("")
+    }
     pub(crate) fn gesture_binding(&self, trigger: &str) -> &str {
-        self.gestures.get(trigger).map_or_else(
-            || GESTURE_TRIGGERS.iter().find(|t| t.id == trigger).map_or("", |t| t.default),
-            String::as_str,
-        )
+        self.gestures.get(trigger).map_or_else(|| self.gesture_default(trigger), String::as_str)
     }
     pub(crate) fn gesture_definition(&self, trigger: &str, platform: Platform) -> Option<ShortcutDefinition> {
         let id = self.gesture_binding(trigger);
@@ -621,6 +750,9 @@ impl Settings {
         definitions(platform).into_iter().map(|(d, _)| d).find(|d| d.id == id)
     }
     fn validate_gestures(&self) -> Result<(), String> {
+        if self.keymap.as_ref().is_some_and(|k| crate::keymaps::preset(&k.id).is_none()) {
+            return Err("Unknown keymap".into());
+        }
         let all = definitions(Platform::Gtk);
         for (trigger, id) in &self.gestures {
             let trigger = GESTURE_TRIGGERS

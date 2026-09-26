@@ -243,3 +243,85 @@ fn native_canvas_touch_taps() {
     assert_ne!(state(&d.w).camera.zoom, camera.zoom);
     d.finish();
 }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_remote_keys"]
+fn native_remote_keys() {
+    let mut d = Driver::new("art.capycanvas.RemoteKeys");
+    let enabled = |w: &Workspace, command| w.gpu.borrow().as_ref().unwrap().session.command(command).enabled;
+    d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
+    d.w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::BeginShortcut { id: CommandId::Undo.shortcut_id() },
+    });
+    for pressed in [true, false] {
+        d.w.interact(crate::input::key_input(gdk::Key::AudioPlay, pressed, gdk::ModifierType::empty(), false, None));
+    }
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ConfirmShortcut { replace: true } });
+    d.w.dispatch(UiAction::CloseSettings);
+    pump(120);
+    assert!(state(&d.w).settings.shortcuts[&CommandId::Undo.shortcut_id()].iter().any(|c| c.key == "mediaplaypause"));
+    d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
+    pump(120);
+    assert!(enabled(&d.w, CommandId::Undo) && !enabled(&d.w, CommandId::Redo));
+    d.input.perform(serde_json::json!([{"key":0x1008ff14,"down":true},{"key":0x1008ff14,"down":false}]));
+    pump(250);
+    assert!(enabled(&d.w, CommandId::Redo), "a remote's media key undoes");
+    d.finish();
+}
+
+fn descendants<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Vec<T> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(widget) = stack.pop() {
+        if let Ok(typed) = widget.clone().downcast::<T>() {
+            found.push(typed);
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            stack.push(current);
+        }
+    }
+    found
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_keymap_presets"]
+fn native_keymap_presets() {
+    let d = Driver::new("art.capycanvas.KeymapPresets");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
+    pump(400);
+    let combo = find_named(&d.w.window.clone().upcast(), "keymap-preset")
+        .or_else(|| descendants::<adw::ComboRow>(&d.w.window.clone().upcast()).into_iter().map(|c| c.upcast()).next())
+        .and_downcast::<adw::ComboRow>()
+        .expect("keymap row");
+    assert!(combo.is_mapped());
+    let titles: Vec<_> = (0..combo.model().unwrap().n_items())
+        .map(|i| combo.model().unwrap().item(i).and_downcast::<gtk::StringObject>().unwrap().string().to_string())
+        .collect();
+    assert_eq!(titles[0], "CapyCanvas");
+    let krita = titles.iter().position(|t| t == "Krita-inspired").unwrap();
+    combo.set_selected(krita as u32);
+    pump(200);
+    assert_eq!(state(&d.w).settings.keymap.as_ref().map(|k| k.id.as_str()), Some("krita"));
+    let differences = descendants::<adw::ExpanderRow>(&d.w.window.clone().upcast())
+        .into_iter()
+        .find(|row| row.widget_name() == "keymap-differences")
+        .unwrap();
+    assert!(differences.is_visible() && differences.title().contains("Krita"));
+    let text = layer_ui::keymaps::KEYMAP_PRESETS.iter().find(|p| p.id == "photoshop").map(|_| {
+        serde_json::json!({"format": "capycanvas-keymap", "version": 1, "keymap": {"id": "photoshop", "revision": 1}}).to_string()
+    }).unwrap();
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ImportKeymap { text } });
+    pump(400);
+    let alert = descendants::<adw::AlertDialog>(&d.w.window.clone().upcast()).into_iter().next().expect("import preview");
+    assert!(alert.heading().unwrap().contains("Photoshop"));
+    alert.emit_by_name::<()>("response", &[&"import"]);
+    pump(400);
+    assert_eq!(state(&d.w).settings.keymap.as_ref().map(|k| k.id.as_str()), Some("photoshop"));
+    assert_eq!(combo.selected() as usize, titles.iter().position(|t| t == "Photoshop-inspired").unwrap());
+    combo.set_selected(0);
+    pump(200);
+    assert_eq!(state(&d.w).settings.keymap, None);
+    d.finish();
+}

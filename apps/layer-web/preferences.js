@@ -148,7 +148,11 @@ export function createPreferences({ app, element, button, icon, numberField, pan
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   const shortcuts = new Map();
-  let shortcutList, shortcutSearch;
+  let shortcutList, shortcutSearch, keymapSelect, keymapSource, keymapDifferences, keymapSignature = "";
+  const keymapImport = element("dialog", "shortcut-capture"); keymapImport.id = "keymap-import";
+  keymapImport.addEventListener("cancel", e => { e.preventDefault(); send({ type: "cancel_keymap_import" }); });
+  document.body.append(keymapImport);
+  let keymapImportSignature = "";
   function paintSwatches(widget, input, kind) {
     if (widget.saved !== kind.value) { widget.saved = kind.value; widget.editing = false; }
     const custom = kind.swatches.findIndex(s => s.custom), active = widget.editing ? custom : kind.selected;
@@ -308,6 +312,24 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       }
       if(page.id==="color")node.append(button("Manage Color Profiles…",()=>chooseProfileLibrary({app,element,button,manage:true})));
       if (page.id === "shortcuts") {
+        const keymap = element("section", "settings-group"); keymap.id = "keymap";
+        const keymapHeading = element("div", "shortcut-heading");
+        const keymapLabels = element("div");
+        keymapLabels.append(element("h3", "", "Keymap"));
+        keymapSource = element("p", "settings-description");
+        keymapLabels.append(keymapSource);
+        const files = element("div", "keymap-files");
+        const importButton = button("Import…", () => send({ type: "choose_keymap_file" })); importButton.id = "keymap-import-button";
+        const exportButton = button("Export…", () => send({ type: "export_keymap" })); exportButton.id = "keymap-export-button";
+        files.append(importButton, exportButton);
+        keymapHeading.append(keymapLabels, files);
+        const keymapRow = element("div", "preference-row");
+        keymapSelect = element("select"); keymapSelect.id = "keymap-preset"; keymapSelect.setAttribute("aria-label", "Keymap");
+        keymapSelect.addEventListener("change", () => send({ type: "select_keymap", id: keymapSelect.value }));
+        keymapRow.append(element("span", "preference-text", "Start from"), keymapSelect);
+        keymapDifferences = element("details", "keymap-differences"); keymapDifferences.id = "keymap-differences";
+        keymap.append(keymapHeading, keymapRow, keymapDifferences);
+        node.append(keymap);
         shortcutSearch = element("input", "preferences-search"); shortcutSearch.type = "search";
         shortcutSearch.id = "shortcuts-search"; shortcutSearch.placeholder = "Search shortcuts";
         shortcutSearch.setAttribute("aria-label", "Search shortcuts");
@@ -414,6 +436,41 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (binding.textContent !== spec.shortcut) binding.textContent = spec.shortcut;
       row.classList.toggle("modified", spec.modified);
     }
+    if (keymapSelect) {
+      const keymap = model.keymap;
+      if (keymapSelect.options.length !== keymap.presets.length)
+        keymapSelect.replaceChildren(...keymap.presets.map(p => Object.assign(document.createElement("option"), { value: p.id, textContent: p.title })));
+      if (keymapSelect.value !== keymap.selected) keymapSelect.value = keymap.selected;
+      if (keymapSource.textContent !== keymap.source) keymapSource.textContent = keymap.source;
+      const signature = JSON.stringify([keymap.selected, keymap.differences]);
+      if (keymapSignature !== signature) {
+        keymapSignature = signature;
+        const summary = element("summary", "", `Differences from ${keymap.title.replace(/-inspired$/, "")}`);
+        keymapDifferences.replaceChildren(summary, ...keymap.differences.map(d => {
+          const row = element("div", "preference-row"); const text = element("span", "preference-text");
+          text.append(element("span", "", d.trigger), element("p", "", d.note)); row.append(text); return row;
+        }));
+        keymapDifferences.hidden = !keymap.differences.length;
+      }
+      const preview = keymap.import, importSignature = JSON.stringify(preview);
+      if (preview && importSignature !== keymapImportSignature) {
+        const header = element("header", "dialog-header"); header.append(element("h2", "", `Import ${preview.title}?`));
+        const body = element("div", "shortcut-editor-body");
+        for (const [title, items] of [["Added", preview.added], ["Changed", preview.changed], ["Removed", preview.removed], ["Not available", preview.unavailable]]) {
+          if (!items.length) continue;
+          body.append(element("h3", "", `${title} (${items.length})`));
+          const list = element("ul", "keymap-preview"); list.append(...items.map(item => element("li", "", item))); body.append(list);
+        }
+        if (!body.children.length) body.append(element("p", "", "No shortcuts change."));
+        const footer = element("footer");
+        const confirmImport = button("Import", () => send({ type: "confirm_keymap_import" }), "suggested-action"); confirmImport.id = "confirm-keymap-import";
+        footer.append(button("Cancel", () => send({ type: "cancel_keymap_import" })), confirmImport);
+        keymapImport.replaceChildren(header, body, footer);
+      }
+      keymapImportSignature = preview ? importSignature : "";
+      if (preview && !keymapImport.open) keymapImport.showModal();
+      else if (!preview && keymapImport.open) keymapImport.close();
+    }
     if (error.textContent !== (model.error || "")) error.textContent = model.error || "";
     if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }
     if (revealed !== model.reveal) {
@@ -432,7 +489,8 @@ export function createPreferences({ app, element, button, icon, numberField, pan
         const header = element("header", "dialog-header"); header.append(element("h2", "", spec.label));
         const exit = button("", closeEditor, "dialog-close"); exit.append(icon("close")); exit.setAttribute("aria-label", "Close shortcut editor"); header.append(exit);
         const body = element("div", "shortcut-editor-body");
-        body.append(element("p", "settings-description", spec.group));
+        body.append(element("p", "settings-description", `${spec.group} · ${spec.scope} · ${spec.source}`));
+        for (const overlap of spec.overlaps) body.append(element("p", "settings-description", overlap));
         const list = element("div", "preference-group");
         spec.bindings.forEach((binding, index) => {
           const row = element("div", "preference-row");

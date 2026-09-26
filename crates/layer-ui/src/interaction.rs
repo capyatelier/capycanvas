@@ -180,6 +180,10 @@ pub enum UiInput {
         button: PenButton,
         pressed: bool,
     },
+    Axes {
+        pan: [f32; 2],
+        zoom: f32,
+    },
     CursorLeave,
     ColorPickerHold { id: u64, position: [f32; 2], offset: f32 },
     /// Focus loss/unmap cancels canvas ownership; the host queues its last raw
@@ -230,4 +234,46 @@ pub(crate) struct Interaction {
     pub applying_hold: bool,
     pub taps: TouchTaps,
     pub touch_policy: TouchPolicy,
+    pub axes: NavigationAxes,
+}
+
+#[derive(Default)]
+pub(crate) struct NavigationAxes {
+    pan: [f32; 2],
+    zoom: f32,
+    last_ns: Option<u64>,
+}
+impl NavigationAxes {
+    const DEAD_ZONE: f32 = 0.15;
+    fn shaped(value: f32) -> f32 {
+        let magnitude = ((value.abs() - Self::DEAD_ZONE) / (1. - Self::DEAD_ZONE)).clamp(0., 1.);
+        magnitude * magnitude * value.signum()
+    }
+    pub fn set(&mut self, pan: [f32; 2], zoom: f32) -> Result<bool, String> {
+        if !pan.into_iter().chain([zoom]).all(|v| v.is_finite() && v.abs() <= 1.) {
+            return Err("Axis values must be between -1 and 1".into());
+        }
+        let length = pan[0].hypot(pan[1]);
+        let radial = if length > Self::DEAD_ZONE { Self::shaped(length) / length } else { 0. };
+        self.pan = pan.map(|v| v * radial);
+        self.zoom = Self::shaped(zoom);
+        if !self.active() {
+            self.last_ns = None;
+        }
+        Ok(self.active())
+    }
+    pub fn active(&self) -> bool {
+        self.pan != [0.; 2] || self.zoom != 0.
+    }
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+    pub fn advance(&mut self, now_ns: u64) -> Option<([f32; 2], f32)> {
+        if !self.active() {
+            return None;
+        }
+        let dt = self.last_ns.map_or(0., |last| now_ns.saturating_sub(last) as f32 / 1e9).min(0.1);
+        self.last_ns = Some(now_ns);
+        (dt > 0.).then(|| (self.pan.map(|v| v * dt), self.zoom * dt))
+    }
 }

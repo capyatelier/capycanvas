@@ -77,6 +77,7 @@ pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
+pub mod keymaps;
 mod settings;
 mod shortcuts;
 mod theme;
@@ -133,7 +134,7 @@ pub use settings::{
     SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
-    BindingScope, GESTURE_TRIGGERS, GestureTrigger, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
 pub use theme::{

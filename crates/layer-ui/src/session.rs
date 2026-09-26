@@ -1090,11 +1090,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 viewport,
                             })?;
                             reply.handled = true;
-                        } else if let Some(binding) = self.state.settings.shortcut_match(
-                            &KeyChord::new(&key, self.held_modifiers(modifiers)),
-                            self.state.platform,
-                            divider.is_none().then(|| self.binding_category()),
-                        ) {
+                        } else if let Some(binding) = self.held_shortcut_match(&key, modifiers, divider.is_none()) {
                             reply.handled = true;
                             if !repeat || binding.repeat {
                                 match binding.action {
@@ -1114,6 +1110,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::PenButton { button, pressed } => self.pen_button(button, pressed, &mut reply)?,
+            UiInput::Axes { pan, zoom } => self.navigation_axes(pan, zoom, &mut reply)?,
             UiInput::Pointer {
                 id,
                 phase,
@@ -1188,6 +1185,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.modifiers = Modifiers::default();
                 self.interaction.pan_key = None;
                 self.interaction.holds.clear();
+                self.interaction.axes.clear();
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
                 // A native DND grab can blur the window without ending the
@@ -3032,6 +3030,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.open_settings(page);
                 (SETTINGS, false)
             }
+            UiAction::Preferences { action: PreferenceAction::ExportKeymap } if self.state.settings_open => {
+                self.request(HostRequestKind::ExportKeymap {
+                    name: "capycanvas-keymap.json".into(),
+                    text: crate::keymaps::export(&self.state.settings),
+                })?;
+                (HOST, false)
+            }
+            UiAction::Preferences { action: PreferenceAction::ChooseKeymapFile } if self.state.settings_open => {
+                self.request(HostRequestKind::ImportKeymap)?;
+                (HOST, false)
+            }
             UiAction::Preferences { action } => {
                 if !self.state.settings_open
                     && !matches!(
@@ -3679,7 +3688,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.engine.wants_continuous_frames()
+        self.interaction.axes.active()
+            || self.engine.wants_continuous_frames()
             || self.pending_filters.is_some()
             || self.eyedropper.busy()
             || self.region_tools.busy()
@@ -3747,6 +3757,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(change) = self.settle_holds()? {
             changed |= change.regions;
         }
+        changed |= self.advance_axes(now_ns)?;
         let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
         if self.refresh_commands() {
@@ -4889,6 +4900,7 @@ mod tests {
     include!("canvas_bar_tests.rs");
     include!("held_action_tests.rs");
     include!("gesture_tests.rs");
+    include!("keymap_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

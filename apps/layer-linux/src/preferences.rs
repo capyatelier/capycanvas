@@ -96,6 +96,13 @@ pub struct Preferences {
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
     shortcuts: adw::PreferencesGroup,
     shortcut_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label)>>,
+    keymap: adw::PreferencesGroup,
+    keymap_combo: adw::ComboRow,
+    keymap_ids: RefCell<Vec<String>>,
+    keymap_differences: adw::ExpanderRow,
+    keymap_difference_rows: RefCell<Vec<adw::ActionRow>>,
+    keymap_signature: RefCell<String>,
+    keymap_import: RefCell<Option<adw::AlertDialog>>,
     editor: adw::Dialog,
     editor_body: gtk::Box,
     editor_signature: RefCell<String>,
@@ -529,6 +536,13 @@ impl Preferences {
             groups: RefCell::default(),
             shortcuts: adw::PreferencesGroup::new(),
             shortcut_rows: RefCell::default(),
+            keymap: adw::PreferencesGroup::new(),
+            keymap_combo: adw::ComboRow::builder().title("Keymap").build(),
+            keymap_ids: RefCell::default(),
+            keymap_differences: adw::ExpanderRow::new(),
+            keymap_difference_rows: RefCell::default(),
+            keymap_signature: RefCell::default(),
+            keymap_import: RefCell::default(),
             editor,
             editor_body,
             editor_signature: RefCell::default(),
@@ -1068,6 +1082,36 @@ impl Preferences {
                 self.groups.borrow_mut().push((page.id, index, native));
             }
             if page.id == SettingsPage::Shortcuts {
+                self.keymap.set_title("Keymap");
+                self.keymap_combo.set_widget_name("keymap-preset");
+                self.keymap_combo.connect_selected_notify(glib::clone!(
+                    #[weak]
+                    w,
+                    move |combo| {
+                        if w.preferences.updating.get() {
+                            return;
+                        }
+                        let id = w.preferences.keymap_ids.borrow().get(combo.selected() as usize).cloned();
+                        if let Some(id) = id {
+                            send(&w, PreferenceAction::SelectKeymap { id });
+                        }
+                    }
+                ));
+                self.keymap.add(&self.keymap_combo);
+                self.keymap_differences.set_widget_name("keymap-differences");
+                self.keymap.add(&self.keymap_differences);
+                let files = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                for (label, action, name) in [
+                    ("Import…", PreferenceAction::ChooseKeymapFile, "keymap-import"),
+                    ("Export…", PreferenceAction::ExportKeymap, "keymap-export"),
+                ] {
+                    let button = action_button(label, w, UiAction::Preferences { action });
+                    button.set_widget_name(name);
+                    button.set_valign(gtk::Align::Center);
+                    files.append(&button);
+                }
+                self.keymap.set_header_suffix(Some(&files));
+                content.add(&self.keymap);
                 let search_group = adw::PreferencesGroup::new();
                 search_group.add(&self.shortcut_search);
                 content.add(&search_group);
@@ -1222,6 +1266,7 @@ impl Preferences {
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
+            self.refresh_keymap(w, &view.keymap);
             if self
                 .shortcut_rows
                 .borrow()
@@ -1286,9 +1331,14 @@ impl Preferences {
                         self.editor_body.remove(&child);
                     }
                     self.editor.set_title(&editor.label);
-                    let description = gtk::Label::new(Some(&editor.group));
+                    let description = gtk::Label::new(Some(&format!("{} · {} · {}", editor.group, editor.scope, editor.source)));
                     description.add_css_class("dim-label");
                     self.editor_body.append(&description);
+                    for overlap in &editor.overlaps {
+                        let label = gtk::Label::builder().label(overlap).wrap(true).xalign(0.0).build();
+                        label.add_css_class("dim-label");
+                        self.editor_body.append(&label);
+                    }
                     let list = gtk::ListBox::new();
                     list.set_selection_mode(gtk::SelectionMode::None);
                     list.add_css_class("boxed-list");
@@ -1397,6 +1447,114 @@ impl Preferences {
     pub fn recording(&self) -> bool {
         self.capture.root().is_some()
     }
+    fn refresh_keymap(&self, w: &Rc<Workspace>, keymap: &layer_ui::keymaps::KeymapView) {
+        let ids: Vec<_> = keymap.presets.iter().map(|p| p.id.clone()).collect();
+        if *self.keymap_ids.borrow() != ids {
+            let titles: Vec<_> = keymap.presets.iter().map(|p| p.title.as_str()).collect();
+            self.keymap_combo.set_model(Some(&gtk::StringList::new(&titles)));
+            *self.keymap_ids.borrow_mut() = ids;
+        }
+        if let Some(index) = self.keymap_ids.borrow().iter().position(|id| *id == keymap.selected) {
+            self.keymap_combo.set_selected(index as u32);
+        }
+        self.keymap_combo.set_subtitle(&keymap.source);
+        let signature = serde_json::to_string(&(&keymap.selected, &keymap.differences)).unwrap();
+        if self.keymap_signature.replace(signature.clone()) != signature {
+            for row in self.keymap_difference_rows.borrow_mut().drain(..) {
+                self.keymap_differences.remove(&row);
+            }
+            self.keymap_differences.set_title(&format!("Differences from {}", keymap.title.trim_end_matches("-inspired")));
+            for difference in &keymap.differences {
+                let row = text_row(&difference.trigger, &difference.note);
+                self.keymap_differences.add_row(&row);
+                self.keymap_difference_rows.borrow_mut().push(row);
+            }
+        }
+        self.keymap_differences.set_visible(!keymap.differences.is_empty());
+        let shown = self.keymap_import.borrow().clone();
+        match (&keymap.import, shown) {
+            (Some(preview), None) => {
+                let mut lines = Vec::new();
+                for (title, items) in [
+                    ("Added", &preview.added),
+                    ("Changed", &preview.changed),
+                    ("Removed", &preview.removed),
+                    ("Not available", &preview.unavailable),
+                ] {
+                    if !items.is_empty() {
+                        lines.push(format!("{title}: {}", items.len()));
+                        lines.extend(items.iter().take(6).map(|item| format!("  {item}")));
+                    }
+                }
+                if lines.is_empty() {
+                    lines.push("No shortcuts change.".into());
+                }
+                let dialog = adw::AlertDialog::builder()
+                    .heading(format!("Import {}?", preview.title))
+                    .body(lines.join("\n"))
+                    .build();
+                dialog.add_responses(&[("cancel", "Cancel"), ("import", "Import")]);
+                dialog.set_close_response("cancel");
+                dialog.set_response_appearance("import", adw::ResponseAppearance::Suggested);
+                dialog.connect_response(None, glib::clone!(
+                    #[weak]
+                    w,
+                    move |_, response| send(&w, if response == "import" {
+                        PreferenceAction::ConfirmKeymapImport
+                    } else {
+                        PreferenceAction::CancelKeymapImport
+                    })
+                ));
+                dialog.present(Some(&self.dialog));
+                *self.keymap_import.borrow_mut() = Some(dialog);
+            }
+            (None, Some(dialog)) => {
+                self.keymap_import.borrow_mut().take();
+                dialog.close();
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(crate) async fn export_keymap(w: &Rc<Workspace>, name: String, text: String) -> Result<(), String> {
+    let dialog = gtk::FileDialog::builder().title("Export Keymap").initial_name(name.as_str()).build();
+    let file = match dialog.save_future(Some(&w.window)).await {
+        Ok(file) => file,
+        Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let path = file.path().ok_or("Choose a local file")?;
+    gtk::gio::spawn_blocking(move || std::fs::write(path, text).map_err(|e| e.to_string()))
+        .await
+        .map_err(|_| "Could not save the keymap".to_string())?
+}
+
+pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Keymaps"));
+    filter.add_suffix("json");
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let dialog = gtk::FileDialog::builder().title("Import Keymap").filters(&filters).build();
+    let file = match dialog.open_future(Some(&w.window)).await {
+        Ok(file) => file,
+        Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let path = file.path().ok_or("Choose a local keymap file")?;
+    let text = gtk::gio::spawn_blocking(move || {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|f| f.take(1 << 20).read_to_end(&mut bytes))
+            .map_err(|e| e.to_string())?;
+        String::from_utf8(bytes).map_err(|_| "The keymap is not UTF-8 text".to_string())
+    })
+    .await
+    .map_err(|_| "Could not read the keymap".to_string())??;
+    send(w, PreferenceAction::ImportKeymap { text });
+    Ok(())
 }
 
 pub(crate) async fn persist(w: &Workspace, settings: Box<Settings>) -> Result<(), String> {

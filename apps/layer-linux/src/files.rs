@@ -180,6 +180,10 @@ impl Workspace {
                                         .await
                                         .map_err(|e| e.to_string())
                                 }
+                                HostRequestKind::ExportKeymap { name, text } => {
+                                    crate::preferences::export_keymap(&w, name, text).await
+                                }
+                                HostRequestKind::ImportKeymap => crate::preferences::import_keymap(&w).await,
                                 HostRequestKind::Document { .. } => unreachable!(),
                             };
                             w.dispatch(UiAction::CompleteRequest {

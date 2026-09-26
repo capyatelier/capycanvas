@@ -144,8 +144,9 @@ events cannot discard the parameter step.
 
 Scoped bindings and held tool overrides are described in
 [settings](settings.md#keyboard-shortcuts), and finger taps and pen side buttons in
-[settings](settings.md#touch-gestures-and-pen-buttons). Device adapters and
-compatibility presets remain the later E–F stages in the investigation. The command bar does not create Bluetooth support or reproduce
+[settings](settings.md#touch-gestures-and-pen-buttons). Remotes and gamepads are in
+[settings](settings.md#remotes-and-gamepads), and keymap presets and files in
+[settings](settings.md#keymap-presets-import-and-export). The command bar does not create Bluetooth support or reproduce
 other editors' held-modifier behavior by itself. The bar is implemented on GTK,
 Web, Android and Windows; the Apple presentation is separate follow-up work.
 

@@ -1,5 +1,6 @@
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
+import {checkInputDevices} from './input-devices.test.mjs';
 import {checkCommandBar} from './command-bar.test.mjs';
 import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
@@ -316,6 +317,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--command-bar")) {
     await checkCommandBar({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--input-devices")) {
+    await checkInputDevices({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-picker")) {
     await checkColorPicker({call,evaluate,settle});

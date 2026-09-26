@@ -528,6 +528,10 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .shortcut-heading h3 { margin: 0; height: auto; padding: 0; }
 .shortcut-heading .settings-description { font-size: inherit; line-height: 20px; margin: 7px 0 0; }
 .shortcut-heading button { flex: none; }
+.keymap-files { display: flex; gap: 6px; flex: none; }
+.keymap-differences { margin-top: 8px; }
+.keymap-differences summary { cursor: pointer; padding: 8px 0; }
+.keymap-preview { margin: 4px 0 12px; padding-left: 20px; }
 .shortcut-row { padding-block: 0; }
 .shortcut-row.modified .shortcut-hint { font-weight: 700; }
 .shortcut-choose { flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; min-width: 0; min-height: 54px; padding: 8px 0; }

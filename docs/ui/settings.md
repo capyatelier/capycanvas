@@ -74,6 +74,83 @@ them and keeps the chosen tool. Modifiers owned by a hold do not change later
 chords, so Ctrl+Z still undoes while Alt samples. Relative step bindings use the
 setting's own numeric step and bounds and repeat while held.
 
+## Keymap presets, import and export
+
+[`keymaps.rs`](../../crates/layer-ui/src/keymaps.rs) holds versioned keymap
+presets as data. Each preset records:
+
+- ID, revision and title
+- The source application, version or checked date, and keyboard layout
+- Source links
+- Binding and gesture overlays
+- Explicit differences from the source application
+
+Bindings resolve in layers: CapyCanvas defaults, then the chosen preset, then
+the user's overrides. Choosing or changing a preset never touches overrides.
+Resetting one shortcut returns it to the preset's binding.
+
+The initial presets are Photoshop-, Krita-, Clip Studio Paint- and
+Procreate-inspired. They reproduce only rows marked as sourced in the
+[shortcut audit](../history/command-input-shortcut-audit-2026-09-25.md) and map
+them to actions with the same meaning in CapyCanvas. Everything else is listed
+as a difference, for example:
+
+- Photoshop's R Rotate View tool
+- Krita's E erase-mode toggle
+- Procreate's QuickMenu
+
+Unverified rows are never shipped as bindings. A preset change that alters
+bindings needs a new revision. The shortcuts page marks a saved keymap with an
+older revision as outdated.
+
+Keymap files use format `capycanvas-keymap`, version 1. A file contains the
+preset reference, shortcut overrides and gesture overrides. Export is
+deterministic. Import is previewed before anything changes:
+
+- The preview lists added, changed and removed bindings, and unavailable
+  actions or presets.
+- Imported bindings merge over the current overrides and take their chords from
+  other actions.
+- Unknown action IDs are reported and not applied.
+- Files from a newer format version are refused.
+
+Each host provides the file chooser. GTK uses `GtkFileDialog`, Web uses a
+download link and a file input, and Android uses the Storage Access Framework.
+
+The binding editor shows each action's group, scope (everywhere, on the canvas,
+or specific tools) and where its binding came from: CapyCanvas default, a preset
+or custom. It also lists any chord that a more or less specific scope resolves
+differently.
+
+## Remotes and gamepads
+
+Keyboard-emulating remotes, foot pedals and page turners work through ordinary
+key events and can be bound like any key. That includes F13–F24 and volume or
+media keys, which hosts may report as, for example, `AudioVolumeUp` or
+`AudioRaiseVolume`. Rust stores one canonical name for each such key, such as
+`volumeup`. On Android an unbound volume or media key keeps its system meaning.
+The app claims it only while a shortcut uses it.
+
+Standard-layout gamepad buttons record and resolve as keys named `gamepad_a`,
+`gamepad_r1` and so on. Web polls the Gamepad API and Android forwards gamepad
+key events. Gamepad buttons do not repeat natively, so the Web adapter repeats a
+held button after 500 ms and then every 50 ms, and only repeatable bindings act
+on those repeats.
+
+Sticks send their current deflection as `axes` input:
+
+- The left stick pans.
+- Pushing the right stick up zooms in.
+
+Rust applies a 0.15 radial dead zone and a squared response, scaled by the
+scroll pan and zoom speeds. It integrates motion on each frame, pauses it while a
+stroke or other canvas contact owns the view, and clears it on blur. A
+disconnect releases held buttons and centers the sticks on both hosts.
+
+GTK has no gamepad adapter, because GTK itself exposes no gamepad API. A
+Bluetooth device works only when it presents one of these standard input
+classes. Bluetooth support alone does not make a device compatible.
+
 ## Touch gestures and pen buttons
 
 Input settings map finger taps and pen side buttons to the same shortcut

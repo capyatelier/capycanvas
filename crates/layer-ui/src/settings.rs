@@ -95,6 +95,8 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub gestures: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keymap: Option<crate::keymaps::KeymapRef>,
     /// Per-preset slider values, shared by every placement of that slider.
     pub slider_bookmarks: BTreeMap<String, SliderBookmarks>,
 }
@@ -123,6 +125,7 @@ impl Default for Settings {
             prediction_ms: 16.0,
             shortcuts: BTreeMap::new(),
             gestures: BTreeMap::new(),
+            keymap: None,
             slider_bookmarks: BTreeMap::new(),
         }
     }
@@ -521,6 +524,8 @@ pub struct PreferencesState {
     pub editing_shortcut: Option<String>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
+    #[serde(skip)]
+    pub(crate) keymap_import: Option<crate::keymaps::KeymapImport>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferencesView {
@@ -537,6 +542,7 @@ pub struct PreferencesView {
     pub shortcut_query: String,
     pub shortcut_editor: Option<ShortcutEditor>,
     pub shortcuts: Vec<ShortcutRow>,
+    pub keymap: crate::keymaps::KeymapView,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
     pub empty: bool,
@@ -552,6 +558,9 @@ pub struct ShortcutEditor {
     pub id: String,
     pub label: String,
     pub group: String,
+    pub scope: String,
+    pub source: String,
+    pub overlaps: Vec<String>,
     pub bindings: Vec<String>,
     pub defaults: Vec<String>,
     pub modified: bool,
@@ -601,6 +610,16 @@ pub enum PreferenceAction {
         id: String,
     },
     ResetAllShortcuts,
+    SelectKeymap {
+        id: String,
+    },
+    ExportKeymap,
+    ChooseKeymapFile,
+    ImportKeymap {
+        text: String,
+    },
+    ConfirmKeymapImport,
+    CancelKeymapImport,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -621,6 +640,8 @@ pub enum HostRequestKind {
     OpenLink { link: crate::ApplicationLink },
     Document { request: crate::DocumentRequest },
     SaveSettings { settings: Box<Settings> },
+    ExportKeymap { name: String, text: String },
+    ImportKeymap,
 }
 
 fn row(id: PreferenceId, title: &str, description: &str, kind: PreferenceKind) -> PreferenceRow {
@@ -734,6 +755,18 @@ impl Settings {
                 value,
                 enabled: row.enabled && row.kind.value().as_ref() != Some(&default_value),
             });
+            if let Some(trigger) = row.id.gesture_trigger()
+                && let Some(reset) = &mut row.reset
+            {
+                let default = self.gesture_default(trigger.id);
+                reset.value = self
+                    .gesture_choices(trigger, platform)
+                    .into_iter()
+                    .find(|(id, _)| id == default)
+                    .map_or_else(|| "Nothing".into(), |(_, label)| label);
+                reset.hint = reset.value.clone();
+                reset.enabled = row.enabled && self.gestures.contains_key(trigger.id);
+            }
             match (&mut row.kind, default_value) {
                 (PreferenceKind::Number { control, .. }, PreferenceValue::Number(value)) => {
                     control.default_value = Some(value as f64);
@@ -1206,7 +1239,7 @@ impl Settings {
                 let (choice, _) = self
                     .gesture_choices(trigger, platform)
                     .swap_remove(value.choice().unwrap() as usize);
-                if choice == trigger.default {
+                if choice == self.gesture_default(trigger.id) {
                     self.gestures.remove(trigger.id);
                 } else {
                     self.gestures.insert(trigger.id.into(), choice);
@@ -1349,13 +1382,24 @@ impl PreferencesState {
                 .iter()
                 .map(|k| k.label(platform))
                 .collect();
+            let (scope, overlaps) = settings.shortcut_scope(id, platform);
             Some(ShortcutEditor {
                 id: id.clone(),
                 label: row.label.clone(),
                 group: row.group.clone(),
+                scope,
+                source: if settings.shortcuts.contains_key(id) {
+                    "Custom".into()
+                } else if settings.keymap_preset().is_some_and(|p| p.keys_for(id).is_some()) {
+                    settings.keymap_preset().unwrap().preset.title.into()
+                } else {
+                    "CapyCanvas default".into()
+                },
+                overlaps,
                 can_add: bindings.len() < crate::shortcuts::MAX_SHORTCUTS,
                 bindings,
-                defaults: crate::shortcuts::defaults(id)
+                defaults: settings
+                    .base_keys(id)
                     .iter()
                     .map(|k| k.label(platform))
                     .collect(),
@@ -1376,6 +1420,7 @@ impl PreferencesState {
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
+            keymap: crate::keymaps::view(settings, self.keymap_import.as_ref()),
             shortcuts,
             capture: self.capture.clone().map(|mut c| {
                 if self.error.is_some() {
@@ -1444,6 +1489,9 @@ impl PreferencesState {
                 self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
+            PreferenceAction::Reset { id } if let Some(trigger) = id.gesture_trigger() => {
+                settings.gestures.remove(trigger.id);
+            }
             PreferenceAction::Reset { id } => {
                 settings.edit(id, settings.default_value(id, platform)?, platform)?;
             }
@@ -1536,7 +1584,7 @@ impl PreferencesState {
                 {
                     return Err("Unknown shortcut action".into());
                 }
-                for chord in crate::shortcuts::defaults(&id) {
+                for chord in settings.base_keys(&id) {
                     if let Some(conflict) = settings.conflict(&id, &chord, platform) {
                         return Err(format!("Remove {}'s shortcut first.", conflict.label));
                     }
@@ -1546,6 +1594,18 @@ impl PreferencesState {
             PreferenceAction::ResetAllShortcuts => {
                 settings.shortcuts.clear();
                 self.capture = None;
+            }
+            PreferenceAction::SelectKeymap { id } => crate::keymaps::select(settings, &id)?,
+            PreferenceAction::ImportKeymap { text } => {
+                self.keymap_import = Some(crate::keymaps::import(settings, &text, platform)?);
+            }
+            PreferenceAction::ConfirmKeymapImport => {
+                *settings = self.keymap_import.take().ok_or("Choose a keymap file first")?.settings;
+                self.capture = None;
+            }
+            PreferenceAction::CancelKeymapImport => self.keymap_import = None,
+            PreferenceAction::ExportKeymap | PreferenceAction::ChooseKeymapFile => {
+                return Err("Keymap files need the app's file chooser".into());
             }
         }
         Ok(())

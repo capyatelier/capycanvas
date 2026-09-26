@@ -53,6 +53,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    pub(super) fn held_shortcut_match(&self, key: &str, modifiers: Modifiers, canvas: bool) -> Option<ShortcutDefinition> {
+        let context = canvas.then(|| self.binding_category());
+        let settings = &self.state.settings;
+        settings
+            .shortcut_match(&KeyChord::new(key, modifiers), self.state.platform, context)
+            .or_else(|| {
+                let released = self.held_modifiers(modifiers);
+                (released != modifiers)
+                    .then(|| settings.shortcut_match(&KeyChord::new(key, released), self.state.platform, context))
+                    .flatten()
+            })
+    }
+
     fn hold_active(&self, command: CommandId) -> bool {
         command != CommandId::Eyedropper
             || self.eyedropper.picking.previous.is_some()

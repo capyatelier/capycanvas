@@ -99,4 +99,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(())
     }
+
+    pub(super) fn navigation_axes(&mut self, pan: [f32; 2], zoom: f32, reply: &mut InputReply) -> Result<(), String> {
+        reply.handled = true;
+        reply.change.canvas_wake |= self.interaction.axes.set(pan, zoom)?;
+        Ok(())
+    }
+
+    pub(super) fn advance_axes(&mut self, now_ns: u64) -> Result<u32, String> {
+        let Some((pan, zoom)) = self.interaction.axes.advance(now_ns) else {
+            return Ok(0);
+        };
+        if self.require_idle().is_err() || self.interaction.pointer.is_some() || self.touch.is_active() {
+            return Ok(0);
+        }
+        let viewport = self.state.camera.viewport.map(|v| v as f32);
+        let center = [viewport[0] / 2., viewport[1] / 2.];
+        let speed = 1.5 * viewport[0].max(viewport[1]) * self.state.settings.pan_speed;
+        let to = [center[0] - pan[0] * speed, center[1] - pan[1] * speed];
+        let scale = (zoom * 2. * self.state.settings.zoom_speed).exp();
+        self.state.camera.gesture(center, to, scale, 0.)?;
+        self.initial_fit = false;
+        self.sync_camera();
+        Ok(regions::CAMERA)
+    }
 }

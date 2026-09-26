@@ -3,6 +3,12 @@ package art.capycanvas
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
@@ -552,7 +558,103 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     }
 }
 
+@Composable private fun Keymap(host: CanvasHost, keymap: JSONObject) {
+    val colors = LocalPalette.current
+    val context = LocalContext.current
+    var choosing by remember { mutableStateOf(false) }
+    var differences by rememberSaveable { mutableStateOf(false) }
+    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val text = host.keymapFile?.optString("text"); host.keymapFile = null
+        if (uri != null && text != null) host.viewModelScope.launch {
+            try { withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) } ?: error("Could not open the export destination") } }
+            catch (e: Exception) { host.preference(obj("type" to "cancel_keymap_import")) }
+        }
+    }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        host.keymapFile = null
+        if (uri != null) host.viewModelScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(1 shl 20); var length = 0
+                    while (length < buffer.size) { val n = input.read(buffer, length, buffer.size - length); if (n < 0) break; length += n }
+                    String(buffer, 0, length)
+                }
+            }
+            if (text != null) host.preference(obj("type" to "import_keymap", "text" to text))
+        }
+    }
+    LaunchedEffect(host.keymapFile) {
+        val request = host.keymapFile ?: return@LaunchedEffect
+        when (request.getString("type")) {
+            "export_keymap" -> exporter.launch(request.getString("name"))
+            "import_keymap" -> importer.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Keymap", Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+            TextButton({ host.preference(obj("type" to "choose_keymap_file")) }, Modifier.testTag("keymap-import")) { Text("Import…") }
+            TextButton({ host.preference(obj("type" to "export_keymap")) }, Modifier.testTag("keymap-export")) { Text("Export…") }
+        }
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
+            Column {
+                val presets = keymap.array("presets").objects()
+                val selected = presets.firstOrNull { it.getString("id") == keymap.getString("selected") }
+                Box {
+                    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("keymap-preset").clickable { choosing = true }.padding(16.dp)) {
+                        Text(selected?.getString("title") ?: "")
+                        Text(keymap.getString("source"), color = colors.settingsSecondary, fontSize = 13.sp)
+                    }
+                    DropdownMenu(choosing, { choosing = false }) {
+                        presets.forEach { preset ->
+                            DropdownMenuItem({ Text(preset.getString("title")) }, {
+                                choosing = false
+                                host.preference(obj("type" to "select_keymap", "id" to preset.getString("id")))
+                            }, Modifier.testTag("keymap-choice-" + preset.getString("id")))
+                        }
+                    }
+                }
+                val items = keymap.array("differences").objects()
+                if (items.isNotEmpty()) {
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("keymap-differences").clickable { differences = !differences }.padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("Differences from " + keymap.getString("title").removeSuffix("-inspired"), Modifier.weight(1f))
+                        SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(if (differences) 180f else 0f), tint = colors.settingsSecondary)
+                    }
+                    if (differences) items.forEach { item ->
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(item.getString("trigger"))
+                            Text(item.getString("note"), color = colors.settingsSecondary, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    keymap.objectOrNull("import")?.let { preview ->
+        AlertDialog({ host.preference(obj("type" to "cancel_keymap_import")) },
+            confirmButton = { TextButton({ host.preference(obj("type" to "confirm_keymap_import")) }, Modifier.testTag("keymap-confirm-import")) { Text("Import") } },
+            dismissButton = { TextButton({ host.preference(obj("type" to "cancel_keymap_import")) }) { Text("Cancel") } },
+            title = { Text("Import " + preview.getString("title") + "?") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()).testTag("keymap-import-preview")) {
+                    var any = false
+                    for ((title, key) in listOf("Added" to "added", "Changed" to "changed", "Removed" to "removed", "Not available" to "unavailable")) {
+                        val lines = preview.array(key).values()
+                        if (lines.isEmpty()) continue
+                        any = true
+                        Text("$title (${lines.size})", fontWeight = FontWeight.SemiBold)
+                        lines.forEach { Text(it.toString(), fontSize = 13.sp) }
+                    }
+                    if (!any) Text("No shortcuts change.")
+                }
+            })
+    }
+}
+
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
+    Keymap(host, view.getJSONObject("keymap"))
     CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
         modifier = Modifier.fillMaxWidth().testTag("shortcuts-search"), height = 48.dp,
         placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
@@ -584,6 +686,9 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     Column(Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
         if (capture != null) { host.key(event.nativeKeyEvent); true } else false
     }.focusRequester(focus).focusable(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(listOf(editor.getString("group"), editor.getString("scope"), editor.getString("source")).joinToString(" · "),
+            color = LocalPalette.current.settingsSecondary, modifier = Modifier.testTag("shortcut-editor-context"))
+        editor.array("overlaps").values().forEach { Text(it.toString(), color = LocalPalette.current.settingsSecondary) }
         Text("Default: " + editor.array("defaults").values().joinToString(" / "), color = LocalPalette.current.settingsSecondary)
         editor.array("bindings").values().forEachIndexed { index, binding ->
             Row(Modifier.fillMaxWidth().background(LocalPalette.current.settingsCard, RoundedCornerShape(12.dp))
