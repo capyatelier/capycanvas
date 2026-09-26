@@ -11,7 +11,7 @@ Status: shared model, GTK and Web hosts implemented. Android is in progress; App
 | Context | Shown when | Items | Placement |
 | --- | --- | --- | --- |
 | Placement | A photo is being placed or pasted | Mode, Original Size, flips, quarter turns, Reset · Cancel, Apply | Beside the photo |
-| Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort), Perspective while distorting, Flip H/V, Rotate 90° left/right, Reset · Cancel, Apply | Beside the transform box |
+| Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort), Perspective while distorting, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
 | Polygon | A polygon selection is under construction | Remove Last Point · Cancel, Finish | Bottom edge |
 | Selection | A selection exists and a selection tool or Move is active, or a command such as Select All just made it | Deselect, Invert, Transform, Mask, Fill, Quick Mask, Save as Selection Layer | Beside the selection |
 
@@ -20,6 +20,8 @@ Status: shared model, GTK and Web hosts implemented. Android is in progress; App
   - Undo and Redo that restore a selection do not bring it back.
   - A tool change ends the visibility that a selection command started.
 - **Bottom-edge placement:** inverted, tonal and painted selections use the bottom edge.
+- **Compact items:** flips and quarter turns show only their icons; their names are in tooltips, accessibility labels and More.
+- **Dropdowns:** a choice that is not segmented, such as Interpolation, opens its items from the bar.
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
 
@@ -54,6 +56,11 @@ Status: shared model, GTK and Web hosts implemented. Android is in progress; App
   - A parallelogram folds back into position, scale, rotation and skew exactly.
 - **Flips and quarter turns** act in the layer's axes about the centre of the transformed box.
 - **Reset** returns to Free and the geometry the transform started with.
+- **Interpolation:** Nearest neighbor, Bilinear or Bicubic, on the bar and in Tool Options.
+  - Until one is chosen, Free and Uniform resample bilinearly and Distort bicubically.
+  - A chosen filter stays for later transforms in the session.
+  - Previews draw a moving bicubic transform bilinearly; the still preview and Apply use the chosen filter.
+  - Placed photos keep their original pixels, so placements do not offer it.
 - **Touch:** a finger inside the box or on a handle manipulates the transform; elsewhere it navigates.
 
 ## Implementation

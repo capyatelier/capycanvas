@@ -458,6 +458,9 @@ command_ids! {
     TransformUniform,
     TransformDistort,
     TransformPerspective,
+    TransformNearest,
+    TransformBilinear,
+    TransformBicubic,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -474,7 +477,10 @@ impl CommandId {
             | Self::TransformFree
             | Self::TransformUniform
             | Self::TransformDistort
-            | Self::TransformPerspective => platform.canvas_bar(),
+            | Self::TransformPerspective
+            | Self::TransformNearest
+            | Self::TransformBilinear
+            | Self::TransformBicubic => platform.canvas_bar(),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
             _ => true,
@@ -492,6 +498,7 @@ impl CommandId {
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
+                | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic
                 | Self::ZenMode
                 | Self::Fullscreen
                 | Self::ToggleTheme
@@ -618,6 +625,9 @@ impl CommandId {
             Self::TransformUniform => "link",
             Self::TransformDistort => "distort",
             Self::TransformPerspective => "perspective",
+            Self::TransformNearest => "mosaic",
+            Self::TransformBilinear => "blur",
+            Self::TransformBicubic => "sharpen",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
@@ -785,6 +795,9 @@ impl CommandId {
             Self::TransformUniform => "Uniform transform",
             Self::TransformDistort => "Distort",
             Self::TransformPerspective => "Perspective",
+            Self::TransformNearest => "Nearest neighbor",
+            Self::TransformBilinear => "Bilinear",
+            Self::TransformBicubic => "Bicubic",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

@@ -61,7 +61,7 @@ impl CanvasBarView {
     }
 }
 
-/// Short labels for commands that appear on the bar.
+/// Short labels for commands that appear on the bar; empty shows the icon alone.
 pub(crate) fn short_label(command: CommandId) -> &'static str {
     match command {
         CommandId::ApplyTransform => "Apply",
@@ -72,10 +72,13 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::TransformUniform => "Uniform",
         CommandId::TransformDistort => "Distort",
         CommandId::TransformPerspective => "Perspective",
-        CommandId::TransformFlipHorizontal => "Flip H",
-        CommandId::TransformFlipVertical => "Flip V",
-        CommandId::TransformRotateLeft => "−90°",
-        CommandId::TransformRotateRight => "+90°",
+        CommandId::TransformNearest => "Nearest",
+        CommandId::TransformBilinear => "Bilinear",
+        CommandId::TransformBicubic => "Bicubic",
+        CommandId::TransformFlipHorizontal
+        | CommandId::TransformFlipVertical
+        | CommandId::TransformRotateLeft
+        | CommandId::TransformRotateRight => "",
         CommandId::ResetTransform => "Reset",
         CommandId::RemoveSelectionPoint => "Remove Point",
         CommandId::Deselect => "Deselect",
@@ -135,6 +138,9 @@ enum PlanItem {
 fn group_commands(group: ToolActionGroup) -> &'static [CommandId] {
     match group {
         ToolActionGroup::TransformMode => &[CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort],
+        ToolActionGroup::TransformInterpolation => {
+            &[CommandId::TransformNearest, CommandId::TransformBilinear, CommandId::TransformBicubic]
+        }
         ToolActionGroup::SelectionMode | ToolActionGroup::SelectionSource => &[],
     }
 }
@@ -260,6 +266,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 placement: None,
             });
         }
+        transform_items.push(PlanItem::Choice(ToolActionGroup::TransformInterpolation));
         Some(Plan {
             kind: CanvasBarKind::Transform,
             label: None,
@@ -590,6 +597,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(CanvasBarLayout { bounds, items: shown, side })
     }
 
+    /// The menu of a bar choice shown as a dropdown.
+    pub fn canvas_bar_choice_menu(&self, context: CanvasBarContext, id: &str) -> Option<ContextMenu> {
+        let bar = self.state.canvas_bar.as_ref().filter(|bar| bar.context == context)?;
+        let wrap = |action: UiAction| UiAction::CanvasBarEdit { context, action: Box::new(action) };
+        bar.items.iter().find_map(|item| match &item.option {
+            ToolOption::Choice { id: choice, label, items, .. } if *choice == id => Some(ContextMenu {
+                title: (*label).into(),
+                sections: vec![choice_items(items, &wrap)],
+            }),
+            _ => None,
+        })
+    }
+
     /// The More menu: items that did not fit, then the context's own menu.
     pub fn canvas_bar_menu(&self, context: CanvasBarContext, shown: usize) -> Option<ContextMenu> {
         let bar = self.state.canvas_bar.as_ref().filter(|bar| bar.context == context)?;
@@ -600,13 +620,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 enabled: state.enabled,
                 ..ContextMenuItem::command(state.label, wrap(UiAction::Invoke { command: state.id }))
             }],
-            ToolOption::Choice { label, items, .. } => vec![ContextMenuItem::submenu(label, vec![items
-                .iter()
-                .map(|i| ContextMenuItem {
-                    selected: Some(i.selected),
-                    ..ContextMenuItem::command(i.label, wrap(i.action.clone()))
-                })
-                .collect()])],
+            ToolOption::Choice { label, items, .. } => {
+                vec![ContextMenuItem::submenu(label, vec![choice_items(items, &wrap)])]
+            }
             ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
         });
         let preference = &self.state.workspace.layout.canvas_bar;
@@ -630,4 +646,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .with_shortcuts(&self.state.settings, self.state.platform),
         )
     }
+}
+
+fn choice_items(items: &[ToolSetItem], wrap: &impl Fn(UiAction) -> UiAction) -> Vec<ContextMenuItem> {
+    items
+        .iter()
+        .map(|i| ContextMenuItem {
+            selected: Some(i.selected),
+            ..ContextMenuItem::command(i.label, wrap(i.action.clone()))
+        })
+        .collect()
 }

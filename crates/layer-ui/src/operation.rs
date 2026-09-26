@@ -2,7 +2,7 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::error;
 use crate::*;
-use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Projective, Rect, TransformMap};
+use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerKind, LayerOperationKind, Point, Projective, Rect, TransformMap};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
 #[path = "operation/placement.rs"]
@@ -108,6 +108,7 @@ pub(super) struct Operation {
     current: Option<Transaction>,
     serial: u64,
     pub aspect: bool,
+    pub interpolation: Option<Interpolation>,
     pub changed: bool,
 }
 impl Operation {
@@ -415,10 +416,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn update_transform(&mut self) -> Result<(), String> {
+        let chosen = self.operation.interpolation;
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
         t.request.transform.map = t.map();
+        t.request.transform.interpolation = t.interpolation(chosen);
+        t.request.moving = t.drag.is_some();
         let affine = t.pose_affine();
         if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
@@ -696,6 +700,22 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn transform_mode(&self) -> Option<(TransformMode, bool)> {
         self.operation.current.as_ref().map(|t| (t.mode, t.perspective))
     }
+    pub(super) fn transform_interpolation(&self) -> Option<Interpolation> {
+        self.operation
+            .current
+            .as_ref()
+            .filter(|t| t.placement.is_none())
+            .map(|t| t.interpolation(self.operation.interpolation))
+    }
+    pub(super) fn set_transform_interpolation(&mut self, interpolation: Interpolation) -> Result<(), String> {
+        self.require_idle()?;
+        let t = self.operation.current.as_ref().ok_or("Start a transform first")?;
+        if t.placement.is_some() {
+            return Err("Placed photos keep their original pixels".into());
+        }
+        self.operation.interpolation = Some(interpolation);
+        self.update_transform()
+    }
     fn transform_surface_map(&self, t: &Transaction) -> impl Fn(Point) -> [f32; 2] {
         let camera = Affine(self.state.camera.view().document_to_surface);
         let dpi = self
@@ -833,6 +853,14 @@ impl Transaction {
         self.inner = Some(inner);
         self.pose = Pose::identity();
         self.frame = inner.bounds(self.bounds).unwrap_or(self.bounds);
+    }
+    fn interpolation(&self, chosen: Option<Interpolation>) -> Interpolation {
+        match (self.placement.is_some(), chosen, self.mode) {
+            (true, ..) => Interpolation::Linear,
+            (false, Some(chosen), _) => chosen,
+            (false, None, TransformMode::Distort) => Interpolation::Bicubic,
+            (false, None, TransformMode::Free) => Interpolation::Linear,
+        }
     }
     fn set_mode(&mut self, mode: TransformMode) {
         match mode {

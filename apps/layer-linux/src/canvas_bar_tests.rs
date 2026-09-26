@@ -37,6 +37,15 @@ fn until(mut predicate: impl FnMut() -> bool, message: &str) {
     }
 }
 
+fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
+    let mut found = None;
+    until(|| {
+        found = find();
+        found.is_some()
+    }, message);
+    found.unwrap()
+}
+
 fn center(w: &Workspace, widget: &gtk::Widget) -> [f32; 2] {
     let b = widget.compute_bounds(&w.window).expect("mapped widget");
     [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
@@ -150,9 +159,10 @@ fn native_canvas_bar_input() {
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let anchor = anchor_in_window(&w);
     assert!(bar.y() > anchor[3], "the bar sits below the transform box");
+    let centre = (anchor[0] + anchor[2]) * 0.5;
     assert!(
-        (bar.x() + bar.width() * 0.5 - (anchor[0] + anchor[2]) * 0.5).abs() < 2.,
-        "the bar is centred on the transform box"
+        bar.x() < centre && centre < bar.x() + bar.width(),
+        "the bar spans the centre of the transform box: {bar:?} {anchor:?}"
     );
     let scale = w.area.scale_factor() as f32;
     until(
@@ -202,10 +212,17 @@ fn native_canvas_bar_input() {
     );
     assert!((distorted[0] - anchor[0]).abs() < 1. && (distorted[1] - anchor[1]).abs() < 1., "the opposite corner stays");
     capture_reference(&w, &format!("{dir}/distort.png"), 1.);
-    assert!(!bar_widget(&w, "canvas-bar-ResetTransform").is_mapped(), "Reset overflows while distorting");
-    native.events(json!([{"point": center(&w, &bar_widget(&w, "canvas-bar-more"))}, {"down": true}, {"down": false}]));
-    until(|| w.canvas_bar.menu_open(), "More opens with the overflowed items");
-    let reset = mapped_label(w.canvas_bar.root.upcast_ref(), "Reset transform").expect("More lists Reset");
+    let interpolation = bar_widget(&w, "canvas-bar-choice-transform-interpolation");
+    assert!(mapped_label(&interpolation, "Bicubic").is_some(), "Distort resamples with Bicubic");
+    native.events(json!([{"point": center(&w, &interpolation)}, {"down": true}, {"down": false}]));
+    let nearest = until_some(|| mapped_label(w.window.upcast_ref(), "Nearest"), "the dropdown lists the filters");
+    native.events(json!([{"point": center(&w, &nearest)}, {"down": true}, {"down": false}]));
+    until(
+        || state(&w).commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected)
+            && mapped_label(&interpolation, "Nearest").is_some(),
+        "choosing Nearest resamples with hard edges",
+    );
+    let reset = bar_widget(&w, "canvas-bar-ResetTransform");
     native.events(json!([{"point": center(&w, &reset)}, {"down": true}, {"down": false}]));
     until(
         || !perspective(&w) && anchor_in_window(&w).iter().zip(anchor).all(|(a, b)| (a - b).abs() < 1.),

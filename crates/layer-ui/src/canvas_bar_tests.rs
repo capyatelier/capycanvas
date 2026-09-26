@@ -186,7 +186,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     let measure = |width: f32| CanvasBarMeasure {
         context: bar.context,
         label: 0.,
-        items: vec![width; 6],
+        items: vec![width; bar.items.len()],
         completion: vec![80., 80.],
         more: 40.,
         height: 48.,
@@ -194,7 +194,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
         padding: 6.,
     };
     let layout = s.canvas_bar_layout(&measure(100.)).expect("current context");
-    assert_eq!(layout.items, 6);
+    assert_eq!(layout.items, bar.items.len());
     assert_eq!(layout.side, CanvasBarSide::Below);
     let lowest = s
         .transform_handle_points()
@@ -236,7 +236,7 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
         .canvas_bar_layout(&CanvasBarMeasure {
             context: bar.context,
             label: 0.,
-            items: vec![90.; 6],
+            items: vec![90.; bar.items.len()],
             completion: vec![80., 80.],
             more: 40.,
             height: 48.,
@@ -246,7 +246,7 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
         .unwrap();
     assert_eq!(layout.side, CanvasBarSide::BottomEdge);
     assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= 360., "{layout:?}");
-    assert!(layout.items < 6, "items that do not fit the window go to More");
+    assert!(layout.items < bar.items.len(), "items that do not fit the window go to More");
 }
 
 #[test]
@@ -521,4 +521,59 @@ fn distort_is_refused_on_photo_placements_with_the_route_that_works() {
     assert!(!s.command(CommandId::TransformDistort).enabled);
     assert_eq!(s.command_disabled_reason(CommandId::TransformDistort).as_deref(), Some(operation::DISTORT_PLACEMENT));
     assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformDistort }).is_err());
+    assert!(interpolation_choice(&s).is_none(), "placed photos keep their pixels");
+    assert!(!s.command(CommandId::TransformBicubic).enabled);
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformNearest }).is_err());
+}
+
+fn interpolation_choice(s: &UiSession<Recorder>) -> Option<(bool, Vec<(&'static str, bool)>)> {
+    s.state.canvas_bar.as_ref()?.items.iter().find_map(|item| match &item.option {
+        ToolOption::Choice { id: "transform-interpolation", segmented, items, .. } => {
+            Some((*segmented, items.iter().map(|i| (i.label, i.selected)).collect()))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn interpolation_follows_the_mode_until_chosen_and_stays_chosen() {
+    use layer_core::Interpolation;
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.interpolation;
+    assert_eq!(preview(&mut s), Interpolation::Linear);
+    assert_eq!(
+        interpolation_choice(&s),
+        Some((false, vec![("Nearest", false), ("Bilinear", true), ("Bicubic", false)]))
+    );
+    invoke(&mut s, CommandId::TransformDistort);
+    s.frame(3, 3).unwrap();
+    assert_eq!(preview(&mut s), Interpolation::Bicubic, "Distort defaults to Bicubic");
+    assert!(s.command(CommandId::TransformBicubic).selected);
+    let quad = s.operation.quad();
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), quad[2]).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: quad[2].x + 20., y: quad[2].y + 10. }).unwrap();
+    s.frame(4, 4).unwrap();
+    assert!(s.renderer_mut().transform.clone().unwrap().moving, "a dragged preview is moving");
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), Point { x: quad[2].x + 20., y: quad[2].y + 10. }).unwrap();
+    s.frame(5, 5).unwrap();
+    assert!(!s.renderer_mut().transform.clone().unwrap().moving, "the still preview draws the chosen filter");
+    let bar = s.state.canvas_bar.clone().unwrap();
+    let menu = s.canvas_bar_choice_menu(bar.context, "transform-interpolation").unwrap();
+    assert_eq!(
+        menu.sections[0].iter().map(|i| (i.label.as_str(), i.selected)).collect::<Vec<_>>(),
+        [("Nearest", Some(false)), ("Bilinear", Some(false)), ("Bicubic", Some(true))]
+    );
+    s.dispatch(menu.sections[0][0].action.clone().unwrap()).unwrap();
+    s.frame(6, 6).unwrap();
+    assert_eq!(preview(&mut s), Interpolation::Nearest);
+    invoke(&mut s, CommandId::TransformFree);
+    s.frame(7, 7).unwrap();
+    assert_eq!(preview(&mut s), Interpolation::Nearest, "a chosen interpolation outlasts mode changes");
+    invoke(&mut s, CommandId::CancelTransform);
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(8, 8).unwrap();
+    assert_eq!(preview(&mut s), Interpolation::Nearest, "and later transforms");
+    assert!(s.state.tool_actions.iter().any(|a| a.command == CommandId::TransformBicubic));
 }

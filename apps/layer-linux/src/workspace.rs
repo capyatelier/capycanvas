@@ -1618,6 +1618,22 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn populate_canvas_bar_choice(
+        self: &Rc<Self>,
+        popover: &gtk::PopoverMenu,
+        context: layer_ui::CanvasBarContext,
+        id: &str,
+    ) {
+        let menu = self
+            .gpu
+            .borrow()
+            .as_ref()
+            .and_then(|g| g.session.canvas_bar_choice_menu(context, id));
+        if let Some(menu) = menu {
+            self.populate_workspace_menu(popover, menu);
+        }
+    }
+
     pub(crate) fn watch_popover(self: &Rc<Self>, popover: &gtk::Popover) {
         self.popovers.borrow_mut().retain(|p| p.upgrade().is_some());
         self.popovers.borrow_mut().push(popover.downgrade());

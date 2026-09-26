@@ -37,6 +37,7 @@ class FakeElement {
   }
   closest() { return null; }
   matches(selector) { return selector === ":popover-open" && this.open; }
+  showPopover() { this.open = true; }
   hidePopover() { this.open = false; }
   click() { this.dispatch("click"); }
   getBoundingClientRect() {
@@ -178,6 +179,26 @@ test("segmented mode choices show icon and label and dispatch their own action",
   segments.children[3].click();
   assert.deepEqual(h.dispatched, [{ type: "canvas_bar_edit", context: v.context, action: { type: "invoke", command: "transform_warp" } }]);
   assert.equal(h.measures[0].items[0], 4 * 40 + 8 * modes.join("").length);
+});
+
+test("dropdown choices list their items beside the bar and dispatch the chosen one", () => {
+  globalThis.innerWidth ??= 1440; globalThis.innerHeight ??= 1000;
+  const h = harness(), filters = ["Nearest", "Bilinear", "Bicubic"];
+  const choice = { label: "Interpolation", option: { Choice: { id: "transform-interpolation", label: "Interpolation", segmented: false, items: filters.map((label, i) => ({
+    label, icon: label.toLowerCase(), selected: i === 2, preview: null, action: { type: "invoke", command: `transform_${label.toLowerCase()}` } })) } } };
+  const v = view({ items: [choice] });
+  h.bar.refresh(v);
+  const dropdown = h.bar.root.children.find(n => n.dataset.toolbarChoice === "transform-interpolation").children[0];
+  assert.deepEqual(dropdown.children.map(c => c.textContent || c.className), ["bicubic", "Bicubic", "chevron-down"]);
+  assert.equal(dropdown.tabIndex, -1);
+  dropdown.click();
+  const popup = h.bar.root.children.find(n => n.className.includes("toolbar-editor-popover"));
+  assert.ok(popup?.open, "the dropdown opens its items");
+  const entries = popup.children[0].children;
+  assert.deepEqual(entries.map(e => e.getAttribute("aria-checked")), ["false", "false", "true"]);
+  entries[0].click();
+  assert.equal(popup.parentNode, null, "choosing closes the dropdown");
+  assert.deepEqual(h.dispatched, [{ type: "canvas_bar_edit", context: v.context, action: { type: "invoke", command: "transform_nearest" } }]);
 });
 
 test("contacts hide the bar at once and it returns once after the debounce", () => {

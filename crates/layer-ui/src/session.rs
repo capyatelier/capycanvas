@@ -1979,7 +1979,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::ResetTransform
             | CommandId::TransformFree
             | CommandId::TransformUniform => idle && self.operation.active(),
-            CommandId::TransformDistort => idle && self.operation.active() && !self.operation.placing(),
+            CommandId::TransformDistort
+            | CommandId::TransformNearest
+            | CommandId::TransformBilinear
+            | CommandId::TransformBicubic => idle && self.operation.active() && !self.operation.placing(),
             CommandId::TransformPerspective => {
                 idle && self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
             }
@@ -2114,6 +2117,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (CommandId::TransformUniform, Some((operation::TransformMode::Free, _))) => self.operation.aspect,
                 (CommandId::TransformDistort, Some((operation::TransformMode::Distort, _))) => true,
                 (CommandId::TransformPerspective, Some((_, perspective))) => perspective,
+                _ => false,
+            }
+            || match (id, self.transform_interpolation()) {
+                (CommandId::TransformNearest, Some(layer_core::Interpolation::Nearest))
+                | (CommandId::TransformBilinear, Some(layer_core::Interpolation::Linear))
+                | (CommandId::TransformBicubic, Some(layer_core::Interpolation::Bicubic)) => true,
                 _ => false,
             }
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
@@ -3917,6 +3926,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.set_transform_mode(mode, command == CommandId::TransformUniform)?;
                 Ok((BRUSH | DOCUMENT | COMMANDS, true))
             }
+            CommandId::TransformNearest | CommandId::TransformBilinear | CommandId::TransformBicubic => {
+                self.set_transform_interpolation(match command {
+                    CommandId::TransformNearest => layer_core::Interpolation::Nearest,
+                    CommandId::TransformBilinear => layer_core::Interpolation::Linear,
+                    _ => layer_core::Interpolation::Bicubic,
+                })?;
+                Ok((BRUSH | DOCUMENT | COMMANDS, true))
+            }
             CommandId::TransformPerspective => {
                 self.toggle_transform_perspective()?;
                 Ok((BRUSH | COMMANDS, false))
@@ -4423,6 +4440,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::TransformRotateLeft,
                 CommandId::TransformRotateRight,
                 CommandId::ResetTransform,
+                CommandId::TransformNearest,
+                CommandId::TransformBilinear,
+                CommandId::TransformBicubic,
                 CommandId::ApplyTransform,
                 CommandId::CancelTransform,
             ]
@@ -4431,6 +4451,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|c| {
                 *c != CommandId::TransformPerspective
                     || self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
+            })
+            .filter(|c| {
+                !self.operation.placing()
+                    || !matches!(c, CommandId::TransformNearest | CommandId::TransformBilinear | CommandId::TransformBicubic)
             })
             .chain(self.operation.placing().then_some(CommandId::PlacementOriginalSize))
             .map(|command| ToolSettingAction {

@@ -420,6 +420,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformFree | TransformUniform => "Transform with box handles; Uniform keeps proportions.",
             TransformDistort => "Pin each corner of the transform box independently, including perspective.",
             TransformPerspective => "While distorting, mirror each corner drag onto its neighbour for symmetric perspective.",
+            TransformNearest | TransformBilinear | TransformBicubic => "Choose how transformed pixels are resampled: hard-edged, smooth, or smooth and sharp.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1033,6 +1034,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::TransformUniform
             | C::TransformPerspective => "Start a transform first",
             C::TransformDistort if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.placing() => {
+                "Placed photos keep their original pixels"
+            }
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic => "Start a transform first",
             C::TransformDistort => "Start a transform first",
             C::SnapRulers => "Show rulers first",
             C::DeleteRuler => "Select a ruler first",

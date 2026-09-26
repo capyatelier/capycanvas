@@ -18,6 +18,7 @@ pub enum ToolActionGroup {
     SelectionMode,
     SelectionSource,
     TransformMode,
+    TransformInterpolation,
 }
 impl ToolActionGroup {
     pub fn segmented(self) -> bool {
@@ -28,12 +29,14 @@ impl ToolActionGroup {
             Self::SelectionMode => "selection-mode",
             Self::SelectionSource => "selection-source",
             Self::TransformMode => "transform-mode",
+            Self::TransformInterpolation => "transform-interpolation",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::SelectionMode | Self::TransformMode => "Mode",
             Self::SelectionSource => "Source",
+            Self::TransformInterpolation => "Interpolation",
         }
     }
 }
@@ -48,6 +51,7 @@ impl ToolSettingAction {
                 Some(ToolActionGroup::SelectionSource)
             }
             TransformFree | TransformUniform | TransformDistort => Some(ToolActionGroup::TransformMode),
+            TransformNearest | TransformBilinear | TransformBicubic => Some(ToolActionGroup::TransformInterpolation),
             _ => None,
         }
     }

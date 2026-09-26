@@ -129,6 +129,26 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       await wait(`layerApp.state().commands.find(c=>c.id==='transform_uniform').selected&&document.querySelector('${segment(1)}').getAttribute('aria-checked')==='true'`);
       await tap(await middle(segment(2)),device);
       await wait(`!!document.querySelector('${bar} [data-command="transform_perspective"]')&&document.querySelector('${segment(2)}').getAttribute('aria-checked')==='true'`);
+      const filters=['transform_nearest','transform_bilinear','transform_bicubic'],interpolation=`${bar} [data-toolbar-choice="transform-interpolation"] > button`;
+      const chosen=()=>evaluate(`${JSON.stringify(filters)}.find(id=>layerApp.state().commands.find(c=>c.id===id).selected)`);
+      if(index===0)assert.equal(await chosen(),'transform_bicubic','Distort resamples with Bicubic until a filter is chosen');
+      const target=(await chosen())==='transform_nearest'?2:0;
+      if(await evaluate(`document.querySelector('${interpolation}').closest('.canvas-action-bar-item').hidden`)){
+        const row=label=>evaluate(`(()=>{const r=[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+        await tap(await middle(`${bar} .canvas-action-bar-more`),device);
+        await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
+        await tap(await row('Interpolation'),device);
+        await wait(`[...document.querySelectorAll('.panel-context-menu:popover-open .menu-label')].some(n=>n.textContent==='Nearest')`);
+        await tap(await row(['Nearest','Bilinear','Bicubic'][target]),device);
+        await wait(`layerApp.state().commands.find(c=>c.id==='${filters[target]}').selected&&!document.querySelector('.panel-context-menu:popover-open')`);
+      } else {
+        await tap(await middle(interpolation),device);
+        await wait(`!!document.querySelector('.toolbar-choice-menu')`);
+        await tap(await middle(`.toolbar-choice-menu > button:nth-child(${target+1})`),device);
+        await wait(`layerApp.state().commands.find(c=>c.id==='${filters[target]}').selected&&!document.querySelector('.toolbar-choice-menu')`);
+      }
+      assert.equal(await evaluate(`document.querySelector('${interpolation} .toolbar-choice-label').textContent`),
+        await evaluate(`layerApp.state().canvas_bar.items.find(i=>i.option.Choice?.id==='transform-interpolation').option.Choice.items.find(i=>i.selected).label`),`${device}: the dropdown shows the chosen filter`);
       await tap(await middle(segment(0)),device);
       await wait(`!document.querySelector('${bar} [data-command="transform_perspective"]')&&layerApp.state().commands.find(c=>c.id==='transform_free').selected&&${visible}`);
       await tap(await middle(`${bar} .canvas-action-bar-more`),device);

@@ -285,7 +285,9 @@ fn build(
             if let Some(icon) = state.icon {
                 content.append(&crate::icons::image(&format!("layer-{icon}-symbolic")));
             }
-            content.append(&gtk::Label::new(Some(item.label)));
+            if !item.label.is_empty() {
+                content.append(&gtk::Label::new(Some(item.label)));
+            }
             button.set_child(Some(&content));
             button.update_property(&[gtk::accessible::Property::Label(state.label)]);
             button.set_tooltip_text(Some(&state.tooltip));
@@ -308,6 +310,31 @@ fn build(
                         workspace.dispatch(action.clone());
                     }
                 }
+            ));
+            update(button.upcast_ref(), &item.option);
+            button.upcast()
+        }
+        ToolOption::Choice { id, label, segmented: false, .. } => {
+            let button = gtk::MenuButton::new();
+            button.set_widget_name(&format!("canvas-bar-choice-{id}"));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+            button.set_tooltip_text(Some(label));
+            button.set_always_show_arrow(true);
+            button.add_css_class("flat");
+            button.set_focus_on_click(false);
+            button.set_can_focus(false);
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            content.append(&gtk::Image::new());
+            content.append(&gtk::Label::new(None));
+            button.set_child(Some(&content));
+            let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+            button.set_popover(Some(&popover));
+            workspace.watch_popover(popover.upcast_ref());
+            let choice = *id;
+            popover.connect_show(glib::clone!(
+                #[weak]
+                workspace,
+                move |popover| workspace.populate_canvas_bar_choice(popover, context, choice)
             ));
             update(button.upcast_ref(), &item.option);
             button.upcast()
@@ -349,6 +376,20 @@ fn update(field: &gtk::Widget, option: &ToolOption) {
                 && toggle.is_active() != state.selected
             {
                 toggle.set_active(state.selected);
+            }
+        }
+        ToolOption::Choice { items, segmented: false, .. } => {
+            let Some(selected) = items.iter().find(|i| i.selected) else {
+                return;
+            };
+            let content = field.downcast_ref::<gtk::MenuButton>().and_then(|b| b.child());
+            let image = content.as_ref().and_then(|c| c.first_child()).and_downcast::<gtk::Image>();
+            let text = content.as_ref().and_then(|c| c.last_child()).and_downcast::<gtk::Label>();
+            if let (Some(image), Some(text)) = (image, text)
+                && text.text() != selected.label
+            {
+                crate::icons::set(&image, Some(&format!("layer-{}-symbolic", selected.icon)));
+                text.set_text(selected.label);
             }
         }
         ToolOption::Choice { items, .. } => {
