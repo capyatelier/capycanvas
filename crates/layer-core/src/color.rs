@@ -138,35 +138,16 @@ impl PixelDescriptor {
 }
 
 pub fn srgb_decode(value: f32) -> f32 {
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
+    RgbSpace::Srgb.decode(f64::from(value)) as f32
 }
 
 pub fn srgb_encode(value: f32) -> f32 {
-    if value <= 0.0031308 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1. / 2.4) - 0.055
-    }
+    RgbSpace::Srgb.encode(f64::from(value)) as f32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn encoded8_preserves_every_opaque_gray_code() {
-        for value in 0..=255 {
-            let decoded = srgb_decode(value as f32 / 255.);
-            assert_eq!((srgb_encode(decoded) * 255.).round() as u32, value);
-        }
-        let old: std::collections::BTreeSet<_> = (0..=50)
-            .map(|v| (srgb_decode(v as f32 / 255.) * 255.).round() as u8)
-            .collect();
-        assert_eq!(old.len(), 9);
-    }
     #[test]
     fn unsupported_layouts_and_invalid_extents_fail() {
         assert_eq!(

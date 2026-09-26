@@ -1,7 +1,7 @@
 //! One SDR rendition: fixed local baseline, then macro/micro contrast in log odds.
 //! The spatial guide, working master and reference white never depend on the UI.
 use super::super::{RgbSpace, rgb::Matrix3};
-use super::LocalToneGuide;
+use super::{LocalToneGuide, pq_decode, pq_encode};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_HEADROOM: f32 = 2.300_448_4;
@@ -314,19 +314,11 @@ struct Bt2390 {
     output: f32,
     knee: f32,
 }
-fn pq_encode(nits: f32) -> f32 {
-    let p = (nits / 10000.).powf(2610. / 16384.);
-    ((3424. / 4096. + 2413. / 128. * p) / (1. + 2392. / 128. * p)).powf(2523. / 32.)
-}
-fn pq_decode(code: f32) -> f32 {
-    let p = code.powf(32. / 2523.);
-    10000. * ((p - 3424. / 4096.).max(0.) / (2413. / 128. - 2392. / 128. * p)).powf(16384. / 2610.)
-}
 impl Bt2390 {
     fn new(headroom: f32) -> Self {
         let peak = headroom.exp2();
-        let pq_peak = pq_encode(peak * super::REFERENCE_WHITE_NITS);
-        let output = pq_encode(super::REFERENCE_WHITE_NITS) / pq_peak;
+        let pq_peak = pq_encode(f64::from(peak * super::REFERENCE_WHITE_NITS)) as f32;
+        let output = pq_encode(f64::from(super::REFERENCE_WHITE_NITS)) as f32 / pq_peak;
         Self {
             peak,
             pq_peak,
@@ -341,7 +333,7 @@ impl Bt2390 {
         if self.peak == 1. || x >= self.peak {
             return x.min(1.);
         }
-        let q = pq_encode(x * super::REFERENCE_WHITE_NITS) / self.pq_peak;
+        let q = pq_encode(f64::from(x * super::REFERENCE_WHITE_NITS)) as f32 / self.pq_peak;
         if q <= self.knee {
             return x;
         }
@@ -351,7 +343,7 @@ impl Bt2390 {
         let q = (2. * t3 - 3. * t2 + 1.) * self.knee
             + (t3 - 2. * t2 + t) * (1. - self.knee)
             + (-2. * t3 + 3. * t2) * self.output;
-        (pq_decode(q * self.pq_peak) / super::REFERENCE_WHITE_NITS).clamp(0., 1.)
+        (pq_decode(f64::from(q * self.pq_peak)) as f32 / super::REFERENCE_WHITE_NITS).clamp(0., 1.)
     }
 }
 

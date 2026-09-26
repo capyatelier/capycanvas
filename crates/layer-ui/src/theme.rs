@@ -75,13 +75,15 @@ impl std::fmt::Display for HexColor {
 }
 impl HexColor {
     pub fn linear(self) -> [f32; 4] {
-        let [r, g, b] = self.0.map(|v| crate::srgb_to_linear(v as f32 / 255.0));
+        let [r, g, b] = self
+            .0
+            .map(|v| layer_core::color::srgb_decode(v as f32 / 255.0));
         [r, g, b, 1.0]
     }
     fn oklab(self) -> [f64; 3] {
         layer_core::color::oklab::to_lab(
             self.0
-                .map(|v| crate::srgb_to_linear(v as f32 / 255.0) as f64),
+                .map(|v| layer_core::color::RgbSpace::Srgb.decode(f64::from(v) / 255.0)),
         )
     }
     fn oklch(lightness: f64, chroma: f64, hue: f64) -> Self {

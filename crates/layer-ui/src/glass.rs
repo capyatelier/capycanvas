@@ -1,4 +1,5 @@
 use crate::HexColor;
+use layer_core::color::RgbSpace;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,7 +108,7 @@ const DARK_GREY: [f32; 3] = [0.2; 3];
 const SELECTED_CONTRAST: f32 = 0.6;
 
 fn difference(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let lab = |c: [f32; 3]| layer_core::color::oklab::to_lab(c.map(|v| f64::from(crate::srgb_to_linear(v))));
+    let lab = |c: [f32; 3]| layer_core::color::oklab::to_lab(c.map(|v| RgbSpace::Srgb.decode(f64::from(v))));
     let [a, b] = [lab(a), lab(b)];
     (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt() as f32
 }
@@ -229,7 +230,7 @@ mod tests {
     }
 
     fn lightness(rgb: [f32; 3]) -> f32 {
-        let [r, g, b] = rgb.map(crate::srgb_to_linear);
+        let [r, g, b] = rgb.map(layer_core::color::srgb_decode);
         (0.2126 * r + 0.7152 * g + 0.0722 * b).max(0.).cbrt()
     }
 

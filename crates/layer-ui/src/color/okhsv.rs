@@ -9,13 +9,6 @@ use layer_core::color::{
     rgb::{Matrix3, apply},
 };
 
-fn encoded(v: f64) -> f64 {
-    if v <= 0.0031308 {
-        12.92 * v
-    } else {
-        1.055 * v.powf(1. / 2.4) - 0.055
-    }
-}
 pub(super) use layer_core::color::oklab::{from_lab, to_lab};
 /// CSS OKLCH units: lightness percent, unscaled chroma, hue degrees.
 /// Neutrals retain the picker's hue instead of exposing matrix roundoff.
@@ -205,7 +198,7 @@ fn hue_preview_linear(hue: f32) -> [f64; 3] {
     rgb.map(|v| v / maximum)
 }
 pub(super) fn hue_preview(hue: f32) -> [f32; 3] {
-    hue_preview_linear(hue).map(|v| encoded(v) as f32)
+    hue_preview_linear(hue).map(|v| RgbSpace::Srgb.encode(v) as f32)
 }
 
 /// Adaptive encoded-sRGB stops follow the smooth interior hue guide.

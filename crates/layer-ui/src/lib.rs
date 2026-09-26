@@ -1544,14 +1544,6 @@ pub mod regions {
     pub const ALL: u32 = 2047;
 }
 
-pub fn srgb_to_linear(value: f32) -> f32 {
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 #[cfg(test)]
 mod icon_tests {
     use super::*;
