@@ -1,7 +1,7 @@
-//! One snapshot schema for value consumers and streaming native transports.
+//! One snapshot schema for the streaming native transports.
 use super::{NativeHost, SnapshotKey};
 use serde::{Serialize, Serializer, ser::SerializeMap};
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// Value's serializer widens f32 to f64. Preserve those exact JSON numbers when
 /// bypassing Value so geometry, color channels and settings retain their values.
@@ -20,28 +20,20 @@ impl serde_json::ser::Formatter for SnapshotFormatter {
     }
 }
 
+/// Append the fields of a serialized host extension object to a published
+/// snapshot object without parsing either one.
+pub fn extend_update(mut bytes: Vec<u8>, extension: &[u8]) -> Vec<u8> {
+    if extension.len() <= 2 {
+        return bytes;
+    }
+    let closing = bytes.pop();
+    debug_assert_eq!(closing, Some(b'}'));
+    bytes.push(b',');
+    bytes.extend_from_slice(&extension[1..]);
+    bytes
+}
+
 impl NativeHost {
-    /// DEPRECATED for interactive workspace publication: use take_update_bytes.
-    /// Handle workspace_update before the camera-only fallback and retain models
-    /// by model_revision. This compatibility API keeps its existing wire format.
-    /// Existing value consumers retain the same schema and publication policy.
-    pub fn take_snapshot(&mut self) -> Option<Value> {
-        self.take_snapshot_with(serde_json::value::Serializer, false, false)
-            .expect("Native snapshot contains JSON-compatible fields")
-    }
-
-    /// DEPRECATED for workspace consumers: migrate to take_update_bytes, which
-    /// includes full models only when required and otherwise publishes geometry.
-    /// Serialize directly from the shared models, avoiding an intermediate JSON
-    /// tree and its allocation/destruction on the serial input/render owner.
-    pub fn take_snapshot_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
-        let mut bytes = Vec::new();
-        let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
-        Ok(self
-            .take_snapshot_with(&mut serializer, false, false)?
-            .map(|()| bytes))
-    }
-
     /// Shared incremental publication: a full snapshot establishes model_revision;
     /// later workspace_update messages replace only transient geometry. Consumers
     /// apply matching revisions at placement/draw time and retain panel content.
@@ -50,18 +42,18 @@ impl NativeHost {
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
-            .take_snapshot_with(&mut serializer, true, false)?
+            .take_snapshot_with(&mut serializer, false)?
             .map(|()| bytes))
     }
 
     /// Opt-in live reflow: retain controls at content_revision while applying a
-    /// complete resolved layout and current camera/measurements. Legacy update
-    /// consumers keep the existing full-refresh behavior for dimension changes.
+    /// complete resolved layout and current camera/measurements. Consumers of
+    /// take_update_bytes refresh all models for dimension changes.
     pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
-            .take_snapshot_with(&mut serializer, true, true)?
+            .take_snapshot_with(&mut serializer, true)?
             .map(|()| bytes))
     }
 
@@ -77,8 +69,7 @@ impl NativeHost {
     pub(super) fn take_snapshot_with<S: Serializer>(
         &mut self,
         serializer: S,
-        incremental: bool,
-        incremental_layout: bool,
+        layout: bool,
     ) -> Result<Option<S::Ok>, S::Error> {
         // Switching publication consumers must reestablish the model baseline.
         self.last_model_snapshot = None;
@@ -95,9 +86,7 @@ impl NativeHost {
         };
         let camera = &self.session.state().camera;
         if self.last_snapshot.as_ref() == Some(&key)
-            && (!incremental
-                || self.last_workspace_model_revision
-                    == Some(self.session.workspace_model_revision()))
+            && self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
         {
             if self.last_camera_revision != Some(camera.revision) {
                 let snapshot =
@@ -109,8 +98,7 @@ impl NativeHost {
         }
         // Search has independent state: retaining the workspace model must not
         // mistake a query/open/close for an ordinary geometry-only publication.
-        if incremental
-            && self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
+        if self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
             && self.last_camera_revision == Some(camera.revision)
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 previous.command_search_revision != key.command_search_revision
@@ -133,9 +121,8 @@ impl NativeHost {
             self.last_snapshot = Some(key);
             return Ok(Some(snapshot));
         }
-        let update = incremental.then(|| self.session.workspace_update());
-        if let Some(update) = &update
-            && self.last_workspace_model_revision == Some(update.model_revision)
+        let update = self.session.workspace_update();
+        if self.last_workspace_model_revision == Some(update.model_revision)
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 SnapshotKey {
                     revision: key.revision,
@@ -152,7 +139,7 @@ impl NativeHost {
                 camera: Option<&'a layer_ui::Camera>,
             }
             let snapshot = Motion {
-                workspace_update: update,
+                workspace_update: &update,
                 color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.color_preview()),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
@@ -161,8 +148,7 @@ impl NativeHost {
             self.last_snapshot = Some(key);
             return Ok(Some(snapshot));
         }
-        if incremental_layout
-            && let Some(update) = &update
+        if layout
             && self.last_workspace_content_revision == Some(update.content_revision)
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 SnapshotKey {
@@ -182,15 +168,12 @@ impl NativeHost {
         }
         let workspace = self.session.durable_workspace();
         let changed_workspace = self.last_durable_workspace.as_ref() != Some(&workspace);
-        let snapshot = self.serialize_snapshot(
-            serializer,
-            changed_workspace.then_some(&workspace),
-            update.as_ref(),
-        )?;
+        let snapshot =
+            self.serialize_snapshot(serializer, changed_workspace.then_some(&workspace), &update)?;
         // A serializer failure cannot acknowledge an update that was not sent.
         self.last_snapshot = Some(key);
-        self.last_workspace_content_revision = update.as_ref().map(|u| u.content_revision);
-        self.last_workspace_model_revision = update.map(|u| u.model_revision);
+        self.last_workspace_content_revision = Some(update.content_revision);
+        self.last_workspace_model_revision = Some(update.model_revision);
         self.last_camera_revision = Some(self.session.state().camera.revision);
         if changed_workspace {
             self.last_durable_workspace = Some(workspace);
@@ -199,9 +182,20 @@ impl NativeHost {
     }
 
     #[cfg(test)]
-    pub(super) fn snapshot(&self) -> Value {
-        self.serialize_snapshot(serde_json::value::Serializer, None, None)
+    pub(super) fn snapshot(&self) -> serde_json::Value {
+        self.serialize_snapshot(
+            serde_json::value::Serializer,
+            None,
+            &self.session.workspace_update(),
+        )
+        .expect("Native snapshot contains JSON-compatible fields")
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_value(&mut self) -> Option<serde_json::Value> {
+        self.take_update_bytes()
             .expect("Native snapshot contains JSON-compatible fields")
+            .map(|bytes| serde_json::from_slice(&bytes).unwrap())
     }
 
     fn color_view(&self, colors: &layer_ui::ColorState) -> layer_ui::ColorPanelView {
@@ -226,7 +220,7 @@ impl NativeHost {
         &self,
         serializer: S,
         workspace: Option<&layer_ui::WorkspaceState>,
-        update: Option<&layer_ui::WorkspaceUpdate>,
+        update: &layer_ui::WorkspaceUpdate,
     ) -> Result<S::Ok, S::Error> {
         let layout = self.session.layout(self.logical);
         let state = self.session.state();
@@ -273,9 +267,7 @@ impl NativeHost {
             model: self.session.application_menu(id),
         });
         let mut map = serializer.serialize_map(None)?;
-        if let Some(update) = update {
-            map.serialize_entry("workspace_update", update)?;
-        }
+        map.serialize_entry("workspace_update", update)?;
         map.serialize_entry("state", state)?;
         map.serialize_entry("layout", &layout)?;
         map.serialize_entry("panels", &panels)?;
@@ -342,6 +334,7 @@ impl NativeHost {
 mod tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction, WorkspaceState};
+    use serde_json::Value;
 
     #[test]
     fn command_search_publications_retain_workspace_and_include_close() {
@@ -385,7 +378,7 @@ mod tests {
             if matches!(platform, Platform::Mac | Platform::Ios) {
                 host.ui_color = crate::UiColor::Tagged(layer_core::color::RgbSpace::DisplayP3);
             }
-            let snapshot = host.take_snapshot().unwrap();
+            let snapshot = host.take_value().unwrap();
             assert_eq!(snapshot.get("color_preview").is_some(), platform.color_picker(), "{platform:?}");
             if platform.color_picker() {
                 assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
@@ -632,7 +625,7 @@ mod tests {
         let mut serializer =
             serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
         assert!(
-            host.take_snapshot_with(&mut serializer, true, true)
+            host.take_snapshot_with(&mut serializer, true)
                 .is_err()
         );
         let packet = layout_update(&mut host);
@@ -783,11 +776,6 @@ mod tests {
         host.chrome_hidden = true;
         drag(&mut host, Move, [520., 400.]);
         assert_eq!(update(&mut host)["chrome_hidden"], true);
-        // Legacy consumers still receive complete layout snapshots after a move.
-        drag(&mut host, Move, [530., 400.]);
-        assert!(host.take_snapshot().unwrap().get("layout").is_some());
-        drag(&mut host, Move, [540., 400.]);
-        assert!(update(&mut host).get("state").is_some());
         // A camera change may share the same packet as unpresented drag motion.
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZoomIn,
@@ -804,104 +792,19 @@ mod tests {
         assert!(packet.get("camera").is_some());
         assert!(packet["workspace_update"]["drag"]["group"].is_object());
     }
-    fn same(value: &mut NativeHost, stream: &mut NativeHost) {
-        // Compare the actual legacy wire representation, including its float
-        // formatting, rather than relying on an in-memory Number comparison.
-        let legacy = value
-            .take_snapshot()
-            .map(|v| serde_json::to_vec(&v).unwrap());
-        assert_eq!(
-            decoded(stream.take_snapshot_bytes().unwrap()),
-            decoded(legacy)
-        );
-        assert!(value.take_snapshot().is_none());
-        assert!(stream.take_snapshot_bytes().unwrap().is_none());
-    }
-    #[test]
-    fn streamed_snapshots_preserve_fields_values_and_publication_policy() {
-        for platform in [
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Android,
-            Platform::Windows,
-        ] {
-            let mut value = host(platform);
-            let mut stream = NativeHost::new(platform).unwrap();
-            // These transports observe the same immutable raster identities.
-            // Independent blank documents intentionally have different cache revisions.
-            stream.session = layer_ui::UiSession::new(
-                crate::Renderer::default(),
-                value.session.engine().document().clone(),
-                [1, 1],
-            )
-            .unwrap();
-            stream.session.set_platform(platform);
-            stream
-                .dispatch(UiAction::RestoreWorkspace {
-                    workspace: Box::new(WorkspaceState::for_platform(platform)),
-                })
-                .unwrap();
-            stream.resize(2410, 1810, 2.).unwrap();
-            same(&mut value, &mut stream);
-            for action in [
-                UiAction::SetBrushSize { value: 37.3 },
-                UiAction::SetColor {
-                    rgba: [0.1, 0.2, 0.7, 0.43],
-                },
-                UiAction::Invoke {
-                    command: CommandId::ZoomIn,
-                },
-                UiAction::OpenSettings {
-                    page: layer_ui::SettingsPage::Input,
-                },
-                UiAction::CloseSettings,
-                UiAction::Invoke {
-                    command: CommandId::ZenMode,
-                },
-            ] {
-                value.dispatch(action.clone()).unwrap();
-                stream.dispatch(action).unwrap();
-                same(&mut value, &mut stream);
-            }
-            for host in [&mut value, &mut stream] {
-                host.error = Some("Synthetic surface error: \"quoted\" and λ\n".into());
-                host.chrome_hidden = true;
-                host.resize(1810, 2410, 2.).unwrap();
-            }
-            same(&mut value, &mut stream);
-            for host in [&mut value, &mut stream] {
-                host.error = None;
-                host.document_adopted();
-            }
-            same(&mut value, &mut stream);
-        }
-    }
 
     #[test]
-    fn direct_formatter_matches_value_float_precision_in_nested_values() {
-        let values = [
-            0.1f32,
-            37.3,
-            f32::MIN_POSITIVE,
-            f32::MAX,
-            -0.,
-            f32::NAN,
-            f32::INFINITY,
-        ];
-        let nested = (
-            Some(values),
-            vec![values],
-            [f64::MIN_POSITIVE, 0.1, f64::MAX],
-        );
-        let expected = serde_json::to_vec(&serde_json::to_value(&nested).unwrap()).unwrap();
-        let mut actual = Vec::new();
-        nested
-            .serialize(&mut serde_json::Serializer::with_formatter(
-                &mut actual,
-                SnapshotFormatter,
-            ))
-            .unwrap();
-        assert_eq!(actual, expected);
+    fn extend_update_appends_fields_without_rewriting_shared_bytes() {
+        let mut host = host(Platform::Windows);
+        let shared = host.take_update_bytes().unwrap().unwrap();
+        let text = "Synthetic \"quoted\" λ\n";
+        let extension = serde_json::to_vec(&json!({"host_status": text})).unwrap();
+        let extended = extend_update(shared.clone(), &extension);
+        assert_eq!(extended[..shared.len() - 1], shared[..shared.len() - 1]);
+        let value: Value = serde_json::from_slice(&extended).unwrap();
+        assert_eq!(value["host_status"], text);
+        assert!(value.get("state").is_some());
+        assert_eq!(extend_update(shared.clone(), b"{}"), shared);
     }
 
     #[test]
@@ -918,43 +821,30 @@ mod tests {
         let fail = |host: &mut NativeHost| {
             let mut serializer =
                 serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
-            assert!(
-                host.take_snapshot_with(&mut serializer, false, false)
-                    .is_err()
-            );
+            assert!(host.take_snapshot_with(&mut serializer, false).is_err());
         };
         let mut host = host(Platform::Mac);
         fail(&mut host);
-        assert!(
-            decoded(host.take_snapshot_bytes().unwrap())
-                .unwrap()
-                .get("workspace_persistence")
-                .is_some()
-        );
+        assert!(update(&mut host).get("workspace_persistence").is_some());
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZoomIn,
         })
         .unwrap();
         // The first edit can also synchronize initial document controls. Consume
         // that state before testing a subsequent camera-only publication.
-        host.take_snapshot().unwrap();
+        update(&mut host);
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZoomIn,
         })
         .unwrap();
         fail(&mut host);
-        assert!(host.take_snapshot().unwrap().get("camera").is_some());
+        assert!(update(&mut host).get("camera").is_some());
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
         })
         .unwrap();
         fail(&mut host);
-        assert!(
-            decoded(host.take_snapshot_bytes().unwrap())
-                .unwrap()
-                .get("workspace_persistence")
-                .is_some()
-        );
-        assert!(host.take_snapshot().is_none());
+        assert!(update(&mut host).get("workspace_persistence").is_some());
+        assert!(host.take_update_bytes().unwrap().is_none());
     }
 }

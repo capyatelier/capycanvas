@@ -61,7 +61,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
                 assert!(std::time::Instant::now() < deadline, "{platform} {fault}: loss callback did not arrive");
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
-            let stopped = app.request(3, Value::Null).unwrap();
+            let stopped = app.full_snapshot();
             assert_eq!(stopped["gpu_ready"], false, "{platform} {fault}");
             assert!(!stopped["error"].is_null());
             let session = &unsafe { &*app.0 }.host.session;
@@ -98,7 +98,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             // the new device or insert a history entry.
             device.destroy();
             let _ = device.poll(wgpu::PollType::Poll);
-            app.request(3, Value::Null);
+            app.full_snapshot();
             assert!(!unsafe { &*app.0 }.host.session.rendering_suspended());
             let up = [480.,370.,1.,0.,0.,0.,0.,3_010_000_000.,3.];
             assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, up.as_ptr(), up.len(), 0, revision) }, 0);

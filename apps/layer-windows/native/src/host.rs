@@ -960,6 +960,25 @@ pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
 pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation: u64) -> i32 {
     guard(host, |host| host.frame(now, presentation))
 }
+#[derive(serde::Serialize)]
+struct WindowsMetadata {
+    windows_gpu_generation: u64,
+    windows_display: serde_json::Value,
+    windows_rendering_suspended: bool,
+    windows_filter_load: Option<crate::filter_packages::Status>,
+    windows_document: Option<serde_json::Value>,
+    windows_proof: Option<layer_ui::proof_workflow::ProofStatus>,
+    windows_proof_form: serde_json::Value,
+    windows_recovery: Option<serde_json::Value>,
+    windows_tabs: Option<serde_json::Value>,
+    windows_palettes: Option<serde_json::Value>,
+    windows_glass: serde_json::Value,
+    windows_tab_styles: serde_json::Map<String, serde_json::Value>,
+    windows_isolated_settings: bool,
+    windows_workspace: Option<crate::workspace_service::WorkspaceStatus>,
+    windows_settings_close: Option<crate::settings::CloseStatus>,
+    windows_workspace_manager: Option<crate::workspace_service::ManagerView>,
+}
 /// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
 /// A nonnull result belongs to the caller and must be freed with `capy_string_free`.
@@ -967,7 +986,7 @@ pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation:
 pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
-        let metadata = crate::snapshots::WindowsMetadata {
+        let metadata = WindowsMetadata {
             windows_gpu_generation: host.gpu_generation,
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
@@ -1001,8 +1020,11 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .map(std::path::PathBuf::from)
                 .is_some_and(|path| path.is_absolute()),
         };
-        if let Some(snapshot) = crate::snapshots::take(&mut host.native, &metadata).map_err(err)? {
-            result = CString::new(snapshot).map_err(err)?.into_raw();
+        let extension = serde_json::to_vec(&metadata).map_err(err)?;
+        if let Some(bytes) = host.native.take_update_bytes().map_err(err)? {
+            result = CString::new(layer_host::extend_update(bytes, &extension))
+                .map_err(err)?
+                .into_raw();
         }
         Ok(0)
     });

@@ -86,7 +86,13 @@ fn main() {
             json!({"size":style.size(),"panel":host.session.panel_view(Panel::Commands).unwrap()}),
         );
     }
-    let snapshot = host.take_snapshot().unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(
+        &host
+            .take_layout_update_bytes()
+            .unwrap()
+            .expect("initial snapshot"),
+    )
+    .unwrap();
     println!("{}", serde_json::to_string_pretty(&json!({"schema":1,"width":780,"height":324,
         "theme":theme,"palette":snapshot["state"]["palette"],"color":snapshot["state"]["brush"]["color"],
         "text_size":f32::from(layer_ui::ui_catalog().text_size_pt) * 4.0 / 3.0,"rows":rows})).unwrap());

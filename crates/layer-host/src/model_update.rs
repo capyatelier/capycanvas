@@ -165,7 +165,7 @@ mod tests {
                 assert_eq!(retained, expected);
                 assert!(host.take_model_update_bytes().unwrap().is_none());
             }
-            host.take_snapshot();
+            host.take_value();
             host.dispatch(UiAction::SetBrushSize { value: 42. })
                 .unwrap();
             assert!(read(&mut host).get("state").is_some());

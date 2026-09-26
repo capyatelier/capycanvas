@@ -21,8 +21,8 @@
 //! bands, floating groups, collapsed columns, column_stacks, fit_tab_groups and
 //! fit_height_groups in the retained workspace; it is live gesture state, not a
 //! persistence request. Collapse/expand, content edits, completion and
-//! cancellation still publish full models. Existing consumers of
-//! take_update_bytes keep their original model_revision behavior.
+//! cancellation still publish full models. Consumers of take_update_bytes
+//! refresh all models at each model_revision.
 //!
 //! Capture tab slots/clip with BeginTabDrag and publish displayed drawer bounds
 //! with MeasureColumnDrawers. Tab presentation moves drawings, not the frozen
@@ -38,7 +38,7 @@ pub struct WorkspaceUpdate {
     pub model_revision: u64,
     /// Opt-in layout consumers retain controls/resources at this revision, but
     /// must apply the accompanying resolved layout when model_revision changes.
-    /// Older consumers continue refreshing all models at model_revision.
+    /// Other consumers refresh all models at model_revision.
     pub content_revision: u64,
     /// None ends the presentation, including cancellation and undo/redo.
     pub drag: Option<WorkspaceDragPresentation>,

@@ -6,11 +6,7 @@ struct Published(std::cell::RefCell<Value>);
 impl Published {
     fn new() -> Self { Self(std::cell::RefCell::new(Value::Null)) }
     fn panel(&self, app: &App) -> Value {
-        let text = unsafe { capy_apple_request(app.0, 3, std::ptr::null()) };
-        if !text.is_null() {
-            *self.0.borrow_mut() = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
-            unsafe { capy_apple_string_free(text) };
-        }
+        *self.0.borrow_mut() = app.full_snapshot();
         let panel = self.0.borrow()["palette_panel"].clone();
         assert!(panel.is_object(), "Palettes are published");
         panel

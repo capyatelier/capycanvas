@@ -6,11 +6,7 @@ impl Published {
         Self(std::cell::RefCell::new(Value::Null))
     }
     fn view(&self, app: &App) -> Value {
-        let text = unsafe { capy_apple_request(app.0, 3, std::ptr::null()) };
-        if !text.is_null() {
-            *self.0.borrow_mut() = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
-            unsafe { capy_apple_string_free(text) };
-        }
+        *self.0.borrow_mut() = app.full_snapshot();
         let view = self.0.borrow().clone();
         assert!(view.is_object(), "a snapshot was published");
         view

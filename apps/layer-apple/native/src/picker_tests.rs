@@ -111,14 +111,11 @@ fn apple_picker_motion_updates_carry_the_panel_projected_preview() {
     for platform in [0, 1] {
         let app = picker_app(platform);
         app.invoke("eyedropper");
-        let full = unsafe { capy_apple_request(app.0, 3, std::ptr::null()) };
-        assert!(!full.is_null());
-        let snapshot: Value = serde_json::from_slice(unsafe { CStr::from_ptr(full) }.to_bytes()).unwrap();
-        unsafe { capy_apple_string_free(full) };
+        let snapshot = app.full_snapshot();
         assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"]);
         pointer(&app, 0, 1, 0., [600., 450.], 3_000_000_000.);
         until(&app, "hover previews", || !app.state()["color_picker"]["preview"].is_null());
-        let update = unsafe { capy_apple_request(app.0, 5, std::ptr::null()) };
+        let update = unsafe { capy_apple_request(app.0, 7, std::ptr::null()) };
         assert!(!update.is_null());
         let update: Value = serde_json::from_slice(unsafe { CStr::from_ptr(update) }.to_bytes()).unwrap();
         let preview = &update["color_preview"];

@@ -11,6 +11,7 @@ use layer_render::CanvasRenderer;
 use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSession};
 pub use gpu::{DeviceWatch, GpuContext, RendererOptions, UiColor};
 pub use renderer::Renderer;
+pub use snapshot::extend_update;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -1039,7 +1040,7 @@ mod tests {
         for platform in [Platform::Ios, Platform::Mac] {
             let mut host = NativeHost::new(platform).unwrap();
             host.resize(1200, 900, 1.).unwrap();
-            let menus = host.take_snapshot().unwrap()["application_menus"].clone();
+            let menus = host.take_value().unwrap()["application_menus"].clone();
             assert_eq!(menus.as_array().unwrap().len(), ApplicationMenu::ALL.len());
             for (id, menu) in ApplicationMenu::ALL
                 .into_iter()
@@ -1065,12 +1066,12 @@ mod tests {
                 "website"
             );
             assert_eq!(help["model"]["sections"][1][0]["enabled"], true);
-            assert!(host.take_snapshot().is_none());
+            assert!(host.take_value().is_none());
             host.dispatch(UiAction::Invoke {
                 command: CommandId::SelectAll,
             })
             .unwrap();
-            let next = host.take_snapshot().unwrap();
+            let next = host.take_value().unwrap();
             let select = next["application_menus"]
                 .as_array()
                 .unwrap()
@@ -1086,7 +1087,7 @@ mod tests {
                 command: CommandId::ZoomIn,
             })
             .unwrap();
-            let camera = host.take_snapshot().unwrap();
+            let camera = host.take_value().unwrap();
             assert!(camera.get("camera").is_some());
             assert!(
                 camera.get("application_menus").is_none(),
@@ -1178,11 +1179,11 @@ mod tests {
             let mut app = NativeHost::new(platform).unwrap();
             let viewport = [1200., 900.];
             app.resize(2400, 1800, 2.).unwrap();
-            let initial = app.take_snapshot().unwrap()["workspace_persistence"].clone();
+            let initial = app.take_value().unwrap()["workspace_persistence"].clone();
             assert_eq!(initial["version"], 1);
             app.dispatch(UiAction::SetBrushSize { value: 40. }).unwrap();
             assert!(
-                app.take_snapshot()
+                app.take_value()
                     .unwrap()
                     .get("workspace_persistence")
                     .is_none()
@@ -1196,7 +1197,7 @@ mod tests {
                 }],
             })
             .unwrap();
-            if let Some(snapshot) = app.take_snapshot() {
+            if let Some(snapshot) = app.take_value() {
                 assert!(
                     snapshot.get("workspace_persistence").is_none(),
                     "Host measurements are transient"
@@ -1216,7 +1217,7 @@ mod tests {
                         viewport,
                     })
                     .unwrap();
-                    if let Some(snapshot) = app.take_snapshot() {
+                    if let Some(snapshot) = app.take_value() {
                         assert!(
                             snapshot.get("workspace_persistence").is_none(),
                             "Never persist a provisional resize"
@@ -1230,7 +1231,7 @@ mod tests {
                     viewport,
                 })
                 .unwrap();
-                let snapshot = app.take_snapshot().unwrap();
+                let snapshot = app.take_value().unwrap();
                 if end == ContactPhase::Cancel {
                     assert!(snapshot.get("workspace_persistence").is_none());
                 } else {
@@ -1246,7 +1247,7 @@ mod tests {
                         )
                         .unwrap();
                     assert_eq!(
-                        restored.take_snapshot().unwrap()["workspace_persistence"],
+                        restored.take_value().unwrap()["workspace_persistence"],
                         saved
                     );
                     app.dispatch(UiAction::Invoke {
@@ -1254,7 +1255,7 @@ mod tests {
                     })
                     .unwrap();
                     assert_eq!(
-                        app.take_snapshot().unwrap()["workspace_persistence"],
+                        app.take_value().unwrap()["workspace_persistence"],
                         initial
                     );
                 }
@@ -1265,11 +1266,11 @@ mod tests {
     fn native_navigation_preserves_camera_patches_and_rejects_nonfinite_input() {
         let mut app = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         app.resize(2400, 1800, 2.0).unwrap();
-        app.take_snapshot().unwrap();
+        app.take_value().unwrap();
         let anchor = [1200., 900.];
         let before = app.session.state().camera.clone();
         app.scroll(anchor, [30., -20.], 2., false, false).unwrap();
-        let patch = app.take_snapshot().unwrap();
+        let patch = app.take_value().unwrap();
         assert!(
             patch.get("state").is_none(),
             "Wheel pan must not rebuild all editor models"
@@ -1278,7 +1279,7 @@ mod tests {
         let zoom = app.session.state().camera.zoom;
         app.gesture(anchor, 1.5, 0.2).unwrap();
         assert!((app.session.state().camera.zoom - zoom * 1.5).abs() < 0.0001);
-        assert!(app.take_snapshot().unwrap().get("state").is_none());
+        assert!(app.take_value().unwrap().get("state").is_none());
         let camera = json!(app.session.state().camera);
         assert!(
             app.scroll(anchor, [f32::NAN, 0.], 2., false, false)
@@ -1289,7 +1290,7 @@ mod tests {
         app.dispatch(UiAction::SetBrushSize { value: 42. }).unwrap();
         app.scroll(anchor, [0., 1.], 2., false, false).unwrap();
         assert_eq!(
-            app.take_snapshot().unwrap()["state"]["brush"]["diameter"],
+            app.take_value().unwrap()["state"]["brush"]["diameter"],
             42.
         );
     }
@@ -1435,7 +1436,7 @@ mod tests {
     fn snapshots_skip_unchanged_input_but_publish_state_and_chrome() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
-        assert!(app.take_snapshot().is_some());
+        assert!(app.take_value().is_some());
         for i in 0..1000 {
             app.pointer(
                 1,
@@ -1445,34 +1446,34 @@ mod tests {
                 false,
             )
             .unwrap();
-            assert!(app.take_snapshot().is_none());
+            assert!(app.take_value().is_none());
         }
         app.dispatch(UiAction::SetBrushSize { value: 42.0 })
             .unwrap();
         assert_eq!(
-            app.take_snapshot().unwrap()["state"]["brush"]["diameter"],
+            app.take_value().unwrap()["state"]["brush"]["diameter"],
             42.0
         );
-        assert!(app.take_snapshot().is_none());
+        assert!(app.take_value().is_none());
         app.chrome_hidden = true;
-        assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
+        assert_eq!(app.take_value().unwrap()["chrome_hidden"], true);
         app.keep_zen_button = true;
         app.pan_cursor = true;
-        let snapshot = app.take_snapshot().unwrap();
+        let snapshot = app.take_value().unwrap();
         assert_eq!(snapshot["keep_zen_button"], true);
         assert_eq!(snapshot["pan_cursor"], true);
-        assert!(app.take_snapshot().is_none());
+        assert!(app.take_value().is_none());
         app.error = Some("test surface error".into());
-        assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");
-        assert!(app.take_snapshot().is_none());
+        assert_eq!(app.take_value().unwrap()["error"], "test surface error");
+        assert!(app.take_value().is_none());
         app.resize(1600, 2560, 2.0).unwrap();
-        assert!(app.take_snapshot().is_some());
+        assert!(app.take_value().is_some());
     }
     #[test]
     fn camera_patches_preserve_pending_structural_updates() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
-        app.take_snapshot().unwrap();
+        app.take_value().unwrap();
         let finger = |app: &mut NativeHost, id, x, phase| {
             app.pointer(
                 id,
@@ -1487,20 +1488,20 @@ mod tests {
         finger(&mut app, 2, 600., 1.);
         for i in 1..100 {
             finger(&mut app, 2, 600. + i as f64, 2.);
-            let patch = app.take_snapshot().unwrap();
+            let patch = app.take_value().unwrap();
             assert_eq!(patch["camera"], json!(app.session.state().camera));
             assert_eq!(patch["revision"], app.session.state().revision);
             assert!(
                 patch.get("state").is_none(),
                 "Camera motion must not build full UI models"
             );
-            assert!(app.take_snapshot().is_none());
+            assert!(app.take_value().is_none());
         }
         // A camera update must not acknowledge an unpublished brush change.
         app.dispatch(UiAction::SetBrushSize { value: 42.0 })
             .unwrap();
         finger(&mut app, 2, 710., 2.);
-        let full = app.take_snapshot().unwrap();
+        let full = app.take_value().unwrap();
         assert_eq!(full["state"]["brush"]["diameter"], 42.0);
         assert_eq!(full["state"]["camera"], json!(app.session.state().camera));
         // Also cover changes that bypass the host's dispatch wrapper.
@@ -1509,14 +1510,14 @@ mod tests {
             .unwrap();
         finger(&mut app, 2, 720., 2.);
         assert_eq!(
-            app.take_snapshot().unwrap()["state"]["brush"]["diameter"],
+            app.take_value().unwrap()["state"]["brush"]["diameter"],
             52.0
         );
         app.error = Some("surface lost".into());
         finger(&mut app, 2, 730., 2.);
-        assert_eq!(app.take_snapshot().unwrap()["error"], "surface lost");
+        assert_eq!(app.take_value().unwrap()["error"], "surface lost");
         app.resize(1600, 2560, 2.0).unwrap();
-        assert!(app.take_snapshot().unwrap().get("layout").is_some());
+        assert!(app.take_value().unwrap().get("layout").is_some());
     }
 
     #[test]

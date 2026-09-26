@@ -255,7 +255,7 @@ fn apple_display_previews_keep_p3_chroma_without_changing_paint_definitions() {
         let definition = json!({"space":"DisplayP3","rgba":[1.,0.5,0.,0.5]});
         app.action(json!({"type":"color","action":{"op":"definition","color":definition}}));
         let state = app.state();
-        let snapshot = app.request(3, Value::Null).unwrap();
+        let snapshot = app.full_snapshot();
         let panel = &snapshot["color_panel"];
         assert_eq!(panel["marker_color"], json!([1.,0.5,0.]));
         assert_eq!(panel["swatches"][0]["rgba"], json!([1.,0.5,0.,0.5]));

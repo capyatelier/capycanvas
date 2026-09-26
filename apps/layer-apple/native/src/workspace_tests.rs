@@ -1,12 +1,7 @@
 use super::*;
 
 fn snapshot(app: &App) -> Value {
-    // Read the next bridge publication after a state change.
-    let text = unsafe { capy_apple_request(app.0, 3, std::ptr::null()) };
-    assert!(!text.is_null());
-    let value = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
-    unsafe { capy_apple_string_free(text) };
-    value
+    app.full_snapshot()
 }
 fn customize(app: &App, action: Value) {
     app.action(json!({"type":"customize","action":action}));

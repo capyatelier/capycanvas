@@ -881,8 +881,9 @@ Related readers are updated before observation signals are published, so even
 synchronous observers see a coherent revision. Camera patches update the same
 canonical state without rebuilding the command, panel or menu indexes.
 
-Interactive publication uses C request 7
-(`NativeHost::take_layout_update_bytes`). A full snapshot establishes
+Publication uses C request 7 (`NativeHost::take_layout_update_bytes`), with
+`display_status` and `document_tabs` appended by `layer_host::extend_update`
+without parsing the shared bytes. A full snapshot establishes
 `workspace_update.model_revision`; later motion must match that revision and
 cannot precede the last accepted presentation revision.
 `WorkspaceMotion` stages group positions, tab previews and drop hints atomically
@@ -892,8 +893,6 @@ continue reading the retained layout and panel models. Their `state.revision`
 changes with a full model publication; `workspaceMotion.revision` tracks later
 motion. Optional camera patches update canonical camera state independently.
 Document and lifecycle consumers still receive full immutable model snapshots.
-Request 3 remains available for compatibility checks. Do not alternate the two
-publication APIs on one interactive owner because they acknowledge separately.
 
 The direct floating-workspace check exercises both Apple presets in an invisible
 AppKit host, retaining Navigator identity through tear-off and group movement,
@@ -902,7 +901,7 @@ action. It does not measure UIKit pixels or hardware presentation cadence:
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
-cargo test -p layer-apple incremental_apple_abi -- --nocapture
+cargo test -p layer-apple layout_apple_abi -- --nocapture
 ```
 
 Check observation fidelity and actual SwiftUI rendered-value propagation without

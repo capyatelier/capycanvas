@@ -16,7 +16,9 @@ use std::{
 mod manager_ui;
 #[path = "workspace_switcher.rs"]
 mod switcher;
-pub(crate) use manager_ui::{ManagerInput, ManagerView};
+pub(crate) use manager_ui::ManagerInput;
+#[cfg(target_os = "windows")]
+pub(crate) use manager_ui::ManagerView;
 
 type Result<T> = std::result::Result<T, StoreError>;
 enum Completion {

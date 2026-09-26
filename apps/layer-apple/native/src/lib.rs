@@ -258,7 +258,7 @@ pub unsafe extern "C" fn capy_apple_color_field(
     })
 }
 /// # Safety
-/// Valid handle; json must be a NUL-terminated UTF-8 string except for requests 3, 5 and 7.
+/// Valid handle; json must be a NUL-terminated UTF-8 string except for request 7.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_request(
     app: *mut CapyApple,
@@ -269,23 +269,18 @@ pub unsafe extern "C" fn capy_apple_request(
         return std::ptr::null_mut();
     };
     app.perform(|a| {
-        if matches!(request, 3 | 5 | 7) {
-            let snapshot = match request {
-                7 => a.host.take_layout_update_bytes(),
-                5 => a.host.take_update_bytes(),
-                _ => a.host.take_snapshot_bytes(),
+        if request == 7 {
+            let Some(bytes) = a.host.take_layout_update_bytes().map_err(|e| e.to_string())? else {
+                return Ok(None);
             };
-            return snapshot
-                .map_err(|e| e.to_string())?
-                .map(|bytes| {
-                    let mut snapshot: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-                    snapshot["display_status"] = a.metal.display_status(&a.host);
-                    snapshot["document_tabs"] = a.tabs_view(a.host.logical[0]);
-                    CString::new(snapshot.to_string())
-                        .map(CString::into_raw)
-                        .map_err(|e| e.to_string())
-                })
-                .transpose();
+            let extension = serde_json::to_vec(&serde_json::json!({
+                "display_status": a.metal.display_status(&a.host),
+                "document_tabs": a.tabs_view(a.host.logical[0]),
+            }))
+            .map_err(|e| e.to_string())?;
+            return CString::new(layer_host::extend_update(bytes, &extension))
+                .map(|snapshot| Some(snapshot.into_raw()))
+                .map_err(|e| e.to_string());
         }
         let value = {
             if json.is_null() {

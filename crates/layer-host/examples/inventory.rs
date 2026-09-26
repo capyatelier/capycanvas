@@ -180,7 +180,8 @@ fn menu_scenarios(platform: Platform) -> Vec<Value> {
 
 fn platform_inventory(platform: Platform) -> Value {
     let mut host = apple_host(platform);
-    let initial = host.take_snapshot().unwrap();
+    let initial: Value =
+        serde_json::from_slice(&host.take_layout_update_bytes().unwrap().expect("initial snapshot")).unwrap();
     // Enumerate unavailable entries too. Filtering by visible menus would hide
     // an unimplemented host capability from the parity audit.
     let commands: Vec<_> = CommandId::ALL

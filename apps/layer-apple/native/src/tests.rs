@@ -176,7 +176,7 @@ fn compact_color_circle_picking_uses_shared_shapes() {
         for platform in [0, 1] {
             let app = App::new(platform);
             app.action(json!({"type":"color","action":{"op":"shape","shape":shape}}));
-            let view = app.request(3, Value::Null).unwrap()["color_panel"].clone();
+            let view = app.full_snapshot()["color_panel"].clone();
             assert_eq!(view["shape"], serde_json::to_value(shape).unwrap());
             let mut state = layer_ui::ColorState::default();
             state.apply(layer_ui::ColorAction::Shape { shape }).unwrap();
@@ -200,7 +200,7 @@ fn compact_color_circle_picking_uses_shared_shapes() {
             app.action(json!({"type":"color","action":{"op":"toggle_readout"}}));
             assert_eq!(app.state()["brush"]["color"], before);
             assert_eq!(
-                app.request(3, Value::Null).unwrap()["color_panel"]["readout_label"],
+                app.full_snapshot()["color_panel"]["readout_label"],
                 "RGB"
             );
         }
@@ -1051,6 +1051,10 @@ impl App {
         unsafe { capy_apple_string_free(result) };
         Some(value)
     }
+    fn full_snapshot(&self) -> Value {
+        unsafe { (*self.0).host.invalidate_snapshot() };
+        self.request(7, Value::Null).unwrap()
+    }
     fn action(&self, action: Value) {
         self.request(0, action).unwrap();
     }
@@ -1319,9 +1323,9 @@ fn ui_actions_change_only_the_addressed_apple_session() {
         first.invoke("zoom_in");
         assert!(first.state()["camera"]["zoom"].as_f64().unwrap() > zoom);
         first.invoke("settings");
-        assert!(!first.request(3, Value::Null).unwrap()["preferences"].is_null());
+        assert!(!first.full_snapshot()["preferences"].is_null());
         first.action(json!({"type": "close_settings"}));
-        assert!(first.request(3, Value::Null).unwrap()["preferences"].is_null());
+        assert!(first.full_snapshot()["preferences"].is_null());
         let menu = first
             .request(2, json!({"type":"application_menu","menu":"file"}))
             .unwrap();
@@ -1661,7 +1665,7 @@ fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
     for platform in [0, 1] {
         let app = App::new(platform);
         app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":false}}));
-        let snapshot = app.request(3, Value::Null).unwrap();
+        let snapshot = app.full_snapshot();
         let menu_action = snapshot["workspace_menu"]["sections"]
             .as_array()
             .unwrap()
@@ -1671,7 +1675,7 @@ fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
             .expect("Tool Settings must be reachable from Workspace")["action"]
             .clone();
         app.action(menu_action);
-        let snapshot = app.request(3, Value::Null).unwrap();
+        let snapshot = app.full_snapshot();
         assert!(
             snapshot["panels"]
                 .as_array()
@@ -1869,7 +1873,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
     for platform in [0, 1] {
         let app = App::new(platform);
         app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":false}}));
-        let initial = app.request(3, Value::Null).unwrap();
+        let initial = app.full_snapshot();
         let open = initial["workspace_menu"]["sections"]
             .as_array()
             .unwrap()
@@ -1879,7 +1883,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
             .unwrap()["action"]
             .clone();
         app.action(open);
-        let snapshot = app.request(3, Value::Null).unwrap();
+        let snapshot = app.full_snapshot();
         assert!(
             snapshot["panels"]
                 .as_array()
@@ -1903,7 +1907,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
         action(json!({"op":"shape","shape":"triangle"}));
         action(json!({"op":"pick_wheel","part":"field","point":[0.5,0.5],"size":1}));
         close(&app.state()["brush"]["color"], [1. / 3., 2. / 3., 0.5, 1.]);
-        let snapshot = app.request(3, Value::Null).unwrap();
+        let snapshot = app.full_snapshot();
         assert_eq!(snapshot["color_panel"]["components"][1]["label"], "L");
         assert_eq!(snapshot["color_panel"]["swatches"][1]["selected"], true);
         action(json!({"op":"swap"}));

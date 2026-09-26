@@ -726,7 +726,8 @@ latency acceptance.
 
 ## Incremental workspace motion
 
-Windows uses NativeHost::take_update_bytes. Full snapshots establish retained
+Windows uses NativeHost::take_update_bytes and appends its `windows_*` status
+fields with layer_host::extend_update. Full snapshots establish retained
 models; matching workspace_update messages move only native presentation.
 Revision checks reject stale placements and mismatched content. The UI mailbox
 retains separate full-model, motion and camera slots, so replacing a motion

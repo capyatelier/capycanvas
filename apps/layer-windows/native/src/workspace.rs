@@ -187,10 +187,9 @@ mod tests {
         host.session.begin_workspace_transition().unwrap();
         for insets in [[0., 138., 48.], [0., 92., 32.], [0.; 3]] {
             host.dispatch(UiAction::MeasureTitlebar { insets }).unwrap();
-            assert_eq!(
-                host.take_snapshot().unwrap()["titlebar_insets"],
-                json!(insets)
-            );
+            let snapshot: Value =
+                serde_json::from_slice(&host.take_update_bytes().unwrap().unwrap()).unwrap();
+            assert_eq!(snapshot["titlebar_insets"], json!(insets));
             assert_eq!(
                 serde_json::to_value(&host.session.state().workspace).unwrap(),
                 saved

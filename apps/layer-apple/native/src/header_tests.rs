@@ -38,7 +38,7 @@ fn apple_header_drag_preview_commits_one_edit_and_preserves_artwork() {
             edit(&app, json!({"type":"set_size","size":size}));
             let initial = app.state();
             app.invoke("customize_workspace_ui");
-            let view = app.request(3, Value::Null).unwrap()["header"].clone();
+            let view = app.full_snapshot()["header"].clone();
             assert_eq!(view["editing"], true);
             assert_eq!(view["model"]["size"], size);
             assert!(view["components"].as_array().unwrap().iter().all(|item| {
