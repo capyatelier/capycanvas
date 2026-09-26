@@ -330,6 +330,9 @@ simulation or alternate brush path.
 
 ## Import contract and reference reconciliation
 
+The sRGB8 golden test, its fixture and the oracle patches were removed with the
+legacy renderer; this section records their results.
+
 Imported image bytes are decoded with the shared sRGB transfer curve, premultiplied,
 and explicitly rounded before eight-bit linear paint storage. This is one GPU
 initialization pass, not CPU conversion or an extra per-frame operation. Hardware
@@ -359,8 +362,7 @@ migration. Only its asset texture format and import operation were changed.
 Filter algorithms, Rust-generated Gaussian coefficients, previews, masks,
 clipping, time and composition stayed unchanged. Its corrected output supplied
 the then-current `runtime-filters-v3.png`; the current implementation did not
-generate that expected image. See the [fixture provenance](../../crates/layer-render-wgpu/tests/fixtures/README.md)
-for reproduction details. V2 and v3 are now retained in Git history, not as
+generate that expected image. V2 and v3 are now retained in Git history, not as
 additional active references; the later v4 correction is described below.
 
 The test still requires every compared channel to differ by at most one byte.
@@ -460,7 +462,6 @@ before the boundary edit. This produces v4: current/old output differs in only
 four of 1,966,080 channels, each by one byte. The reference is still generated
 by the old renderer, never today's comparison test; its unchanged tolerance
 still tests all forty filters and four scopes. V3 is retained in Git history.
-See [reference provenance](../../crates/layer-render-wgpu/tests/fixtures/README.md).
 
 This does **not** solve complete cross-backend parity. With explicit rounding,
 hardware Vulkan and Mesa software Vulkan still differ above one byte in 23,114

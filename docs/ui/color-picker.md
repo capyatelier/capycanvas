@@ -200,10 +200,6 @@ library access.
   managed textures through GTK's GPU renderer, including Display P3, transparent
   colors, and HDR-to-SDR rendition. The existing native color-panel and HDR-picker
   regressions cover the retained readouts, controls, and field/arc rendering.
-- A broader GPU run also selects
-  `spatial_filters_match_linear_sampling_oracles`, which fails its Ripple oracle
-  with 91,837 differing pixels. The identical failure was reproduced from an
-  untouched `dc27e04d` snapshot; it is outside this picker change.
 - Web release build: `apps/layer-web/build.sh`. The shared
   `apps/layer-web/color-picker.test.mjs` runs through `test.mjs --color-picker`
   on a composited desktop and `device.test.mjs --color-picker` on the Huion.

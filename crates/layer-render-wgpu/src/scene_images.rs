@@ -162,12 +162,6 @@ pub(super) struct ImageStages {
     pub input_updates: u64,
     pub pass_updates: u64,
     pub pass_pixels: u64,
-    pub backdrop_updates: u64,
-    pub backdrop_pixels: u64,
-    pub composition_pixels: u64,
-    pub composition_builds: u64,
-    #[cfg(test)]
-    pub mask_pixels: u64,
 }
 impl ImageStages {
     /// Windowed filters rebuild their images for every dependency window. Once
@@ -398,11 +392,9 @@ impl Scene {
                 for tile in page_coordinates(backdrop.damage) {
                     let pixels = self.group(r, packet, base.properties.parent, tile)?;
                     self.capture_tile(r, pixels, &backdrop.image, tile);
-                    self.images.backdrop_pixels += page_rect(tile).intersect(bounds).area();
                 }
                 self.stop_before = None;
                 self.encode_jobs(r, encoder)?;
-                self.images.backdrop_updates += 1;
                 backdrop.valid = true;
             }
             backdrop.updated = true;
@@ -416,7 +408,6 @@ impl Scene {
                     &cached.output,
                     &backdrop.image,
                 ));
-                self.images.composition_builds += 1;
             }
             let composition = cached.composition.as_mut().unwrap();
             let damage = if !composition.valid {
@@ -426,7 +417,6 @@ impl Scene {
             };
             if !damage.is_empty() {
                 composition.encode(self, r, base, damage, encoder);
-                self.images.composition_pixels += damage.area();
             }
             damage
         } else {
@@ -849,10 +839,6 @@ impl Scene {
                         for tile in page_coordinates(mask_dirty) {
                             let m = self.mask_tile(r, mask, mask_offset, tile);
                             self.copy_window_tile(m, &image.texture, tile, bounds);
-                            #[cfg(test)]
-                            {
-                                self.images.mask_pixels += u64::from(PAGE_SIZE).pow(2);
-                            }
                         }
                         self.encode_jobs(r, encoder)?;
                     }

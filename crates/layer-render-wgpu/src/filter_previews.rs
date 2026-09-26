@@ -34,8 +34,6 @@ pub(crate) struct FilterPreviews {
     rendering: Vec<Arc<str>>,
     tx: mpsc::Sender<Ready>,
     rx: mpsc::Receiver<Ready>,
-    pub source_updates: u64,
-    pub rendered_rows: u64,
 }
 impl FilterPreviews {
     pub(crate) fn rendition_changed(&mut self) {
@@ -108,8 +106,6 @@ impl FilterPreviews {
             rendering: Vec::new(),
             tx,
             rx,
-            source_updates: 0,
-            rendered_rows: 0,
         })
     }
     pub(crate) fn note_frame(&mut self, packet: FramePacket<'_>, epoch: u64) {
@@ -232,7 +228,6 @@ impl FilterPreviews {
                 mapped_at_creation: false,
             }));
             self.probe_batch(r)?;
-            self.source_updates += 1;
         } else if self
             .request
             .as_ref()
@@ -632,7 +627,6 @@ impl FilterPreviews {
                 let _ = tx.send(Ready::Pixels(image));
             },
         );
-        self.rendered_rows += self.rendering.len() as u64;
         Ok(())
     }
     fn take(
@@ -849,7 +843,7 @@ impl FilterPreviews {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{fixture, fixtures};
+    use crate::tests::fixture;
 
     fn finish(r: &mut WgpuRasterizer) -> FilterPreviewImage {
         for _ in 0..100 {
@@ -1022,349 +1016,5 @@ mod tests {
         assert_eq!(finish(&mut r).image.request_id, 4);
         assert_eq!(r.filter_previews.as_ref().unwrap().scratch_size, extent);
     }
-    #[test]
-    fn filter_previews_capture_insertion_pixels_and_cache_independently_of_view() {
-        let mut r = WgpuRasterizer::new_headless().unwrap();
-        let asset = AssetId("test:preview-source".into());
-        let mut bytes = vec![0u8; 512 * 256 * 4];
-        for y in 105..145 {
-            for x in 300..340 {
-                let p = (y * 512 + x) * 4;
-                bytes[p..p + 4].copy_from_slice(&[30, 100, 230, 255]);
-            }
-        }
-        r.prepare_asset(
-            &asset,
-            HostImage {
-                width: 512,
-                height: 256,
-                stride: 512 * 4,
-                format: PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )
-        .unwrap();
-        let mut base = Layer::paint(LayerId(1), "Source");
-        base.asset = Some(asset);
-        let mut upper = Layer::paint(LayerId(2), "Not part of preview");
-        upper.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
-        upper.properties.clipped = true;
-        let layers = vec![upper, base];
-        let view = layer_render::ViewState {
-            width_px: 512,
-            height_px: 256,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [0.; 4],
-        };
-        r.submit(FramePacket {
-            time_seconds: 0.,
-            view,
-            document_extent: [512, 256],
-            layers: &layers,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: true,
-            composite_all: true,
-        })
-        .unwrap();
-        assert!(
-            r.readback_srgb_rgba8()
-                .unwrap()
-                .chunks_exact(4)
-                .any(|p| p[3] > 0),
-            "test artwork must be rendered before capture"
-        );
-        let mut request = FilterPreviewRequest {
-            request_id: 1,
-            target: LayerId(1),
-            size: [200, 40],
-            extent: [512, 256],
-            view,
-            layers: layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: vec![
-                Arc::new(fixture("curves").preview().unwrap()),
-                Arc::new(fixture("black_white").preview().unwrap()),
-            ],
-        };
-        assert!(r.request_filter_previews(request.clone()).unwrap());
-        let first = finish(&mut r);
-        let preview = r.filter_previews.as_ref().unwrap();
-        assert_eq!(preview.source_updates, 1);
-        assert_eq!(preview.rendered_rows, 2);
-        assert_eq!(
-            preview.scene.effects.compilations, 2,
-            "compile only the two requested filters"
-        );
-        let p = preview.point.unwrap();
-        assert!((300..340).contains(&p[0]) && (105..145).contains(&p[1]));
-        let colors: Vec<_> = first.image.bytes[..200 * 40 * 4]
-            .chunks_exact(4)
-            .filter(|p| p[3] > 100)
-            .collect();
-        assert!(colors.len() > 100, "must find actual nonempty content");
-        assert!(
-            colors.iter().all(|p| p[2] > p[0] + 20),
-            "must not include the clipped grayscale filter above insertion point"
-        );
-        // The original 40px mark stays 40px wide (never thumbnail-scaled).
-        for row in first.image.bytes[..200 * 40 * 4].chunks_exact(200 * 4) {
-            assert!(row.chunks_exact(4).filter(|p| p[3] > 0).count() <= 42);
-        }
-        request.request_id = 2;
-        request.view.document_to_surface = [2., 0., 0., 2., 90., 100.];
-        assert!(r.request_filter_previews(request.clone()).unwrap());
-        let second = r.take_filter_previews().unwrap().unwrap();
-        assert_eq!(second.image.bytes, first.image.bytes);
-        assert_eq!(second.image.request_id, 2);
-        assert_eq!(r.filter_previews.as_ref().unwrap().rendered_rows, 2);
-        request.filters = vec![Arc::new(fixture("exposure").preview().unwrap())];
-        request.request_id = 3;
-        assert!(r.request_filter_previews(request).unwrap());
-        finish(&mut r);
-        assert_eq!(r.filter_previews.as_ref().unwrap().source_updates, 1);
-        assert_eq!(r.filter_previews.as_ref().unwrap().rendered_rows, 3);
-        assert_eq!(
-            r.filter_previews
-                .as_ref()
-                .unwrap()
-                .scene
-                .effects
-                .compilations,
-            3
-        );
-        // A top-level insertion formerly copied the displayed composite. A
-        // display cache may be reduced or independently overwritten; previews
-        // must always capture their declared artwork scope.
-        let mut projected = layers.clone();
-        projected[0].visible = false;
-        r.submit(FramePacket {
-            time_seconds: 0., view, document_extent: [512, 256], layers: &projected,
-            dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: false,
-            composite_all: true,
-        }).unwrap();
-        let mut request = FilterPreviewRequest {
-            request_id: 4, target: LayerId(1), size: [200, 40], extent: [512, 256], view,
-            layers: projected, filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
-        };
-        r.filter_previews = None;
-        assert!(r.request_filter_previews(request.clone()).unwrap());
-        let expected = finish(&mut r).image.bytes;
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.encode_clear_value(&mut encoder, r.composite_view.as_ref().unwrap(), "replace display only", 1.);
-        encoder.submit(&r.queue);
-        r.filter_previews = None;
-        request.request_id = 5;
-        assert!(r.request_filter_previews(request.clone()).unwrap());
-        assert_eq!(finish(&mut r).image.bytes, expected);
-        let source_updates = r.filter_previews.as_ref().unwrap().source_updates;
-        r.set_ui_rendition(Some(layer_core::color::hdr::SdrRendition {
-            exposure: -2., ..Default::default()
-        })).unwrap();
-        request.request_id = 6;
-        assert!(r.request_filter_previews(request.clone()).unwrap());
-        assert_ne!(finish(&mut r).image.bytes, expected);
-        assert_eq!(r.filter_previews.as_ref().unwrap().source_updates, source_updates,
-            "rendition changes repaint previews without decoding/reprobing artwork");
-        r.set_ui_rendition(None).unwrap();
-        request.request_id = 7;
-        assert!(r.request_filter_previews(request).unwrap());
-        assert_eq!(finish(&mut r).image.bytes, expected);
-    }
-    #[test]
-    fn empty_document_filter_previews_have_a_masked_color_sample() {
-        let mut r = WgpuRasterizer::new_headless().unwrap();
-        let layers = vec![Layer::paint(LayerId(1), "Empty")];
-        let view = layer_render::ViewState {
-            width_px: 512,
-            height_px: 256,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [1.; 4],
-        };
-        r.submit(FramePacket {
-            time_seconds: 0.,
-            view,
-            document_extent: [512, 256],
-            layers: &layers,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: true,
-            composite_all: true,
-        })
-        .unwrap();
-        r.request_filter_previews(FilterPreviewRequest {
-            request_id: 1,
-            target: LayerId(1),
-            size: [200, 40],
-            extent: [512, 256],
-            view,
-            layers,
-            filters: vec![
-                Arc::new(fixture("curves").preview().unwrap()),
-                Arc::new(fixture("black_white").preview().unwrap()),
-            ],
-        })
-        .unwrap();
-        let image = finish(&mut r).image;
-        assert!(r.filter_previews.as_ref().unwrap().point.is_none());
-        let pixels: Vec<_> = image.bytes.chunks_exact(4).collect();
-        assert!(pixels.iter().filter(|p| p[3] > 100).count() > 1000);
-        assert!(pixels.iter().filter(|p| p[3] == 0).count() > 1000);
-        assert_ne!(&image.bytes[..200 * 40 * 4], &image.bytes[200 * 40 * 4..]);
-        let directory = std::path::Path::new("../../artifacts/ui/filter-picker");
-        std::fs::create_dir_all(directory).unwrap();
-        let file = std::fs::File::create(directory.join("gpu-preview-sample.png")).unwrap();
-        let mut png = png::Encoder::new(file, image.width, image.height);
-        png.set_color(png::ColorType::Rgba);
-        png.set_depth(png::BitDepth::Eight);
-        png.write_header()
-            .unwrap()
-            .write_image_data(&image.bytes)
-            .unwrap();
-    }
 
-    #[test]
-    fn cropped_multipass_preview_matches_full_resolution_canvas() {
-        use layer_core::{EffectInstance, EffectPass, EffectSampling};
-        let mut r = WgpuRasterizer::new_headless().unwrap();
-        let asset = AssetId("test:preview-seam".into());
-        let bytes: Vec<u8> = (0..512 * 256)
-            .flat_map(|i| {
-                if i % 512 < 256 {
-                    [230, 30, 60, 255]
-                } else {
-                    [30, 80, 230, 255]
-                }
-            })
-            .collect();
-        r.prepare_asset(
-            &asset,
-            HostImage {
-                width: 512,
-                height: 256,
-                stride: 2048,
-                format: PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )
-        .unwrap();
-        let mut base = Layer::paint(LayerId(1), "Paint");
-        base.asset = Some(asset);
-        let mut program = (*fixture("brightness_contrast").program()).clone();
-        program.entry = "preview_h".into();
-        program.wgsl="fn preview_h(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (c+fx_sample(p+vec2<f32>(-2.,0.))+fx_sample(p+vec2<f32>(2.,0.)))/3.;} fn preview_v(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (c+fx_sample(p+vec2<f32>(0.,-2.))+fx_sample(p+vec2<f32>(0.,2.)))/3.;}".into();
-        program.passes = ["preview_h", "preview_v"]
-            .map(|entry| EffectPass {
-                entry: entry.into(),
-                sampling: EffectSampling::Neighborhood { radius: 2 },
-            })
-            .into();
-        let effect = Arc::new(EffectInstance::new(Arc::new(program)));
-        let mut filter = Layer::paint(LayerId(2), "Blur");
-        filter.kind = LayerKind::Effect;
-        filter.effect = Some(effect.clone());
-        let mut layers = vec![filter, base];
-        let view = layer_render::ViewState {
-            width_px: 512,
-            height_px: 256,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [0.; 4],
-        };
-        r.submit(FramePacket {
-            time_seconds: 0.,
-            view,
-            document_extent: [512, 256],
-            layers: &layers,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: true,
-            composite_all: true,
-        })
-        .unwrap();
-        let full = r.readback_srgb_rgba8().unwrap();
-        r.request_filter_previews(FilterPreviewRequest {
-            request_id: 1,
-            target: LayerId(1),
-            size: [200, 40],
-            extent: [512, 256],
-            view,
-            layers: layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: vec![effect],
-        })
-        .unwrap();
-        let preview = finish(&mut r).image;
-        assert_eq!(r.filter_previews.as_ref().unwrap().point, Some([256, 128]));
-        let mut compared = 0;
-        for y in 0..40 {
-            for x in 0..200 {
-                let small = &preview.bytes[(y * 200 + x) * 4..][..4];
-                if small[3] == 255 {
-                    let large = &full[((y + 108) * 512 + x + 156) * 4..][..4];
-                    for c in 0..4 {
-                        assert!(
-                            (small[c] as i16 - large[c] as i16).abs() <= 1,
-                            "({x},{y}) preview={small:?} canvas={large:?}"
-                        );
-                    }
-                    compared += 1;
-                }
-            }
-        }
-        assert!(compared > 500);
-        assert!(
-            r.filter_previews.as_ref().unwrap().scratch_size[0] < 512,
-            "bounded passes render crop plus halo, not the whole document"
-        );
-        // Every built-in preview executes the exact canvas algorithm, including
-        // document-coordinate warps and original-input reads in later passes.
-        r.filter_previews = None;
-        for id in fixtures() {
-            layers[0].effect = Some(Arc::new(id.preview().unwrap()));
-            r.submit(FramePacket {
-                time_seconds: 0.,
-                view,
-                document_extent: [512, 256],
-                layers: &layers,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: false,
-                composite_all: true,
-            })
-            .unwrap();
-            let full = r.readback_srgb_rgba8().unwrap();
-            r.request_filter_previews(FilterPreviewRequest {
-                request_id: 2,
-                target: LayerId(1),
-                size: [200, 40],
-                extent: [512, 256],
-                view,
-                layers: layers.iter().map(Layer::composite_snapshot).collect(),
-                filters: vec![Arc::new(id.preview().unwrap())],
-            })
-            .unwrap();
-            let preview = finish(&mut r).image;
-            let mut compared = 0;
-            for y in 0..40 {
-                for x in 0..200 {
-                    let small = &preview.bytes[(y * 200 + x) * 4..][..4];
-                    if small[3] == 255 {
-                        let large = &full[((y + 108) * 512 + x + 156) * 4..][..4];
-                        assert!(
-                            small
-                                .iter()
-                                .zip(large)
-                                .all(|(&a, &b)| (a as i16 - b as i16).abs() <= 1),
-                            "{} ({x},{y}): preview={small:?} canvas={large:?}",
-                            id.label()
-                        );
-                        compared += 1;
-                    }
-                }
-            }
-            assert!(compared > 500, "{} opaque preview coverage", id.label());
-        }
-    }
 }

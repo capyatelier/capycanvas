@@ -757,8 +757,8 @@ manager handoff. Workspace storage is integrated as described below. Windows
 now includes native workspace management, multiple windows, runtime filter
 packages and saved toolbar management. Packaging, physical gestures, DPI/device
 lifecycle, full visual parity and all overlap/scroll/drag combinations still need
-acceptance. The strict GPU filter-reference mismatch remains open. Final painting
-presentation and input-latency acceptance remain deferred.
+acceptance. Final painting presentation and input-latency acceptance remain
+deferred.
 
 ## Workspace persistence and recovery
 

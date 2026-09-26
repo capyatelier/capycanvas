@@ -3,7 +3,7 @@
 The current renderer matches the independent pre-migration filter algorithms
 within the existing one-byte tolerance on the tested Windows GPU. This comparison
 qualifies the sampled migration cases on that machine. The checked-in Linux
-reference still fails on Windows; it is unchanged.
+reference failed on Windows; it was not changed.
 
 ## Evidence
 
@@ -34,53 +34,11 @@ host-environment difference caused it, or establish perceptual equivalence.
 The comparison covers these fixed presets and sampled positions. It does not
 qualify arbitrary parameters, other GPUs/drivers, browser rendering, physical
 input or painting cadence. The ordinary
-`runtime_filter_pixel_reference` test remains unchanged and still fails against
-the Linux fixture on this machine. No production renderer change follows from
-this comparison.
+`runtime_filter_pixel_reference` test was not changed and failed against the
+Linux fixture on this machine. No production renderer change follows from this
+comparison.
 
 ## Reproduce
 
-Apply the [oracle patch](../../tools/visual/windows-filter-oracle.patch) only to a
-separate checkout of the pinned independent commit. Its production changes are
-exactly the three import-contract changes recorded in the
-[reference provenance](../../crates/layer-render-wgpu/tests/fixtures/README.md):
-sRGB color attachments, encoded immutable input textures, and texel-exact
-explicit sRGB decoding followed by premultiplication. Filter algorithms,
-preprocessing and presets are untouched. The added test ports the current capture
-loop to the old `BuiltinEffect::ALL` API and compares the resulting raw pixels.
-
-From the current checkout in PowerShell:
-
-~~~powershell
-$repo = (Get-Location).Path
-$oracle = Join-Path $repo 'artifacts/windows/independent-filter-source'
-git worktree add --detach $oracle 7719e6b0ffa69e9aca1bf19acfedef9584d2fdad
-git -C $oracle apply --unidiff-zero (Join-Path $repo 'tools/visual/windows-filter-oracle.patch')
-
-# Adapter indices belong to this machine. Inspect the reported adapter;
-# the independent test rejects the wrong backend and CPU fallback.
-$env:LAYER_GPU_INDEX = '1'
-$env:CAPY_ORACLE_BACKEND = 'dx12'
-$env:CARGO_TARGET_DIR = Join-Path $repo 'target'
-cargo test --locked -p layer-render-wgpu --lib tests::filter_library::runtime_filter_pixel_reference -- --exact --nocapture
-~~~
-
-On the recorded reference failure, the current test writes `actual.png`,
-`input.png`, `reference.png` and `differences.tsv` under
-`artifacts/performance/filter-reference`. Preserve those files for each backend
-and confirm they came from this invocation before comparing them. A passing
-reference test does not emit fresh failure captures; do not reuse older files.
-Then run the independent comparison:
-
-~~~powershell
-$env:CAPY_ORACLE_CANDIDATE = Join-Path $repo 'artifacts/performance/filter-reference'
-$env:CAPY_ORACLE_OUTPUT = Join-Path $oracle ('artifacts/filter-oracle/' + $env:CAPY_ORACLE_BACKEND)
-$env:CARGO_TARGET_DIR = Join-Path $repo 'artifacts/windows/independent-filter-target'
-cargo test --manifest-path (Join-Path $oracle 'Cargo.toml') --locked -p layer-render-wgpu --lib windows_independent_filter_capture -- --nocapture
-~~~
-
-Repeat the current capture and independent comparison for Vulkan, selecting its
-actual adapter index and setting `CAPY_ORACLE_BACKEND=vulkan`. On the reviewed
-machine Vulkan was index 0 and D3D12 index 1. Keep outputs separate. The test logs
-its adapter and raw error counts, saves independent images locally, and fails if
-import pixels differ or any output channel exceeds the one-byte bound.
+The sRGB8 golden test, its Linux fixture and the oracle patches were removed
+with the legacy renderer; the results recorded above stand.

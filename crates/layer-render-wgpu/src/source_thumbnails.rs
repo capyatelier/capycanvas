@@ -40,8 +40,6 @@ pub(super) struct SourceThumbnails {
     rows: wgpu::Buffer,
     working: wgpu::Buffer,
     cache: VecDeque<Overview>,
-    #[cfg(test)]
-    pub builds: usize,
 }
 impl SourceThumbnails {
     pub fn new(r: &WgpuRasterizer) -> Self {
@@ -183,8 +181,6 @@ impl SourceThumbnails {
                 mapped_at_creation: false,
             }),
             cache: VecDeque::new(),
-            #[cfg(test)]
-            builds: 0,
         }
     }
     pub fn storage_bytes(&self) -> u64 {
@@ -264,10 +260,6 @@ impl SourceThumbnails {
             }
             write.track(encoder);
             overview.valid = write.validity();
-            #[cfg(test)]
-            if overview.remaining.is_empty() {
-                self.builds += 1;
-            }
         }
         let ready = overview.remaining.is_empty();
         self.cache.push_back(overview);

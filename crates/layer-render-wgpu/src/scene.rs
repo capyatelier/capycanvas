@@ -110,10 +110,6 @@ impl Scene {
         true
     }
     #[cfg(test)]
-    pub fn force_image_rebuild(&mut self) {
-        self.images = images::ImageStages::default();
-    }
-    #[cfg(test)]
     pub fn image_pass_pixels(&self) -> u64 {
         self.images.pass_pixels
     }
@@ -124,15 +120,6 @@ impl Scene {
     #[cfg(test)]
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
-    }
-    #[cfg(test)]
-    pub fn composition_work(&self) -> [u64; 4] {
-        [
-            self.images.backdrop_updates,
-            self.images.backdrop_pixels,
-            self.images.composition_pixels,
-            self.images.composition_builds,
-        ]
     }
     pub fn source_cache_work(&self) -> [u64; 2] {
         [self.source_tiles.hits + self.display_source_tiles.hits,

@@ -4,7 +4,7 @@ The current filter presets are perceptually equivalent to the independent
 pre-migration algorithms on the tested Mac. The latest follow-up below retains
 small raw differences with no perceptible mismatch in reviewed artwork.
 No production renderer or reference tolerance changes follow from these
-comparisons. The ordinary Linux-reference test still fails.
+comparisons. The ordinary Linux-reference test failed.
 
 ## Current renderer follow-up — 2026-09-16
 
@@ -86,8 +86,9 @@ apps and drawings are unchanged; the new products are not installed over them.
 Compared renderer source: `7a70cf45e147e011c88d66c0e3f79fe15976470e`.
 Independent source: `7719e6b0ffa69e9aca1bf19acfedef9584d2fdad`.
 Both use Rust 1.98.1, wgpu/Naga 30.0.1 and hardware Metal on Apple M2 Pro.
-The independent checkout applies only the three import-contract corrections in
-the [reference provenance](../../crates/layer-render-wgpu/tests/fixtures/README.md).
+The independent checkout applies only the three import-contract corrections:
+sRGB color attachments, encoded immutable input textures, and texel-exact
+explicit sRGB decoding followed by premultiplication.
 Filter algorithms, preprocessing, presets and composition remain unchanged.
 
 Each renderer uses identical original 384 × 256 artwork, forty filter preview
@@ -129,40 +130,5 @@ logs and comparison reports are ignored under
 
 ## Reproduce
 
-The existing reference test optionally exports complete images when
-`CAPY_FILTER_CAPTURE` names a directory. Use a fresh directory and inspect its
-`adapter.txt`, `filters.txt`, input and source before comparing. Captures are
-written before the unchanged Linux PNG assertion, so that assertion may still
-fail after all images have been saved.
-
-From the current checkout on the Mac:
-
-```bash
-repo=$(pwd)
-export CAPY_FILTER_CAPTURE="$repo/artifacts/apple-filter-current"
-cargo test --locked -p layer-render-wgpu --lib tests::filter_library::runtime_filter_pixel_reference -- --exact --nocapture
-```
-
-Then apply the shared [independent capture patch](../../tools/visual/windows-filter-oracle.patch)
-to a separate checkout of the pinned commit. The patch retains its original
-Windows test name and also accepts an explicit Metal backend. It rejects CPU
-fallback and an unexpected backend; inspect both recorded adapters.
-
-```bash
-oracle="$repo/artifacts/apple-filter-independent-source"
-git worktree add --detach "$oracle" 7719e6b0ffa69e9aca1bf19acfedef9584d2fdad
-git -C "$oracle" apply --unidiff-zero "$repo/tools/visual/windows-filter-oracle.patch"
-export CAPY_ORACLE_BACKEND=metal
-export CAPY_ORACLE_CANDIDATE="$CAPY_FILTER_CAPTURE"
-export CAPY_ORACLE_OUTPUT="$repo/artifacts/apple-filter-independent"
-export CARGO_TARGET_DIR="$repo/target"
-cargo test --manifest-path "$oracle/Cargo.toml" --locked -p layer-render-wgpu --lib windows_independent_filter_capture -- --nocapture
-```
-
-The independent test checks exact imported inputs and the original sampled
-one-byte limit. It also exports all complete images as `<filter>-<scope>.png`.
-For the separate full-image analysis, decode each matching PNG as RGBA8, require
-identical dimensions and filter lists, and count absolute differences across
-every channel of all 160 images. Keep this result distinct from the sampled
-test result. Apply the same scalar transfer functions and alpha composition to
-both images when preparing display comparisons.
+The sRGB8 golden test, its Linux fixture and the oracle patches were removed
+with the legacy renderer; the results recorded above stand.

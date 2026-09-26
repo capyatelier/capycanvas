@@ -6794,12 +6794,6 @@ mod tests {
         assert_eq!(empty, transparent_paper);
     }
 
-    fn pixel(renderer: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
-        renderer.wait_idle().unwrap();
-        let pixels = renderer.readback_srgb_rgba8().unwrap();
-        pixels[(y * 128 + x) * 4..][..4].try_into().unwrap()
-    }
-
     #[test]
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
