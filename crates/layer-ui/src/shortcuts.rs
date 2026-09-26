@@ -206,6 +206,24 @@ pub(crate) fn action_command(action: &UiAction) -> Option<CommandId> {
     }
 }
 
+pub(crate) fn tool_command(action: &UiAction) -> Option<CommandId> {
+    let UiAction::Layer { action: LayerAction::Tool { tool } } = action else {
+        return None;
+    };
+    Some(match tool {
+        LayerCanvasTool::Region { fill: true, .. } => CommandId::Fill,
+        LayerCanvasTool::Region { fill: false, .. } => CommandId::AutoSelect,
+        LayerCanvasTool::Gradient { .. } => CommandId::Gradient,
+        LayerCanvasTool::Figure { .. } => CommandId::Figure,
+        LayerCanvasTool::Ruler { .. } => CommandId::Ruler,
+        LayerCanvasTool::Hand => CommandId::Hand,
+        tool if tool.picks_color() => CommandId::Eyedropper,
+        LayerCanvasTool::Select => CommandId::Lasso,
+        LayerCanvasTool::Move => CommandId::Move,
+        _ => return None,
+    })
+}
+
 impl CommandId {
     pub fn shortcut_id(self) -> String {
         match self {
@@ -499,76 +517,9 @@ impl Settings {
     /// Native menu equivalents use typed chords, never parsed display labels.
     pub fn action_keys(&self, action: &UiAction, platform: Platform) -> Vec<KeyChord> {
         fn canonical(action: &UiAction) -> UiAction {
-            if let Some(command) = action_command(action) { return UiAction::Invoke { command }; }
-            use LayerAction as L;
-            match action {
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Region { fill, .. },
-                        },
-                } => UiAction::Invoke {
-                    command: if *fill {
-                        CommandId::Fill
-                    } else {
-                        CommandId::AutoSelect
-                    },
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Gradient { .. },
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Gradient,
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Figure { .. },
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Figure,
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Ruler { .. },
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Ruler,
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Hand,
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Hand,
-                },
-                UiAction::Layer {
-                    action: L::Tool { tool },
-                } if tool.picks_color() => UiAction::Invoke {
-                    command: CommandId::Eyedropper,
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Select,
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Lasso,
-                },
-                UiAction::Layer {
-                    action:
-                        L::Tool {
-                            tool: LayerCanvasTool::Move,
-                        },
-                } => UiAction::Invoke {
-                    command: CommandId::Move,
-                },
-                _ => action.clone(),
-            }
+            action_command(action)
+                .or_else(|| tool_command(action))
+                .map_or_else(|| action.clone(), |command| UiAction::Invoke { command })
         }
         let action = canonical(action);
         let builtin = match &action {

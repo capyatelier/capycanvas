@@ -68,6 +68,10 @@ impl ApplicationMenu {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(crate) fn proof_panel_command(&self, id: CommandId) -> bool {
+        crate::color_management::enabled(self.state.platform)
+            && matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)
+    }
     pub fn application_menu(&self, menu: ApplicationMenu) -> ContextMenu {
         use ApplicationMenu as M;
         let command = |id: CommandId| {
@@ -159,8 +163,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .iter()
                                 .copied()
                                 .filter(|id| id.available_on(self.state.platform))
-                                .filter(|id| !(menu == M::View && crate::color_management::enabled(self.state.platform)
-                                    && matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)))
+                                .filter(|id| !(menu == M::View && self.proof_panel_command(*id)))
                                 .filter(|id| !(menu == M::View && self.state.platform == Platform::Windows
                                     && *id == CommandId::SdrRendition))
                                 .filter(|id| !matches!(id, CommandId::SdrRendition | CommandId::PreviewSdr) || self.engine.document().color.depth.is_float())

@@ -281,7 +281,7 @@ pub(super) struct LayerInteraction {
     pub collapsed: BTreeSet<LayerId>,
     pub selected: BTreeSet<LayerId>,
     pub editing: Option<LayerId>,
-    clipboard_mask: Option<(LayerMask, Point)>,
+    pub clipboard_mask: Option<(LayerMask, Point)>,
     pub path: Vec<Point>,
     original: Option<Layer>,
     solo: Option<Vec<(LayerId, bool)>>,

@@ -222,6 +222,11 @@ pub struct ColorComponentView {
     pub value: f32,
     pub numeric: crate::NumericControl,
 }
+pub(crate) const PAINT_SLOTS: [(ColorSlot, &str); 3] = [
+    (ColorSlot::Foreground, "Foreground color"),
+    (ColorSlot::Background, "Background color"),
+    (ColorSlot::Transparent, "Transparent paint"),
+];
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorSwatchView {
     pub slot: ColorSlot,
@@ -352,25 +357,22 @@ impl ColorState {
                 numeric: Self::component_control(i).unwrap(),
             }),
             quick_colors: self.quick_colors(),
-            swatches: [
-                (
-                    ColorSlot::Foreground,
-                    "Foreground color",
+            swatches: {
+                let rgba = [
                     self.preview_in(self.foreground, display),
-                ),
-                (
-                    ColorSlot::Background,
-                    "Background color",
                     self.preview_in(self.background, display),
-                ),
-                (ColorSlot::Transparent, "Transparent paint", [0.; 4]),
-            ]
-            .map(|(slot, label, rgba)| ColorSwatchView {
-                slot,
-                label,
-                rgba,
-                selected: self.slot == slot,
-            }),
+                    [0.; 4],
+                ];
+                std::array::from_fn(|i| {
+                    let (slot, label) = PAINT_SLOTS[i];
+                    ColorSwatchView {
+                        slot,
+                        label,
+                        rgba: rgba[i],
+                        selected: self.slot == slot,
+                    }
+                })
+            },
         }
     }
     pub fn definition(&self) -> RgbColor {

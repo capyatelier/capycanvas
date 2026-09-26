@@ -191,7 +191,7 @@ pub(super) struct CommandSearch {
 /// Existing snake_case action tags and parameter names are the public wire
 /// contract. Active-layer commands omit the ephemeral layer ID; toggles omit
 /// their next boolean value. Saved-selection and resource IDs remain explicit.
-fn identity(action: &UiAction) -> String {
+pub(super) fn identity(action: &UiAction) -> String {
     let mut value = serde_json::to_value(action).expect("serializable action");
     if let UiAction::Customize {
         action: CustomizationAction::SetPanelVisible { panel, .. },
@@ -204,6 +204,19 @@ fn identity(action: &UiAction) -> String {
             "command.{}",
             serde_json::to_value(command).unwrap().as_str().unwrap()
         );
+    }
+    if let UiAction::Effect { .. } = action
+        && let Some(fields) = value["action"].as_object_mut()
+    {
+        fields.remove("layer");
+    }
+    if let UiAction::Selection {
+        action: SelectionAction::LoadCoverage { .. } | SelectionAction::NewLayer { .. },
+    } = action
+        && let Some(fields) = value["action"].as_object_mut()
+    {
+        fields.remove("id");
+        fields.remove("parent");
     }
     if let UiAction::Layer { .. } = action {
         if let Some(fields) = value["action"].as_object_mut() {
@@ -233,8 +246,15 @@ fn entry(
         .unwrap_or(action);
     let presentation_label = match &action {
         UiAction::Customize {
-            action: CustomizationAction::SetPanelVisible { .. },
-        } => format!("{label} panel"),
+            action: CustomizationAction::SetPanelVisible { panel, .. },
+        } => {
+            let noun = if panel.kind() == PanelKind::Tiles { "toolbar" } else { "panel" };
+            if label.to_lowercase().ends_with(noun) {
+                label.to_owned()
+            } else {
+                format!("{label} {noun}")
+            }
+        }
         _ => label.to_owned(),
     };
     let label = presentation_label.as_str();
@@ -342,8 +362,7 @@ fn entry(
             history,
             repeat,
             enabled,
-            disabled_reason: (!enabled)
-                .then(|| "Unavailable in the current tool or edit target".into()),
+            disabled_reason: None,
             selected: selected.unwrap_or(false),
             shortcut,
             parameter: None,
@@ -392,6 +411,7 @@ fn menu_entries(
     items: Vec<Vec<ContextMenuItem>>,
     path: &str,
     entries: &mut Vec<Entry>,
+    alias: &dyn Fn(UiAction) -> UiAction,
     settings: &Settings,
     platform: Platform,
 ) {
@@ -400,7 +420,7 @@ fn menu_entries(
             let mut item_entry = entry(
                 &item.label,
                 path,
-                action,
+                alias(action),
                 item.enabled,
                 item.selected,
                 settings,
@@ -416,6 +436,7 @@ fn menu_entries(
                 item.sections,
                 &format!("{path} › {}", item.label),
                 entries,
+                alias,
                 settings,
                 platform,
             );
@@ -468,12 +489,33 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn catalog_entries(&self) -> Vec<Entry> {
         let settings = &self.state.settings;
         let platform = self.state.platform;
+        let document = self.engine.document();
+        let active = document.active_layer.0;
+        let idle = self.require_idle().is_ok();
+        let managed = self.managed_workspace.is_some();
+        let artwork = !document.active_mask;
+        let alias = |action: UiAction| {
+            let command = match &action {
+                UiAction::Layer { action: LayerAction::Clear { id } } if *id == active && artwork => CommandId::ClearLayer,
+                UiAction::Layer { action: LayerAction::Delete { id } } if *id == active => CommandId::DeleteLayer,
+                UiAction::Layer { action: LayerAction::RasterizeSource { id } } if *id == active && artwork => {
+                    CommandId::RasterizeSource
+                }
+                UiAction::Layer { action: LayerAction::RepairSourceProfile { id } } if *id == active && artwork => {
+                    CommandId::RepairSourceProfile
+                }
+                UiAction::WorkspaceManager { command: WorkspaceCommand::ResetLayout } if managed => CommandId::ResetLayout,
+                _ => return action,
+            };
+            UiAction::Invoke { command }
+        };
         let mut entries = Vec::new();
         for menu in ApplicationMenu::ALL {
             menu_entries(
                 self.application_menu(menu).sections,
                 menu.label(),
                 &mut entries,
+                &alias,
                 settings,
                 platform,
             );
@@ -482,10 +524,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         // share CommandState, including selection submodes and temporary locks.
         for command in CommandId::ALL
             .into_iter()
-            .filter(|c| c.available_on(platform))
+            .filter(|c| c.available_on(platform) && !self.proof_panel_command(*c))
         {
             let state = self.command(command);
-            let mut item = entry(
+            entries.push(entry(
                 state.label,
                 "Commands",
                 UiAction::Invoke { command },
@@ -493,16 +535,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 state.checkable.then_some(state.selected),
                 settings,
                 platform,
-            );
-            item.descriptor.disabled_reason = self.command_disabled_reason(command);
-            entries.push(item);
+            ));
         }
         for family in ToolFamily::ALL {
             entries.push(entry(
                 family.label(),
                 "Tools",
                 UiAction::CycleTool { family },
-                self.require_idle().is_ok(),
+                idle,
                 None,
                 settings,
                 platform,
@@ -513,7 +553,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 brush.label,
                 "Brushes",
                 UiAction::SelectBrush { id: brush.id },
-                self.require_idle().is_ok(),
+                idle,
                 None,
                 settings,
                 platform,
@@ -521,71 +561,186 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.descriptor.description = format!("Load this {} brush preset.", brush.category);
             entries.push(item);
         }
-        for tool in self
-            .state
-            .tool_panels
-            .tools
-            .groups
-            .iter()
-            .chain(self.state.tool_panels.tools.subtools.iter())
-        {
-            entries.push(entry(
-                tool.label,
-                "Tools",
-                tool.action.clone(),
-                self.require_idle().is_ok(),
+        let panels = &self.state.tool_panels;
+        for set in panels.brush_sets.groups.iter().chain(&panels.sculpt_sets.groups) {
+            let mut item = entry(
+                &format!("{} brushes", set.label),
+                "Brush sets",
+                set.action.clone(),
+                idle,
                 None,
                 settings,
                 platform,
-            ));
+            );
+            item.descriptor.description = "Use the last brush chosen in this set.".into();
+            entries.push(item);
+        }
+        let current = self.layer_interaction.tool;
+        let (shape, paint) = self.layer_interaction.figure;
+        let [radial, transparent] = self.layer_interaction.gradient;
+        for representative in [
+            LayerCanvasTool::Ruler { kind: RulerKind::Straight },
+            LayerCanvasTool::Figure { shape, paint },
+            LayerCanvasTool::Region { fill: false, source: RegionSource::Visible },
+            LayerCanvasTool::Region { fill: true, source: RegionSource::Visible },
+            LayerCanvasTool::Gradient { radial, transparent },
+        ] {
+            use LayerCanvasTool as T;
+            let same = match (current, representative) {
+                (T::Region { fill: a, .. }, T::Region { fill: b, .. }) => a == b,
+                (a, b) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
+            };
+            let tool = if same { current } else { representative };
+            let family = crate::shortcuts::tool_command(&UiAction::Layer { action: LayerAction::Tool { tool } })
+                .map_or("", |command| self.command(command).label);
+            let view = tools::view(&self.state.brush, tool);
+            for item in view.groups.iter().chain(&view.subtools) {
+                if !matches!(item.action, UiAction::Invoke { .. }) {
+                    entries.push(entry(
+                        &format!("{family} › {}", item.label),
+                        "Tool options",
+                        item.action.clone(),
+                        idle,
+                        Some(same && item.selected),
+                        settings,
+                        platform,
+                    ));
+                }
+            }
+        }
+        for option in self.state.tool_options() {
+            if let ToolOption::Choice { label, items, .. } = option {
+                for item in items.into_iter().filter(|i| {
+                    !matches!(
+                        i.action,
+                        UiAction::Invoke { .. } | UiAction::SelectBrush { .. } | UiAction::SelectToolGroup { .. }
+                    )
+                }) {
+                    let family = crate::shortcuts::tool_command(&item.action)
+                        .map_or(label, |command| self.command(command).label);
+                    entries.push(entry(
+                        &format!("{family} › {}", item.label),
+                        "Tool options",
+                        item.action,
+                        idle,
+                        Some(item.selected),
+                        settings,
+                        platform,
+                    ));
+                }
+            }
         }
         for setting in &self.state.tool_settings {
-            let mut item = entry(
-                &format!("{}…", setting.label),
+            let item = parameter_entry(
+                format!("tool_setting.{}", setting.id),
+                setting.label,
                 "Tool settings",
+                setting.label,
+                &setting.numeric,
+                setting.value,
                 UiAction::SetToolSetting {
                     id: setting.id.into(),
                     value: setting.value,
                 },
-                self.require_idle().is_ok(),
-                None,
+                idle,
                 settings,
                 platform,
             );
-            item.search.push_str(" set adjust");
-            item.descriptor.id = format!("tool_setting.{}", setting.id);
-            item.descriptor.kind = CommandKind::Parameter;
-            let numeric = &setting.numeric;
-            // Compact toolbar readouts round to tenths, which would misstate
-            // bounds such as a pressure minimum of 0.25. Keep schema precision.
-            let number = |value| {
-                let text = numeric
-                    .resolve(value, NumericOperation::Format)
-                    .expect("valid tool numeric schema")
-                    .edit;
-                if text.contains('.') {
-                    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+            entries.push(item);
+        }
+        let properties = &self.state.layer_properties;
+        if properties.layer == Some(active)
+            && !self.selection_masks.quick()
+            && document.layer(document.active_layer).is_some_and(|l| l.kind != LayerKind::Selection)
+        {
+            let set = |key: &str, value| UiAction::Effect {
+                action: EffectAction::Set { layer: active, key: key.into(), value },
+            };
+            for control in &properties.controls {
+                let context = format!("{} · {}", properties.title, control.label);
+                let label = if matches!(control.key.as_str(), "opacity" | "blend") {
+                    format!("Layer {}", control.label.to_lowercase())
                 } else {
-                    text
+                    format!("{} {}", properties.title, control.label.to_lowercase())
+                };
+                match (&control.kind, &control.value) {
+                    (PropertyKind::Number { numeric }, layer_core::EffectValue::Number(value)) => {
+                        entries.push(parameter_entry(
+                            format!("layer_property.{}", control.key),
+                            &label,
+                            "Layer properties",
+                            &context,
+                            numeric,
+                            *value,
+                            set(&control.key, layer_core::EffectValue::Number(*value)),
+                            properties.enabled,
+                            settings,
+                            platform,
+                        ));
+                    }
+                    (PropertyKind::Choice { options }, layer_core::EffectValue::Choice(current)) => {
+                        for (i, option) in options.iter().enumerate() {
+                            let mut item = entry(
+                                &format!("{label}: {option}"),
+                                "Layer properties",
+                                set(&control.key, layer_core::EffectValue::Choice(i as u32)),
+                                properties.enabled,
+                                Some(i as u32 == *current),
+                                settings,
+                                platform,
+                            );
+                            item.descriptor.description = context.clone();
+                            entries.push(item);
+                        }
+                    }
+                    (PropertyKind::Toggle, layer_core::EffectValue::Toggle(on)) => {
+                        let mut item = entry(
+                            &label,
+                            "Layer properties",
+                            set(&control.key, layer_core::EffectValue::Toggle(!on)),
+                            properties.enabled,
+                            Some(*on),
+                            settings,
+                            platform,
+                        );
+                        item.descriptor.id = format!("layer_property.{}", control.key);
+                        item.descriptor.description = context;
+                        entries.push(item);
+                    }
+                    _ => {}
                 }
-            };
-            let unit = if numeric.unit.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", numeric.unit)
-            };
-            item.descriptor.description = format!(
-                "{} · Current {}{unit} · Range {}–{}{unit}",
-                setting.label,
-                number(setting.value as f64),
-                number(numeric.min),
-                number(numeric.max),
+            }
+        }
+        if let Some(workspace) = &self.managed_workspace {
+            let switchable = self.require_workspace_idle().is_ok();
+            for choice in &workspace.choices {
+                let current = choice.id == workspace.id;
+                let mut item = entry(
+                    &choice.name,
+                    "Workspaces",
+                    UiAction::WorkspaceManager {
+                        command: WorkspaceCommand::Switch { id: choice.id.clone() },
+                    },
+                    switchable || current,
+                    Some(current),
+                    settings,
+                    platform,
+                );
+                item.descriptor.description = "Switch to this workspace.".into();
+                entries.push(item);
+            }
+        }
+        for (slot, label) in crate::color::PAINT_SLOTS {
+            let mut item = entry(
+                label,
+                "Color",
+                UiAction::Color { action: ColorAction::Select { slot } },
+                idle,
+                Some(self.state.colors.slot == slot),
+                settings,
+                platform,
             );
-            item.descriptor.parameter = Some(CommandParameter {
-                numeric: setting.numeric.clone(),
-                value: setting.value,
-                text: setting.numeric.compact_value(setting.value as f64),
-            });
+            item.descriptor.description = "Paint with this color.".into();
             entries.push(item);
         }
         for (label, action) in [
@@ -597,7 +752,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 label,
                 "Color",
                 UiAction::Color { action },
-                self.require_idle().is_ok(),
+                idle,
                 None,
                 settings,
                 platform,
@@ -628,8 +783,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         for e in &mut entries {
             if let Some(UiAction::Invoke { command }) = e.action {
                 e.descriptor.enabled = self.command_flags(command).0;
-                e.descriptor.disabled_reason = self.command_disabled_reason(command);
             }
+            e.descriptor.disabled_reason = match &e.action {
+                Some(action) if !e.descriptor.enabled => Some(self.action_disabled_reason(action)),
+                _ => None,
+            };
         }
         if self.command_search.focus == CommandFocus::Palette {
             let palette = self.state.colors.library.active_palette().id;
@@ -687,6 +845,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn command_disabled_reason(&self, command: CommandId) -> Option<String> {
+        use CommandId as C;
         if self.command_flags(command).0 {
             return None;
         }
@@ -699,47 +858,204 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.rendering_suspended && !Self::command_without_renderer(command) {
             return Some("Painting is unavailable. Save the drawing and reopen it.".into());
         }
-        if let Err(reason) = self.require_idle() {
+        let gate = match command {
+            C::SdrRendition
+            | C::PreviewSdr
+            | C::SoftProofSetup
+            | C::SoftProof
+            | C::RepairSourceProfile
+            | C::RasterizeSource
+            | C::AssignProfile
+            | C::ConvertColorSpace
+            | C::ChangeBitDepth
+            | C::ImportImage
+            | C::PasteImage
+            | C::DocumentProperties
+            | C::NewDocument
+            | C::OpenDocument
+            | C::ExportDocument
+            | C::SelectAll
+            | C::Deselect
+            | C::InvertSelection
+            | C::ClearLayer
+            | C::FillSelection => self.require_document_idle(),
+            C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
+            C::CloseDocument => self.require_document_snapshot_idle(),
+            C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
+            C::CompleteSelection | C::CancelSelection | C::GamutWarning | C::UndoWorkspace | C::RedoWorkspace => Ok(()),
+            _ => self.require_idle(),
+        };
+        if let Err(reason) = gate {
             return Some(reason);
         }
-        Some(
-            match command {
-                CommandId::Undo => "Nothing to undo",
-                CommandId::Redo => "Nothing to redo",
-                CommandId::Deselect
-                | CommandId::InvertSelection
-                | CommandId::FillSelection
-                | CommandId::SaveSelectionLayer
-                    if self.current_selection().is_none() =>
-                {
-                    "Create a selection first"
-                }
-                CommandId::ApplyTransform
-                | CommandId::CancelTransform
-                | CommandId::TransformAspect
-                    if !self.operation.active() =>
-                {
-                    "Start a transform first"
-                }
-                CommandId::DeleteRuler => "Select a ruler first",
-                CommandId::Reselect if self.selection_masks.reselect.is_none() => {
-                    "No previous selection to restore"
-                }
-                _ if self.operation.active() => "Apply or cancel the transform first",
-                _ if self.state.document_file.busy => "Wait for the current file operation",
-                _ if self
-                    .engine
-                    .document()
-                    .is_locked(self.engine.document().active_layer) =>
-                {
-                    "The active layer is locked"
-                }
-                _ => "Unavailable in the current tool or edit target",
+        let document = self.engine.document();
+        let active = document.layer(document.active_layer);
+        let paint = active.is_some_and(|l| l.kind == LayerKind::Paint);
+        let locked = document.is_locked(document.active_layer);
+        let mask_target = self.selection_masks.target();
+        let selection = self.current_selection().is_some();
+        let reason = match command {
+            C::Undo => "Nothing to undo",
+            C::Redo => "Nothing to redo",
+            C::UndoWorkspace | C::RedoWorkspace if self.state.customization.header_editing => {
+                "Finish customizing the title bar first"
             }
-            .into(),
-        )
+            C::UndoWorkspace => "No workspace change to undo",
+            C::RedoWorkspace => "No workspace change to redo",
+            C::ReturnToArtwork
+            | C::ResetMaskColors
+            | C::SwapMaskColors
+            | C::MaskOverlayProtected
+            | C::FillSelectionMask
+            | C::ClearSelectionMask
+                if mask_target.is_none() =>
+            {
+                "Edit a selection mask first"
+            }
+            C::MaskOverlayProtected | C::FillSelectionMask | C::ClearSelectionMask => {
+                "This selection layer is locked"
+            }
+            C::ScaleRotate
+            | C::ClearLayer
+            | C::Figure
+            | C::Move
+            | C::FillSelection
+            | C::RepairSourceProfile
+            | C::RasterizeSource
+                if mask_target.is_some() =>
+            {
+                "Return to the artwork first"
+            }
+            C::QuickMask | C::NewSelectionLayer | C::PlacementOriginalSize | C::ScaleRotate
+                if self.operation.active() && !self.operation.placing() =>
+            {
+                "Apply or cancel the transform first"
+            }
+            C::PlacementOriginalSize => "Place an image first",
+            C::Reselect if selection => "Deselect before restoring the previous selection",
+            C::Reselect => "No previous selection to restore",
+            C::Deselect | C::InvertSelection | C::FillSelection | C::SaveSelectionLayer if !selection => {
+                "Create a selection first"
+            }
+            C::DeleteLayer if self.selection_masks.quick() => "Leave Quick Mask first",
+            C::DeleteLayer => {
+                return Some(
+                    document
+                        .delete_layers_edit(&[document.active_layer])
+                        .err()
+                        .map_or_else(|| "This layer can't be deleted".into(), layer_error),
+                );
+            }
+            C::SdrRendition | C::PreviewSdr if !document.color.depth.is_float() => {
+                "Requires a high dynamic range drawing"
+            }
+            C::PreviewSdr if !self.state.hdr_display_available => "Requires a high dynamic range display",
+            C::PreviewSdr if self.state.sdr_appearance_preview.is_some() => {
+                "Close the SDR appearance preview first"
+            }
+            C::PreviewSdr => "Turn off soft proofing and the gamut warning first",
+            C::GamutWarning => "Set up soft proofing first",
+            C::ResetLayout if self.managed_workspace.is_some() => "The layout already matches its starting state",
+            C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
+            C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
+            C::ApplyTransform | C::CancelTransform | C::TransformAspect => "Start a transform first",
+            C::SnapRulers => "Show rulers first",
+            C::DeleteRuler => "Select a ruler first",
+            C::CompleteSelection
+                if self.layer_interaction.tool
+                    != (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) =>
+            {
+                "Use the polygon selection tool"
+            }
+            C::CompleteSelection => "Place at least three points first",
+            C::CancelSelection => "No selection path to cancel",
+            C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
+            C::ZoomIn => "Already at the maximum zoom",
+            C::ZoomOut => "Already at the minimum zoom",
+            _ if self.operation.active() => "Apply or cancel the transform first",
+            _ if self.state.document_file.busy => "Wait for the current file operation",
+            _ if locked => "The active layer is locked",
+            C::ScaleRotate => "Select unlocked paint content or a layer mask",
+            C::ClearLayer | C::FillSelection | C::RaiseLayer | C::LowerLayer if !paint => "Select a paint layer",
+            C::ClearLayer | C::FillSelection if document.active_mask => "Return to the layer's artwork first",
+            C::RaiseLayer => "The layer is already at the top",
+            C::LowerLayer => "The layer is already at the bottom",
+            _ => "Unavailable in the current tool or edit target",
+        };
+        Some(reason.into())
     }
 
+    fn action_disabled_reason(&self, action: &UiAction) -> String {
+        if let UiAction::Invoke { command } = action
+            && let Some(reason) = self.command_disabled_reason(*command)
+        {
+            return reason;
+        }
+        let gate = match action {
+            UiAction::WorkspaceManager { .. } | UiAction::Customize { .. } => self.require_workspace_idle(),
+            UiAction::Layer { .. } | UiAction::Selection { .. } | UiAction::Effect { .. } => self.require_document_idle(),
+            _ => self.require_idle(),
+        };
+        if let Err(reason) = gate {
+            return reason;
+        }
+        let document = self.engine.document();
+        let roots = document.layer_roots(&self.layer_interaction.selected);
+        let reason = match action {
+            UiAction::Layer { action: LayerAction::GroupSelected } => {
+                document.group_layers_edit(&roots, LayerId(0)).err().map(layer_error)
+            }
+            UiAction::Layer { action: LayerAction::Ungroup { .. } } => {
+                document.ungroup_layer_edit(document.active_layer).err().map(layer_error)
+            }
+            UiAction::Layer { action: LayerAction::DeleteSelected } => {
+                document.delete_layers_edit(&roots).err().map(layer_error)
+            }
+            UiAction::Layer { action: LayerAction::Delete { .. } } => {
+                document.delete_layers_edit(&[document.active_layer]).err().map(layer_error)
+            }
+            UiAction::Layer {
+                action:
+                    LayerAction::MaskSelection { .. }
+                    | LayerAction::FillSelection
+                    | LayerAction::InvertSelection
+                    | LayerAction::Deselect,
+            }
+            | UiAction::Selection { .. }
+                if document.selection.is_none() && self.current_selection().is_none() =>
+            {
+                Some("Create a selection first".into())
+            }
+            UiAction::Layer { action: LayerAction::PasteMask { .. } }
+                if self.layer_interaction.clipboard_mask.is_none() =>
+            {
+                Some("Copy a layer mask first".into())
+            }
+            UiAction::Layer { action: LayerAction::CopyMask { .. } | LayerAction::ApplyMask { .. } }
+                if document.layer(document.active_layer).is_some_and(|l| l.mask.is_none()) =>
+            {
+                Some("The layer has no mask".into())
+            }
+            UiAction::Layer { action: LayerAction::ReferenceSelection } => {
+                Some("Mark layers as references first".into())
+            }
+            UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.active_mask => {
+                Some("Return to the artwork before applying a filter".into())
+            }
+            UiAction::Layer { .. } | UiAction::Effect { .. } | UiAction::Selection { .. }
+                if document.is_locked(document.active_layer) =>
+            {
+                Some("The active layer is locked".into())
+            }
+            UiAction::Layer { .. } | UiAction::Effect { .. }
+                if document.layer(document.active_layer).is_some_and(|l| l.kind == LayerKind::Background) =>
+            {
+                Some("The background can't be changed this way".into())
+            }
+            _ => None,
+        };
+        reason.unwrap_or_else(|| "Unavailable in the current tool or edit target".into())
+    }
     pub(super) fn open_command_search(&mut self) -> Result<(), String> {
         self.require_idle()?;
         self.command_search.entries = self.catalog_entries();
@@ -837,8 +1153,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     NumericOperation::Expression { text },
                 )?
                 .value as f32;
-            if let UiAction::SetToolSetting { value, .. } = &mut action {
-                *value = number;
+            match &mut action {
+                UiAction::SetToolSetting { value, .. } => *value = number,
+                UiAction::Effect { action: EffectAction::Set { value, .. } } => {
+                    *value = layer_core::EffectValue::Number(number)
+                }
+                _ => {}
             }
         }
         self.dispatch(action)
@@ -956,6 +1276,63 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.refresh_detail();
         }
         Ok(self.changed(regions::COMMAND_SEARCH, false))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parameter_entry(
+    id: String,
+    label: &str,
+    category: &str,
+    context: &str,
+    numeric: &NumericControl,
+    value: f32,
+    action: UiAction,
+    enabled: bool,
+    settings: &Settings,
+    platform: Platform,
+) -> Entry {
+    let mut item = entry(&format!("{label}…"), category, action, enabled, None, settings, platform);
+    item.search.push_str(" set adjust");
+    item.descriptor.id = id;
+    item.descriptor.kind = CommandKind::Parameter;
+    // Compact toolbar readouts round to tenths, which would misstate
+    // bounds such as a pressure minimum of 0.25. Keep schema precision.
+    let number = |value| {
+        let text = numeric
+            .resolve(value, NumericOperation::Format)
+            .expect("valid numeric schema")
+            .edit;
+        if text.contains('.') {
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            text
+        }
+    };
+    let unit = if numeric.unit.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", numeric.unit)
+    };
+    item.descriptor.description = format!(
+        "{context} · Current {}{unit} · Range {}–{}{unit}",
+        number(value as f64),
+        number(numeric.min),
+        number(numeric.max),
+    );
+    item.descriptor.parameter = Some(CommandParameter {
+        numeric: numeric.clone(),
+        value,
+        text: numeric.compact_value(value as f64),
+    });
+    item
+}
+
+fn layer_error(error: layer_core::DocumentError) -> String {
+    match error {
+        layer_core::DocumentError::InvalidLayerOperation(message) => message.into(),
+        layer_core::DocumentError::ProtectedLayer(_) => "The layer is locked".into(),
+        _ => "Unavailable for the selected layers".into(),
     }
 }
 

@@ -12,7 +12,9 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
     for command in CommandId::ALL {
         let wire = serde_json::to_value(command).unwrap();
         let id = format!("command.{}", wire.as_str().unwrap());
-        if command.available_on(Platform::Gtk) {
+        if s.proof_panel_command(command) {
+            assert!(!ids.iter().any(|v| **v == id), "the Proof panel owns {command:?}");
+        } else if command.available_on(Platform::Gtk) {
             let d = catalog.iter().find(|d| d.id == id).unwrap();
             assert_eq!(d.enabled, s.command(command).enabled, "{command:?}");
             assert_eq!(d.disabled_reason.is_some(), !d.enabled);
@@ -385,4 +387,126 @@ fn command_search_top_is_a_fifth_of_the_workspace_within_bounds() {
     assert_eq!(style.top(100.), 48.);
     assert_eq!(style.top(600.), 120.);
     assert_eq!(style.top(2160.), 192.);
+}
+
+#[test]
+fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let find = |s: &UiSession<Recorder>, label: &str| {
+        s.command_catalog()
+            .into_iter()
+            .find(|d| d.label == label)
+            .unwrap_or_else(|| panic!("{label} is cataloged"))
+    };
+    let execute = |s: &mut UiSession<Recorder>, id: &str, value: Option<&str>| {
+        s.dispatch(UiAction::ExecuteCommand {
+            id: id.into(),
+            value: value.map(Into::into),
+        })
+        .unwrap();
+    };
+    let radial = find(&s, "Ruler › Radial");
+    assert!(!radial.selected);
+    execute(&mut s, &radial.id, None);
+    assert_eq!(
+        s.layer_interaction.tool,
+        LayerCanvasTool::Ruler { kind: RulerKind::Radial }
+    );
+    assert!(find(&s, "Ruler › Radial").selected);
+    assert!(!find(&s, "Ruler › Straight").selected);
+
+    let id = find(&s, "Watercolor brushes").id;
+    execute(&mut s, &id, None);
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+    assert_eq!(crate::tools::group(s.state.brush.preset), ToolGroup::Watercolor);
+
+    assert!(s.command_catalog().iter().all(|d| !d.label.starts_with("Sample size ›")));
+    invoke(&mut s, CommandId::Eyedropper);
+    let id = find(&s, "Sample size › 5 px circle").id;
+    execute(&mut s, &id, None);
+    assert_eq!(s.state.color_picker.sample_width, 5);
+
+    invoke(&mut s, CommandId::AddLayer);
+    let layer = s.engine.document().active_layer;
+    let opacity = find(&s, "Layer opacity…");
+    assert_eq!(opacity.id, "layer_property.opacity");
+    assert!(opacity.description.ends_with("Current 100 % · Range 0–100 %"), "{}", opacity.description);
+    execute(&mut s, &opacity.id, Some("40"));
+    let properties = |s: &UiSession<Recorder>| s.engine.document().layer(layer).unwrap().properties.clone();
+    assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);
+    let id = find(&s, "Layer blend mode: Multiply").id;
+    execute(&mut s, &id, None);
+    assert_eq!(properties(&s).blend, layer_core::LayerBlend::Multiply);
+    assert!(find(&s, "Layer blend mode: Multiply").selected);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(properties(&s).blend, layer_core::LayerBlend::Normal);
+    assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);
+
+    let id = find(&s, "Background color").id;
+    execute(&mut s, &id, None);
+    assert_eq!(s.state.colors.slot, ColorSlot::Background);
+
+    s.configure_workspace_manager(ManagedWorkspace {
+        id: "w0".into(),
+        name: "Workspace 0".into(),
+        baseline: durable_layout(&s.state.workspace.layout),
+        choices: (0..8)
+            .map(|i| WorkspaceChoice { id: format!("w{i}"), name: format!("Workspace {i}") })
+            .collect(),
+    })
+    .unwrap();
+    let catalog = s.command_catalog();
+    for i in 0..8 {
+        let choice = catalog.iter().find(|d| d.label == format!("Workspace {i}")).unwrap();
+        assert_eq!(choice.selected, i == 0);
+    }
+    assert_eq!(catalog.iter().filter(|d| d.label == "Restore Starting Layout…").count(), 1);
+}
+
+#[test]
+fn equivalent_menu_actions_share_command_identities_and_explain_unavailability() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let catalog = s.command_catalog();
+    let active = s.engine.document().active_layer.0;
+    for action in [
+        LayerAction::Clear { id: active },
+        LayerAction::Delete { id: active },
+    ] {
+        let id = command_catalog::identity(&UiAction::Layer { action });
+        assert!(!catalog.iter().any(|d| d.id == id), "{id} is the command entry");
+    }
+    let labels: Vec<_> = catalog.iter().map(|d| d.label.as_str()).collect();
+    assert!(!labels.iter().any(|l| l.ends_with("panel panel") || l.ends_with("toolbar panel")));
+    let reason = |s: &UiSession<Recorder>, id: &str| {
+        s.command_catalog()
+            .into_iter()
+            .find(|d| d.id == id)
+            .and_then(|d| d.disabled_reason)
+            .unwrap_or_default()
+    };
+    assert_eq!(reason(&s, "command.undo_workspace"), "No workspace change to undo");
+    assert_eq!(reason(&s, "command.return_to_artwork"), "Edit a selection mask first");
+    assert_eq!(
+        reason(&s, &command_catalog::identity(&UiAction::Layer { action: LayerAction::PasteMask { id: active } })),
+        "Copy a layer mask first"
+    );
+    while s.command(CommandId::ZoomIn).enabled {
+        invoke(&mut s, CommandId::ZoomIn);
+    }
+    assert_eq!(reason(&s, "command.zoom_in"), "Already at the maximum zoom");
+    s.dispatch(UiAction::Layer {
+        action: LayerAction::Lock { id: active, value: true },
+    })
+    .unwrap();
+    assert_eq!(reason(&s, "command.clear_layer"), "The active layer is locked");
+    let generic = "Unavailable in the current tool or edit target";
+    assert!(
+        s.command_catalog()
+            .iter()
+            .filter(|d| !d.enabled)
+            .all(|d| d.disabled_reason.as_deref().is_some_and(|r| !r.is_empty())),
+    );
+    assert!(s.command_catalog().iter().filter(|d| d.disabled_reason.as_deref() == Some(generic)).count() < 3);
 }
