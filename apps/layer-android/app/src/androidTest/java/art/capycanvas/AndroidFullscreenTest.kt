@@ -1,31 +1,23 @@
 package art.capycanvas
 
-import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.SystemClock
-import android.view.View
-import android.view.ViewGroup
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleCallback
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
 
 class AndroidFullscreenTest {
-    private fun canvas(view: View): CanvasSurfaceView? {
-        if (view is CanvasSurfaceView) return view
-        if (view is ViewGroup) for (i in 0 until view.childCount) canvas(view.getChildAt(i))?.let { return it }
-        return null
-    }
+    @get:Rule val device = CapyDeviceRule()
 
     @Test fun canvasSizeStaysStableFromFirstLayoutThroughSystemBarTransitions() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
         val samples = mutableListOf<String>()
         val violations = linkedSetOf<String>()
         var phase = "startup"
@@ -35,7 +27,7 @@ class AndroidFullscreenTest {
             if (activity is MainActivity && stage == Stage.CREATED) {
                 val decor = activity.window.decorView
                 decor.viewTreeObserver.addOnPreDrawListener {
-                    val surface = canvas(decor)
+                    val surface = decor.descendant<CanvasSurfaceView>()
                     val insets = ViewCompat.getRootWindowInsets(decor)
                     if (surface != null && surface.width > 0 && surface.height > 0 && insets != null) {
                         val obstruction = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.captionBar())
@@ -62,15 +54,6 @@ class AndroidFullscreenTest {
         instrumentation.runOnMainSync {
             ActivityLifecycleMonitorRegistry.getInstance().addLifecycleCallback(callback)
         }
-        fun screenshot(name: String) {
-            instrumentation.uiAutomation.takeScreenshot()!!.let { bitmap ->
-                try {
-                    instrumentation.targetContext.getExternalFilesDir(null)!!.resolve("stable-immersive-$name.png").outputStream().use {
-                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-                    }
-                } finally { bitmap.recycle() }
-            }
-        }
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 fun waitFor(description: String, condition: (MainActivity) -> Boolean) {
@@ -94,7 +77,7 @@ class AndroidFullscreenTest {
                 waitFor("first canvas and hidden bars") {
                     it.host.surfaceReady && it.host.snapshot?.optBoolean("brush_ready") == true && barsHidden(it)
                 }
-                screenshot("startup")
+                screenshot("stable-immersive-startup.png")
 
                 // Exercise visible insets and their animations directly. A
                 // transient edge reveal may not report visible insets to the app;
@@ -108,7 +91,7 @@ class AndroidFullscreenTest {
                     insets != null && insets.isVisible(WindowInsetsCompat.Type.statusBars()) && insets.isVisible(WindowInsetsCompat.Type.navigationBars())
                 }
                 SystemClock.sleep(500)
-                screenshot("bars-shown")
+                screenshot("stable-immersive-bars-shown.png")
                 scenario.onActivity {
                     phase = "bars-hiding"
                     WindowCompat.getInsetsController(it.window, it.window.decorView).hide(WindowInsetsCompat.Type.systemBars())

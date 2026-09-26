@@ -8,24 +8,18 @@ import android.view.Choreographer
 import android.view.FrameMetrics
 import android.view.InputDevice
 import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
 import android.view.Window
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
 import org.junit.Test
-import org.junit.Before
-import org.junit.After
-import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,11 +28,7 @@ import kotlin.math.sin
 /** Opt-in measurement on the real Android frame clock, without Compose test
  * clock advancement or wait-for-idle between pointer samples. */
 class AndroidWorkspacePerformanceTest {
-    @Before fun isolateWorkspace() {
-        CanvasHost.workspaceDirectoryForTest = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
-            "workspace-performance-tests/${java.util.UUID.randomUUID()}").absolutePath
-    }
-    @After fun releaseWorkspace() { CanvasHost.workspaceDirectoryForTest = null }
+    @get:Rule val device = CapyDeviceRule()
 
     @Test fun continuousDragFrameTiming() = frameTiming(false)
 
@@ -52,12 +42,7 @@ class AndroidWorkspacePerformanceTest {
             lateinit var host: CanvasHost
             lateinit var owner: ViewRootForTest
             lateinit var window: Window
-            fun root(view: View): ViewRootForTest? {
-                if (view is ViewRootForTest) return view
-                if (view is ViewGroup) for (index in 0 until view.childCount) root(view.getChildAt(index))?.let { return it }
-                return null
-            }
-            scenario.onActivity { host = it.host; owner = root(it.window.decorView)!!; window = it.window }
+            scenario.onActivity { host = it.host; owner = it.window.decorView.descendant<ViewRootForTest>()!!; window = it.window }
             fun waitFor(condition: () -> Boolean) {
                 val deadline = SystemClock.uptimeMillis() + 60_000
                 do {
@@ -80,12 +65,9 @@ class AndroidWorkspacePerformanceTest {
                 assertTrue(done.await(10, TimeUnit.SECONDS))
                 return result
             }
-            fun find(node: SemanticsNode, tag: String): SemanticsNode? =
-                if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node
-                else node.children.firstNotNullOfOrNull { find(it, tag) }
             fun bounds(tag: String): androidx.compose.ui.geometry.Rect {
                 var result = androidx.compose.ui.geometry.Rect.Zero
-                scenario.onActivity { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)!!.boundsInRoot }
+                scenario.onActivity { result = owner.find(hasTag(tag))!!.boundsInRoot }
                 return result
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
@@ -97,8 +79,6 @@ class AndroidWorkspacePerformanceTest {
                 host.snapshot!!.getJSONObject("state").getJSONObject("settings").getString("transparency")) }
             val transparency = InstrumentationRegistry.getArguments().getString("workspaceTransparency")?.toInt() ?: savedTransparency
             val fixture = JSONObject(saved.toString())
-            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-                "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
             fixture.getJSONObject("layout").apply {
                 put("bands", JSONArray(listOf(
                     obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
@@ -185,7 +165,7 @@ class AndroidWorkspacePerformanceTest {
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
                         scenario.onActivity {
                             drawnRevisions.clear(); changedBounds = 0
-                            resizeNode = if (resize) find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-41") else null
+                            resizeNode = if (resize) owner.find(hasTag("group-41")) else null
                             lastDrawnBounds = resizeNode?.boundsInRoot
                         }
                         measuring.set(true)
@@ -244,12 +224,12 @@ class AndroidWorkspacePerformanceTest {
                             if (expectRetained) assertSame(retainedPanels, host.panelContent)
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
-                                val shown = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${geometry.group}")!!.boundsInRoot
+                                val shown = owner.find(hasTag("group-${geometry.group}"))!!.boundsInRoot
                                 val density = owner.view.resources.displayMetrics.density
                                 assertEquals("Native placement follows Rust geometry", workspace.left + geometry.bounds!!.left * density, shown.left, 1.1f)
                                 assertEquals(workspace.top + geometry.bounds.top * density, shown.top, 1.1f)
                                 if (colorOverlap) {
-                                    val wheel = find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-wheel")!!.boundsInRoot
+                                    val wheel = owner.find(hasTag("color-wheel"))!!.boundsInRoot
                                     assertTrue("Motion overlaps the visible Color wheel", shown.overlaps(wheel))
                                 }
                             }
@@ -291,10 +271,6 @@ class AndroidWorkspacePerformanceTest {
                 window.removeOnFrameMetricsAvailableListener(listener)
                 scenario.onActivity { owner.view.viewTreeObserver.removeOnDrawListener(drawListener) }
                 frames.quitSafely()
-                scenario.onActivity { host.clearActionError() }
-                action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to savedTransparency)))
-                action(obj("type" to "restore_workspace", "workspace" to saved))
-                waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString() == saved.toString() }
             }
         }
     }

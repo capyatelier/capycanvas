@@ -23,11 +23,11 @@ import java.security.MessageDigest
 
 /** Real JNI/file workers and Vulkan. Test files stay in this app's private cache. */
 class AndroidRasterTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule(order = 0) val device = CapyDeviceRule(nativeFileJobs = true)
+    @get:Rule(order = 1) val compose = createEmptyComposeRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var activity: MainActivity
     private val host get() = activity.host
-    private lateinit var recoveryDirectory: File
     private fun launch() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -42,11 +42,7 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
     @Before fun isolatedWindow() {
-        DocumentController.nativeFileJobsForTest = true
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        for (command in listOf("input keyevent KEYCODE_WAKEUP", "wm dismiss-keyguard")) {
-            android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
-        }
+        wakeDevice()
         // A driver crash can strand the previous run's synthetic contact in
         // InputDispatcher. Cancel that injected device before opening a picker.
         for (source in listOf(android.view.InputDevice.SOURCE_STYLUS, android.view.InputDevice.SOURCE_TOUCHSCREEN, android.view.InputDevice.SOURCE_MOUSE)) {
@@ -54,21 +50,12 @@ class AndroidRasterTest {
             val coords = arrayOf(android.view.MotionEvent.PointerCoords())
             val now = SystemClock.uptimeMillis()
             val event = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_CANCEL, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, source, 0)
-            try { automation.injectInputEvent(event, true) } finally { event.recycle() }
+            try { instrumentation.uiAutomation.injectInputEvent(event, true) } finally { event.recycle() }
         }
-        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "raster-test-${System.nanoTime()}")
-        ColorPreferencesStore.directoryForTest=File(root,"color-preferences")
-        recoveryDirectory = File(root, "recovery")
-        RecoveryController.directoryForTest = recoveryDirectory
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
         launch()
     }
     @After fun closeWindow() {
         if (::scenario.isInitialized) scenario.close()
-        DocumentController.nativeFileJobsForTest = false
-        RecoveryController.directoryForTest = null
-        CanvasHost.workspaceDirectoryForTest = null
-        ColorPreferencesStore.directoryForTest=null
     }
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private fun builtinRecipe(index: Int): JSONObject {
@@ -77,6 +64,18 @@ class AndroidRasterTest {
     }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
+    private fun refresh() { tick(); compose.runOnUiThread { host.documentChanged() }; compose.waitForIdle() }
+    private fun send(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; compose.waitUntil(30_000) { !tick() } }
+    private fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
+    private fun action(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; scenario.onActivity { host.documentChanged() }; tick(); compose.waitForIdle() }
+    private fun action(command: String) { compose.runOnUiThread { host.invoke(command) }; compose.waitForIdle() }
+    private fun tabs() = native { JSONObject(Native.documentTabs(it, obj("op" to "view").toString())) }
+    private fun ids() = tabs().array("tabs").objects().map { it.getLong("id") }
+    private fun histogram(): JSONObject {
+        val control = Native.captureControl()
+        try { return JSONObject(Native.inspectionHistogram(native { Native.inspectionTask(it, control) })).getJSONObject("histogram") }
+        finally { Native.captureFree(control) }
+    }
     @Test fun diagnosticsSampleInOpenColumns() {
         fun action(value: JSONObject) {
             val done = java.util.concurrent.CountDownLatch(1)
@@ -195,11 +194,6 @@ class AndroidRasterTest {
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
     @Test fun selectionToolsRenderAndCombineOnDevice() {
-        fun send(value: JSONObject) {
-            native { Native.dispatch(it, value.toString()) }
-            compose.waitUntil(30_000) { !tick() }
-        }
-        fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
         fun selection() = native { state(it).getJSONObject("layer_tools").getBoolean("has_selection") }
         fun waitSelection() = compose.waitUntil(30_000) { tick(); selection() }
         fun drag(x1: Double, y1: Double, x2: Double, y2: Double) {
@@ -349,8 +343,6 @@ class AndroidRasterTest {
             Native.projectWork(job,-1,500,200);native { Native.projectAdopt(it,job,"null") }
         } finally { Native.projectFree(job) }
         compose.runOnUiThread { host.documentChanged() }
-        fun send(value:JSONObject) { native { Native.dispatch(it,value.toString()) }; compose.waitUntil(30_000) { !tick() } }
-        fun invoke(id:String)=send(obj("type" to "invoke","command" to id))
         fun tone(index:Int)=send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to index)))
         fun pixel(name:String):Int {
             val data=png(name);val image=android.graphics.BitmapFactory.decodeByteArray(data,0,data.size)
@@ -415,7 +407,7 @@ class AndroidRasterTest {
         assertEquals(3,properties.array("controls").length())
         assertEquals(0,properties.array("controls").objects().first { it.getString("key")=="mask_mode" }.getJSONObject("value").getInt("value"))
         // Inject through Android's actual input dispatcher and CanvasSurfaceView.
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation = instrumentation.uiAutomation
         val camera = host.snapshot!!.getJSONObject("state").getJSONObject("camera")
         val viewport = camera.getJSONArray("viewport")
         val origin = host.surfaceOrigin
@@ -523,15 +515,12 @@ class AndroidRasterTest {
     @Test fun portablePhotoGainmapDelivery() {
         val root=InstrumentationRegistry.getArguments().getString("photoDirectory") ?: throw AssumptionViolatedException("Supply -e photoDirectory with the portable photo fixtures")
         require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))
-        val instrumentation=InstrumentationRegistry.getInstrumentation()
         val automation=instrumentation.uiAutomation
         fun fixture(name:String)=File(files,name).apply {
             writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $root/$name")).use{it.readBytes()})
             assertTrue("Fixture $name",length()>0)
         }
-        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
         fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
-        fun histogram():JSONObject {val c=Native.captureControl();try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}finally{Native.captureFree(c)}}
         fun choice(label:String,text:String){
             compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-$label") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
             compose.onNodeWithTag("color-choice-$label").performScrollTo().performClick()
@@ -653,7 +642,7 @@ class AndroidRasterTest {
         val arguments=InstrumentationRegistry.getArguments()
         val path=arguments.getString("photoFile") ?: throw AssumptionViolatedException("Supply -e photoFile with an HDR photo")
         require(Regex("/data/local/tmp/[A-Za-z0-9_./-]+").matches(path))
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val input=File(files,"large-photo.avif").apply {
             writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $path")).use{it.readBytes()})
         }
@@ -663,12 +652,6 @@ class AndroidRasterTest {
         val watching=java.util.concurrent.atomic.AtomicBoolean(true)
         val peak=java.util.concurrent.atomic.AtomicLong()
         val sampler=Thread{while(watching.get()){peak.accumulateAndGet(android.os.Debug.getPss().toLong()*1024,::maxOf);SystemClock.sleep(250)}}.apply{start()}
-        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
-        fun histogram():JSONObject {
-            val c=Native.captureControl()
-            try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}
-            finally{Native.captureFree(c)}
-        }
         try {
             val started=SystemClock.uptimeMillis();open(input);refresh()
             report.put("open_ms",SystemClock.uptimeMillis()-started)
@@ -714,7 +697,7 @@ class AndroidRasterTest {
 
     @Test fun hdrBlackIntensityMarkerVisible() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile")
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val input=File(files,"hdr-marker.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
         open(input)
         native { Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot_intensity","slot" to "foreground","color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"stops" to 2)).toString()) }
@@ -747,9 +730,8 @@ class AndroidRasterTest {
     @Test fun hdrEditingProofDeliveryAndRecovery() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
         Assume.assumeTrue("Supply an independently encoded PQ PNG with -e hdrFile",sourcePath!=null)
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val input=File(files,"hdr-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
-        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};refresh()}
         fun histogram():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
         fun form()=native{JSONObject(Native.proofForm(it))}
@@ -880,10 +862,9 @@ class AndroidRasterTest {
     @Test fun gpuToneRetainsPreviewAndRejectsLatePublication() {
         val source=InstrumentationRegistry.getArguments().getString("hdrFile")
         Assume.assumeTrue("Supply -e hdrFile",source!=null)
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val input=File(files,"gpu-tone-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
         fun status()=native{JSONObject(Native.toneStatus(it))}
-        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
         fun ready(){compose.waitUntil(120_000){val s=status();s.getBoolean("ready")||!s.isNull("error")};assertTrue(status().isNull("error"))}
         open(input)
         native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())};refresh();ready()
@@ -916,7 +897,7 @@ class AndroidRasterTest {
 
     @Test fun hdrDisplayNegotiation() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile for the display regression")
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         fun shell(command:String)=ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use{it.readBytes()}
         val output=File(activity.getExternalFilesDir(null),"display").apply{mkdirs()}
         val input=File(files,"display-hdr.png").apply{writeBytes(shell("cat $sourcePath"))}
@@ -1038,10 +1019,9 @@ class AndroidRasterTest {
     @Test fun proofWorkspaceDragCancelAndDrawer() {
         val source=InstrumentationRegistry.getArguments().getString("hdrFile")
         Assume.assumeTrue("Supply -e hdrFile",source!=null)
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val file=File(files,"workspace-hdr.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
         open(file);tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
-        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
         fun edit(value:JSONObject){compose.runOnUiThread{host.customize(value)};compose.waitForIdle()}
         fun group()=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("proof")}
         fun recipe()=native{JSONObject(Native.proofForm(it)).getJSONObject("rendition").toString()}
@@ -1077,9 +1057,8 @@ class AndroidRasterTest {
     @Test fun proofSetupCompareEditPortabilityExportAndRecovery() {
         val profilePath=InstrumentationRegistry.getArguments().getString("proofProfile")
         Assume.assumeTrue("Supply -e proofProfile /data/local/tmp/capy-proof-cmyk.icc",profilePath!=null)
-        val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
+        val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
         val target=runBlocking{ProfileStore.import(activity,targetBytes)}
-        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
         fun hide(){compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};compose.waitForIdle()}
         fun cancel(){compose.onNodeWithTag("proof-mode-off").performScrollTo().performClick();hide()}
         var selectedName=""
@@ -1128,7 +1107,7 @@ class AndroidRasterTest {
         compose.waitUntil(10_000){!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
         DocumentController.nativeFileJobsForTest=true
         compose.waitForIdle();SystemClock.sleep(300)
-        InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"proof-print.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        instrumentation.uiAutomation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"proof-print.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
         apply()
         assertTrue("The saved ICC, not the same-named builtin, must be selected",current().getJSONObject("profile").has("Icc"))
         val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
@@ -1209,7 +1188,7 @@ class AndroidRasterTest {
         }
         println("Native preparation cancellation and stale-result rejection passed")
         InstrumentationRegistry.getArguments().getString("proofPortableFile")?.let{path->
-            val bytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")).use{it.readBytes()}
+            val bytes=ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $path")).use{it.readBytes()}
             val portable=File(files,"proof-from-web.capy").apply{writeBytes(bytes)}
             open(portable);compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
             assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
@@ -1239,7 +1218,7 @@ class AndroidRasterTest {
             return result!!
         }
         fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
-            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+            instrumentation.uiAutomation.executeShellCommand(command)
         ).use { it.readBytes().decodeToString() }
         // Read the published state; Native.snapshot would consume the
         // publication before Compose can receive it.
@@ -1251,7 +1230,7 @@ class AndroidRasterTest {
         if(steps>=180) {
             val output=File(activity.getExternalFilesDir(null),"motion-start-$tool")
             output.resolveSibling(output.name+".json").writeText(obj("camera" to camera,"x" to cx,"y" to cy).toString(2))
-            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->output.resolveSibling(output.name+".png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+            instrumentation.uiAutomation.takeScreenshot()?.let{shot->output.resolveSibling(output.name+".png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
         }
         val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
         measurements(true)
@@ -1269,7 +1248,7 @@ class AndroidRasterTest {
             })
             val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
-            try {assertTrue("Injected tool=$tool phase=$phase at (${coords[0].x}, ${coords[0].y})",InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
+            try {assertTrue("Injected tool=$tool phase=$phase at (${coords[0].x}, ${coords[0].y})",instrumentation.uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
             if (phase == android.view.MotionEvent.ACTION_UP) break
             if (i == 10) during?.invoke()
             i++; SystemClock.sleep(4)
@@ -1279,7 +1258,7 @@ class AndroidRasterTest {
             val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply{id=7;toolType=tool})
             val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply{x=cx;y=cy;pressure=0f})
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),android.view.MotionEvent.ACTION_HOVER_EXIT,1,properties,coords,0,0,1f,1f,0,0,source,0)
-            try{InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,true)}finally{event.recycle()}
+            try{instrumentation.uiAutomation.injectInputEvent(event,true)}finally{event.recycle()}
         }
         // The host's Choreographer is the only frame producer during
         // motion. Capture its timeline independently of GPU timings.
@@ -1288,7 +1267,7 @@ class AndroidRasterTest {
         val timeline = measurements(false)
         assertNull(host.failure)
         if (timeline.getJSONArray("inputs").length() == 0) {
-            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
+            instrumentation.uiAutomation.takeScreenshot()?.let { screenshot ->
                 try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
                 finally { screenshot.recycle() }
             }
@@ -1414,10 +1393,10 @@ class AndroidRasterTest {
                 for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
                 return null
             }
-            return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+            return find(instrumentation.uiAutomation.rootInActiveWindow)
         }
         fun systemClick(name: String, long: Boolean = false) {
-            InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(300, 5_000)
+            instrumentation.uiAutomation.waitForIdle(300, 5_000)
             val deadline = SystemClock.uptimeMillis() + 15_000
             var node: android.view.accessibility.AccessibilityNodeInfo? = null
             while (node == null && SystemClock.uptimeMillis() < deadline) {
@@ -1436,7 +1415,7 @@ class AndroidRasterTest {
                 android.util.Log.i("CapyPlacementTest", "Picker contact $name long=$long bounds=$bounds description=${target.contentDescription}")
                 val x = bounds.centerX(); val y = bounds.centerY()
                 val command = if (long) "input touchscreen swipe $x $y $x $y ${android.view.ViewConfiguration.getLongPressTimeout() + 200}" else "input touchscreen tap $x $y"
-                ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).use { it.readBytes() }
+                ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
             } else {
                 while (!target.isClickable && target.parent != null) target = target.parent
                 assertTrue("DocumentsUI action $name", target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
@@ -1503,7 +1482,7 @@ class AndroidRasterTest {
                     }
                     root.addView(source, android.widget.FrameLayout.LayoutParams(64, 64).apply { leftMargin = 100; topMargin = 100 })
                 }
-                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                instrumentation.waitForIdleSync()
                 scenario.onActivity {
                     val location = IntArray(2); source.getLocationOnScreen(location)
                     start = androidx.compose.ui.geometry.Offset(location[0] + 32f, location[1] + 32f)
@@ -1515,7 +1494,7 @@ class AndroidRasterTest {
                         val point = start + (destination - start) * fraction
                         val phase = when (i) { 0 -> android.view.MotionEvent.ACTION_DOWN; 13 -> android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
                         val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, point.x, point.y, 0).apply { setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN) }
-                        try { assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+                        try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
                         SystemClock.sleep(50)
                     }
                     assertTrue("Android framework started global URI drag", started)
@@ -1601,11 +1580,6 @@ class AndroidRasterTest {
         open(photo)
         scenario.onActivity { host.documentChanged() }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
-        fun action(value: JSONObject) {
-            native { Native.dispatch(it, value.toString()) }
-            scenario.onActivity { host.documentChanged() }
-            tick(); compose.waitForIdle()
-        }
         fun storage() = native {
             JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())).getLong("resident_bytes")
         }
@@ -1634,11 +1608,6 @@ class AndroidRasterTest {
     @Test fun largePhotoFilterPreviewDrawing() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterDrawing") == "true")
         open(File(activity.filesDir, "filter-memory-test.jpg"))
-        fun action(value: JSONObject) {
-            native { Native.dispatch(it, value.toString()) }
-            scenario.onActivity { host.documentChanged() }
-            tick(); compose.waitForIdle()
-        }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
         if (host.snapshot!!.getJSONObject("state").getJSONObject("workspace").optBoolean("zen_mode")) {
             action(obj("type" to "invoke", "command" to "zen_mode"))
@@ -1717,11 +1686,6 @@ class AndroidRasterTest {
     @Test fun largePhotoFilterPreviewLifecycle() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
         open(File(activity.filesDir, "filter-memory-test.jpg"))
-        fun action(value: JSONObject) {
-            native { Native.dispatch(it, value.toString()) }
-            scenario.onActivity { host.documentChanged() }
-            tick(); compose.waitForIdle()
-        }
         scenario.onActivity { host.documentChanged() }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
         action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
@@ -2268,7 +2232,7 @@ class AndroidRasterTest {
         scenario.onActivity { activity=it }
         ready()
         assertEquals(painted,hash(png("front-recreated.png")))
-        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val automation=instrumentation.uiAutomation
         val originalRotation=activity.display!!.rotation
         val automaticRotation=android.provider.Settings.System.getInt(activity.contentResolver,android.provider.Settings.System.ACCELEROMETER_ROTATION,0)!=0
         try {
@@ -2385,7 +2349,7 @@ class AndroidRasterTest {
         val modifiedTabs=native{h->JSONObject(Native.documentTabs(h,obj("op" to "view").toString())).array("tabs").objects().count {tab->
             JSONObject(Native.documentTabs(h,obj("op" to "recovery","id" to tab.getLong("id")).toString())).getBoolean("modified")
         }}
-        assertEquals(modifiedTabs,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
+        assertEquals(modifiedTabs,device.recovery.listFiles().orEmpty().count { it.extension == "capy" })
         assertNull(host.actionError)
         scenario.close()
         launch()
@@ -2398,12 +2362,10 @@ class AndroidRasterTest {
         assertEquals(hash(firstPng),hash(png("controller-recovered.png")))
         assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         assertTrue(native {state(it).getJSONObject("document_file").isNull("location")})
-        assertEquals(modifiedTabs,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
+        assertEquals(modifiedTabs,device.recovery.listFiles().orEmpty().count { it.extension == "capy" })
         activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS: exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, atomic recovery, Activity recreation, recovery offer/adoption\n")
     }
     @Test fun drawingTabsKeepHistorySpillAndLifecycle() {
-        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
-        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
         fun closeDecision(label:String)=native { handle ->
             val state=state(handle)
             state.array("requests").objects().firstOrNull{r->r.getJSONObject("kind").optString("type")=="document"}?.getInt("id")
@@ -2474,7 +2436,6 @@ class AndroidRasterTest {
     }
 
     @Test fun drawingTabsRecoverMultipleInactiveDrawings() {
-        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
         action("add_layer")
         val firstLayers=native{state(it).array("layers").length()}
@@ -2485,7 +2446,7 @@ class AndroidRasterTest {
         val secondLayers=native{state(it).array("layers").length()}
         var write:Job?=null
         compose.runOnUiThread{host.documentChanged();write=host.recovery.capture()};runBlocking{write?.join()}
-        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        assertEquals(2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
         assertEquals(listOf(true,true),tabs().array("tabs").objects().map{it.getBoolean("modified")})
         scenario.close();launch()
         repeat(2) {
@@ -2502,13 +2463,11 @@ class AndroidRasterTest {
             manifest(file.readBytes()).getJSONObject("document").getJSONArray("layers").length()
         }
         assertEquals(setOf(firstLayers,secondLayers),counts.toSet())
-        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        assertEquals(2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
         activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS two independently owned inactive/active recovery snapshots; sequential offers append unsaved independent drawings; durable origins retired only after publication")
     }
 
     @Test fun drawingTabsNativePointerReorder() {
-        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
-        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
         fun settled(){compose.waitUntil(60_000){!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}};compose.runOnUiThread{host.documentChanged()};compose.waitForIdle();assertNull(host.failure);assertNull(host.actionError)}
         val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
         try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
@@ -2516,19 +2475,9 @@ class AndroidRasterTest {
         val workspace=native{state(it).getJSONObject("workspace")}
         workspace.getJSONObject("layout").put("header",obj("size" to "large","next_id" to 2,"zones" to org.json.JSONArray(listOf(org.json.JSONArray(),org.json.JSONArray(listOf(obj("id" to 1,"item" to obj("kind" to "document_title")))),org.json.JSONArray()))))
         native{Native.dispatch(it,obj("type" to "restore_workspace","workspace" to workspace).toString())};settled()
-        val instrumentation=InstrumentationRegistry.getInstrumentation()
-        fun roots(view:android.view.View):List<androidx.compose.ui.platform.ViewRootForTest> = when(view) {
-            is androidx.compose.ui.platform.ViewRootForTest -> listOf(view)
-            is android.view.ViewGroup -> (0 until view.childCount).flatMap{roots(view.getChildAt(it))}
-            else -> emptyList()
-        }
-        fun find(node:androidx.compose.ui.semantics.SemanticsNode,tag:String):androidx.compose.ui.semantics.SemanticsNode? {
-            if(node.config.contains(SemanticsProperties.TestTag)&&node.config[SemanticsProperties.TestTag]==tag)return node
-            return node.children.firstNotNullOfOrNull{find(it,tag)}
-        }
         fun locate(tag:String,within:android.view.View?=null):Pair<android.view.View,androidx.compose.ui.geometry.Rect> {
             var found:Pair<android.view.View,androidx.compose.ui.geometry.Rect>?=null
-            instrumentation.runOnMainSync{found=android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(::roots).filter{within==null||it.view===within}.firstNotNullOfOrNull{root->find(root.semanticsOwner.unmergedRootSemanticsNode,tag)?.let{root.view to it.boundsInRoot}}}
+            instrumentation.runOnMainSync{found=semanticsRoots().filter{within==null||it.view===within}.firstNotNullOfOrNull{root->root.find(hasTag(tag))?.let{root.view to it.boundsInRoot}}}
             return checkNotNull(found){"Missing $tag"}
         }
         fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0,outside:Boolean=false) {
@@ -2539,9 +2488,7 @@ class AndroidRasterTest {
             val to=if(vertical)androidx.compose.ui.geometry.Offset(end.center.x,end.bottom-8f)else androidx.compose.ui.geometry.Offset(end.right-8f,end.center.y)
             val down=SystemClock.uptimeMillis()
             fun event(action:Int,point:androidx.compose.ui.geometry.Offset) {
-                val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_STYLUS->android.view.InputDevice.SOURCE_STYLUS;else->android.view.InputDevice.SOURCE_TOUCHSCREEN}
-                val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&action!=android.view.MotionEvent.ACTION_UP&&action!=android.view.MotionEvent.ACTION_CANCEL)android.view.MotionEvent.BUTTON_PRIMARY else 0
-                val event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,1,arrayOf(android.view.MotionEvent.PointerProperties().apply{id=0;toolType=tool}),arrayOf(android.view.MotionEvent.PointerCoords().apply{x=point.x;y=point.y;pressure=.7f}),0,buttons,1f,1f,0,0,source,0)
+                val event=motion(tool,action,point,down)
                 try{instrumentation.runOnMainSync{view.dispatchTouchEvent(event)}}finally{event.recycle()}
                 SystemClock.sleep(40)
             }

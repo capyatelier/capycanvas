@@ -6,11 +6,9 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.View
-import android.view.ViewGroup
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
-import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
@@ -20,24 +18,21 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /** Native mouse/finger/pen MotionEvents on the tablet, including popup focus and CANCEL.
  * Keep the real frame clock: a held contact must survive opening a native popup. */
 class AndroidInteractionTest {
+    @get:Rule val device = CapyDeviceRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var activity: MainActivity
     private lateinit var host: CanvasHost
     private lateinit var owner: ViewRootForTest
     private lateinit var surface: CanvasSurfaceView
-    private lateinit var saved: JSONObject
     private lateinit var fixture: JSONObject
     private var density = 1f
-    private var previousRotation = 0
-    private var autoRotate = true
     private var downAt = 0L
     private var contact = false
     private var popupInput = false
@@ -48,27 +43,9 @@ class AndroidInteractionTest {
     // View dispatch keeps exact geometry deterministic. Opt into the OS input
     // dispatcher with -e systemInput true where system injection is available.
     private var systemInput = InstrumentationRegistry.getArguments().getString("systemInput") == "true"
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private val recovery get() = File(instrumentation.targetContext.filesDir, "interaction-workspace-recovery.json")
 
-    private inline fun <reified T> findView(view: View): T? {
-        val pending = ArrayDeque<View>().apply { add(view) }
-        while (pending.isNotEmpty()) {
-            val next = pending.removeFirst()
-            if (next is T) return next
-            if (next is ViewGroup) for (i in 0 until next.childCount) pending.add(next.getChildAt(i))
-        }
-        return null
-    }
-    private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
-        if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node
-        else node.children.firstNotNullOfOrNull { find(it, tag) }
-    private fun tagged(tag: String): Pair<ViewRootForTest, SemanticsNode>? {
-        find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { return owner to it }
-        return android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
-            findView<ViewRootForTest>(view)?.let { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { root to it } }
-        }
-    }
+    private fun find(tag: String) = owner.find(hasTag(tag))
+    private fun tagged(tag: String) = findTag(tag, owner)
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
         instrumentation.runOnMainSync {
@@ -86,25 +63,12 @@ class AndroidInteractionTest {
     private fun workspace() = state().getJSONObject("workspace").toString()
     private fun group(panel: String) = snapshot().getJSONObject("layout").array("groups").objects()
         .first { panel in it.array("panels").values() }
-    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + timeout
-        do {
-            var ready = false
-            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
-            if (ready) return
-            SystemClock.sleep(16)
-        } while (SystemClock.uptimeMillis() < deadline)
-        fail("Timed out: $label; workspace manager: ${host.workspaceManager}")
-    }
+    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) =
+        host.awaitMain(label, timeout, { "workspace manager: ${host.workspaceManager}" }, condition)
     // A held contact at a scroll edge can keep native overscroll animation
     // alive. Drain main-thread work without waiting forever for global idleness.
     private fun settle() { SystemClock.sleep(180); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
-    private fun action(value: JSONObject) {
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
-        assertTrue(done.await(10, TimeUnit.SECONDS))
-        settle()
-    }
+    private fun action(value: JSONObject) { host.drain(value, 10); settle() }
     private fun customize(value: JSONObject) = action(obj("type" to "customize", "action" to value))
     private fun transparency() = listOf("off", "low", "medium", "high").indexOf(state().getJSONObject("settings").getString("transparency"))
     private fun transparency(value: Int) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to value)))
@@ -136,7 +100,7 @@ class AndroidInteractionTest {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
                     if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "brush-slider-preview") } != null
+                        view.descendant<ViewRootForTest>()?.find(hasTag("brush-slider-preview")) != null
                     }?.let { view ->
                         val p = IntArray(2); view.getLocationOnScreen(p)
                         if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
@@ -167,19 +131,13 @@ class AndroidInteractionTest {
         // Composition can expose a menu before WindowManager transfers focus.
         // Sending Back in that gap can finish the Activity instead of the menu.
         waitFor("native menu receives keyboard focus") {
-            android.view.inspector.WindowInspector.getGlobalWindowViews().any { view ->
-                view.hasWindowFocus() && findView<ViewRootForTest>(view)?.let {
-                    find(it.semanticsOwner.unmergedRootSemanticsNode,"workspace-menu")!=null
-                }==true
-            }
+            semanticsRoots().any { it.view.hasWindowFocus() && it.find(hasTag("workspace-menu")) != null }
         }
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         waitFor("native menu closes") { popupCount()==0 && owner.view.hasWindowFocus() }; settle()
     }
     private fun popupCount(): Int {
-        fun count() = android.view.inspector.WindowInspector.getGlobalWindowViews().count { view ->
-                findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "workspace-menu") != null } == true
-            }
+        fun count() = semanticsRoots().count { it.find(hasTag("workspace-menu")) != null }
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return count()
         var result = 0
         instrumentation.runOnMainSync { result = count() }
@@ -190,54 +148,28 @@ class AndroidInteractionTest {
     private val pointerTools = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
     private fun resetLayerScroll(first: Long) {
         instrumentation.runOnMainSync {
-            find(owner.semanticsOwner.unmergedRootSemanticsNode,"layer-rows")!!.config[
+            find("layer-rows")!!.config[
                 androidx.compose.ui.semantics.SemanticsActions.ScrollToIndex].action!!.invoke(0)
         }
         waitFor("list reset") { exists("layer-row-$first") }; settle()
     }
     @Before fun ready() {
-        CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "interaction-workspace-tests/${java.util.UUID.randomUUID()}").absolutePath
-        // A previous canvas tap can leave a recovery offer that steals window
-        // focus. Isolate drawing recovery alongside the workspace fixture.
-        RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        var portrait = false
-        scenario.onActivity {
-            previousRotation = it.window.decorView.display.rotation
-            autoRotate = android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0
-            portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        }
-        if (portrait) {
-            assertTrue(instrumentation.uiAutomation.setRotation(if (previousRotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
-            val until = SystemClock.uptimeMillis() + 10_000
-            while (portrait && SystemClock.uptimeMillis() < until) {
-                SystemClock.sleep(50)
-                scenario.onActivity { portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE }
-            }
-            assertFalse("The interaction fixtures use the landscape tablet layout", portrait)
-        }
+        scenario = launchCapy()
+        device.landscape(scenario)
         scenario.onActivity {
             activity=it
-            host = it.host; owner = findView<ViewRootForTest>(it.window.decorView)!!
-            surface = findView<CanvasSurfaceView>(it.window.decorView)!!
+            host = it.host; owner = it.window.decorView.descendant<ViewRootForTest>()!!
+            surface = it.window.decorView.descendant<CanvasSurfaceView>()!!
             density = it.resources.displayMetrics.density
-        }
-        waitFor("brush ready", 60_000) { snapshot().optBoolean("brush_ready") }
-        waitFor("workspace ready", 60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
-        instrumentation.runOnMainSync {
-            saved = if (recovery.exists()) JSONObject(recovery.readText())
-                else JSONObject(workspace()).also { recovery.writeText(it.toString()) }
         }
         val defaults = Native.create(false)
         try { fixture = JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace") }
         finally { Native.destroy(defaults) }
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
         fixture.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(
-                obj("id" to 40, "edge" to "left", "extent" to 390, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
-                obj("id" to 42, "edge" to "right", "extent" to 330, "root" to tabs(43, "navigator", "layers", "properties")),
-                obj("id" to 44, "edge" to "top", "extent" to 42, "root" to tabs(45, "toolbar")))))
+                obj("id" to 40, "edge" to "left", "extent" to 390, "root" to tabs(41, "brushes", "sizes", "tool_settings", style = "icon_name")),
+                obj("id" to 42, "edge" to "right", "extent" to 330, "root" to tabs(43, "navigator", "layers", "properties", style = "icon_name")),
+                obj("id" to 44, "edge" to "top", "extent" to 42, "root" to tabs(45, "toolbar", style = "icon_name")))))
             put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(46, getInt("next_id")))
         }
@@ -246,16 +178,7 @@ class AndroidInteractionTest {
     }
     @After fun cleanup() {
         try { if (contact) event(MotionEvent.ACTION_CANCEL) }
-        finally {
-            try { if (::saved.isInitialized) {
-                action(obj("type" to "restore_workspace", "workspace" to saved))
-                recovery.delete()
-            } }
-            finally {
-                instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
-                if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null; RecoveryController.directoryForTest = null
-            }
-        }
+        finally { if (::scenario.isInitialized) scenario.close() }
     }
 
     @Test fun longPressRetainsEveryWorkspaceDragSource() {
@@ -543,16 +466,14 @@ class AndroidInteractionTest {
     }
 
     @Test fun canvasEdgeDoubleTapUsesRecursiveDefaultWidths() {
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
         fun split(id: Int, axis: String, first: JSONObject, second: JSONObject) = obj("kind" to "split", "id" to id,
             "axis" to axis, "fraction" to .4, "first" to first, "second" to second)
         val nested = JSONObject(fixture.toString())
         nested.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 650,
-                "root" to split(60, "vertical", tabs(61, "sizes", "layers"),
-                    split(62, "horizontal", tabs(63, "brushes"),
-                        split(64, "vertical", tabs(65, "navigator"), tabs(66, "tool_settings"))))))))
+                "root" to split(60, "vertical", tabs(61, "sizes", "layers", style = "icon_name"),
+                    split(62, "horizontal", tabs(63, "brushes", style = "icon_name"),
+                        split(64, "vertical", tabs(65, "navigator", style = "icon_name"), tabs(66, "tool_settings", style = "icon_name"))))))))
             put("next_id", maxOf(67, getInt("next_id")))
         }
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
@@ -572,8 +493,6 @@ class AndroidInteractionTest {
     }
 
     @Test fun menuBodyAndExtendedTabDropsAcrossDevices() {
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         try { for (right in listOf(false, true)) {
             val theme = if (right) "light" else "dark"
@@ -589,10 +508,10 @@ class AndroidInteractionTest {
                         put("bands", JSONArray(listOf(
                             obj("id" to 40, "edge" to if (right) "right" else "left", "extent" to 252,
                                 "root" to obj("kind" to "split", "id" to 41, "axis" to "vertical", "fraction" to .5,
-                                    "first" to tabs(42, "brushes"), "second" to tabs(43, "sizes"))),
+                                    "first" to tabs(42, "brushes", style = "icon_name"), "second" to tabs(43, "sizes", style = "icon_name"))),
                             obj("id" to 44, "edge" to if (right) "left" else "right", "extent" to 310,
-                                "root" to tabs(45, "layers", "adjustments", "properties")),
-                            obj("id" to 46, "edge" to "top", "extent" to 36, "root" to tabs(47, "toolbar")))))
+                                "root" to tabs(45, "layers", "adjustments", "properties", style = "icon_name")),
+                            obj("id" to 46, "edge" to "top", "extent" to 36, "root" to tabs(47, "toolbar", style = "icon_name")))))
                         put("column_stacks", JSONArray()); put("next_id", maxOf(50, getInt("next_id")))
                     }
                     action(obj("type" to "restore_workspace", "workspace" to layout))
@@ -711,8 +630,6 @@ class AndroidInteractionTest {
     }
 
     private fun stackFixture() {
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
         fun split(id: Int, first: JSONObject, second: JSONObject) = obj("kind" to "split", "id" to id,
             "axis" to "vertical", "fraction" to .5, "first" to first, "second" to second)
         fixture.getJSONObject("layout").apply {
@@ -753,7 +670,7 @@ class AndroidInteractionTest {
             for (panel in listOf("brushes", "navigator")) {
                 assertTrue(exists("column-connection-42-$panel"))
                 instrumentation.runOnMainSync {
-                    assertEquals(true, find(owner.semanticsOwner.unmergedRootSemanticsNode, "column-icon-$panel")!!.config.getOrNull(SemanticsProperties.Selected))
+                    assertEquals(true, find("column-icon-$panel")!!.config.getOrNull(SemanticsProperties.Selected))
                 }
             }
             val beforeResize = workspace()
@@ -849,8 +766,6 @@ class AndroidInteractionTest {
     }
 
     @Test fun collapsedDividerDropsHaveForgivingTargetsAndAlignedPreviews() {
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
         for (edge in listOf("left", "right")) {
             fixture.getJSONObject("layout").put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to edge, "extent" to 252, "root" to obj("kind" to "split", "id" to 41,
@@ -1010,9 +925,7 @@ class AndroidInteractionTest {
             } }
             finally { event.recycle() }
         }
-        fun tooltip(): Pair<ViewRootForTest, SemanticsNode>? = android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
-            findView<ViewRootForTest>(view)?.let { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, "hover-tooltip")?.let { root to it } }
-        }
+        fun tooltip() = findTag("hover-tooltip")
         try {
             for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
                 action(obj("type" to "set_theme", "theme" to theme))
@@ -1252,10 +1165,8 @@ class AndroidInteractionTest {
                 obj("id" to tile, "control" to obj("kind" to "panel", "panel" to "color")),
                 obj("id" to nextTile, "control" to obj("kind" to "divider")),
                 obj("id" to nextTile + 1, "control" to obj("kind" to "panel", "panel" to "color")))))
-            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-                "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
             layout.array("bands").getJSONObject(0).put("root", obj("kind" to "split", "id" to 46,
-                "axis" to "vertical", "fraction" to .5, "first" to tabs(41, "brushes", "tool_settings"), "second" to tabs(47, "sizes")))
+                "axis" to "vertical", "fraction" to .5, "first" to tabs(41, "brushes", "tool_settings", style = "icon_name"), "second" to tabs(47, "sizes", style = "icon_name")))
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme)); restore()
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
@@ -1267,7 +1178,7 @@ class AndroidInteractionTest {
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
                 fun line(tag: String, horizontal: Boolean, name: String, slotDp: Float = 8f) {
                     waitFor("divider layout $tag") {
-                        find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot?.let {
+                        find(tag)?.boundsInRoot?.let {
                             kotlin.math.abs((if (horizontal) it.height else it.width) - slotDp * density) < 1f
                         } == true
                     }
@@ -1355,7 +1266,7 @@ class AndroidInteractionTest {
                         val preview = moving.bounds!!
                         assertEquals("$panel $pointer: contact follows the lower edge", y / density - offsetY, preview.top, 1f)
                         assertEquals("$panel $pointer: preview keeps source height", sourceHeight, preview.height, 1f)
-                        val node = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${moving.group}")!!
+                        val node = find("group-${moving.group}")!!
                         assertEquals("Native allocation stays full while clipped", preview.height * density, node.size.height.toFloat(), 1f)
                         assertTrue("Preview extends beyond workspace", preview.bottom * density > rootBounds.bottom)
                     }

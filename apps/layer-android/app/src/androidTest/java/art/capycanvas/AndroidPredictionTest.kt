@@ -24,19 +24,18 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import java.io.File
-import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Exercise native capability, disabled Compose controls and persisted selection.
  * Use private workspace and settings stores. */
 class AndroidPredictionTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createEmptyComposeRule()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val preferences get() = context.getSharedPreferences(CanvasHost.preferencesName, 0)
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
-    private lateinit var original: JSONObject
     private var actualSupport = false
     private val tag = "preference-platform_prediction"
     private fun settings() = host.snapshot!!.getJSONObject("state").getJSONObject("settings")
@@ -74,17 +73,8 @@ class AndroidPredictionTest {
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
     @Before fun ready() {
-        CanvasHost.workspaceDirectoryForTest = File(context.filesDir, "prediction-tests/${UUID.randomUUID()}").absolutePath
-        RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        scenario.onActivity { host = it.host }
-        compose.waitUntil(60_000) {
-            host.failure != null || (host.snapshot?.optBoolean("brush_ready") == true &&
-                host.workspaceManager?.optBoolean("ready") == true &&
-                host.workspaceManager?.optBoolean("busy") == false)
-        }
-        assertNull(host.failure)
-        original = JSONObject(settings().toString())
+        scenario = launchCapy()
+        host = scenario.activity().host
         actualSupport = if (Build.VERSION.SDK_INT >= 34) {
             val predictor = MotionPredictor(context)
             val manager = context.getSystemService(InputManager::class.java)
@@ -98,22 +88,7 @@ class AndroidPredictionTest {
         Log.i("CapyPredictionTest", "Connected stylus native prediction available: $actualSupport")
     }
     @After fun cleanup() {
-        try {
-            if (::original.isInitialized) {
-                compose.runOnIdle {
-                    host.updatePredictionAvailability(actualSupport)
-                    host.dispatch(obj("type" to "restore_settings", "settings" to original))
-                    host.dispatch(obj("type" to "close_settings"))
-                }
-                waitFor { settings().toString() == original.toString() }
-            }
-        } finally {
-            try { if (::scenario.isInitialized) scenario.close() }
-            finally {
-                CanvasHost.workspaceDirectoryForTest = null
-                RecoveryController.directoryForTest = null
-            }
-        }
+        if (::scenario.isInitialized) scenario.close()
     }
     @Test fun nativePredictionCanBeComparedAndUnavailableControlIsDisabled() {
         val ids = rows().map { it.getString("id") }

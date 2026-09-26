@@ -1,12 +1,8 @@
 package art.capycanvas
 
 import android.os.SystemClock
-import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
-import android.view.inspector.WindowInspector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
@@ -16,25 +12,16 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
-import java.io.File
-import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
-/** Real Compose/native-view contacts; user workspaces and preferences are restored. */
+/** Real Compose/native-view contacts on isolated workspaces and preferences. */
 class AndroidTitleBarTest {
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    @get:Rule val device = CapyDeviceRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
-    private lateinit var legacy: Map<String, *>
     private var pressed: ViewRootForTest? = null
     private var point = Offset.Zero
     private var downAt = 0L
@@ -43,15 +30,7 @@ class AndroidTitleBarTest {
     private var density = 1f
     private fun view() = host.workspaceManager!!
     private fun layout() = host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").toString()
-    private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
-        if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node else node.children.firstNotNullOfOrNull { find(it, tag) }
-    private fun roots(view: View): List<ViewRootForTest> = when (view) {
-        is ViewRootForTest -> listOf(view)
-        is ViewGroup -> (0 until view.childCount).flatMap { roots(view.getChildAt(it)) }
-        else -> emptyList()
-    }
-    private fun node(tag: String): Pair<ViewRootForTest, SemanticsNode>? = WindowInspector.getGlobalWindowViews().flatMap(::roots)
-        .firstNotNullOfOrNull { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { root to it } }
+    private fun node(tag: String) = findTag(tag)
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
         instrumentation.runOnMainSync { result = node(tag)?.second?.boundsInRoot }
@@ -66,51 +45,25 @@ class AndroidTitleBarTest {
         }
         return checkNotNull(result)
     }
-    private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) {
-        val until = SystemClock.uptimeMillis() + timeout
-        do {
-            var ready = false
-            instrumentation.runOnMainSync {
-                assertNull(host.failure); assertNull(host.actionError)
-                host.snapshot?.objectOrNull("state")?.let { assertTrue(it.optString("host_error"), it.isNull("host_error")) }
-                ready = condition()
-            }
-            if (ready) return
-            SystemClock.sleep(20)
-        } while (SystemClock.uptimeMillis() < until)
-        shot("failure-${label.replace(Regex("[^A-Za-z0-9-]"), "-")}")
-        fail("Timed out: $label; ${view()}")
-    }
+    private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) =
+        host.awaitMain(label, timeout, { shot("failure-${label.replace(Regex("[^A-Za-z0-9-]"), "-")}"); "${view()}" }) {
+            host.snapshot?.objectOrNull("state")?.let { assertTrue(it.optString("host_error"), it.isNull("host_error")) }
+            condition()
+        }
     private fun idle() {
         // A settled workspace-manager view alone does not mean that a queued
         // header edit and its snapshot have reached the native owner and UI.
-        val published = CountDownLatch(1)
-        instrumentation.runOnMainSync { host.query(obj("type" to "catalog")) { published.countDown() } }
-        assertTrue("Native UI publication", published.await(15, TimeUnit.SECONDS))
+        host.drain()
         SystemClock.sleep(220)
         waitFor("workspace idle") { !view().optBoolean("busy") && !view().optBoolean("switcher_busy") && !view().optBoolean("dirty") }
         assertTrue(view().toString(), view().isNull("error")); assertTrue(view().toString(), view().isNull("switcher_error"))
     }
     private fun send(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; idle() }
-    private fun capture(): String {
-        var result = ""
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync {
-            CoroutineScope(Dispatchers.Main).launch {
-                result = host.withNative { Native.workspace(it, obj("type" to "capture").toString()) }; done.countDown()
-            }
-        }
-        assertTrue(done.await(10, TimeUnit.SECONDS)); return result
-    }
+    private fun capture() = host.workspaceCapture()
     private fun event(action: Int, next: Offset = point) {
         point = next
         if (action == MotionEvent.ACTION_DOWN) downAt = SystemClock.uptimeMillis()
-        val source = when (tool) { MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; else -> InputDevice.SOURCE_TOUCHSCREEN }
-        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) button else 0
-        val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1,
-            arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool }),
-            arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = .7f }),
-            0, buttons, 1f, 1f, 0, 0, source, 0)
+        val event = motion(tool, action, next, downAt, button)
         try { instrumentation.runOnMainSync { checkNotNull(pressed).view.dispatchTouchEvent(event) } }
         finally { event.recycle() }
         if (action in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) pressed = null
@@ -125,25 +78,15 @@ class AndroidTitleBarTest {
         android.util.Log.i("TitleBarAcceptance", "Tap $tag")
         down(tag); event(MotionEvent.ACTION_UP); idle()
     }
-    private fun key(code: Int, meta: Int = 0) {
-        // Keyboard input must pass ViewRootImpl so Android leaves touch mode.
-        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
-            instrumentation.sendKeySync(KeyEvent(0, SystemClock.uptimeMillis(), action, code, 0, meta))
-        SystemClock.sleep(220)
-    }
+    private fun key(code: Int, meta: Int = 0) { pressKey(code, meta); SystemClock.sleep(220) }
 
     private lateinit var fixture: JSONObject
-    private var originalSettings = ""
     private fun snapshot() = host.snapshot!!
     private fun state() = snapshot().getJSONObject("state")
     private fun model() = snapshot().getJSONObject("header").getJSONObject("model")
     private fun entries() = model().array("zones").values().flatMap { (it as JSONArray).objects() }
     private fun editing() = snapshot().getJSONObject("header").optBoolean("editing")
-    private fun action(value: JSONObject) {
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
-        assertTrue(done.await(15, TimeUnit.SECONDS)); SystemClock.sleep(250)
-    }
+    private fun action(value: JSONObject) { host.drain(value); SystemClock.sleep(250) }
     private fun edit(value: JSONObject) = action(obj("type" to "customize", "action" to obj("type" to "header", "action" to value)))
     private fun restore(size: String = "small") {
         val value = JSONObject(fixture.toString())
@@ -153,18 +96,12 @@ class AndroidTitleBarTest {
         idle()
     }
     private fun launch() {
-        scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario = launchCapy(90_000)
         scenario.onActivity { host = it.host; density = it.resources.displayMetrics.density }
-        waitFor("startup", 90000) { host.workspaceManager?.optBoolean("ready") == true && host.snapshot?.optBoolean("brush_ready") == true }
         idle()
     }
     @Before fun ready() {
-        legacy = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all
-        val directory = File(instrumentation.targetContext.filesDir, "title-bar-tests/${UUID.randomUUID()}")
-        CanvasHost.workspaceDirectoryForTest = directory.absolutePath
-        RecoveryController.directoryForTest = File(directory, "recovery")
         launch()
-        originalSettings = state().getJSONObject("settings").toString()
         fixture = JSONObject(state().getJSONObject("workspace").toString())
         fixture.put("zen_mode", false)
         fixture.getJSONObject("layout").apply {
@@ -181,24 +118,9 @@ class AndroidTitleBarTest {
     }
     @After fun cleanup() {
         if (pressed != null) event(MotionEvent.ACTION_CANCEL)
-        if (::host.isInitialized && originalSettings.isNotEmpty()) action(obj("type" to "restore_settings", "settings" to JSONObject(originalSettings)))
         if (::scenario.isInitialized) scenario.close()
-        CanvasHost.workspaceDirectoryForTest = null
-        RecoveryController.directoryForTest = null
-        val preferences = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0)
-        preferences.edit().apply {
-            val settings = legacy["settings"] as? String
-            if (settings == null) remove("settings") else putString("settings", settings)
-        }.commit()
-        assertEquals("User preferences preserved", legacy, preferences.all)
     }
-    private fun shot(name: String) {
-        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/title-bar/$name.png")
-        file.parentFile!!.mkdirs()
-        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-            file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
-        }
-    }
+    private fun shot(name: String) = screenshot("validation/title-bar/$name.png")
     private fun tilePixel(tag: String): Int {
         var position = Offset.Zero
         instrumentation.runOnMainSync {
@@ -224,7 +146,7 @@ class AndroidTitleBarTest {
         waitFor("$label row") {
             fun row(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) node
                 else node.children.firstNotNullOfOrNull(::row)
-            WindowInspector.getGlobalWindowViews().flatMap(::roots).any { root -> row(root.semanticsOwner.unmergedRootSemanticsNode)?.let { menuRoot = root; target = it; true } == true }
+            semanticsRoots().any { root -> row(root.semanticsOwner.unmergedRootSemanticsNode)?.let { menuRoot = root; target = it; true } == true }
         }
         pressed = menuRoot
         event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)

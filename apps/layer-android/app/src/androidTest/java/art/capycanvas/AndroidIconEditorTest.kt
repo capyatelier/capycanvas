@@ -5,35 +5,22 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
-import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
-import java.util.UUID
 
 /** Actual toolbar controls around a new, untouched document and isolated workspace. */
 class AndroidIconEditorTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createEmptyComposeRule()
 
     @Test fun allToolCategoriesModesFiltersAndToolbarIconsRender() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val output = File(context.getExternalFilesDir(null), "validation/icon-editor").apply { mkdirs() }
-        CanvasHost.workspaceDirectoryForTest = File(context.filesDir, "icon-editor-${UUID.randomUUID()}").absolutePath
-        var scenario: ActivityScenario<MainActivity>? = null
-        var host: CanvasHost? = null
-        var settings: JSONObject? = null
-        try {
-            scenario = ActivityScenario.launch(MainActivity::class.java)
-            scenario.onActivity { host = it.host }
-            val app = host!!
-            compose.waitUntil(60_000) { app.snapshot?.optBoolean("brush_ready") == true || app.failure != null }
-            assertNull(app.failure)
-            compose.waitUntil(60_000) { app.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
+        val output = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/icon-editor").apply { mkdirs() }
+        launchCapy().use { scenario ->
+            val app = scenario.activity().host
             fun state() = app.snapshot!!.getJSONObject("state")
-            settings = JSONObject(state().getJSONObject("settings").toString())
             val document = state().getJSONObject("document_file")
             assertTrue("Fixture never opens an existing document", document.isNull("location"))
             assertFalse("Fixture never paints", document.getBoolean("modified"))
@@ -66,10 +53,6 @@ class AndroidIconEditorTest {
                 }
                 assertNull(app.actionError)
             }
-        } finally {
-            settings?.let { original -> compose.runOnIdle { host?.dispatch(obj("type" to "restore_settings", "settings" to original)) } }
-            scenario?.close()
-            CanvasHost.workspaceDirectoryForTest = null
         }
     }
 

@@ -3,41 +3,22 @@ package art.capycanvas
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
-import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.text.format.DateFormat
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.ExternalResource
-import org.junit.rules.RuleChain
-import java.io.File
 import java.util.Date
-import java.util.UUID
 
 class AndroidSystemStatusTest {
-    private val compose = createAndroidComposeRule<MainActivity>()
-    @get:Rule val isolation: RuleChain = RuleChain.outerRule(object : ExternalResource() {
-        override fun before() {
-            val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "system-status-tests/${UUID.randomUUID()}")
-            CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-            RecoveryController.directoryForTest = File(root, "recovery")
-        }
-        override fun after() {
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-        }
-    }).around(compose)
-    private fun shell(command: String) {
-        ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).use { it.readBytes() }
-    }
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
     @Test fun headerTracksAndroidClockPreferenceAndShowsLiveBatteryInOrder() {
-        shell("input keyevent KEYCODE_WAKEUP"); shell("wm dismiss-keyguard")
+        wakeDevice()
         compose.waitUntil(30_000) { compose.activity.host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
         val host = compose.activity.host
         fun bar(vararg kinds: String) {

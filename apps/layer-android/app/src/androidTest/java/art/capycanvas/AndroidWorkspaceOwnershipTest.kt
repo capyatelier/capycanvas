@@ -1,15 +1,15 @@
 package art.capycanvas
 
 import android.os.SystemClock
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
-import java.util.UUID
 
 /** Exercises the Android kernel-lock path using independent native sessions. */
 class AndroidWorkspaceOwnershipTest {
+    @get:Rule val device = CapyDeviceRule()
     private fun request(handle: Long, input: JSONObject) = JSONObject(Native.workspace(handle, input.toString())).getJSONObject("view")
     private fun settled(handle: Long): JSONObject {
         val deadline = SystemClock.uptimeMillis() + 30_000
@@ -21,7 +21,7 @@ class AndroidWorkspaceOwnershipTest {
         error("Native workspace did not settle")
     }
     @Test fun liveOwnersRemainExclusiveAndClosedSessionsReleaseTheirLocks() {
-        val directory = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "ownership-tests/${UUID.randomUUID()}")
+        val directory = File(device.root, "ownership")
         var first = Native.create(false)
         val second = Native.create(false)
         try {

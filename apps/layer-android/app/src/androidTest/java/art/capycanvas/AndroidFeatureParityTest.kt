@@ -5,9 +5,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
-import androidx.test.platform.app.InstrumentationRegistry
 import android.graphics.Bitmap
-import android.os.ParcelFileDescriptor
 import android.view.WindowManager
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,32 +16,17 @@ import java.util.concurrent.TimeUnit
 
 /** Device coverage for native projections of the evolving shared GTK/core models. */
 class AndroidFeatureParityTest {
-    private val compose = createAndroidComposeRule<MainActivity>()
-    @get:Rule val isolation: org.junit.rules.RuleChain = org.junit.rules.RuleChain.outerRule(object : org.junit.rules.ExternalResource() {
-        override fun before() {
-            val root = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,"parity-${System.nanoTime()}")
-            CanvasHost.workspaceDirectoryForTest = java.io.File(root,"workspace").absolutePath
-            RecoveryController.directoryForTest = java.io.File(root,"recovery")
-        }
-        override fun after() {
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-        }
-    }).around(compose)
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
     private fun state() = host.snapshot!!.getJSONObject("state")
     private lateinit var savedWorkspace: JSONObject
     private lateinit var savedSettings: JSONObject
     private lateinit var defaultWorkspace: JSONObject
     @Before fun ready() {
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        for (command in listOf("input keyevent KEYCODE_WAKEUP", "wm dismiss-keyguard")) {
-            ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
-        }
+        wakeDevice()
         compose.activity.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
-        assertNull(host.failure)
-        compose.waitUntil(60_000) { host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
+        host.awaitReady()
         savedWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         savedSettings = JSONObject(state().getJSONObject("settings").toString())
         val native = Native.create(false)
@@ -52,13 +35,6 @@ class AndroidFeatureParityTest {
         action(obj("type" to "close_settings"))
         action(obj("type" to "restore_workspace", "workspace" to defaultWorkspace))
         action(obj("type" to "restore_settings", "settings" to JSONObject(savedSettings.toString())))
-    }
-    @After fun restore() {
-        if (::savedWorkspace.isInitialized) {
-            action(obj("type" to "close_settings"))
-            action(obj("type" to "restore_workspace", "workspace" to savedWorkspace))
-            action(obj("type" to "restore_settings", "settings" to savedSettings))
-        }
     }
     private fun action(value: JSONObject) {
         if (value.optString("command").contains("document")) compose.activity.getExternalFilesDir(null)!!.resolve("parity-document-debug.json").writeText(state().toString(2))
@@ -77,13 +53,7 @@ class AndroidFeatureParityTest {
         val density = compose.activity.resources.displayMetrics.density
         return JSONArray(listOf(r.width / density, r.height / density))
     }
-    private fun capture(name: String) {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val bitmap = instrumentation.uiAutomation.takeScreenshot()!!
-        try {
-            instrumentation.targetContext.getExternalFilesDir(null)!!.resolve("parity-$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        } finally { bitmap.recycle() }
-    }
+    private fun capture(name: String) = screenshot("parity-$name.png")
     @Test fun toolSetAndSettingsFollowSelectedTool() {
         action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "tool_settings", "visible" to true)))
         action(obj("type" to "move_panel", "panel" to "tool_settings", "target" to obj("kind" to "float", "position" to JSONArray(listOf(480, 130))), "viewport" to viewport()))
@@ -145,7 +115,7 @@ class AndroidFeatureParityTest {
             if (view is android.view.ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
             return null
         }
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+        instrumentation.runOnMainSync {
             val canvas = find(compose.activity.window.decorView)!!
             val properties = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_STYLUS }
             val coords = android.view.MotionEvent.PointerCoords().apply { x = point.x * canvas.width; y = point.y * canvas.height; pressure = .8f }
@@ -160,7 +130,7 @@ class AndroidFeatureParityTest {
         canvasEvent(android.view.MotionEvent.ACTION_UP, to)
     }
     private fun pixel(point: Offset): Int {
-        val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()!!
         val readable = bitmap.copy(Bitmap.Config.ARGB_8888, false)
         val color = readable.getPixel((point.x * readable.width).toInt(), (point.y * readable.height).toInt())
         readable.recycle(); bitmap.recycle(); return color
@@ -222,7 +192,7 @@ class AndroidFeatureParityTest {
     private fun awaitNavigatorPixel(predicate: (Int) -> Boolean) {
         compose.waitUntil(15_000) {
             val bounds = compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot
-            val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+            val screenshot = instrumentation.uiAutomation.takeScreenshot()!!
             val image = screenshot.copy(Bitmap.Config.ARGB_8888, false)
             try { (bounds.left.toInt() until bounds.right.toInt() step 2).any { x ->
                 (bounds.top.toInt() until bounds.bottom.toInt() step 2).any { y -> predicate(image.getPixel(x,y)) }
@@ -373,7 +343,7 @@ class AndroidFeatureParityTest {
         compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "delete_ruler" }.getBoolean("enabled") }
         capture("ruler")
         compose.waitUntil(10_000) {
-            val screen = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+            val screen = instrumentation.uiAutomation.takeScreenshot()!!
             val pixels = screen.copy(Bitmap.Config.ARGB_8888, false)
             try {
                 ((pixels.width * .52f).toInt()..(pixels.width * .58f).toInt()).any { x ->
@@ -400,7 +370,7 @@ class AndroidFeatureParityTest {
             for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
             return null
         }
-        return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+        return find(instrumentation.uiAutomation.rootInActiveWindow)
     }
     private fun chooseSaveFile(name: String) {
         // Exercise Android's real DocumentsUI create picker and URI grant result.

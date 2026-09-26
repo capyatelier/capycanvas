@@ -5,11 +5,8 @@ import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
 import android.view.ViewConfiguration
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -23,6 +20,7 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -31,12 +29,11 @@ import kotlin.math.*
 
 /** Production Compose, shared Rust and typed tablet input, with isolated workspace storage. */
 class AndroidColorPanelTest {
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    @get:Rule val device = CapyDeviceRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var activity: MainActivity
     private lateinit var host: CanvasHost
     private lateinit var owner: ViewRootForTest
-    private lateinit var savedSettings: JSONObject
     private lateinit var fixture: JSONObject
     private var referenceHandle = 0L
     private var density = 1f
@@ -44,8 +41,6 @@ class AndroidColorPanelTest {
     private var contact = false
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
-    private var previousRotation = 0
-    private var autoRotate = true
     private var button = MotionEvent.BUTTON_PRIMARY
     private var waitForInput = true
     private var replayOrigin: IntArray? = null
@@ -53,38 +48,19 @@ class AndroidColorPanelTest {
     private val tools = listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)
     private val output get() = File(activity.getExternalFilesDir(null), "validation/color-panel").apply { mkdirs() }
 
-    private fun findOwner(view: View): ViewRootForTest? {
-        if (view is ViewRootForTest) return view
-        if (view is ViewGroup) for (i in 0 until view.childCount) findOwner(view.getChildAt(i))?.let { return it }
-        return null
-    }
-    private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
-        if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node else node.children.firstNotNullOfOrNull { find(it, tag) }
+    private fun find(tag: String) = owner.find(hasTag(tag))
     private fun node(tag: String): SemanticsNode {
         var result: SemanticsNode? = null
-        instrumentation.runOnMainSync { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag) }
+        instrumentation.runOnMainSync { result = find(tag) }
         return checkNotNull(result) { "Missing $tag" }
     }
     private fun bounds(tag: String) = node(tag).boundsInRoot
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun colors() = state().getJSONObject("colors")
     private fun view() = host.panelContent!!.getJSONObject("color_panel")
-    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + timeout
-        do {
-            var ready = false
-            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
-            if (ready) return
-            SystemClock.sleep(16)
-        } while (SystemClock.uptimeMillis() < deadline)
-        fail("Timed out: $label")
-    }
+    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) = host.awaitMain(label, timeout, condition = condition)
     private fun settle() { SystemClock.sleep(100); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
-    private fun action(action: JSONObject) {
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync { host.dispatch(action); host.query(obj("type" to "catalog")) { done.countDown() } }
-        assertTrue(done.await(10, TimeUnit.SECONDS)); settle()
-    }
+    private fun action(action: JSONObject) { host.drain(action, 10); settle() }
     private fun color(action: JSONObject) = action(obj("type" to "color", "action" to action))
     private fun shape(shape: String) = color(obj("op" to "shape", "shape" to shape))
     private fun resize(width: Int, height: Int = width + 36) {
@@ -92,35 +68,14 @@ class AndroidColorPanelTest {
         val floating = workspace.getJSONObject("layout").getJSONArray("floating").getJSONObject(0)
         floating.put("width", width); floating.put("height", height)
         action(obj("type" to "restore_workspace", "workspace" to workspace))
-        waitFor("color panel") { find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-panel") != null }; settle()
+        waitFor("color panel") { find("color-panel") != null }; settle()
     }
     @Before fun ready() {
-        val root = File(instrumentation.targetContext.cacheDir, "color-panel-tests/${java.util.UUID.randomUUID()}")
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        RecoveryController.directoryForTest = File(root, "recovery")
-        ColorPreferencesStore.directoryForTest = File(root, "color-preferences")
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        var portrait = false
+        scenario = launchCapy()
+        device.landscape(scenario)
         scenario.onActivity {
-            previousRotation = it.window.decorView.display.rotation
-            autoRotate = android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0
-            portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            activity = it; host = it.host; owner = it.window.decorView.descendant<ViewRootForTest>()!!; density = it.resources.displayMetrics.density
         }
-        if (portrait) {
-            assertTrue(instrumentation.uiAutomation.setRotation(if (previousRotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
-            val until = SystemClock.uptimeMillis() + 10_000
-            while (portrait && SystemClock.uptimeMillis() < until) {
-                SystemClock.sleep(50)
-                scenario.onActivity { portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE }
-            }
-            assertFalse("The color panel fixtures place a floating panel in landscape", portrait)
-        }
-        scenario.onActivity {
-            activity = it; host = it.host; owner = findOwner(it.window.decorView)!!; density = it.resources.displayMetrics.density
-        }
-        waitFor("brush ready", 60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-        waitFor("workspace ready", 60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
-        savedSettings = JSONObject(state().getJSONObject("settings").toString())
         action(obj("type" to "close_settings"))
         val defaults = Native.create(false)
         try { action(obj("type" to "restore_workspace", "workspace" to JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace"))) }
@@ -133,19 +88,10 @@ class AndroidColorPanelTest {
         referenceHandle = Native.create(false)
     }
     @After fun cleanup() {
-        try {
-            if (contact) event(MotionEvent.ACTION_CANCEL)
-            if (::savedSettings.isInitialized) {
-                action(obj("type" to "restore_settings", "settings" to savedSettings))
-                action(obj("type" to "set_theme", "theme" to savedSettings.opt("theme")))
-            }
-        } finally {
+        try { if (contact) event(MotionEvent.ACTION_CANCEL) }
+        finally {
             if (referenceHandle != 0L) Native.destroy(referenceHandle)
-            instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
             if (::scenario.isInitialized) scenario.close()
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-            ColorPreferencesStore.directoryForTest = null
         }
     }
     private fun event(action: Int, next: Offset = point) {
@@ -245,7 +191,7 @@ class AndroidColorPanelTest {
         waitFor("settings drawer") {state().getJSONObject("customization").objectOrNull("drawer")!=null}
         assertEquals("[[\"tool_settings\"]]",state().getJSONObject("customization").getJSONObject("drawer").array("columns").toString())
         assertEquals("explicit",state().getJSONObject("customization").getJSONObject("drawer").getString("dismissal"))
-        waitFor("settings controls") {find(owner.semanticsOwner.unmergedRootSemanticsNode,"picker-setting-size")!=null}
+        waitFor("settings controls") {find("picker-setting-size")!=null}
         SystemClock.sleep(350) // Wait for drawer placement before aiming a real contact.
         tap(bounds("picker-setting-size").let{Offset(it.right-40*density,it.center.y)})
         fullCapture("picker-size-popup")
@@ -253,11 +199,11 @@ class AndroidColorPanelTest {
         var popupPoint=Offset.Zero
         waitFor("native size menu") {
             fun label(node:SemanticsNode):SemanticsNode?=if(node.config.getOrNull(SemanticsProperties.Text)?.any{it.text=="101 px circle"}==true)node else node.children.firstNotNullOfOrNull(::label)
-            android.view.inspector.WindowInspector.getGlobalWindowViews().any { view ->
-                findOwner(view)?.let { root -> label(root.semanticsOwner.unmergedRootSemanticsNode)?.let { target ->
+            semanticsRoots().any { root ->
+                label(root.semanticsOwner.unmergedRootSemanticsNode)?.let { target ->
                     val a=IntArray(2);val b=IntArray(2);root.view.getLocationOnScreen(a);owner.view.getLocationOnScreen(b)
                     popupPoint=target.boundsInRoot.center+Offset((a[0]-b[0]).toFloat(),(a[1]-b[1]).toFloat());true
-                } }==true
+                }==true
             }
         }
         tap(popupPoint)
@@ -355,7 +301,7 @@ class AndroidColorPanelTest {
         val reports=JSONArray()
         for(visible in listOf(false,true,false,true)) {
             action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "color","visible" to visible)))
-            waitFor("wheel visibility") {(find(owner.semanticsOwner.unmergedRootSemanticsNode,"color-wheel")!=null)==visible}
+            waitFor("wheel visibility") {(find("color-wheel")!=null)==visible}
             action(obj("type" to "invoke","command" to "eyedropper"))
             event(MotionEvent.ACTION_HOVER_MOVE,p);event(MotionEvent.ACTION_HOVER_MOVE,p)
             waitFor("preview ready"){picker().objectOrNull("preview")!=null};SystemClock.sleep(300)
@@ -549,11 +495,7 @@ class AndroidColorPanelTest {
 
     private fun menuOpen(): Boolean {
         var present = false
-        instrumentation.runOnMainSync {
-            present = android.view.inspector.WindowInspector.getGlobalWindowViews().any { view ->
-                findOwner(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "color-swap-menu") != null } == true
-            }
-        }
+        instrumentation.runOnMainSync { present = findTag("color-swap-menu") != null }
         return present
     }
     @Test fun swatchMenusAndTransparentMemory() {
@@ -603,7 +545,7 @@ class AndroidColorPanelTest {
             action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to true)))
             action(obj("type" to "customize", "action" to obj("type" to "set_column_drawers", "column" to group, "drawers" to true)))
             tap(bounds("column-icon-color").center)
-            waitFor("retained drawer") { find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-panel") != null }
+            waitFor("retained drawer") { find("color-panel") != null }
             settle()
             tap(bounds("color-shape-triangle").center)
             assertEquals("triangle", view().getString("shape"))
@@ -617,7 +559,7 @@ class AndroidColorPanelTest {
             // Close via its own icon so test contacts never draw on the document.
             tap(bounds("column-icon-color").center)
             tap(bounds("column-icon-color").center)
-            waitFor("reopened drawer") { find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-panel") != null }
+            waitFor("reopened drawer") { find("color-panel") != null }
             assertEquals(remembered, colors().toString())
         }
     }

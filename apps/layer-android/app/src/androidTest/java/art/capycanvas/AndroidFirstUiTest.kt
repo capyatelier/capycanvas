@@ -7,7 +7,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -16,7 +15,8 @@ import java.util.concurrent.TimeUnit
 
 /** Hold the real renderer before device creation, with the real Compose UI running. */
 class AndroidFirstUiTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createEmptyComposeRule()
 
     @Test fun grayCanvasAndControlsDrawWithoutAnyCanvasShaders() {
         val entered = CountDownLatch(1)
@@ -39,7 +39,6 @@ class AndroidFirstUiTest {
                 assertFalse(host.surfaceReady)
                 assertNull(host.failure)
             }
-            val instrumentation = InstrumentationRegistry.getInstrumentation()
             // A saved floating panel can cover the screen center. Choose an
             // uncovered point in the actual native placeholder, before opening a menu.
             val placeholder = compose.onNodeWithTag("canvas-placeholder").fetchSemanticsNode().boundsInRoot

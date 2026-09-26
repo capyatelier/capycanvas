@@ -1,33 +1,18 @@
 package art.capycanvas
 
 import android.os.SystemClock
-import android.view.InputDevice
 import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
-import org.junit.After
 import org.junit.Assert.*
-import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
-import java.io.File
-import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Run alone in a fresh instrumentation process to exercise the cold renderer. */
 class AndroidStartupTest {
-    @Before fun isolate() {
-        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "startup-tests/${UUID.randomUUID()}")
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        RecoveryController.directoryForTest = File(root, "recovery")
-    }
-    @After fun release() {
-        CanvasHost.workspaceDirectoryForTest = null
-        RecoveryController.directoryForTest = null
-    }
+    @get:Rule val device = CapyDeviceRule()
     @Test fun drawingNavigationAndFirstUseShadersRemainResponsive() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var host: CanvasHost
@@ -55,21 +40,16 @@ class AndroidStartupTest {
             }
             val ready = waitFor { it.optBoolean("brush_ready") && workspaceReady() }
             assertTrue(ready.getBoolean("canvas_ready"))
-            fun canvas(view: View): CanvasSurfaceView? {
-                if (view is CanvasSurfaceView) return view
-                if (view is ViewGroup) for (i in 0 until view.childCount) canvas(view.getChildAt(i))?.let { return it }
-                return null
-            }
             var down = SystemClock.uptimeMillis()
             fun event(action: Int, positions: List<Pair<Float, Float>>, tool: Int) {
                 scenario.onActivity { activity ->
-                    val view = canvas(activity.window.decorView)!!
+                    val view = activity.window.decorView.descendant<CanvasSurfaceView>()!!
                     val properties = positions.indices.map { MotionEvent.PointerProperties().apply { id = it; toolType = tool } }.toTypedArray()
                     val coordinates = positions.map { (x, y) -> MotionEvent.PointerCoords().apply {
                         this.x = x * view.width; this.y = y * view.height; pressure = 1f; size = 1f
                     } }.toTypedArray()
                     val motion = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, positions.size, properties, coordinates,
-                        0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        0, 0, 1f, 1f, 0, 0, toolSource(tool), 0)
                     view.dispatchTouchEvent(motion)
                     motion.recycle()
                 }

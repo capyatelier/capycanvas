@@ -1,13 +1,10 @@
 package art.capycanvas
 
-import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
 import android.view.ViewConfiguration
-import android.view.ViewGroup
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
@@ -23,6 +20,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -30,7 +28,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 class AndroidPaletteTest {
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    @get:Rule val device = CapyDeviceRule()
     private val arguments get() = InstrumentationRegistry.getArguments()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
@@ -41,30 +39,12 @@ class AndroidPaletteTest {
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
     private var mouseButton = MotionEvent.BUTTON_PRIMARY
-    private lateinit var root: File
     private val tools = listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)
-    private val output get() = File(scenarioActivity().getExternalFilesDir(null), "validation/palettes").apply { mkdirs() }
+    private val output get() = File(scenario.activity().getExternalFilesDir(null), "validation/palettes").apply { mkdirs() }
 
-    private fun scenarioActivity(): MainActivity { var result: MainActivity? = null; scenario.onActivity { result = it }; return result!! }
-    private inline fun <reified T> findView(view: View): T? {
-        val pending = ArrayDeque<View>(listOf(view))
-        while (pending.isNotEmpty()) {
-            val next = pending.removeFirst()
-            if (next is T) return next
-            if (next is ViewGroup) for (i in 0 until next.childCount) pending.add(next.getChildAt(i))
-        }
-        return null
-    }
-    private fun find(node: SemanticsNode, test: (SemanticsNode) -> Boolean): SemanticsNode? =
-        if (test(node)) node else node.children.firstNotNullOfOrNull { find(it, test) }
-    private fun tagged(test: (SemanticsNode) -> Boolean): Pair<ViewRootForTest, SemanticsNode>? {
-        find(owner.semanticsOwner.unmergedRootSemanticsNode, test)?.let { return owner to it }
-        return android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
-            findView<ViewRootForTest>(view)?.takeIf { it !== owner }?.let { r -> find(r.semanticsOwner.unmergedRootSemanticsNode, test)?.let { r to it } }
-        }
-    }
-    private fun tag(tag: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
-    private fun text(text: String): (SemanticsNode) -> Boolean = { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true }
+    private fun tagged(test: (SemanticsNode) -> Boolean) = findNode(test, owner)
+    private fun tag(tag: String) = hasTag(tag)
+    private fun text(text: String) = hasLabel(text)
     private fun main(block: () -> Unit) = if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) block() else instrumentation.runOnMainSync(block)
     private fun exists(test: (SemanticsNode) -> Boolean): Boolean { var found = false; main { found = tagged(test) != null }; return found }
     private fun exists(tag: String) = exists(tag(tag))
@@ -87,30 +67,13 @@ class AndroidPaletteTest {
     private fun order() = view().array("swatches").objects().map { it.getLong("id") }
     private fun popupCount(): Int {
         var result = 0
-        main {
-            result = android.view.inspector.WindowInspector.getGlobalWindowViews().count { v ->
-                findView<ViewRootForTest>(v)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, tag("workspace-menu")) != null } == true
-            }
-        }
+        main { result = semanticsRoots().count { it.find(tag("workspace-menu")) != null } }
         return result
     }
-    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + timeout
-        do {
-            var ready = false
-            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
-            if (ready) return
-            SystemClock.sleep(16)
-        } while (SystemClock.uptimeMillis() < deadline)
-        runCatching { capture("timeout-${label.replace(Regex("[^A-Za-z0-9]+"), "-")}") }
-        fail("Timed out: $label")
-    }
+    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) =
+        host.awaitMain(label, timeout, { runCatching { capture("timeout-${label.replace(Regex("[^A-Za-z0-9]+"), "-")}") }; "" }, condition)
     private fun settle() { SystemClock.sleep(180); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
-    private fun action(value: JSONObject) {
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
-        assertTrue(done.await(10, TimeUnit.SECONDS)); settle()
-    }
+    private fun action(value: JSONObject) { host.drain(value, 10); settle() }
     private fun library(action: JSONObject): String? {
         val done = CountDownLatch(1); var error: String? = null
         instrumentation.runOnMainSync { host.paletteAction(action) { error = it; done.countDown() } }
@@ -122,13 +85,9 @@ class AndroidPaletteTest {
         if (action == MotionEvent.ACTION_DOWN) { downAt = SystemClock.uptimeMillis(); contact = true }
         val origin = IntArray(2)
         instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
-        val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool })
-        val coords = arrayOf(MotionEvent.PointerCoords().apply { x = next.x + origin[0]; y = next.y + origin[1]; pressure = if (action == MotionEvent.ACTION_UP) 0f else .7f })
-        val source = when (tool) { MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; else -> InputDevice.SOURCE_TOUCHSCREEN }
-        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) mouseButton else 0
-        val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, metaState, buttons, 1f, 1f, 0, 0, source, 0)
-        try { assertTrue("System accepts ${MotionEvent.actionToString(action)}", instrumentation.uiAutomation.injectInputEvent(motion, true)) }
-        finally { motion.recycle() }
+        val event = motion(tool, action, next + Offset(origin[0].toFloat(), origin[1].toFloat()), downAt, mouseButton, metaState)
+        try { assertTrue("System accepts ${MotionEvent.actionToString(action)}", instrumentation.uiAutomation.injectInputEvent(event, true)) }
+        finally { event.recycle() }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
     }
     private fun glide(from: Offset, to: Offset, steps: Int = 12) {
@@ -140,18 +99,8 @@ class AndroidPaletteTest {
         try { tap(at) } finally { mouseButton = MotionEvent.BUTTON_PRIMARY }
     }
     private fun hold(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(ViewConfiguration.getLongPressTimeout() + 250L) }
-    private fun capture(name: String) {
-        settle()
-        val shot = instrumentation.uiAutomation.takeScreenshot()
-        File(output, "$name.png").outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        shot.recycle()
-    }
-    private fun key(code: Int, meta: Int = 0) {
-        val now = SystemClock.uptimeMillis()
-        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
-            instrumentation.sendKeySync(KeyEvent(now, now, action, code, 0, meta, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
-        settle()
-    }
+    private fun capture(name: String) { settle(); screenshot("validation/palettes/$name.png") }
+    private fun key(code: Int, meta: Int = 0) { pressKey(code, meta); settle() }
     private fun setText(tag: String, value: String) {
         val target = node(tag)
         instrumentation.runOnMainSync {
@@ -183,30 +132,18 @@ class AndroidPaletteTest {
     private fun swatch(index: Int) = "palette-swatch-${order()[index]}"
 
     @Before fun ready() {
-        root = File(instrumentation.targetContext.cacheDir, "palette-tests/${java.util.UUID.randomUUID()}")
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        RecoveryController.directoryForTest = File(root, "recovery")
-        ColorPreferencesStore.directoryForTest = File(root, "color-preferences")
         launch()
         switchWorkspace("builtin:workspace:illustrator")
     }
     private fun launch() {
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        scenario.onActivity { host = it.host; owner = findView<ViewRootForTest>(it.window.decorView)!!; density = it.resources.displayMetrics.density }
-        waitFor("brush ready", 60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-        waitFor("workspace ready", 60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
+        scenario = launchCapy()
+        scenario.onActivity { host = it.host; owner = it.window.decorView.descendant<ViewRootForTest>()!!; density = it.resources.displayMetrics.density }
         action(obj("type" to "close_settings"))
         if (state().getJSONObject("workspace").optBoolean("zen_mode")) action(obj("type" to "invoke", "command" to "zen_mode"))
     }
     @After fun cleanup() {
         try { if (contact) event(MotionEvent.ACTION_CANCEL) }
-        finally {
-            if (::scenario.isInitialized) scenario.close()
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-            ColorPreferencesStore.directoryForTest = null
-            root.deleteRecursively()
-        }
+        finally { if (::scenario.isInitialized) scenario.close() }
     }
 
     @Test fun defaultsPlacePalettesAfterColorAndInSketchDrawer() {
@@ -496,7 +433,7 @@ class AndroidPaletteTest {
             frames.add(longArrayOf(metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION), metrics.getMetric(android.view.FrameMetrics.DEADLINE),
                 ui, metrics.getMetric(android.view.FrameMetrics.GPU_DURATION), metrics.getMetric(android.view.FrameMetrics.INTENDED_VSYNC_TIMESTAMP)))
         }
-        val window = scenarioActivity().window
+        val window = scenario.activity().window
         instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener, android.os.Handler(thread.looper)) }
         val origin = IntArray(2); instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
         val start = SystemClock.uptimeMillis(); var samples = 0

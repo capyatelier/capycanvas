@@ -1,39 +1,25 @@
 package art.capycanvas
 
-import kotlinx.coroutines.launch
-import android.graphics.Bitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
 import java.io.File
-import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /** Real Compose controls and MotionEvents, with a private test workspace store. */
 class AndroidWorkspaceManagerTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createEmptyComposeRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private lateinit var directory: File
-    private lateinit var legacy: Map<String, *>
     private fun view() = host.workspaceManager!!
     private fun state() = host.snapshot!!.getJSONObject("state")
-    @Before fun ready() {
-        directory = File(instrumentation.targetContext.filesDir, "workspace-tests/${UUID.randomUUID()}")
-        CanvasHost.workspaceDirectoryForTest = directory.absolutePath
-        legacy = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all
-        launch()
-    }
+    @Before fun ready() = launch()
     private fun launch() {
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        scenario.onActivity { host = it.host }
-        compose.waitUntil(60000) { host.snapshot?.optBoolean("brush_ready") == true && host.workspaceManager?.optBoolean("ready") == true }
+        scenario = launchCapy()
+        host = scenario.activity().host
         idle()
         if (state().getJSONObject("workspace").optBoolean("zen_mode")) action(obj("type" to "invoke", "command" to "zen_mode"))
         shot("startup")
@@ -46,9 +32,7 @@ class AndroidWorkspaceManagerTest {
         assertTrue(view().isNull("error"))
     }
     private fun action(value: JSONObject) {
-        val done = CountDownLatch(1)
-        scenario.onActivity { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
-        assertTrue(done.await(10, TimeUnit.SECONDS))
+        host.drain(value, 10)
         Thread.sleep(350); idle()
     }
     private fun manager(value: JSONObject) {
@@ -68,30 +52,15 @@ class AndroidWorkspaceManagerTest {
         compose.onNodeWithText(label, useUnmergedTree = true).performTouchInput { click() }
         Thread.sleep(300); idle()
     }
-    private fun capture(): JSONObject {
-        var result = ""
-        val done = CountDownLatch(1)
-        scenario.onActivity {
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                result = host.withNative { Native.workspace(it, obj("type" to "capture").toString()) }; done.countDown()
-            }
-        }
-        assertTrue(done.await(10, TimeUnit.SECONDS)); return JSONObject(result)
-    }
+    private fun capture() = JSONObject(host.workspaceCapture())
     private fun normalized(value: JSONObject): String {
         val copy = JSONObject(value.toString())
         copy.getJSONObject("history").getJSONObject("revisions").apply { keys().forEach { getJSONObject(it).put("timestamp_ms", "date") } }
         return copy.toString()
     }
-    private fun shot(name: String) {
-        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/workspaces/$name.png")
-        file.parentFile!!.mkdirs()
-        instrumentation.uiAutomation.takeScreenshot()?.let { image -> file.outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }; image.recycle() }
-    }
+    private fun shot(name: String) = screenshot("validation/workspaces/$name.png")
     @After fun cleanup() {
         if (::scenario.isInitialized) scenario.close()
-        CanvasHost.workspaceDirectoryForTest = null
-        assertEquals("Legacy preferences are preserved", legacy, instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all)
     }
     @Test fun restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator() {
         val name="Paint"

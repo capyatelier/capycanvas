@@ -5,18 +5,13 @@ import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.inspector.WindowInspector
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -24,6 +19,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
 
@@ -32,11 +28,10 @@ import java.io.File
  * advancing a virtual clock only between native calls masked close cancellation.
  */
 class AndroidDrawingTabsUiTest {
-    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    @get:Rule val device = CapyDeviceRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var activity: MainActivity
     private lateinit var host: CanvasHost
-    private lateinit var root: File
     private fun <T> ui(block: () -> T): T {
         var result: Result<T>? = null
         instrumentation.runOnMainSync { result = runCatching(block) }
@@ -68,23 +63,16 @@ class AndroidDrawingTabsUiTest {
         waitFor("drawing idle") { ui { !host.drawingTabs.blocked } && native { JSONObject(Native.documentTabs(it, obj("op" to "ready").toString())).getBoolean("park") } }
         healthy()
     }
-    private fun roots(view: View): List<ViewRootForTest> = when (view) {
-        is ViewRootForTest -> listOf(view)
-        is ViewGroup -> (0 until view.childCount).flatMap { roots(view.getChildAt(it)) }
-        else -> emptyList()
-    }
-    private fun find(node: SemanticsNode, match: (SemanticsNode) -> Boolean): SemanticsNode? =
-        if (match(node)) node else node.children.firstNotNullOfOrNull { find(it, match) }
     private fun point(match: (SemanticsNode) -> Boolean): Offset? = ui {
-        WindowInspector.getGlobalWindowViews().flatMap(::roots).asReversed().firstNotNullOfOrNull { root ->
-            find(root.semanticsOwner.unmergedRootSemanticsNode, match)?.let { node ->
+        semanticsRoots().asReversed().firstNotNullOfOrNull { root ->
+            root.find(match)?.let { node ->
                 val screen = IntArray(2); root.view.getLocationOnScreen(screen)
                 node.boundsInRoot.center + Offset(screen[0].toFloat(), screen[1].toFloat())
             }
         }
     }
-    private fun tag(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.TestTag) == value }
-    private fun text(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
+    private fun tag(value: String) = hasTag(value)
+    private fun text(value: String) = hasLabel(value)
     private fun description(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(value) == true }
     /** The narrow title bar folds File into its primary menu; exercise the
      * same route a tablet user sees instead of assuming desktop menu labels. */
@@ -154,7 +142,7 @@ class AndroidDrawingTabsUiTest {
     }
     private fun openFixture(name: String): Pair<Long, File> {
         ready()
-        val file = File(root, name)
+        val file = File(device.root, name)
         val selected = tabs().getLong("selected")
         val capture = native { Native.projectRecoveryFor(it, selected) }
         try { Native.projectPublish(capture, file.absolutePath) } finally { Native.projectFree(capture) }
@@ -164,11 +152,6 @@ class AndroidDrawingTabsUiTest {
         return tabs().getLong("selected") to file
     }
     @Before fun launch() {
-        DocumentController.nativeFileJobsForTest = false
-        root = File(instrumentation.targetContext.cacheDir, "tab-ui-${System.nanoTime()}").apply { mkdirs() }
-        RecoveryController.directoryForTest = File(root, "recovery")
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        ColorPreferencesStore.directoryForTest = File(root, "colors")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it; host = it.host; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         waitFor("production startup", 120_000) { ui { host.snapshot?.optBoolean("brush_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { c -> c.optString("id") == "new_document" && c.optBoolean("enabled") } == true } }
@@ -176,10 +159,6 @@ class AndroidDrawingTabsUiTest {
     }
     @After fun cleanup() {
         if (::scenario.isInitialized) scenario.close()
-        DocumentController.nativeFileJobsForTest = false
-        RecoveryController.directoryForTest = null
-        CanvasHost.workspaceDirectoryForTest = null
-        ColorPreferencesStore.directoryForTest = null
     }
     @Test fun closeButtonsAndFileMenuUseRealFrameTiming() {
         val first = tabs().getLong("selected"); val second = create()

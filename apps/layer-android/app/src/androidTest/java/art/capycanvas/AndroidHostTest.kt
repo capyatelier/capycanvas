@@ -10,7 +10,6 @@ import android.view.MotionEvent
 import android.view.Choreographer
 import android.view.PointerIcon
 import android.view.View
-import android.view.ViewGroup
 import androidx.compose.ui.test.*
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -23,10 +22,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
-import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Before
-import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.json.JSONObject
@@ -50,28 +47,11 @@ class AndroidHostTest {
             finally { Native.destroy(handle) }
         }
     }
-    val compose = createAndroidComposeRule<MainActivity>()
-    @get:Rule val workspaceRule = org.junit.rules.RuleChain.outerRule(object : org.junit.rules.ExternalResource() {
-        override fun before() {
-            CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir,
-                "host-tests/${java.util.UUID.randomUUID()}").absolutePath
-            RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
-        }
-        override fun after() {
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-        }
-    }).around(compose)
+    @get:Rule(order = 0) val device = CapyDeviceRule()
+    @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private var originalWorkspace: JSONObject? = null
-    private var originalTheme: Any = JSONObject.NULL
     @Before fun ready() {
-        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
-        assertNull("GPU initialization", host.failure)
-        compose.waitUntil(60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
-        originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
-        originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        host.awaitReady()
         compose.runOnIdle {
             host.dispatch(obj("type" to "close_settings"))
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
@@ -80,17 +60,9 @@ class AndroidHostTest {
         waitState { it.optString("theme") == "light" && it.getJSONObject("workspace").toString() == defaultWorkspace }
         compose.waitForIdle()
     }
-    @After fun restoreWorkspace() {
-        originalWorkspace?.let { workspace ->
-            compose.runOnIdle {
-                host.dispatch(obj("type" to "close_settings"))
-                host.dispatch(obj("type" to "restore_workspace", "workspace" to workspace))
-                host.dispatch(obj("type" to "set_theme", "theme" to originalTheme))
-            }
-            waitState { it.getJSONObject("workspace").toString() == workspace.toString() }
-        }
-    }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    private fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+    private fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
     @Test fun nativeSdrTaggedColorsAndGradientEditor() {
         val color = obj("space" to "DisplayP3", "rgba" to JSONArray(listOf(1.0, .01, .23, 1.0)))
         action(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to "foreground", "color" to color)))
@@ -162,8 +134,6 @@ class AndroidHostTest {
 
     @Test fun dropIndicatorsTrackContinuousMouseAndTouchMotion() {
         val fixture = JSONObject(defaultWorkspace)
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
         fixture.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
@@ -176,7 +146,6 @@ class AndroidHostTest {
         val owner = root.fetchSemanticsNode().root as ViewRootForTest
         val origin = root.fetchSemanticsNode().positionInRoot
         val density = compose.activity.resources.displayMetrics.density
-        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
         fun findHint(node: SemanticsNode): androidx.compose.ui.geometry.Rect? =
             if (node.config.getOrNull(SemanticsProperties.TestTag) == "workspace-drop-hint") node.boundsInRoot
             else node.children.firstNotNullOfOrNull(::findHint)
@@ -268,7 +237,6 @@ class AndroidHostTest {
         val workspace = compose.onNodeWithTag("workspace")
         val root = workspace.fetchSemanticsNode().boundsInRoot
         val density = compose.activity.resources.displayMetrics.density
-        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
         fun settle() { compose.waitForIdle(); SystemClock.sleep(100); compose.waitForIdle() }
         for (mouse in listOf(true, false)) {
             action(obj("type" to "restore_workspace", "workspace" to fixture))
@@ -304,8 +272,6 @@ class AndroidHostTest {
 
     @Test fun workspaceUsesNativeMouseAndPenCursors() {
         val fixture = JSONObject(defaultWorkspace)
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
         fixture.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
@@ -321,7 +287,6 @@ class AndroidHostTest {
         val native = (root.fetchSemanticsNode().root as ViewRootForTest).view
         fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
         fun saved() = state().getJSONObject("workspace").toString()
-        fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
         fun event(point: androidx.compose.ui.geometry.Offset, tool: Int): MotionEvent {
             val local = point + root.fetchSemanticsNode().positionInRoot
             val coords = MotionEvent.PointerCoords().apply { x = local.x; y = local.y }
@@ -424,8 +389,6 @@ class AndroidHostTest {
     @Test fun panelHeadersDoNotHighlightOnMouseOrStylusHoverOrPress() {
         val fixture = JSONObject(defaultWorkspace)
         fixture.getJSONObject("layout").apply {
-            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
-                "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
             put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
@@ -540,7 +503,6 @@ class AndroidHostTest {
 
     @Test fun columnDrawersUseNativeMouseAndTouchDrag() {
         val fixture = JSONObject(defaultWorkspace)
-        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id, "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
         fixture.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
@@ -558,7 +520,6 @@ class AndroidHostTest {
             val layout = state().getJSONObject("workspace").getJSONObject("layout")
             return (layout.array("bands").objects() + layout.array("floating").objects()).firstNotNullOf { find(it.getJSONObject("root")) }
         }
-        fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
         fun history(before: String) {
             val after = snapshot(); assertNotEquals(before, after)
             action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, snapshot())
@@ -898,11 +859,7 @@ class AndroidHostTest {
         compose.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()?.config?.contains(SemanticsProperties.Disabled) == false
     }
     private fun waitState(test: (JSONObject) -> Boolean) = compose.waitUntil(10_000) { test(state()) }
-    private fun findCanvas(view: View): CanvasSurfaceView? = when (view) {
-        is CanvasSurfaceView -> view
-        is ViewGroup -> (0 until view.childCount).firstNotNullOfOrNull { findCanvas(view.getChildAt(it)) }
-        else -> null
-    }
+    private fun findCanvas(view: View) = view.descendant<CanvasSurfaceView>()
     private fun penStroke(steps: Int = 60) {
         lateinit var canvas: CanvasSurfaceView
         val location = IntArray(2)

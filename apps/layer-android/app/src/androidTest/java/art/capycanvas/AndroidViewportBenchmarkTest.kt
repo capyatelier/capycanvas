@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -17,15 +18,11 @@ import kotlin.math.*
 
 /** Opt-in pen replay through either Android input dispatch or the canvas owner. */
 class AndroidViewportBenchmarkTest {
+    @get:Rule val device = CapyDeviceRule(nativeFileJobs = true)
+
     @Test fun retainedViewport() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue(args.getString("viewportBenchmark") == "true")
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val root = File(instrumentation.targetContext.cacheDir, "gpen-${System.nanoTime()}")
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        RecoveryController.directoryForTest = File(root, "recovery")
-        ColorPreferencesStore.directoryForTest = File(root, "color")
-        DocumentController.nativeFileJobsForTest = true
         val osInput = args.getString("osInput", "false") == "true"
         val prediction = args.getString("prediction", "true") == "true"
         val label = args.getString("label", "baseline")!!
@@ -41,7 +38,7 @@ class AndroidViewportBenchmarkTest {
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
         val motion = args.getString("motion", "stroke")!!
         check(motion in listOf("stroke", "pan", "pinch"))
-        try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             val host = activity.host
@@ -191,11 +188,6 @@ class AndroidViewportBenchmarkTest {
             }
             assertNull(host.failure)
             native { Native.presentationTimings(it, false) }
-        } } finally {
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-            ColorPreferencesStore.directoryForTest = null
-            DocumentController.nativeFileJobsForTest = false
         }
     }
 }

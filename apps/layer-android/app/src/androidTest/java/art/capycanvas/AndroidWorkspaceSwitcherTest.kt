@@ -1,13 +1,9 @@
 package art.capycanvas
 
 import android.os.SystemClock
-import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
 import android.view.ViewConfiguration
-import android.view.ViewGroup
-import android.view.inspector.WindowInspector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
@@ -16,24 +12,15 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
-import androidx.test.platform.app.InstrumentationRegistry
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
-import java.io.File
-import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /** Typed native contacts in real Compose dialog windows, with isolated SQLite. */
 class AndroidWorkspaceSwitcherTest {
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    @get:Rule val device = CapyDeviceRule()
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var host: CanvasHost
-    private lateinit var legacy: Map<String, *>
     private var pressed: ViewRootForTest? = null
     private var point = Offset.Zero
     private var downAt = 0L
@@ -44,30 +31,13 @@ class AndroidWorkspaceSwitcherTest {
     private fun ids(field: String) = view().array(field).objects().map { it.getString("id") }
     private fun order() = view().array("order").values().map { it.toString() }
     private fun layout() = host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").toString()
-    private fun find(node: SemanticsNode, tag: String): SemanticsNode? =
-        if (node.config.getOrNull(SemanticsProperties.TestTag) == tag) node else node.children.firstNotNullOfOrNull { find(it, tag) }
-    private fun roots(view: View): List<ViewRootForTest> = when (view) {
-        is ViewRootForTest -> listOf(view)
-        is ViewGroup -> (0 until view.childCount).flatMap { roots(view.getChildAt(it)) }
-        else -> emptyList()
-    }
-    private fun node(tag: String): Pair<ViewRootForTest, SemanticsNode>? = WindowInspector.getGlobalWindowViews().flatMap(::roots)
-        .firstNotNullOfOrNull { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, tag)?.let { root to it } }
+    private fun node(tag: String) = findTag(tag)
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
         instrumentation.runOnMainSync { result = node(tag)?.second?.boundsInRoot }
         return checkNotNull(result) { "Missing $tag" }
     }
-    private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) {
-        val until = SystemClock.uptimeMillis() + timeout
-        do {
-            var ready = false
-            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
-            if (ready) return
-            SystemClock.sleep(20)
-        } while (SystemClock.uptimeMillis() < until)
-        fail("Timed out: $label; ${view()}")
-    }
+    private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) = host.awaitMain(label, timeout, { "${view()}" }, condition)
     private fun rowsEnabled() = view().optString("page") != "workspaces" || !view().isNull("form") || view().array("rows").objects()
         .all { node("workspace-row-${it.getString("id")}")?.second?.config?.getOrNull(SemanticsProperties.Disabled) == null }
     private fun idle() {
@@ -76,25 +46,11 @@ class AndroidWorkspaceSwitcherTest {
         assertTrue(view().toString(), view().isNull("error")); assertTrue(view().toString(), view().isNull("switcher_error"))
     }
     private fun send(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; idle() }
-    private fun capture(): String {
-        var result = ""
-        val done = CountDownLatch(1)
-        instrumentation.runOnMainSync {
-            CoroutineScope(Dispatchers.Main).launch {
-                result = host.withNative { Native.workspace(it, obj("type" to "capture").toString()) }; done.countDown()
-            }
-        }
-        assertTrue(done.await(10, TimeUnit.SECONDS)); return result
-    }
+    private fun capture() = host.workspaceCapture()
     private fun event(action: Int, next: Offset = point) {
         point = next
         if (action == MotionEvent.ACTION_DOWN) downAt = SystemClock.uptimeMillis()
-        val source = when (tool) { MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; else -> InputDevice.SOURCE_TOUCHSCREEN }
-        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) button else 0
-        val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1,
-            arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool }),
-            arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = .7f }),
-            0, buttons, 1f, 1f, 0, 0, source, 0)
+        val event = motion(tool, action, next, downAt, button)
         try { instrumentation.runOnMainSync { checkNotNull(pressed).view.dispatchTouchEvent(event) } }
         finally { event.recycle() }
         if (action in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) pressed = null
@@ -109,25 +65,14 @@ class AndroidWorkspaceSwitcherTest {
         android.util.Log.i("SwitcherAcceptance", "Tap $tag")
         down(tag); event(MotionEvent.ACTION_UP); idle()
     }
-    private fun key(code: Int, meta: Int = 0) {
-        // Keyboard input must pass ViewRootImpl so Android leaves touch mode.
-        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
-            instrumentation.sendKeySync(KeyEvent(0, SystemClock.uptimeMillis(), action, code, 0, meta))
-        SystemClock.sleep(220)
-    }
+    private fun key(code: Int, meta: Int = 0) { pressKey(code, meta); SystemClock.sleep(220) }
     private fun open() { send(obj("type" to "open", "page" to "workspaces")); waitFor("dialog focus") { node("workspace-manager")?.first?.view?.hasWindowFocus() == true } }
     private fun options(id: String, action: String) { tap("workspace-options-$id"); tap("workspace-$action") }
     private fun newWorkspace(name: String): String {
         send(obj("type" to "form", "kind" to "new")); send(obj("type" to "submit", "name" to name, "source" to null))
         return view().getString("id")
     }
-    private fun shot(name: String) {
-        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/workspace-switcher/$name.png")
-        file.parentFile!!.mkdirs()
-        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-            file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
-        }
-    }
+    private fun shot(name: String) = screenshot("validation/workspace-switcher/$name.png")
     private fun scrollTop() {
         instrumentation.runOnMainSync {
             fun findScroll(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsActions.ScrollBy) != null) node
@@ -137,25 +82,18 @@ class AndroidWorkspaceSwitcherTest {
         SystemClock.sleep(350)
     }
     private fun launch() {
-        scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario = launchCapy()
         scenario.onActivity { host = it.host; density = it.resources.displayMetrics.density }
-        waitFor("startup", 60000) { host.workspaceManager?.optBoolean("ready") == true && host.snapshot?.optBoolean("brush_ready") == true }
         idle()
         if (host.snapshot!!.getJSONObject("state").getJSONObject("workspace").optBoolean("zen_mode")) {
             instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "zen_mode")) }
             waitFor("header visible") { node("workspace-switcher") != null }; idle()
         }
     }
-    @Before fun ready() {
-        legacy = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all
-        CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "switcher-tests/${UUID.randomUUID()}").absolutePath
-        launch()
-    }
+    @Before fun ready() = launch()
     @After fun cleanup() {
         if (pressed != null) event(MotionEvent.ACTION_CANCEL)
         if (::scenario.isInitialized) scenario.close()
-        CanvasHost.workspaceDirectoryForTest = null
-        assertEquals("User preferences are preserved", legacy, instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all)
     }
 
     @Test fun pinsOrderingPreviewKeyboardAndRestart() {
