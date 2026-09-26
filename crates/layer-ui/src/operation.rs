@@ -620,10 +620,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()?;
         Ok(true)
     }
-    /// A contact on active photo handles/body directly manipulates placement.
-    /// Touch outside them keeps the existing two-finger camera gesture route.
-    pub(super) fn placement_touch_hit(&self, position: [f32; 2]) -> bool {
-        let Some(t) = self.operation.current.as_ref().filter(|t| t.placement.is_some()) else { return false; };
+    /// A finger on any transform handle or inside the box manipulates it;
+    /// elsewhere it keeps the camera gestures.
+    pub(super) fn transform_touch_hit(&self, position: [f32; 2]) -> bool {
+        let Some(t) = self.operation.current.as_ref() else { return false; };
         let Some(inverse) = t.basis.inverse() else { return false; };
         let p = self.state.camera.input_transform().map(Point { x: position[0], y: position[1] });
         t.hit(inverse.map(p), self.ruler_reach()).is_some()

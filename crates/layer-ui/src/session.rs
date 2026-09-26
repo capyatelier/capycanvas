@@ -1155,11 +1155,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err("Invalid pointer position".into());
                 }
-                let placement_contact = kind == PointerKind::Touch
+                let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
-                            && !self.touch.is_active() && self.placement_touch_hit(position)));
-                if kind == PointerKind::Touch && !placement_contact {
+                            && !self.touch.is_active() && self.transform_touch_hit(position)));
+                if kind == PointerKind::Touch && !transform_contact {
                     if self.interaction.pointer.is_none() && !self.state.settings_open {
                         reply.change = self.touch(id, pen_phase(phase), position);
                         reply.handled = true;
