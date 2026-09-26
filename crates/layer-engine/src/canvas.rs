@@ -31,6 +31,9 @@ mod color_transition;
 
 const TRANSFORM_HISTORY: usize = 16;
 const INPUT_BATCH: usize = 4096;
+const STROKE_POINT_CAPACITY: usize = 65_536;
+const DAB_CAPACITY: usize = 32_768;
+const BATCH_CAPACITY: usize = 64;
 // A small wet microbatch amortizes page ping-pong and reservoir passes while
 // keeping exchange far below the eight-sample display-frame cadence that made
 // carried color advance in visible bands.
@@ -43,23 +46,6 @@ const MAX_WET_DABS_PER_BATCH: u32 = 3;
 const MAX_SMUDGE_DABS_PER_BATCH: usize = 3;
 const MAX_SMUDGE_TRAVEL_DIAMETERS: f32 = 0.14;
 const MAX_SMUDGE_DAMAGE_DIAMETERS_SQUARED: f32 = 4.0;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EngineCapacity {
-    pub stroke_points: usize,
-    pub dabs_per_frame: usize,
-    pub batches_per_frame: usize,
-}
-
-impl Default for EngineCapacity {
-    fn default() -> Self {
-        Self {
-            stroke_points: 65_536,
-            dabs_per_frame: 32_768,
-            batches_per_frame: 64,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EngineMetrics {
@@ -137,29 +123,11 @@ pub struct CanvasEngine<B: CanvasRenderer> {
 
 impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn new(
-        backend: B,
-        document: Document,
-        input: InputConsumer<PenEvent>,
-        view: ViewState,
-        input_transform: ViewTransform,
-    ) -> Result<Self, EngineError<B::Error>> {
-        Self::with_capacity(
-            backend,
-            document,
-            input,
-            view,
-            input_transform,
-            EngineCapacity::default(),
-        )
-    }
-
-    pub fn with_capacity(
         mut backend: B,
         mut document: Document,
         input: InputConsumer<PenEvent>,
         view: ViewState,
         input_transform: ViewTransform,
-        capacity: EngineCapacity,
     ) -> Result<Self, EngineError<B::Error>> {
         if backend.document_color() != document.color {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
@@ -191,7 +159,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             tool: StrokeTool::Brush,
             instant_feedback: InstantFeedbackConfig::default(),
             ruler_snapping: Some(12.),
-            builder: StrokeBuilder::with_capacity(capacity.stroke_points.min(MAX_CONTACT_POINTS)),
+            builder: StrokeBuilder::with_capacity(STROKE_POINT_CAPACITY),
             dab_generator,
             finalized_real_points: 0,
             active_stroke: None,
@@ -203,8 +171,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             rebuild_completed: false,
             estimates: Default::default(),
             pending_smudge_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
-            dabs: Vec::with_capacity(capacity.dabs_per_frame),
-            batches: Vec::with_capacity(capacity.batches_per_frame),
+            dabs: Vec::with_capacity(DAB_CAPACITY),
+            batches: Vec::with_capacity(BATCH_CAPACITY),
             transform_preview: None,
             selection_display: None,
             rebuild_all: true,
@@ -394,19 +362,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             dab.center.y += offset.y;
         }
         contacts
-    }
-
-    pub fn create_paint_layer(
-        &mut self,
-        name: impl Into<std::sync::Arc<str>>,
-        index: usize,
-    ) -> Result<LayerId, DocumentError> {
-        let id = self.editor.allocate_layer_id();
-        self.apply_edit(Edit::InsertLayer {
-            index,
-            layer: layer_core::Layer::paint(id, name),
-        })?;
-        Ok(id)
     }
 
     pub fn allocate_layer_id(&mut self) -> LayerId {
@@ -602,10 +557,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    pub fn remove_layer(&mut self, id: LayerId) -> Result<(), DocumentError> {
-        self.apply_edit(Edit::RemoveLayer { id })
-    }
-
     pub fn move_layer(&mut self, id: LayerId, to: usize) -> Result<(), DocumentError> {
         self.apply_edit(Edit::MoveLayer { id, to })
     }
@@ -638,14 +589,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn set_layer_opacity(&mut self, id: LayerId, opacity: f32) -> Result<(), DocumentError> {
         self.apply_edit(Edit::SetLayerOpacity { id, opacity })
-    }
-
-    pub fn set_layer_visibility(
-        &mut self,
-        id: LayerId,
-        visible: bool,
-    ) -> Result<(), DocumentError> {
-        self.apply_edit(Edit::SetLayerVisibility { id, visible })
     }
 
     pub fn set_brush(&mut self, brush: BrushSnapshot) -> Result<(), BrushError> {
