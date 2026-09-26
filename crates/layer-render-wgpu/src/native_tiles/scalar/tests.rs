@@ -5,7 +5,6 @@ use crate::{
     raster::{CaptureSource, TileCapture},
 };
 use layer_core::raster::RasterTile;
-mod bench;
 
 fn texture(r: &WgpuRasterizer) -> wgpu::Texture {
     r.device.create_texture(&wgpu::TextureDescriptor {

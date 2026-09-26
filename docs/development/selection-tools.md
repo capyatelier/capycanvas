@@ -104,9 +104,8 @@ Run the native tests through `tools/performance/workspace-motion.sh gtk
 `artifacts/selection-gtk/`.
 
 Run `cargo test --locked -p layer-core -p layer-ui --lib` for shared behavior.
-Hardware checks live in `layer_tests::selection_options`, the existing selection
-and region tests, and `layer_tests::selected_brush_latency` (ignored, release,
-serial). The brush probe covers no selection, legacy masks, and byte masks.
+Hardware checks live in `layer_tests::selection_options`,
+`layer_tests::selection_painting` and the existing selection and region tests.
 Keep machine-specific logs and screenshots in ignored `artifacts/`, not Git.
 
 ## Paintable coverage and saved masks
@@ -218,13 +217,6 @@ Additional reproducible checks:
   events; they do not establish physical pressure/tilt feel.
 - Run `native_quick_mask_input` through the native GTK harness above. It checks
   coverage and tint pixels, saves/edits/loads a mask, and captures both themes.
-- `cargo test --locked -p layer-render-wgpu --release selection_paint_latency
-  -- --ignored --nocapture --test-threads=1` measures a 4096² mask. On NVIDIA
-  RTX PRO 6000 Blackwell Max-Q/Vulkan 610.57.04, eight real G-Pen samples per
-  update measured 0.073/0.209 ms sample-and-submit p95 and 0.177/0.628 ms
-  GPU-complete p95 for 64/800px brushes. Final capture took 11.5/5.2 ms.
-  Interactive hosts compile pipelines asynchronously. These are workstation
-  measurements, not tablet latency claims.
 - `cargo test --locked -p layer-render-wgpu selection_resize_latency --lib --
   --ignored --nocapture --test-threads=1` measures a 2048² soft mask with no
   binary early-outs. On the workstation above, GPU completion plus capture took

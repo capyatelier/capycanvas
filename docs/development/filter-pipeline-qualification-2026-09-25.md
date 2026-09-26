@@ -388,8 +388,7 @@ LAYER_PEN_BRUSH_PX=2000 LAYER_PENUP_STROKES=12 LAYER_PEN_CONTACT_MS=1200 \
   native_penup_and_following_strokes artifacts/filter-optimization/gtk-pen
 ```
 
-Also run `selected_brush_latency` on the release renderer test executable, and
+Also run
 `target/release/examples/raster_workloads 60mp --output-dir artifacts/filter-optimization/save`.
-Those cover selection/material brushes and dense U16 photo painting concurrent
-with archive saving, respectively. They are separate workloads from the 61 MP
-2000 px latency comparison.
+It covers dense U16 photo painting concurrent with archive saving, a separate
+workload from the 61 MP 2000 px latency comparison.

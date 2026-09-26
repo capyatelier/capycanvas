@@ -656,7 +656,7 @@ the resulting GTK appearance remains subject to human review.
   0.057/0.072ms at 256, and 0.083/0.750ms at 4096. These are ten warm samples,
   not percentile/first-use claims. The initial per-pixel edge-search prototype
   took 1.759ms median at 256 vertices; it was replaced, not retained as another
-  runtime path. Benchmark: `selection_raster_latency` (release, ignored test).
+  runtime path.
 - Selected-brush benchmark, 384px diameter, eight incremental dabs per submit,
   2048×1536, warm 120-sample windows. Triplets are median/p95/p99 milliseconds;
   completion includes the benchmark's explicit GPU wait, not display latency:
@@ -673,8 +673,7 @@ the resulting GTK appearance remains subject to human review.
   Watercolor has a measurable ~0.047ms median GPU increase from restricting
   deposition, backtraces and neighboring transport samples. This is not free,
   but remains comfortably within 8.33ms. CPU tails vary between runs; do not
-  interpret their decreases as a selection speedup. `selected_brush_latency`
-  asserts that unchanged coverage is not regenerated between strokes.
+  interpret their decreases as a selection speedup.
 - Six-second GTK/Wayland G-Pen runs delivered 119.93Hz without selection and
   119.95Hz with a 256-point selection; the latter discarded one presentation.
   Selected worker CPU median/p95/p99 was 0.281/0.525/0.717ms; GPU
@@ -727,8 +726,7 @@ the resulting GTK appearance remains subject to human review.
   | Noise | 0.016 / 0.051 / 0.150 | 0.081 / 0.083 / 0.084 | 0.137 / 0.177 / 0.275 |
 
   First Solid completion was 5.139ms, versus 0.35–0.45ms for the subsequent
-  fixtures. No claim of cold-start or tablet latency is implied. Repeat with
-  `cargo test -p layer-render-wgpu --release connected_region_latency --lib -- --ignored --nocapture --test-threads=1`.
+  fixtures. No claim of cold-start or tablet latency is implied.
 - Region integration uses immutable packed coverage shared with brush clipping,
   mask initialization, fill/gradient operations and a GPU selection outline in
   the existing presentation pass. Translation shares the coverage allocation;
@@ -766,7 +764,7 @@ the resulting GTK appearance remains subject to human review.
   detector pipeline creation, so these are not three independent cold starts.
   GPU timing includes source capture and copies; completion adds asynchronous
   mapping and history validation. These are workstation results, not tablet
-  measurements. Repeat with the ignored release `region_request_latency` test.
+  measurements.
   Reusable query storage is 13.5MiB for visible sampling and approximately
   25.8MiB after allocating the reference source/composition scratch. Each retained
   2048×1536 region costs 1.5MiB GPU plus 1.5MiB CPU history, with up to another
@@ -871,7 +869,7 @@ the resulting GTK appearance remains subject to human review.
   This includes the GPU operation and canvas composition, with a test-only wait
   to measure completed work. Production has no such wait. It is not physical
   pen-to-display latency. The two-color rectangle/ellipse and line use 24px
-  width. Repeat with the ignored `figure_latency` renderer test in release mode.
+  width.
   The blank canvas is presented before timing, matching the app lifecycle;
   operation-specific pages/scratch are not preallocated. First small rectangle
   completed in 3.076ms, and the first large rectangle in 4.420ms. These share a
@@ -1018,8 +1016,7 @@ the resulting GTK appearance remains subject to human review.
   never inside pointer processing. A preliminary build including unrelated
   concurrent startup changes had a 15.464ms copy-baseline completion p99; the
   table is from an isolated source snapshot. That difference is not attributed
-  to a transform optimization. Reproduce with the ignored release renderer test
-  `pixel_transform::tests::transform_latency` on an otherwise idle GPU.
+  to a transform optimization.
   A repeat gave selected full-layer GPU p99 0.045ms and 48-tile GPU p99 0.102ms,
   with completion p99 0.258/0.647ms respectively; cached pipeline creation was
   1.008ms. Both runs fit the primitive's warm budget, not a full editor frame.
@@ -1072,8 +1069,7 @@ the resulting GTK appearance remains subject to human review.
   allocation. Captures are refreshed per committed operation; live previews
   must retain an immutable transaction source instead. First-operation times
   in this cached-driver run were 0.85–3.56ms; this does not replace the cold
-  compilation warning above. Reproduce with ignored release test
-  `layer_tests::transforms::ordered_transform_latency`, serially on an idle GPU.
+  compilation warning above.
 - Still required before exposing Operation: linked-mask transforms,
   shared handles and numeric settings, GTK rendering/input,
   and end-to-end latency/visual tests. Existing painting is unchanged; this is a
@@ -1167,8 +1163,7 @@ the resulting GTK appearance remains subject to human review.
   overhead: the preparation itself encodes no work. All three modes retain the
   same 3MiB source/output storage at this extent, with no additional selection
   channel. Presentation uniforms grow by 16 bytes. These are preparation timings,
-  not application presentation or physical-input latency. Repeat with ignored
-  release test `affine_selection_preparation_latency`.
+  not application presentation or physical-input latency.
 - Tests cover fractional coverage, holes, scaling/rotation/reflection, inversion,
   off-canvas placement, exact agreement across fills/brushes/masks, unchanged
   preparation reuse, retained GPU outline sources, and atomic Apply/undo/redo.

@@ -1070,9 +1070,7 @@ use the production native renderer. Both updated runs decode source tiles only
 during preparation (384 and 950 misses respectively, no subsequent source loads).
 Fixture generation took 362 and 906 ms respectively, outside cold render timing.
 
-Reproduce with the ignored release test `large_photo_placement_workload` and
-`LAYER_PLACEMENT_SIZE=24mp` or `61mp`. `LAYER_PLACEMENT_PHOTO` can supply an actual
-file through the portable decoder. GPU execution needs physical device access.
+The `raster_workloads` example covers the 24 MP and 60 MP photo workloads.
 
 ### Actual camera JPEGs: current renderer measurement
 

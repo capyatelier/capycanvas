@@ -328,22 +328,12 @@ fn tonal_61mp_performance() {
         if i >= 2 {
             warm.push(elapsed);
         }
-        let gpu = r
-            .regions
-            .as_ref()
-            .and_then(|r| r.timing.as_ref())
-            .map(|t| t.completed_snapshot(&r.device, &r.queue).gpu.ordered());
         eprintln!(
-            "TONAL_61MP run={i} total_ms={elapsed:.3} gpu_ms={gpu:?} baseline_gpu_bytes={before} gpu_bytes={} region_bytes={} history_bytes={}",
+            "TONAL_61MP run={i} total_ms={elapsed:.3} baseline_gpu_bytes={before} gpu_bytes={} region_bytes={} history_bytes={}",
             r.telemetry().resident_bytes,
             r.regions.as_ref().unwrap().storage_bytes(),
             result.pixels.words().len() * 4
         );
-        if i == 0 {
-            let mut t = telemetry::Telemetry::new(&r.device, &r.queue);
-            t.enabled = true;
-            r.regions.as_mut().unwrap().timing = Some(t);
-        }
         assert_eq!(result.pixels.extent(), extent);
         held.push(result.pixels.clone());
         assert!(r.selection_clip.storage_bytes() <= 128 * 1024 * 1024);
@@ -694,63 +684,6 @@ fn tonal_sdr_native_painted_source_and_composite() {
             "{source:?}: sample {:?} coverage {}",
             result.tonal_sample,
             byte(&result.pixels, 300, 300)
-        );
-    }
-}
-
-#[test]
-#[ignore = "24MP hardware tonal preview benchmark; release, serial"]
-fn tonal_preview_latency() {
-    let extent = [6000, 4000];
-    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
-        space: RgbSpace::ProPhoto,
-        depth: SampleDepth::F32,
-    })
-    .unwrap();
-    let mut paper = Layer::paint(LayerId(1), "Uniform photo benchmark");
-    paper.kind = layer_core::LayerKind::Background;
-    r.submit(FramePacket {
-        view: ViewState {
-            background_rgba_linear: [1.; 4],
-            ..view()
-        },
-        document_extent: extent,
-        layers: &[paper],
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: true,
-        time_seconds: 0.,
-        composite_all: true,
-    })
-    .unwrap();
-    for probe in [false, true] {
-        let mut ms = Vec::new();
-        for _ in 0..6 {
-            let start = std::time::Instant::now();
-            let result = receive(
-                &mut r,
-                RegionSource::Composite,
-                TonalBand::defaults(),
-                false,
-                probe.then_some(TonalProbe {
-                    bounds: [0, 0, 6000, 4000],
-                    point: false,
-                    quad: None,
-                }),
-                None,
-            );
-            ms.push(start.elapsed().as_secs_f64() * 1000.);
-            assert_eq!(byte(&result.pixels, 3000, 2000), 255);
-            if probe {
-                assert_eq!(result.tonal_sample.unwrap().count, 24_000_000);
-            }
-        }
-        let first = ms.remove(0);
-        ms.sort_by(f64::total_cmp);
-        eprintln!(
-            "tonal 24MP seven bands probe={probe}: first={first:.2}ms warm_median={:.2}ms warm_max={:.2}ms",
-            ms[2], ms[4]
         );
     }
 }

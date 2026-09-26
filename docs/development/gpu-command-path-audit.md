@@ -116,10 +116,8 @@ Physical hardware:
 - Linux Vulkan, NVIDIA RTX PRO 6000 Blackwell Max-Q. This exercises the shared
   renderer, not the GTK GUI.
 
-The release-mode ignored test
-`raster::restore_tests::native_restore_submission_latency` runs both policies
-against the same renderer, U16 sRGB blobs, and preallocated 256 × 256 Float32
-targets. Document metadata is 9504 × 6336 (60,217,344 pixels), but it does **not**
+The paired benchmark ran both policies against the same renderer, U16 sRGB
+blobs, and preallocated 256 × 256 Float32 targets. Document metadata is 9504 × 6336 (60,217,344 pixels), but it does **not**
 render/composite that whole canvas. Solid-color input tiles are highly
 compressible; arbitrary photo decode costs are not represented.
 
@@ -205,7 +203,6 @@ were **not tested**. Shared code reach is not a measured speedup on those hosts.
 On a machine with a supported physical GPU:
 
 ```sh
-cargo test -p layer-render-wgpu --release --lib native_restore_submission_latency -- --ignored --nocapture --test-threads=1
 cargo test -p layer-render-wgpu --release --lib raster -- --test-threads=1
 ```
 
@@ -217,7 +214,6 @@ ANDROID_NDK_HOME=/path/to/android-ndk cargo ndk -t arm64-v8a --platform 29 test 
 /path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip -o /tmp/capy-restore-tests target/aarch64-linux-android/release/deps/layer_render_wgpu-HASH
 adb -s 5ll21u1002931 push /tmp/capy-restore-tests /data/local/tmp/capy-restore-tests
 adb -s 5ll21u1002931 shell chmod 755 /data/local/tmp/capy-restore-tests
-adb -s 5ll21u1002931 shell /data/local/tmp/capy-restore-tests native_restore_submission_latency --ignored --nocapture --test-threads=1
 adb -s 5ll21u1002931 shell /data/local/tmp/capy-restore-tests restore_tests --test-threads=1
 adb -s 5ll21u1002931 shell rm /data/local/tmp/capy-restore-tests
 ```

@@ -83,7 +83,7 @@ comparison. Final classification medians were 1.11–1.43× that control.
 - Native device benchmark: build the renderer test executable using
   `cargo ndk -t arm64-v8a --platform 29 test --locked --release -p layer-render-wgpu --lib --no-run`,
   push it to `/data/local/tmp`, and run `tonal_61mp_performance --ignored
-  --nocapture --test-threads=1`. `tonal_preview_latency` measures broad sampling.
+  --nocapture --test-threads=1`.
 - Native application: build/install a separate `capyApplicationId`, then run
   `AndroidRasterTest#tonal61MpRecoveryAndInteraction` and
   `AndroidRasterTest#tonalHdrCoverageAndSamplingOnDevice`. The 61 MP test exercises

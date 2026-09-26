@@ -376,48 +376,6 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
 }
 
 #[test]
-#[ignore = "hardware selection painting timing; serial release run"]
-fn selection_paint_latency() {
-    use layer_engine::{PenEvent, PenPhase, PressureCurve, SampleFlags, SelectionStroke, ToolKind, ViewTransform};
-    use std::time::Instant;
-    let mut r = renderer();
-    r.document_extent = [4096, 4096];
-    for diameter in [64., 800.] {
-        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
-        brush.diameter = diameter;
-        let mut stroke = SelectionStroke::new(diameter as u64, brush, ViewTransform::IDENTITY, PressureCurve::default(), None);
-        let mut paint = request(diameter as u64, Selection::empty(), SelectionPaintMode::Gray, 0.5);
-        paint.style = stroke.style();
-        let mut submit = Vec::new();
-        let mut complete = Vec::new();
-        for i in 0..120 {
-            paint.dabs.clear();
-            let start = Instant::now();
-            for j in 0..8 {
-                let n = i*8+j;
-                stroke.push(PenEvent {
-                    device_id: 1, sequence: n, timestamp_ns: n*1_000_000, view_revision: 0,
-                    surface_position: Point { x: 600.+n as f32*2., y: 1000. }, pressure: 0.7,
-                    tilt_radians: [0.;2], twist_radians: 0., distance: 0.,
-                    phase: if n==0 { PenPhase::Down } else { PenPhase::Move },
-                    tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
-                }, &mut paint.dabs);
-            }
-            r.paint_selection(&paint).unwrap();
-            submit.push(start.elapsed().as_secs_f64()*1000.);
-            r.wait_idle().unwrap();
-            complete.push(start.elapsed().as_secs_f64()*1000.);
-        }
-        submit.sort_by(f64::total_cmp);
-        complete.sort_by(f64::total_cmp);
-        eprintln!("selection G-Pen {diameter}px, 8 real samples/update on 4096²: p50/p95 sample+submit_ms={:.3}/{:.3}, complete_ms={:.3}/{:.3}",submit[60],submit[114],complete[60],complete[114]);
-        let start = Instant::now();
-        let _ = receive(&mut r, paint);
-        eprintln!("selection finish capture_ms={:.3}",start.elapsed().as_secs_f64()*1000.);
-    }
-}
-
-#[test]
 fn selection_paint_retained_preview_repaints_strokes_without_artwork_or_cursor_damage() {
     let mut r = renderer();
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;

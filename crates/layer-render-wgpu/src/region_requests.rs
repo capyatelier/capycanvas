@@ -13,8 +13,6 @@ pub(super) struct RegionRequests {
     waiting: Option<RegionRequest>,
     tx: mpsc::Sender<Result<RegionResult, GpuRasterError>>,
     rx: mpsc::Receiver<Result<RegionResult, GpuRasterError>>,
-    #[cfg(test)]
-    pub timing: Option<telemetry::Telemetry>,
 }
 impl RegionRequests {
     pub fn storage_bytes(&self) -> u64 {
@@ -34,8 +32,6 @@ impl RegionRequests {
             waiting: None,
             tx,
             rx,
-            #[cfg(test)]
-            timing: None,
         }
     }
     fn start(
@@ -43,8 +39,6 @@ impl RegionRequests {
         r: &mut WgpuRasterizer,
         request: RegionRequest,
     ) -> Result<bool, GpuRasterError> {
-        #[cfg(test)]
-        let trace = self.timing.as_ref().map(|_| std::time::Instant::now());
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
@@ -118,10 +112,6 @@ impl RegionRequests {
                 label: Some("connected region request"),
             },
         );
-        #[cfg(test)]
-        if let Some(t) = &mut self.timing {
-            t.begin(&r.device, &r.queue, &mut encoder);
-        }
         if let Some(selection) = &request.limit {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, selection)?;
@@ -164,8 +154,6 @@ impl RegionRequests {
                 )?
             }
         };
-        #[cfg(test)]
-        let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let direct_tonal = tone.is_some()
             && extent == r.document_extent
             && request.selection.as_ref().is_some_and(|s| {
@@ -212,8 +200,6 @@ impl RegionRequests {
         } else {
             (input, extent, false)
         };
-        #[cfg(test)]
-        let flood_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let coverage_size = region.bounds_offset;
         let probe = tone.and_then(|t| t.probe);
         let mask_size = coverage_size + 32;
@@ -242,42 +228,8 @@ impl RegionRequests {
                 self.raw.tonal_statistics.size(),
             );
         }
-        #[cfg(test)]
-        if let Some(t) = &mut self.timing {
-            t.end(&mut encoder);
-        }
         r.uploads.finish(&encoder);
-        #[cfg(test)]
-        let encode_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
-        #[cfg(test)]
-        let submission = if trace.is_some() {
-            encoder.submit_timed(&r.queue)
-        } else {
-            encoder.submit(&r.queue);
-            [0.; 2]
-        };
-        #[cfg(not(test))]
         encoder.submit(&r.queue);
-        #[cfg(test)]
-        if let Some(trace) = trace {
-            let total = trace.elapsed().as_secs_f64() * 1000.;
-            if total > 0.6 {
-                eprintln!(
-                    "region timing request={} cumulative source/flood/encode/submit={:.3}/{:.3}/{:.3}/{:.3}ms; finish/queue={:.3}/{:.3}",
-                    request.request_id,
-                    source_ms.unwrap(),
-                    flood_ms.unwrap(),
-                    encode_ms.unwrap(),
-                    total,
-                    submission[0],
-                    submission[1]
-                );
-            }
-        }
-        #[cfg(test)]
-        if let Some(t) = &mut self.timing {
-            t.submitted(&r.queue);
-        }
         self.pending = Some(region);
         selection_readback::capture_selection(
             readback,
