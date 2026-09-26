@@ -74,7 +74,7 @@ export async function checkMediumTiles({ call, evaluate, settle }) {
       await send({ type: "invoke", command: "zen_mode" });
       await check(docked);
       assert.deepEqual(await evaluate("({zoom:layerApp.state().camera.zoom,rotation:layerApp.state().camera.rotation,pixels:[document.querySelector('#canvas').width,document.querySelector('#canvas').height]})"), camera);
-      // Each size choice survives an actual reload, including the legacy labeled ID.
+      // Each size choice survives an actual reload.
       await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;function check(){
         const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy&&!v.dirty)resolve();
         else if(performance.now()>end)reject(Error('Workspace save did not finish'));else setTimeout(check,40);

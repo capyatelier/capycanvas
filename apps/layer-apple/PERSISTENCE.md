@@ -36,15 +36,13 @@ Cancel restores that layout and Restore commits one undoable change. Closing
 or suspending the scene cancels a pending preview.
 The workspace browser initially selects the current workspace; filtering clears
 selection and preview. Late or rapid selection replies cannot revive a dismissed
-preview. Separate Save/Load Layout UI and Apple bridge operations have been
-removed.
+preview.
 
 Externally opened `.capyworkspace` and `.capytoolbar` files use coordinated reads
 on the file queue and shared Rust import validation. The compact workspace
 screens follow the shared design without storage administration, package
-pickers/exporters, trash or metadata/version-management controls; their obsolete
-routing and presentation state are removed. Layout History keeps the existing preview/Cancel/Restore flow.
-The lower-level storage service retains consistent SQLite backup and package
+pickers/exporters, trash or metadata/version-management controls. The
+lower-level storage service provides consistent SQLite backup and package
 serialization, with direct integration coverage.
 
 `NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
@@ -58,11 +56,7 @@ until storage and adoption acknowledge the transition. Failed ownership retains
 in-memory changes for Save as New Workspace.
 
 Workspace startup uses the SQLite scene binding and shared default catalog.
-The Apple legacy JSON writer, migration scan and migration bridge requests are
-removed. Old `workspaces/<scene>.json` and `workspace.json` files are ignored and
-left untouched; malformed obsolete files cannot block current-library startup.
-Current SQLite errors still surface without replacing the stored data. Shared
-migration code used by other hosts is unchanged.
+SQLite errors surface without replacing the stored data.
 
 The direct checks use temporary storage and both Apple platform configurations:
 
@@ -73,7 +67,7 @@ cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --feature
 ```
 
 They exercise latest-edit switching, failed-transition unlock, startup and
-restart beside another owner, obsolete-file isolation, toolbar metadata/versions, toolbars, layout
+restart beside another owner, toolbar metadata/versions, toolbars, layout
 history, import/export packages, trash, consistent SQLite backup and recovery as
 a new workspace after a competing owner claims an expired lease. A deliberately
 locked temporary database verifies that the drawing owner still serves edits

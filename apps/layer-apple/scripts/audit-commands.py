@@ -127,12 +127,8 @@ def shared_controls(inventory, coverage, platform, model):
 
 
 def audit(inventory, coverage):
-    if inventory.get("schema") not in [2, 3, 4] or coverage.get("schema") != 3:
+    if inventory.get("schema") != 4 or coverage.get("schema") != 3:
         raise ValueError("Unsupported inventory or command-coverage schema")
-    if inventory["schema"] == 2:
-        print("Schema 2 input: dynamic controls and workspace service routes are not checked.")
-    if inventory["schema"] < 4:
-        print("Older inventory input: filter/layer property schemas and edit routes are not checked.")
     catalog = inventory["commands"]
     covered = [command for group in coverage["groups"] for command in group["commands"]]
     for label, commands in [("catalog", catalog), ("coverage", covered)]:
@@ -157,10 +153,8 @@ def audit(inventory, coverage):
         unavailable = {c["id"] for c in commands if not c["available"]}
         if unavailable != set(coverage["unavailable"][platform]):
             raise ValueError(f"{platform} capability changed: review unavailable commands {sorted(unavailable)}")
-        if inventory["schema"] >= 3:
-            shared_controls(inventory, coverage, platform, model)
-        if inventory["schema"] >= 4:
-            shared_properties(coverage, platform, model)
+        shared_controls(inventory, coverage, platform, model)
+        shared_properties(coverage, platform, model)
         print(f"{platform}: {len(commands)} commands, {len(model['panels'])} panels, "
               f"{len(model['preferences'])} settings pages; unavailable={sorted(unavailable)}")
     print(f"PASS: all {len(catalog)} commands classified in {len(coverage['groups'])} groups for both Apple hosts.")

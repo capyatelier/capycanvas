@@ -28,7 +28,7 @@ def distribution(values, divisor=NS_PER_MS):
 
 
 def admission_denials(records):
-    reasons = {1: "inactive", 2: "owner_pending", 3: "drawable_capacity"}
+    reasons = {1: "inactive", 2: "owner_pending"}
     counts = collections.Counter(reasons.get(r[3], "unclassified") for r in records if not r[2])
     return {name: counts[name] for name in [*reasons.values(), "unclassified"]}
 
@@ -87,18 +87,16 @@ def analyze(header, events, target_hz=120):
     visible = {key: r for key, r in presented.items() if r[1] > 0}
     gpu = {r[0]: r for r in grouped[7]}
     calibrated_gpu, gpu_clocks = calibrate_gpu(grouped[14], gpu)
-    schedules = {r[0]: r for r in grouped[12]}
     submitted = [r for r in frames.values() if r[6] > 0]
     ready_states = [r[0] for r in grouped[9] if r[2] & 11 == 11 and not r[3]]
     ready_at = min(ready_states, default=None)
     state_errors = sum(bool(r[3]) for r in grouped[9])
     stats = sorted(grouped[8], key=lambda r: r[0])
     last_stats = stats[-1] if stats else [0] * 10
-    displays = sorted({(r[1], r[2], r[3] / 1000, r[4], r[5]) for r in grouped[6]})
+    displays = sorted({(r[1], r[2], r[3] / 1000, r[4]) for r in grouped[6]})
     memory = sorted((r for r in grouped[5] if r[4] == 0), key=lambda r: r[0])
     times = sorted(r[1] for r in visible.values())
     ticks = grouped[0]
-    retries = grouped[13]
     activity = sorted(grouped[10], key=lambda r: r[0])
     cycles = {}
     active, cycle, cursor = False, 0, 0
@@ -132,19 +130,6 @@ def analyze(header, events, target_hz=120):
             "owner_service_over_8_33ms": sum(r[3] - r[2] > BUDGET_NS for r in records),
             "owner_service_over_target_budget": sum(r[3] - r[2] > target_budget_ns for r in records),
         }
-    def schedule_metrics(records):
-        recorded = [schedules[r[0]] for r in records if r[0] in schedules]
-        deadlines = [(r, schedules[r[0]][1]) for r in records if r[0] in schedules and schedules[r[0]][1]]
-        return {
-            "legacy_frames": sum(r[3] == 0 for r in recorded),
-            "supplied_drawables_accepted": sum(r[3] == 1 for r in recorded),
-            "stale_drawables_rejected": sum(r[3] == 2 for r in recorded),
-            # The owner returns after polling and snapshot publication. This is
-            # an upper bound, not the timestamp of the actual Metal present call.
-            "owner_completion_after_commit_deadline_ms": distribution(max(0, r[3] - deadline) for r, deadline in deadlines),
-            "owners_completing_after_commit_deadline": sum(r[3] > deadline for r, deadline in deadlines),
-            "presentation_target_after_commit_deadline_ms": distribution(r[2] - r[1] for r in recorded if r[1] and r[2] >= r[1]),
-        }
     visible_frames = [(r, frames[r[0]]) for r in visible.values() if r[0] in frames]
     def gpu_completion_metrics(records):
         identities = {r[0] for r in records}
@@ -172,7 +157,7 @@ def analyze(header, events, target_hz=120):
         warnings.append("No display-link activity records; idle-separated cadence cannot be measured.")
     if drawables - presented.keys():
         warnings.append("Acquired drawables lack completion callbacks.")
-    gpu_timing_requested = header.get("gpu_timing_requested", True)
+    gpu_timing_requested = header["gpu_timing_requested"]
     if not gpu_timing_requested:
         warnings.append("GPU timing intentionally disabled; this trace measures CPU and presentation only.")
         if gpu or last_stats[2] or grouped[14]:
@@ -195,7 +180,7 @@ def analyze(header, events, target_hz=120):
                      "This trace alone does not establish the required workload matrix or ten-minute acceptance."])
     result = {
         "schema": 1, "platform": "iPadOS" if header["platform"] == 0 else "macOS",
-        "input_source": header.get("input_source", "platform"),
+        "input_source": header["input_source"],
         "gpu_timing_requested": gpu_timing_requested,
         "evaluation": {"target_hz": target_hz, "frame_budget_ms": target_budget_ns / NS_PER_MS,
                        "cadence_tolerance_percent": 5},
@@ -206,9 +191,6 @@ def analyze(header, events, target_hz=120):
                    "correction_input_batches": sum(r[6] == 2 for r in inputs.values()),
                    "ticks": len(ticks), "ticks_denied_admission": sum(not r[2] for r in ticks),
                    "ticks_denied_by_reason": admission_denials(ticks),
-                   "presentation_retries": len(retries),
-                   "presentation_retries_admitted": sum(bool(r[2]) for r in retries),
-                   "presentation_retries_denied_by_reason": admission_denials(retries),
                    "frames": len(frames), "viewport_submissions": len(submitted), "acquired_drawables": len(drawables),
                    "presented_drawables": len(visible), "zero_time_presentations": sum(not r[1] for r in presented.values()),
                    "missing_presentation_callbacks": len(drawables - presented.keys()),
@@ -217,12 +199,10 @@ def analyze(header, events, target_hz=120):
                    "gpu_false_zero_samples": zero_gpu,
                    "gpu_pending_at_last_poll": last_stats[5], "gpu_poll_errors": sum(bool(r[6]) for r in stats),
                    "frames_without_gpu_sample": sum(r[0] not in gpu for r in submitted), "frame_errors": state_errors},
-        "display_configurations": [{"pixels": list(d[:2]), "scale": d[2], "maximum_hz": d[3],
-                                    "metal_preferred_frame_latency": d[4] or None} for d in displays],
+        "display_configurations": [{"pixels": list(d[:2]), "scale": d[2], "maximum_hz": d[3]} for d in displays],
         "recorder_reserved_bytes": header["capacity"] * header["record_stride_bytes"],
         "ready_seconds_from_start": None if ready_at is None else (ready_at - header["started_ns"]) / 1e9,
         "all_submitted_frames": frame_metrics(submitted),
-        "display_scheduling": schedule_metrics(list(frames.values())),
         "frames_after_readiness": frame_metrics([r for r in submitted if ready_at is not None and r[0] > ready_at]),
         "gpu_queue_span_ms": distribution(r[1] for r in gpu.values() if r[2] == 1 and r[1] > 0),
         "gpu_clock_calibration": gpu_clocks,
@@ -263,7 +243,6 @@ def analyze(header, events, target_hz=120):
             acquired = {key for key in drawables if begin[0] <= key[0] < end[0]}
             observed_times = sorted(r[1] for r in visible.values() if begin[0] <= r[1] <= end[0])
             measured_ticks = [r for r in ticks if begin[0] <= r[0] < end[0]]
-            measured_retries = [r for r in retries if begin[0] <= r[0] < end[0]]
             memory_rows = [r for r in memory if begin[0] <= r[0] <= end[0]]
             scheduler = [r[5] for r in markers if r[1] in (3, 6) and begin[0] <= r[0] <= end[0]]
             report.update({
@@ -274,9 +253,6 @@ def analyze(header, events, target_hz=120):
                 "ticks": len(measured_ticks),
                 "ticks_denied_admission": sum(not r[2] for r in measured_ticks),
                 "ticks_denied_by_reason": admission_denials(measured_ticks),
-                "presentation_retries": len(measured_retries),
-                "presentation_retries_admitted": sum(bool(r[2]) for r in measured_retries),
-                "presentation_retries_denied_by_reason": admission_denials(measured_retries),
                 "admitted_frames_without_viewport": len(admitted) - len(rows),
                 "missing_presentation_callbacks": len(acquired - presented.keys()),
                 "zero_time_presentations": sum(key in acquired and not r[1] for key, r in presented.items()),
@@ -286,7 +262,6 @@ def analyze(header, events, target_hz=120):
                 "last_presentation_before_end_ms": (end[0] - observed_times[-1]) / NS_PER_MS if observed_times else None,
                 "producer_interval_maximum_lateness_ms": distribution(scheduler),
                 "frames": frame_metrics(rows),
-                "display_scheduling": schedule_metrics(admitted),
                 "gpu_queue_span_ms": distribution(r[1] for key, r in gpu.items() if key in identities and r[2] == 1 and r[1] > 0),
                 "gpu_samples_missing": sum(key not in gpu for key in identities),
                 "gpu_completion": gpu_completion_metrics(rows),

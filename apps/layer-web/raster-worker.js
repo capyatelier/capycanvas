@@ -124,7 +124,7 @@ async function recovery(mode, operation) {
 async function colorPreferences(mode,operation,storeName="values") {
   const database=await new Promise((resolve,reject)=>{
     const request=indexedDB.open("capy-color-preferences",2);
-    request.onupgradeneeded=()=>{for(const name of ["values","profiles"])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
+    request.onupgradeneeded=()=>{for(const name of ["values","profiles"])request.result.createObjectStore(name);};
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
   try{return await new Promise((resolve,reject)=>{

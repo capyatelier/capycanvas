@@ -12,8 +12,9 @@ def frame(time, receipt=0):
 
 
 def header(**changes):
-    return dict(schema=1, platform=0, configuration="release", duration_seconds=10,
-                started_ns=0, capacity=100, record_stride_bytes=88, dropped_records=0, **changes)
+    return {**dict(schema=1, platform=0, configuration="release", duration_seconds=10, started_ns=0,
+                   capacity=100, record_stride_bytes=88, dropped_records=0,
+                   gpu_timing_requested=True, input_source="platform"), **changes}
 
 
 class ReportChecks(unittest.TestCase):
@@ -62,20 +63,6 @@ class ReportChecks(unittest.TestCase):
         conflicting = analyze(header(gpu_timing_requested=False), [record(14, *first)])
         self.assertTrue(any("contradict" in w for w in conflicting["warnings"]))
 
-    def test_presentation_retries_do_not_inflate_display_tick_counts(self):
-        events = [record(13, 5, 9, 1), record(11, 10, 2, 1),
-                  record(0, 11, 19, 0, 3), record(13, 12, 19, 1),
-                  record(13, 13, 19, 0, 3), record(11, 20, 3, 1)]
-        result = analyze(header(workload={"name": "ink", "measurement_seconds": .00000001}), events)
-        self.assertEqual(result["counts"]["ticks"], 1)
-        self.assertEqual(result["counts"]["presentation_retries"], 3)
-        self.assertEqual(result["counts"]["presentation_retries_admitted"], 2)
-        measured = result["workload"]
-        self.assertEqual(measured["ticks_denied_admission"], 1)
-        self.assertEqual(measured["presentation_retries"], 2)
-        self.assertEqual(measured["presentation_retries_admitted"], 1)
-        self.assertEqual(measured["presentation_retries_denied_by_reason"]["drawable_capacity"], 1)
-
     def test_admission_backpressure_remains_visible_and_separate_from_cpu_work(self):
         events = [record(0, 1, 2, 0, 1), record(11, 10, 2, 1),
                   record(0, 11, 12, 0, 2), record(0, 13, 14, 0, 3),
@@ -83,9 +70,9 @@ class ReportChecks(unittest.TestCase):
         result = analyze(header(workload={"name": "ink", "measurement_seconds": .00000001}), events)
         self.assertEqual(result["counts"]["ticks_denied_admission"], 4)
         self.assertEqual(result["counts"]["ticks_denied_by_reason"],
-                         {"inactive": 1, "owner_pending": 1, "drawable_capacity": 1, "unclassified": 1})
+                         {"inactive": 1, "owner_pending": 1, "unclassified": 2})
         self.assertEqual(result["workload"]["ticks_denied_by_reason"],
-                         {"inactive": 0, "owner_pending": 1, "drawable_capacity": 1, "unclassified": 1})
+                         {"inactive": 0, "owner_pending": 1, "unclassified": 2})
         self.assertEqual(result["workload"]["frames"]["owner_service_ms"]["count"], 0)
 
     def test_90hz_evaluation_retains_real_misses_and_120hz_diagnostics(self):
@@ -127,22 +114,6 @@ class ReportChecks(unittest.TestCase):
         self.assertTrue(any("intentionally disabled" in warning for warning in result["warnings"]))
         conflicting = analyze(header(gpu_timing_requested=False), [record(7, 100, 1000, 1)])
         self.assertTrue(any("contradict" in warning for warning in conflicting["warnings"]))
-
-    def test_commit_deadline_is_distinct_from_presentation_target(self):
-        events = [record(6, 1, 2400, 1800, 2000, 120, 2),
-                  frame(100_000_000), record(12, 100_000_000, 101_000_000, 108_000_000, 1),
-                  record(4, 100_000_000, 108_000_000),
-                  frame(200_000_000), record(12, 200_000_000, 203_000_000, 208_000_000, 2)]
-        result = analyze(header(), events)
-        self.assertEqual(result["display_configurations"][0]["metal_preferred_frame_latency"], 2)
-        schedule = result["display_scheduling"]
-        self.assertEqual(schedule["supplied_drawables_accepted"], 1)
-        self.assertEqual(schedule["stale_drawables_rejected"], 1)
-        self.assertEqual(schedule["owners_completing_after_commit_deadline"], 1)
-        self.assertEqual(schedule["owner_completion_after_commit_deadline_ms"]["max"], 1)
-        self.assertEqual(schedule["presentation_target_after_commit_deadline_ms"]["max"], 7)
-        self.assertEqual(result["presentation"]["positive_target_lateness_ms"]["max"], 0)
-        self.assertEqual(result["presentation"]["frame_admission_to_present_ms"]["max"], 8)
 
     def test_workload_interval_excludes_setup_and_reports_synthetic_source(self):
         events = [record(9, 1, 1, 11), frame(10),

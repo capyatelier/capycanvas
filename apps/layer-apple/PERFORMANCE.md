@@ -2712,7 +2712,7 @@ endpoints and paired Metal clock samples retain their separate clock domains.
 
 | Kind | Fields in order, excluding trailing zeros |
 | --- | --- |
-| 0 tick | admission time, target time, admitted flag, denial reason (0 unspecified, 1 inactive, 2 owner pending; historical 3 drawable capacity) |
+| 0 tick | admission time, target time, admitted flag, denial reason (0 unspecified, 1 inactive, 2 owner pending) |
 | 1 frame | ID, target, owner start, owner end, five CPU stage durations, latest nonpredicted receipt ID |
 | 2 input | enqueue ID/time, owner start/end, oldest/newest sample time, count, kind (0 real, 1 predicted, 2 correction), original last phase, tool, accepted flag |
 | 3 drawable | frame ID, acquire start/end, drawable ID, acquired flag |
@@ -2724,7 +2724,6 @@ endpoints and paired Metal clock samples retain their separate clock domains.
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
-| 13 presentation retry (historical) | attempt time, original display target, admitted flag, denial reason using kind 0 values |
 | 14 GPU clock | recorder time before sampling, Metal CPU nanoseconds, Metal GPU ticks, recorder time after sampling |
 
 Optional GPU recording samples paired clocks at most ten times per second.
@@ -2739,22 +2738,13 @@ work and includes submission/polling gaps; it is not isolated GPU busy time.
 The display target is not a recorded Metal commit deadline, so completion before
 that target alone does not establish the cause of a missed presentation.
 
-The analyzer also retains local scheduling experiment records: kind 12 contains
-frame ID, CPU commit deadline, presentation target and drawable admission status
-(0 ordinary acquisition, 1 supplied drawable accepted, 2 stale drawable rejected).
-The optional sixth field of kind 6 records the requested Metal frame latency;
-zero means unavailable. The published CADisplayLink hosts do not emit these
-experimental fields. Owner completion includes polling and snapshot publication,
-so lateness relative to the commit deadline is an upper bound, not a measured
-Metal commit timestamp.
-
 Workload phases: 0 configuration, 1 warm-up begins, 2 measurement begins,
 3 measurement ends, 4 postlude ends, 5 failure, 6 producer sample. Phase 0's
 remaining fields are width, height, paint-layer count, brush ID, diameter ×1000
 and prediction flag. Phases 2/3/6 record cumulative nonpredicted sample and batch
 counts, followed by the maximum producer lateness since its previous sample.
 The metadata `workload` object includes the profile version, expected duration
-and sample rate. These additions retain schema 1; older traces omit them.
+and sample rate.
 
 ## Fast checks
 

@@ -258,11 +258,8 @@ display, so obsolete standalone/status-bar meta overrides are unnecessary.
 The package works at root and subpaths without hardcoding a domain. See
 [Apple's icon lookup](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariWebContent/ConfiguringWebApplications/ConfiguringWebApplications.html)
 and [WebKit's transparency caveat](https://bugs.webkit.org/show_bug.cgi?id=255596).
-The live editor's previous Apple link and PNG were present and returned HTTP
-200; the conventional fallback was missing. These changes harden discovery and
-artwork compatibility, but Home Screen selection still needs a real iPad check
-after deploying and reopening the updated app. An already-installed icon may
-need to be removed and added again; do not discard an unsaved drawing.
+An already-installed icon may need to be removed and added again; do not
+discard an unsaved drawing.
 
 After the first successful online install, the worker precaches the whole
 package. The worker also applies to ordinary browser tabs; Home Screen/PWA
@@ -283,18 +280,15 @@ installs retain the previous one.
 New workers call `skipWaiting()` after successful installation and claim clients,
 but never reload or navigate an open editor. Its loaded JS/Wasm and drawing stay
 in place until the user refreshes. Old package caches remain available for lazy
-asset requests from open tabs, including tabs running the previous worker's
-cache-only HTML policy. Cleanup occurs on a cold navigation with no other
+asset requests from open tabs. Cleanup occurs on a cold navigation with no other
 clients under the scope; an outgoing page still alive during refresh postpones
 cleanup. It deletes only caches created before the active package, preserving
 concurrent new installs and neighboring installations. Unknown URLs, APIs,
 non-GET requests and user data are not cached by this worker.
 
 Registration uses `updateViaCache: "none"` and precaching uses reload requests
-with content integrity. Keep `sw.js` at its stable URL. The first rollout from
-the older cache-only worker can need an additional ordinary refresh after the
-replacement worker activates; later releases use network-first navigation.
-There is no update dialog or forced mid-drawing reload. See the
+with content integrity. Keep `sw.js` at its stable URL. There is no update
+dialog or forced mid-drawing reload. See the
 [service-worker lifecycle](https://web.dev/articles/service-worker-lifecycle).
 
 **Offline app availability is separate from drawing recovery.** Save drawings

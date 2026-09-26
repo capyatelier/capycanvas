@@ -134,9 +134,6 @@ private final class State: @unchecked Sendable {
             let restored = try NativeOwner(platform: platform, persistence: persistence, receive: { restoredState.receive($0, $1) })
             precondition(flush(restored))
             precondition(restoredState.read().0["state"]["theme"].string == "dark")
-            precondition(!FileManager.default.fileExists(atPath: root.appendingPathComponent("workspace.json").path)
-                && !FileManager.default.fileExists(atPath: root.appendingPathComponent("workspaces").path),
-                "The drawing owner must not write a second workspace store")
 
             // Rapid cross-window edits must converge to the final committed
             // settings, including after delayed notifications and write acks.

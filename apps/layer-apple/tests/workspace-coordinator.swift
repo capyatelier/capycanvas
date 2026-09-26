@@ -9,13 +9,6 @@ import SQLite3
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-coordinator-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let scene = UUID().uuidString, otherScene = UUID().uuidString
-            // Obsolete JSON files must not gate current SQLite startup or be
-            // rewritten by workspace saves. They are deliberately invalid.
-            let legacyData = Data("obsolete workspace input".utf8)
-            let sceneFile = root.appendingPathComponent("workspaces/\(scene).json")
-            let otherFile = root.appendingPathComponent("workspaces/\(otherScene).json")
-            let fallback = root.appendingPathComponent("workspace.json")
-            for file in [sceneFile, otherFile, fallback] { try AtomicJSONFile.write(legacyData, to: file) }
             let storage = EditorPersistence(root: root)
             let first = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
             let manager = first.workspaceLibrary!
@@ -32,14 +25,9 @@ import SQLite3
             precondition(first.state["workspace"]["zen_mode"].bool)
             let initial = try await manager.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
             precondition(initial["rows"].array.count == 3, "Initialize only the shared default workspaces")
-            // Current workspace edits persist only through the shared library.
             try await first.apply(["type": "set_brush_size", "value": 73])
             try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
             try await manager.flush()
-            for file in [sceneFile, otherFile, fallback] {
-                let after = try Data(contentsOf: file)
-                precondition(after == legacyData, "Managed editors must not dual-write legacy storage")
-            }
             // Switching immediately after accepted edits must capture them,
             // without waiting for the autosave timer or restoring stale tools.
             try await first.apply(["type": "set_brush_size", "value": 87])
@@ -81,9 +69,7 @@ import SQLite3
             precondition(second.workspaceLibrary!.ready, second.workspaceLibrary!.error ?? "Second scene failed")
             precondition(second.workspaceLibrary!.status["active_id"].string != original)
             try await manager.close()
-            // Reopening restores the SQLite scene binding and ignores old files.
-            try Data("obsolete legacy input".utf8).write(to: sceneFile)
-            try Data("obsolete fallback".utf8).write(to: fallback)
+            // Reopening restores the SQLite scene binding.
             let reopened = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
             try await wait("reopened scene") { reopened.workspaceLibrary!.ready || reopened.workspaceLibrary!.error != nil }
             let restored = reopened.workspaceLibrary!
@@ -106,7 +92,7 @@ import SQLite3
             precondition(blocked.workspaceLibrary?.ready != true)
             let preserved = try Data(contentsOf: badFile)
             precondition(preserved == badData)
-            print("PASS: platform \(platform), SQLite startup, scene ownership, latest-edit switching, failure unlock, legacy isolation, resume and restart")
+            print("PASS: platform \(platform), SQLite startup, scene ownership, latest-edit switching, failure unlock, resume and restart")
         }
     }
     @MainActor static func ownershipAndStorage(_ manager: WorkspaceLibrary, editor: EditorStore,

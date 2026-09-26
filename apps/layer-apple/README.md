@@ -508,8 +508,6 @@ the shared default. Lockable targets retain their disabled schemas and reject
 a sampled stale field edit. Paper's protected stack position has no Lock action;
 its opacity remains editable. Ten corruption probes per preset check that the
 audit rejects missing filters, controls, handlers and contradictory results.
-Older schema 2 artifacts receive command-only checks; schemas 2/3 warn that
-property scenarios are not checked.
 
 The Filters category control reuses the shared editor choice and its opaque menu.
 Opening a choice focuses its selected enabled row; Escape closes filter search.

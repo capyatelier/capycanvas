@@ -108,12 +108,12 @@ const cdp = await launchChrome(
 const { call, settle, errors } = cdp;
 function checkRasterErrors() {
   if(!process.argv.includes("--offscreen-raster")){assert.deepEqual(errors,[]);return;}
-  // Chrome 150 / NVIDIA 610 headless presentation also fails on pre-M1 main.
+  // Chrome 150 / NVIDIA 610 headless presentation loses its Dawn instance.
   // This explicit mode qualifies exported GPU pixels and frame creation only;
   // keep the normal editor/screenshot suite strict and reject every other error.
   const remaining=errors.filter(error=>!error.startsWith("A valid external Instance reference no longer exists."));
   assert.deepEqual(remaining,[]);
-  if(remaining.length!==errors.length)console.log("Presentation NOT qualified: pre-existing Chrome headless Dawn instance failure (also reproduced on pre-M1 main).");
+  if(remaining.length!==errors.length)console.log("Presentation NOT qualified: Chrome headless Dawn instance failure.");
 }
 async function evaluate(expression) {
   if(process.env.LAYER_TEST_VERBOSE)process.stderr.write(`Evaluate: ${expression.slice(0,300)}\n`);

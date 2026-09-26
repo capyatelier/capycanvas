@@ -43,7 +43,7 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     if(device!==displayDevice){
       displayDevice=device;extendedCanvas=false;
       if(device){
-        // Older browsers may silently ignore toneMapping. Check the accepted
+        // Browsers may silently ignore toneMapping. Check the accepted
         // configuration on a disposable canvas before changing the live view.
         const context=document.createElement('canvas').getContext('webgpu');
         try{

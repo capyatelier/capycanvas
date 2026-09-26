@@ -23,7 +23,7 @@ self.addEventListener("install", (event) => {
       throw error;
     }
     // Switching request handlers does not reload an open drawing. Old hashed
-    // resources remain available below, including during the first migration.
+    // resources remain available below.
     await self.skipWaiting();
   })());
 });
