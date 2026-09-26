@@ -135,32 +135,6 @@ fn phase(value: u8) -> Result<PenPhase, JsValue> {
 
 #[wasm_bindgen]
 impl WebApp {
-    pub fn filter_package_modules(&self, manifest: &str) -> Result<JsValue, JsValue> {
-        serialize(
-            &layer_core::EffectPackage::parse(manifest)
-                .map_err(js)?
-                .module_names()
-                .map_err(js)?,
-        )
-    }
-    pub fn load_filter_package(
-        &mut self,
-        manifest: &str,
-        modules: JsValue,
-        mode: JsValue,
-    ) -> Result<JsValue, JsValue> {
-        self.install_filters(manifest, modules, mode, false)
-    }
-    /// Startup refresh owns only the library. It must not block workspace
-    /// adoption/input or migrate programs embedded in a reopened document.
-    pub fn load_filter_library(
-        &mut self,
-        manifest: &str,
-        modules: JsValue,
-        mode: JsValue,
-    ) -> Result<JsValue, JsValue> {
-        self.install_filters(manifest, modules, mode, true)
-    }
     pub fn poll_filter_previews(
         &mut self,
         filters: JsValue,
@@ -574,31 +548,6 @@ impl WebApp {
         }
         Ok(())
     }
-    fn install_filters(
-        &mut self,
-        manifest: &str,
-        modules: JsValue,
-        mode: JsValue,
-        library_only: bool,
-    ) -> Result<JsValue, JsValue> {
-        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
-            serde_wasm_bindgen::from_value(modules).map_err(js)?;
-        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
-        let read = |name: &str| {
-            modules
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("Missing filter module: {name}"))
-        };
-        let change = if library_only {
-            self.session.load_effect_library(manifest, read, mode)
-        } else {
-            self.session.load_effect_package(manifest, read, mode)
-        }
-        .map_err(js)?;
-        serialize(&change)
-    }
-
     fn prepare_startup(&mut self) -> Result<(), JsValue> {
         let engine = self.session.engine();
         let Some(gpu) = &engine.backend().0 else {
@@ -989,9 +938,6 @@ impl WebApp {
         self.session
             .stroke_recording()
             .stop(layer_engine::recording::StopReason::Manual);
-    }
-    pub fn stroke_recording_bytes(&mut self) -> Result<Vec<u8>, JsValue> {
-        self.session.stroke_recording().bytes().map_err(js)
     }
     pub fn stroke_recording_data(&mut self) -> Result<Vec<u8>, JsValue> {
         self.session.stroke_recording().snapshot().map_err(js)
