@@ -119,14 +119,14 @@ fn native_canvas_bar_input() {
     };
     let kind = |w: &Workspace| state(w).canvas_bar.map(|b| b.context.kind);
     until(
-        || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && w.canvas_bar.root.is_mapped(),
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()),
         "the selection bar appears beside the new selection",
     );
     let mut native = Native::start();
     let transform = bar_widget(&w, "canvas-bar-ScaleRotate");
     native.events(json!([{"point": center(&w, &transform)}, {"down": true}, {"down": false}]));
     until(
-        || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && w.canvas_bar.root.is_mapped(),
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()),
         "Transform on the selection bar opens the transform bar",
     );
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
@@ -163,9 +163,9 @@ fn native_canvas_bar_input() {
         {"point": inside}, {"down": true}, {"wait_ms": 40},
         {"point": [inside[0] + 40., inside[1] + 20.]}
     ]));
-    assert!(!w.canvas_bar.root.is_visible(), "the bar hides during a canvas drag");
+    assert!(w.canvas_bar.visible_bounds().is_none(), "the bar hides during a canvas drag");
     native.events(json!([{"down": false}]));
-    until(|| w.canvas_bar.root.is_mapped(), "the bar returns after the drag");
+    until(|| w.canvas_bar.visible_bounds().is_some(), "the bar returns after the drag");
     let moved = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     assert!((moved.x() - bar.x() - 40.).abs() < 3., "the bar follows the moved box");
     let more = bar_widget(&w, "canvas-bar-more");
@@ -181,7 +181,7 @@ fn native_canvas_bar_input() {
         command: CommandId::ZenMode,
     });
     pump(300);
-    assert!(w.canvas_bar.root.is_mapped(), "the bar stays visible in Zen");
+    assert!((w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "the bar stays visible in Zen");
     assert!(!w.canvas_bar.root.has_css_class("zen-hidden"));
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
@@ -210,7 +210,7 @@ fn native_canvas_bar_input() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::ScaleRotate,
     });
-    until(|| w.canvas_bar.root.is_mapped(), "completion stays available while the bar is off");
+    until(|| (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "completion stays available while the bar is off");
     assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-TransformAspect").is_none());
     let cancel = bar_widget(&w, "canvas-bar-CancelTransform");
     native.events(json!([{"point": center(&w, &cancel)}, {"down": true}, {"down": false}]));
@@ -250,7 +250,7 @@ fn native_canvas_bar_polygon_input() {
     for p in [[600., 400.], [1200., 400.], [1200., 900.]] {
         click(&mut native, canvas_point(&w, p));
     }
-    until(|| w.canvas_bar.root.is_mapped(), "the polygon bar appears");
+    until(|| (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "the polygon bar appears");
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let area = w.area.compute_bounds(&w.window).unwrap();
     assert!(

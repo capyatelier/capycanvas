@@ -1700,7 +1700,7 @@ impl Workspace {
             None
         };
         let facts = ChromeFacts {
-            canvas_bar: self.canvas_bar.bounds(),
+            canvas_bar: self.canvas_bar.visible_bounds(),
             contact_tab,
             zen_button: self
                 .zen_capy

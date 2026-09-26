@@ -109,11 +109,25 @@ impl CanvasBar {
         Some((view.context, self.layout.get().map_or(0, |l| l.items)))
     }
 
-    /// Bounds in workspace coordinates while the bar is placed and shown.
+    /// Allocated bounds in workspace coordinates, kept while suppressed so
+    /// hiding and showing never reallocates the workspace.
     pub fn bounds(&self) -> Option<Bounds> {
-        (self.view.borrow().is_some() && !self.suppressed.get())
+        self.view
+            .borrow()
+            .is_some()
             .then(|| self.layout.get().map(|l| l.bounds))
             .flatten()
+    }
+
+    /// Bounds while the bar can be seen and touched.
+    pub fn visible_bounds(&self) -> Option<Bounds> {
+        self.bounds().filter(|_| !self.suppressed.get())
+    }
+
+    fn present(&self) {
+        let shown = !self.suppressed.get();
+        self.root.set_opacity(if shown { 1. } else { 0. });
+        self.root.set_can_target(shown);
     }
 
     pub fn refresh(&self, workspace: &Rc<Workspace>, view: Option<&CanvasBarView>) {
@@ -199,8 +213,8 @@ impl CanvasBar {
             }
         }
         self.layout.set(layout);
-        self.root
-            .set_visible(layout.is_some() && !self.suppressed.get());
+        self.root.set_visible(layout.is_some());
+        self.present();
         workspace.queue_surface_allocate();
     }
 
@@ -210,9 +224,10 @@ impl CanvasBar {
             source.remove();
         }
         if hidden {
-            self.menu.popdown();
-            self.suppressed.set(true);
-            self.root.set_visible(false);
+            if !self.suppressed.replace(true) {
+                self.menu.popdown();
+                self.present();
+            }
             return;
         }
         if !self.suppressed.get() {
@@ -228,6 +243,7 @@ impl CanvasBar {
                     bar.reappear.borrow_mut().take();
                     bar.suppressed.set(false);
                     bar.place(&workspace);
+                    bar.present();
                 }
             ),
         );
