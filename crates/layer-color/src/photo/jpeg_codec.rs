@@ -1,34 +1,19 @@
 //! Pure Rust JPEG codec. This backend buffers full images; enforce admission
 //! limits before allocating pixels, and account for retained compressed input.
 use super::*;
-use libjpeg_turbo_rs::{ColorSpace, Decoder, Encoder as JpegEncoder, PixelFormat, Subsampling};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use libjpeg_turbo_rs::{ColorSpace, Decoder, Encoder, PixelFormat, Subsampling};
 
 pub(super) const MEMORY_ERROR: &str = "JPEG exceeds the codec memory budget; use a smaller image";
 const SCRATCH_BYTES: usize = 2 * 1024 * 1024;
-
-fn io<T>(operation: impl FnOnce() -> std::io::Result<T>) -> Result<T, String> {
-    match catch_unwind(AssertUnwindSafe(operation)) {
-        Ok(result) => result.map_err(err),
-        Err(payload) => {
-            std::mem::forget(payload);
-            Err("JPEG I/O callback panicked".into())
-        }
-    }
-}
 
 pub(super) fn read_bounded(mut input: impl Read, budget: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 65536];
     loop {
-        let count = io(|| {
-            loop {
-                match input.read(&mut buffer) {
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    result => break result,
-                }
-            }
-        })?;
+        let count = match input.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(err)?,
+        };
         if count == 0 {
             return Ok(bytes);
         }
@@ -94,133 +79,63 @@ pub(super) fn channels(
     }
 }
 
-pub(super) struct Encoder<W> {
-    output: W,
-    pixels: Vec<u8>,
-    extent: [usize; 2],
+/// Pixels, coding planes, entropy output and metadata insertion copies coexist
+/// within the caller's available-memory budget. Returns the packed pixel length.
+pub(super) fn admit(
+    extent: [u32; 2],
+    channels: usize,
+    metadata: usize,
+    budget: usize,
+) -> Result<usize, String> {
+    super::validate_extent(extent, 32768)?;
+    let len = (extent[0] as usize)
+        .checked_mul(extent[1] as usize)
+        .and_then(|n| n.checked_mul(channels))
+        .ok_or(MEMORY_ERROR)?;
+    let working = len
+        .checked_mul(8)
+        .and_then(|v| v.checked_add(SCRATCH_BYTES))
+        .ok_or(MEMORY_ERROR)?
+        .saturating_add(metadata.saturating_mul(4));
+    if working > budget {
+        return Err(MEMORY_ERROR.into());
+    }
+    Ok(len)
+}
+
+/// Baseline, full-chroma coding of packed 8-bit samples. `exif` is a complete
+/// `Exif\0\0` APP1 payload.
+pub(super) fn encode(
+    pixels: &[u8],
+    extent: [u32; 2],
     format: PixelFormat,
     quality: u8,
+    icc: &[u8],
+    exif: Option<&[u8]>,
     resolution: Option<layer_core::ImageResolution>,
-    icc: Vec<u8>,
-    exif: Vec<u8>,
-    row: usize,
-    finished: bool,
-    budget: usize,
-    pixel_working_bytes: usize,
-}
-impl<W: Write> Encoder<W> {
-    pub fn new(
-        output: W,
-        extent: [u32; 2],
-        channels: usize,
-        quality: u8,
-        resolution: Option<layer_core::ImageResolution>,
-        budget: usize,
-    ) -> Result<Self, String> {
-        super::validate_extent(extent, 32768)?;
-        if !(1..=100).contains(&quality) {
-            return Err("JPEG quality must be between 1 and 100".into());
-        }
-        let format = match channels {
-            1 => PixelFormat::Grayscale,
-            3 => PixelFormat::Rgb,
-            4 => PixelFormat::Cmyk,
-            _ => return Err("Unsupported JPEG color encoding".into()),
-        };
-        let extent = extent.map(|v| v as usize);
-        let len = extent[0]
-            .checked_mul(extent[1])
-            .and_then(|n| n.checked_mul(channels))
-            .ok_or(MEMORY_ERROR)?;
-        // Reserve estimated room for input, coding planes, entropy output and
-        // metadata injection copies, within the caller's available-memory budget.
-        let pixel_working_bytes = len
-            .checked_mul(8)
-            .and_then(|v| v.checked_add(SCRATCH_BYTES))
-            .ok_or(MEMORY_ERROR)?;
-        if pixel_working_bytes > budget {
-            return Err(MEMORY_ERROR.into());
-        }
-        if let Some(resolution) = resolution {
-            resolution.jfif_density()?;
-        }
-        let mut pixels = Vec::new();
-        pixels.try_reserve_exact(len).map_err(|_| MEMORY_ERROR)?;
-        pixels.resize(len, 0);
-        Ok(Self {
-            output,
-            pixels,
-            extent,
-            format,
-            quality,
-            resolution,
-            icc: Vec::new(),
-            exif: Vec::new(),
-            row: 0,
-            finished: false,
-            budget,
-            pixel_working_bytes,
-        })
+) -> Result<Vec<u8>, String> {
+    let [width, height] = extent.map(|v| v as usize);
+    if pixels.len() != width * height * format.bytes_per_pixel() {
+        return Err("Incomplete JPEG output".into());
     }
-    pub fn profile(&mut self, profile: &[u8]) -> Result<(), String> {
-        if profile.len() > crate::MAX_ICC_BYTES.min(255 * 65519) {
-            return Err("JPEG ICC profile is too large".into());
-        }
-        self.check_metadata_budget(profile.len(), self.exif.len())?;
-        self.icc = profile.to_vec();
-        Ok(())
+    if icc.len() > crate::MAX_ICC_BYTES.min(255 * 65519) {
+        return Err("JPEG ICC profile is too large".into());
     }
-    pub fn marker(&mut self, marker: u8, data: &[u8]) -> Result<(), String> {
-        if marker != 1 || !data.starts_with(b"Exif\0\0") || data.len() > 65533 {
-            return Err("Unsupported JPEG output marker".into());
-        }
-        self.check_metadata_budget(self.icc.len(), data.len())?;
-        self.exif = data[6..].to_vec();
-        Ok(())
+    let mut encoder = Encoder::new(pixels, width, height, format)
+        .quality(quality)
+        .subsampling(Subsampling::S444)
+        .force_baseline(true)
+        .icc_profile(icc);
+    if let Some(exif) = exif {
+        encoder = encoder.exif_data(
+            exif.strip_prefix(b"Exif\0\0")
+                .filter(|_| exif.len() <= 65533)
+                .ok_or("Unsupported JPEG output marker")?,
+        );
     }
-    fn check_metadata_budget(&self, icc: usize, exif: usize) -> Result<(), String> {
-        // Retained metadata, marker construction and final output insertion can
-        // coexist. Profile bytes are not necessarily small relative to pixels.
-        let total = self
-            .pixel_working_bytes
-            .saturating_add(icc.saturating_mul(4))
-            .saturating_add(exif.saturating_mul(4));
-        if total > self.budget {
-            return Err(MEMORY_ERROR.into());
-        }
-        Ok(())
+    if let Some(resolution) = resolution {
+        let (unit, [x, y]) = resolution.jfif_density()?;
+        encoder = encoder.density(unit, x, y);
     }
-    pub fn row(&mut self, row: &[u8]) -> Result<(), String> {
-        let len = self.extent[0] * self.format.bytes_per_pixel();
-        if self.finished || self.row >= self.extent[1] || row.len() != len {
-            return Err("Invalid JPEG output row".into());
-        }
-        self.pixels[self.row * len..(self.row + 1) * len].copy_from_slice(row);
-        self.row += 1;
-        Ok(())
-    }
-    pub fn finish(&mut self) -> Result<(), String> {
-        if self.finished {
-            return Err("JPEG codec is unavailable after a completed or failed operation".into());
-        }
-        self.finished = true;
-        if self.row != self.extent[1] {
-            return Err("Incomplete JPEG output".into());
-        }
-        let mut encoder =
-            JpegEncoder::new(&self.pixels, self.extent[0], self.extent[1], self.format)
-                .quality(self.quality)
-                .subsampling(Subsampling::S444)
-                .force_baseline(true)
-                .icc_profile(&self.icc);
-        if !self.exif.is_empty() {
-            encoder = encoder.exif_data(&self.exif);
-        }
-        if let Some(resolution) = self.resolution {
-            let (unit, [x, y]) = resolution.jfif_density()?;
-            encoder = encoder.density(unit, x, y);
-        }
-        let bytes = encoder.encode().map_err(err)?;
-        io(|| self.output.write_all(&bytes))
-    }
+    encoder.encode().map_err(err)
 }

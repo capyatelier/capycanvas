@@ -28,48 +28,62 @@ pub(super) fn physical(unit: u16, density: [Option<[u32; 2]>; 2]) -> Option<Imag
     };
     result.validate().ok().map(|_| result)
 }
-pub(super) fn exif(bytes: &[u8]) -> Result<Exif, String> {
-    let bytes = bytes.strip_prefix(b"Exif\0\0").unwrap_or(bytes);
-    if bytes.len() < 8 {
-        return Err("Incomplete EXIF header".into());
+/// Bounds-checked TIFF header and values in either byte order.
+#[derive(Clone, Copy)]
+pub(super) struct Tiff<'a> {
+    bytes: &'a [u8],
+    little: bool,
+    error: &'static str,
+}
+impl<'a> Tiff<'a> {
+    pub fn new(bytes: &'a [u8], error: &'static str) -> Result<Self, String> {
+        let little = match bytes.get(..4) {
+            Some(b"II\x2a\0") => true,
+            Some(b"MM\0\x2a") => false,
+            _ => return Err(error.into()),
+        };
+        Ok(Self {
+            bytes,
+            little,
+            error,
+        })
     }
-    let little = match &bytes[..2] {
-        b"II" => true,
-        b"MM" => false,
-        _ => return Err("Invalid EXIF byte order".into()),
-    };
-    let u16_at = |at: usize| -> Result<u16, String> {
-        let b: [u8; 2] = bytes
-            .get(at..at.checked_add(2).ok_or("EXIF offset overflow")?)
-            .ok_or("Incomplete EXIF value")?
-            .try_into()
-            .unwrap();
-        Ok(if little {
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+    fn get<const N: usize>(&self, at: usize) -> Result<[u8; N], String> {
+        at.checked_add(N)
+            .and_then(|end| self.bytes.get(at..end))
+            .map(|b| b.try_into().unwrap())
+            .ok_or_else(|| self.error.into())
+    }
+    pub fn u16(&self, at: usize) -> Result<u16, String> {
+        let b = self.get(at)?;
+        Ok(if self.little {
             u16::from_le_bytes(b)
         } else {
             u16::from_be_bytes(b)
         })
-    };
-    let u32_at = |at: usize| -> Result<u32, String> {
-        let b: [u8; 4] = bytes
-            .get(at..at.checked_add(4).ok_or("EXIF offset overflow")?)
-            .ok_or("Incomplete EXIF value")?
-            .try_into()
-            .unwrap();
-        Ok(if little {
+    }
+    pub fn u32(&self, at: usize) -> Result<u32, String> {
+        let b = self.get(at)?;
+        Ok(if self.little {
             u32::from_le_bytes(b)
         } else {
             u32::from_be_bytes(b)
         })
-    };
-    if u16_at(2)? != 42 {
-        return Err("Unsupported EXIF TIFF header".into());
     }
-    let ifd = u32_at(4)? as usize;
+}
+pub(super) fn exif(bytes: &[u8]) -> Result<Exif, String> {
+    let tiff = Tiff::new(
+        bytes.strip_prefix(b"Exif\0\0").unwrap_or(bytes),
+        "Invalid EXIF metadata",
+    )?;
+    let ifd = tiff.u32(4)? as usize;
     if ifd == 0 {
         return Ok(Exif::default());
     }
-    let count = usize::from(u16_at(ifd)?);
+    let count = usize::from(tiff.u16(ifd)?);
     let mut result = Exif::default();
     let mut density = [None; 2];
     let mut unit = 2;
@@ -77,27 +91,27 @@ pub(super) fn exif(bytes: &[u8]) -> Result<Exif, String> {
         let at = ifd
             .checked_add(2 + index * 12)
             .ok_or("EXIF directory overflow")?;
-        match u16_at(at)? {
+        match tiff.u16(at)? {
             274 => {
-                if u16_at(at + 2)? != 3 || u32_at(at + 4)? != 1 {
+                if tiff.u16(at + 2)? != 3 || tiff.u32(at + 4)? != 1 {
                     return Err("Invalid EXIF orientation field".into());
                 }
-                let value = u16_at(at + 8)?;
+                let value = tiff.u16(at + 8)?;
                 if !(1..=8).contains(&value) {
                     return Err("Invalid EXIF orientation".into());
                 }
                 result.orientation = value;
             }
             tag @ (282 | 283) => {
-                if u16_at(at + 2)? == 5 && u32_at(at + 4)? == 1 {
-                    let offset = u32_at(at + 8)? as usize;
+                if tiff.u16(at + 2)? == 5 && tiff.u32(at + 4)? == 1 {
+                    let offset = tiff.u32(at + 8)? as usize;
                     density[(tag - 282) as usize] = Some([
-                        u32_at(offset)?,
-                        u32_at(offset.checked_add(4).ok_or("EXIF offset overflow")?)?,
+                        tiff.u32(offset)?,
+                        tiff.u32(offset.checked_add(4).ok_or("EXIF offset overflow")?)?,
                     ]);
                 }
             }
-            296 if u16_at(at + 2)? == 3 && u32_at(at + 4)? == 1 => unit = u16_at(at + 8)?,
+            296 if tiff.u16(at + 2)? == 3 && tiff.u32(at + 4)? == 1 => unit = tiff.u16(at + 8)?,
             _ => (),
         }
     }

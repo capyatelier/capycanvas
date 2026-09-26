@@ -171,50 +171,6 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
 }
 
 #[test]
-fn jpeg_io_errors_and_panics_return_to_rust_without_reusing_failed_codec_state() {
-    struct Broken;
-    impl Read for Broken {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("reader failed"))
-        }
-    }
-    assert_eq!(
-        jpeg_codec::read_bounded(Broken, 1024).err().unwrap(),
-        "reader failed"
-    );
-    struct BrokenWrite(bool);
-    impl Write for BrokenWrite {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            if self.0 {
-                panic!("writer panicked");
-            }
-            Err(std::io::Error::other("disk full"))
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    for panic in [false, true] {
-        let mut encoder =
-            jpeg_codec::Encoder::new(BrokenWrite(panic), [8, 8], 3, 90, None, 128 * 1024 * 1024)
-                .unwrap();
-        for _ in 0..8 {
-            encoder.row(&[128; 24]).unwrap();
-        }
-        let error = encoder.finish().unwrap_err();
-        assert_eq!(
-            error,
-            if panic {
-                "JPEG I/O callback panicked"
-            } else {
-                "disk full"
-            }
-        );
-        assert!(encoder.finish().unwrap_err().contains("unavailable"));
-    }
-}
-
-#[test]
 fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
     let extent = [8192, 7324];
     let interpretation = SourceInterpretation {
@@ -405,11 +361,9 @@ fn export_budget_rejects_before_requesting_rows_or_writing_output() {
     .unwrap_err();
     assert!(error.contains("codec memory budget"));
     assert!(output.is_empty());
-    let mut encoder =
-        jpeg_codec::Encoder::new(std::io::sink(), [8, 8], 3, 95, None, 3 * 1024 * 1024).unwrap();
+    jpeg_codec::admit([8, 8], 3, 0, 3 * 1024 * 1024).unwrap();
     assert!(
-        encoder
-            .profile(&vec![0; 512 * 1024])
+        jpeg_codec::admit([8, 8], 3, 512 * 1024, 3 * 1024 * 1024)
             .unwrap_err()
             .contains("codec memory budget")
     );

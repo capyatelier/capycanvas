@@ -1,85 +1,78 @@
 //! MPF camera previews do not make the primary photograph a multi-frame image.
 //! Accept a baseline primary followed only by explicitly typed large thumbnails.
+use super::metadata::Tiff;
 
-pub(super) fn validate_previews(segment: &[u8]) -> Result<(), String> {
-    let invalid = "Invalid JPEG MPF directory";
-    let unsupported = "Multiple-picture JPEG is not supported. Export the intended image as a separate SDR PNG, JPEG or TIFF.";
-    let bytes = segment.strip_prefix(b"MPF\0").ok_or(invalid)?;
-    let little = match bytes.get(..4) {
-        Some(b"II\x2a\0") => true,
-        Some(b"MM\0\x2a") => false,
-        _ => return Err(invalid.into()),
-    };
-    let u16_at = |at: usize| -> Result<u16, String> {
-        let b = bytes
-            .get(at..at.checked_add(2).ok_or(invalid)?)
-            .ok_or(invalid)?;
-        Ok(if little {
-            u16::from_le_bytes(b.try_into().unwrap())
-        } else {
-            u16::from_be_bytes(b.try_into().unwrap())
-        })
-    };
-    let u32_at = |at: usize| -> Result<u32, String> {
-        let b = bytes
-            .get(at..at.checked_add(4).ok_or(invalid)?)
-            .ok_or(invalid)?;
-        Ok(if little {
-            u32::from_le_bytes(b.try_into().unwrap())
-        } else {
-            u32::from_be_bytes(b.try_into().unwrap())
-        })
-    };
-    let ifd = u32_at(4)? as usize;
-    let count = usize::from(u16_at(ifd)?);
-    let end = ifd.checked_add(2 + 12 * count + 4).ok_or(invalid)?;
-    if ifd < 8 || end > bytes.len() {
-        return Err(invalid.into());
+const INVALID: &str = "Invalid JPEG MPF directory";
+
+/// Attributes, size and offset of each of 1..=64 baseline MPF images. Offsets
+/// are relative to the TIFF header that follows the `MPF\0` signature.
+pub(super) fn mpf_entries(bytes: &[u8]) -> Result<Vec<[u32; 3]>, String> {
+    let tiff = Tiff::new(bytes, INVALID)?;
+    let ifd = tiff.u32(4)? as usize;
+    let count = usize::from(tiff.u16(ifd)?);
+    let end = ifd.checked_add(2 + 12 * count + 4).ok_or(INVALID)?;
+    if ifd < 8 || end > tiff.len() {
+        return Err(INVALID.into());
     }
     let mut images = None;
     let mut entries = None;
     for index in 0..count {
         let at = ifd + 2 + 12 * index;
-        match u16_at(at)? {
+        match tiff.u16(at)? {
             0xb001 => {
-                if images.is_some() || u16_at(at + 2)? != 4 || u32_at(at + 4)? != 1 {
-                    return Err(invalid.into());
+                if tiff.u16(at + 2)? != 4
+                    || tiff.u32(at + 4)? != 1
+                    || images.replace(tiff.u32(at + 8)? as usize).is_some()
+                {
+                    return Err(INVALID.into());
                 }
-                images = Some(u32_at(at + 8)? as usize);
             }
             0xb002 => {
-                if entries.is_some() || u16_at(at + 2)? != 7 {
-                    return Err(invalid.into());
+                if tiff.u16(at + 2)? != 7
+                    || entries
+                        .replace((tiff.u32(at + 8)? as usize, tiff.u32(at + 4)? as usize))
+                        .is_some()
+                {
+                    return Err(INVALID.into());
                 }
-                entries = Some((u32_at(at + 8)? as usize, u32_at(at + 4)? as usize));
             }
             _ => (),
         }
     }
-    let images = images.ok_or(invalid)?;
-    let (at, length) = entries.ok_or(invalid)?;
-    if images == 0
-        || images.checked_mul(16) != Some(length)
+    let images = images.ok_or(INVALID)?;
+    let (at, length) = entries.ok_or(INVALID)?;
+    if !(1..=64).contains(&images)
+        || images * 16 != length
         || at < end
-        || at.checked_add(length).is_none_or(|end| end > bytes.len())
+        || at.checked_add(length).is_none_or(|end| end > tiff.len())
     {
-        return Err(invalid.into());
+        return Err(INVALID.into());
     }
-    for index in 0..images {
-        let at = at + index * 16;
-        let attributes = u32_at(at)?;
-        let size = u32_at(at + 4)?;
-        let offset = u32_at(at + 8)?;
+    (0..images)
+        .map(|index| {
+            let at = at + index * 16;
+            let entry = [tiff.u32(at)?, tiff.u32(at + 4)?, tiff.u32(at + 8)?];
+            if entry[0] & 0x0700_0000 != 0 {
+                return Err(INVALID.into());
+            }
+            Ok(entry)
+        })
+        .collect()
+}
+
+pub(super) fn validate_previews(segment: &[u8]) -> Result<(), String> {
+    let entries = mpf_entries(segment.strip_prefix(b"MPF\0").ok_or(INVALID)?)?;
+    for (index, [attributes, size, offset]) in entries.into_iter().enumerate() {
         let kind = attributes & 0x00ff_ffff;
-        if size < 4 || attributes & 0x0700_0000 != 0 {
-            return Err(invalid.into());
+        if size < 4 {
+            return Err(INVALID.into());
         }
         if if index == 0 {
             kind != 0x030000 || offset != 0
         } else {
             !matches!(kind, 0x010001 | 0x010002) || offset == 0
         } {
-            return Err(unsupported.into());
+            return Err("Multiple-picture JPEG is not supported. Export the intended image as a separate SDR PNG, JPEG or TIFF.".into());
         }
     }
     Ok(())

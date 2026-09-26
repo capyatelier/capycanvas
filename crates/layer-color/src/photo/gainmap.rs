@@ -104,14 +104,15 @@ pub(super) fn test_guide(
     crate::build_local_tone_guide(extent, RgbSpace::Srgb, || false, read).unwrap()
 }
 
-pub(super) fn read_gainmap(input: impl Read + Seek, format: GainMapFormat, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<SourceImage, String> {
-    if format == GainMapFormat::Jpeg { return jpeg::read(input, limits, cancelled); }
-    Ok(super::avif_io::read(std::io::BufReader::new(input), limits, cancelled)?.source)
-}
+pub(super) use jpeg::read as read_jpeg;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn read_gainmap(input: std::io::Cursor<impl AsRef<[u8]>>, format: GainMapFormat, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<SourceImage, String> {
+        if format == GainMapFormat::Jpeg { let bytes = input.get_ref().as_ref(); return read_jpeg(bytes, bytes.len(), limits, cancelled); }
+        Ok(super::super::avif_io::read(input, limits, cancelled)?.source)
+    }
     #[test]
     fn gainmap_host_budgets_cover_encoding_and_preview_decoding() {
         let extent = [16, 16];

@@ -1,5 +1,7 @@
 //! JPEG gain-map interchange: MPF image offsets, ISO 21496-1 fractions and
 //! Adobe HDR gain-map XMP. Codecs operate only on the validated image slices.
+use super::super::jpeg_markers::{Segment, scan};
+use super::super::jpeg_mpf::mpf_entries;
 use super::{GainMapMetadata, Metadata};
 use quick_xml::{events::Event, name::ResolveResult, reader::NsReader};
 use std::collections::BTreeMap;
@@ -203,73 +205,6 @@ fn xmp_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
     ))
 }
 
-struct Segment<'a> {
-    marker: u8,
-    offset: usize,
-    bytes: &'a [u8],
-}
-fn scan(bytes: &[u8]) -> Result<(usize, Vec<Segment<'_>>), String> {
-    if !bytes.starts_with(b"\xff\xd8") {
-        return Err("Invalid gain-map JPEG signature".into());
-    }
-    let mut at = 2usize;
-    let mut entropy = false;
-    let mut segments = Vec::new();
-    let mut scans = 0;
-    loop {
-        if entropy {
-            at += bytes
-                .get(at..)
-                .and_then(|b| b.iter().position(|v| *v == 0xff))
-                .ok_or(INVALID)?;
-        }
-        if bytes.get(at) != Some(&0xff) {
-            return Err(INVALID.into());
-        }
-        while bytes.get(at) == Some(&0xff) {
-            at += 1;
-        }
-        let marker = *bytes.get(at).ok_or(INVALID)?;
-        at += 1;
-        if entropy && (marker == 0 || (0xd0..=0xd7).contains(&marker)) {
-            continue;
-        }
-        if marker == 0xd9 {
-            return Ok((at, segments));
-        }
-        if marker == 1 {
-            continue;
-        }
-        if marker == 0 || (0xd0..=0xd8).contains(&marker) {
-            return Err(INVALID.into());
-        }
-        let size =
-            u16::from_be_bytes(bytes.get(at..at + 2).ok_or(INVALID)?.try_into().unwrap()) as usize;
-        if size < 2 {
-            return Err(INVALID.into());
-        }
-        let data = bytes.get(at + 2..at + size).ok_or(INVALID)?;
-        if matches!(marker, 0xe1 | 0xe2) {
-            if segments.len() >= 4096 {
-                return Err("Too many JPEG metadata segments".into());
-            }
-            segments.push(Segment {
-                marker,
-                offset: at + 2,
-                bytes: data,
-            });
-        }
-        at += size;
-        entropy = marker == 0xda;
-        if entropy {
-            scans += 1;
-            if scans > 256 {
-                return Err("Too many JPEG scans".into());
-            }
-        }
-    }
-}
-
 fn metadata(segments: &[Segment<'_>]) -> Result<Option<Metadata>, String> {
     let mut iso = None;
     for s in segments {
@@ -318,9 +253,13 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Images<'_>, String> {
         return Err(INVALID.into());
     }
     let entries = mpf_entries(&mpf.bytes[4..])?;
+    if entries.len() < 2 {
+        return Err(INVALID.into());
+    }
     let mut selected = None;
     let mut previous_end = base_end;
-    for (index, (size, offset)) in entries.into_iter().enumerate() {
+    for (index, [_, size, offset]) in entries.into_iter().enumerate() {
+        let (size, offset) = (size as usize, offset as usize);
         if index == 0 {
             if offset != 0 || size != base_end {
                 return Err(INVALID.into());
@@ -352,90 +291,6 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Images<'_>, String> {
         }
     }
     selected.ok_or("JPEG gain-map image or metadata is missing".into())
-}
-
-fn mpf_entries(bytes: &[u8]) -> Result<Vec<(usize, usize)>, String> {
-    let little = match bytes.get(..4) {
-        Some(b"II\x2a\0") => true,
-        Some(b"MM\0\x2a") => false,
-        _ => return Err(INVALID.into()),
-    };
-    let u16_at = |at: usize| -> Result<u16, String> {
-        let b = bytes
-            .get(at..at.checked_add(2).ok_or(INVALID)?)
-            .ok_or(INVALID)?
-            .try_into()
-            .unwrap();
-        Ok(if little {
-            u16::from_le_bytes(b)
-        } else {
-            u16::from_be_bytes(b)
-        })
-    };
-    let u32_at = |at: usize| -> Result<usize, String> {
-        let b = bytes
-            .get(at..at.checked_add(4).ok_or(INVALID)?)
-            .ok_or(INVALID)?
-            .try_into()
-            .unwrap();
-        Ok(if little {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        } as usize)
-    };
-    let ifd = u32_at(4)?;
-    if ifd < 8 {
-        return Err(INVALID.into());
-    }
-    let count = u16_at(ifd)? as usize;
-    let end = ifd.checked_add(2 + 12 * count + 4).ok_or(INVALID)?;
-    if end > bytes.len() {
-        return Err(INVALID.into());
-    }
-    let mut images = None;
-    let mut entries = None;
-    for i in 0..count {
-        let at = ifd + 2 + 12 * i;
-        match u16_at(at)? {
-            0xb001 => {
-                if u16_at(at + 2)? != 4
-                    || u32_at(at + 4)? != 1
-                    || images.replace(u32_at(at + 8)?).is_some()
-                {
-                    return Err(INVALID.into());
-                }
-            }
-            0xb002 => {
-                if u16_at(at + 2)? != 7
-                    || entries
-                        .replace((u32_at(at + 8)?, u32_at(at + 4)?))
-                        .is_some()
-                {
-                    return Err(INVALID.into());
-                }
-            }
-            _ => (),
-        }
-    }
-    let images = images.ok_or(INVALID)?;
-    let (at, size) = entries.ok_or(INVALID)?;
-    if !(2..=64).contains(&images)
-        || size != images * 16
-        || at < end
-        || at.checked_add(size).is_none_or(|v| v > bytes.len())
-    {
-        return Err(INVALID.into());
-    }
-    (0..images)
-        .map(|i| {
-            let at = at + i * 16;
-            if u32_at(at)? & 0x07000000 != 0 {
-                return Err("Unsupported MPF image encoding".into());
-            }
-            Ok((u32_at(at + 4)?, u32_at(at + 8)?))
-        })
-        .collect()
 }
 
 fn segment(marker: u8, payload: &[u8]) -> Result<Vec<u8>, String> {

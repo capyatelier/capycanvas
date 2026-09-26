@@ -133,26 +133,16 @@ fn encode(
     check(cancel)?;
     let exif = resolution
         .map(super::super::metadata::exif_output)
-        .transpose()?
-        .unwrap_or_default();
-    let mut encoder = Encoder::new(
+        .transpose()?;
+    let encoded_base = jpeg_codec::encode(
         &base,
-        extent[0] as usize,
-        extent[1] as usize,
+        extent,
         PixelFormat::Rgb,
-    )
-    .quality(quality)
-    .subsampling(Subsampling::S444)
-    .force_baseline(true)
-    .icc_profile(&icc);
-    if !exif.is_empty() {
-        encoder = encoder.exif_data(&exif[6..]);
-    }
-    if let Some(resolution) = resolution {
-        let (unit, [x, y]) = resolution.jfif_density()?;
-        encoder = encoder.density(unit, x, y);
-    }
-    let encoded_base = encoder.encode().map_err(err)?;
+        quality,
+        &icc,
+        exif.as_deref(),
+        resolution,
+    )?;
     check(cancel)?;
     drop(base);
     let mut limits = DecodeLimits::from_memory_budget(budget);
@@ -266,8 +256,7 @@ impl Pair {
             return Err("JPEG gain map is larger than its base image".into());
         }
         drop(header);
-        let base_metadata =
-            super::super::jpeg_markers::read_source(std::io::Cursor::new(images.base))?;
+        let base_metadata = super::super::jpeg_markers::read_source(images.base)?;
         let base_profile = base_metadata
             .profile
             .map(|p| ColorProfile::Icc(p.into()))
@@ -275,8 +264,7 @@ impl Pair {
         let application_profile = if images.metadata.use_base_space {
             None
         } else {
-            let gain_metadata =
-                super::super::jpeg_markers::read_source(std::io::Cursor::new(images.gain))?;
+            let gain_metadata = super::super::jpeg_markers::read_source(images.gain)?;
             Some(ColorProfile::Icc(
                 gain_metadata
                     .profile
@@ -343,14 +331,13 @@ impl Pair {
     }
 }
 
-pub(super) fn read(
-    input: impl Read,
+pub(in crate::photo) fn read(
+    bytes: &[u8],
+    retained: usize,
     limits: DecodeLimits,
     cancel: &AtomicBool,
 ) -> Result<SourceImage, String> {
-    check(cancel)?;
-    let bytes = jpeg_codec::read_bounded(input, limits.codec_bytes / 4)?;
-    let pair = Pair::new(&bytes, bytes.capacity(), limits, cancel)?;
+    let pair = Pair::new(bytes, retained, limits, cancel)?;
     let extent = pair.extent();
     let mut builder = SourceBuilder::new(
         extent,
@@ -588,13 +575,13 @@ mod tests {
             codec_bytes: 1024,
             ..Default::default()
         };
-        assert!(read(std::io::Cursor::new(&bytes), limits, &c).is_err());
+        assert!(read(&bytes, bytes.len(), limits, &c).is_err());
         for len in [0, 2, 90, bytes.len() / 2, bytes.len() - 1] {
-            assert!(read(std::io::Cursor::new(&bytes[..len]), Default::default(), &c).is_err());
+            assert!(read(&bytes[..len], len, Default::default(), &c).is_err());
         }
         let mut invalid_offset = bytes;
         invalid_offset[82..86].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(read(std::io::Cursor::new(invalid_offset), Default::default(), &c).is_err());
+        assert!(read(&invalid_offset, invalid_offset.len(), Default::default(), &c).is_err());
     }
     #[test]
     fn jpeg_grayscale_reduced_gain_maps_and_orientation() {
