@@ -331,5 +331,8 @@ class AndroidCommandSearchTest {
                     assertTrue("$name y=$y: no stale blur after closing", sharpness(row(pixels, y, span)) > .05)
             }
         }
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+        action(obj("type" to "invoke", "command" to "undo"))
+        waitFor("stripes removed") { state().getJSONArray("commands").objects().none { it.getString("id") == "undo" && it.getBoolean("enabled") } }
     }
 }
