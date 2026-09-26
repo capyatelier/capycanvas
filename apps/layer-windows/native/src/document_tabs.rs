@@ -28,6 +28,7 @@ impl Gpu {
         let mut gpu =
             WgpuRasterizer::from_wgpu_native_staged(self.adapter, self.device, self.queue, color)
                 .map_err(|e| e.to_string())?;
+        gpu.enable_demand_shaders();
         gpu.configure_ui_previews(layer_core::color::RgbSpace::Srgb)
             .map_err(|e| e.to_string())?;
         gpu.finish_startup_cache();

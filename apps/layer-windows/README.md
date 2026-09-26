@@ -585,7 +585,7 @@ performance remain separate; see the [current acceptance index](../../docs/devel
 Debug builds optimize Naga, the WGSL compiler dependency, while retaining
 debuggable application Rust. Process exit joins retired shader workers after
 all canvas hosts are destroyed. The lifecycle fixture covers close before
-brush readiness, during shader warmup and from clean/dirty minimized windows;
+brush readiness, during shader preparation and from clean/dirty minimized windows;
 it retains the five-second zero-exit requirement. The long material-shader
 compilation responsible for earlier close failures is split by operation; see
 the startup/close checkpoint below for current evidence and its limits.
@@ -962,13 +962,12 @@ final physical-input/presentation acceptance remain open.
 
 ## Runtime filter packages
 
-Builds copy the shared manifest and WGSL modules into `Assets/filters` beside the
-executable. Each window reads these files on a background worker and stages them
-through the shared GPU validator. A missing default directory retains the embedded
-fallback; an explicitly selected missing or invalid package reports an error.
-`CAPY_FILTERS_DIR` selects another directory and `CAPY_FILTERS_MODE` selects
-`add`, `replace` or `merge` (default). Startup refreshes the filter library without
-migrating programs embedded in an existing document.
+The shared catalog is embedded; startup does not reload an installed copy.
+`CAPY_FILTERS_DIR` selects an external package, which each window reads on a
+background worker and stages through the shared GPU validator. A missing or
+invalid package reports an error. `CAPY_FILTERS_MODE` selects `add`, `replace` or
+`merge` (default). Startup refreshes the filter library without migrating
+programs embedded in an existing document.
 
 For the already-built app, from the repository root:
 
@@ -981,8 +980,7 @@ $env:CAPY_FILTERS_MODE='add'
 Native integrations can send `CanvasCommandKind::Filters` through the ordered
 canvas command queue. Its render-owner entry is `capy_load_filter_directory`,
 accepting JSON with optional `directory`, `mode` (default `merge`) and `library`
-(default `false`). Omitting the directory reloads the environment override or
-installed assets. Explicit replacement updates compatible live instances;
+(default `false`). Omitting the directory reloads `CAPY_FILTERS_DIR`. Explicit replacement updates compatible live instances;
 `library: true` keeps embedded document programs unchanged. Conflicting WGSL
 names are rejected under the shared contract. `windows_filter_load` snapshots
 report request ID, pending state, phase and error. The call returns zero when

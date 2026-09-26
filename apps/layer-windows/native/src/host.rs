@@ -318,6 +318,7 @@ impl CapyHost {
         }
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue,
             self.native.session.engine().document().color).map_err(err)?;
+        renderer.enable_demand_shaders();
         renderer.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(err)?;
         let encoding = self.display.encoding(config.format);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;

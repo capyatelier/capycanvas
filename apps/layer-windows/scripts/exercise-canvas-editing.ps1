@@ -53,7 +53,7 @@ function Invoke([string]$Value,[switch]$Name){(Control $Value -Name:$Name).GetCu
 function Select-Tool([string]$Id){
  if(((Model).state.commands|Where-Object id -eq $Id).selected){return}
  $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Id){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No native $Id tile"
- Invoke $target.id;Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return (Model).state.layer_tools.tool -eq 'transform'};((Model).state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
+ Invoke $target.id;Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
 }
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Signature {$m=Model;@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 25 -Compress}
@@ -162,7 +162,7 @@ try{
  $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$app.Handle
  @{process_id=$app.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned canvas editing review $($app.Id): $run"
- Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_filter_load.phase -eq 'ready'} 'Isolated editing canvas did not start' 45
+ Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated editing canvas did not start' 45
  $handle=$app.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'

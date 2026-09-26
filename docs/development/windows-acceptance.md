@@ -1,5 +1,7 @@
 # Windows acceptance status
 
+2026-09-26: [on-demand shaders on Windows](../history/windows-implementation.md#on-demand-shaders-on-windows-2026-09-26) removes the startup shader warmup and the duplicate filter catalog, with startup timings and the full fixture sweep.
+
 2026-09-25 (later): the [Windows follow-up through 32f53ce](../history/windows-implementation.md#windows-follow-up-through-32f53ce-2026-09-25) adds forwarded file launches and multi-copy recovery, and the [package refresh at e6bcb4d](../history/windows-implementation.md#portable-and-msix-refresh-at-e6bcb4d-2026-09-25) records the current ZIP and MSIX hashes.
 
 2026-09-25: the [upstream port through c65e145](../history/windows-implementation.md#upstream-port-through-c65e145-2026-09-25) records app-local DXC shader compilation, file workflows, stroke recording, touch-safe tooltips, input-free frame pacing and the fixtures that still fail on the baseline.

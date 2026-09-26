@@ -8386,7 +8386,7 @@ mod tests {
     #[test]
     fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        for platform in [Platform::Web, Platform::Android, Platform::Gtk] {
+        for platform in [Platform::Web, Platform::Android, Platform::Gtk, Platform::Windows] {
             let mut s = session();
             s.set_platform(platform);
             s.frame(0, 0).unwrap();

@@ -357,7 +357,6 @@ if(!(Model).state.document_file.modified -or (Model).state.document_file.locatio
 }
 
 if($RecoverGpu){
-    Wait-Until {(Model).windows_filter_load.phase -eq 'ready'} 'Filters must settle before recovery' 60
     function Signature {
         $state=(Model).state
         $state.document_file.PSObject.Properties.Remove("revision")

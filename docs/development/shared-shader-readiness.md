@@ -1,9 +1,9 @@
 # Shared shader readiness
 
-Android, GTK and Web now use the same demand-driven dependency tracking and
-input admission policy in `layer-render-wgpu`. This extends the
-[Web refresh work](web-refresh-responsiveness.md). Apple and Windows retain
-legacy warmup until their hosts opt in and complete device validation.
+Android, GTK, Web and Windows now use the same demand-driven dependency tracking
+and input admission policy in `layer-render-wgpu`. This extends the
+[Web refresh work](web-refresh-responsiveness.md). Apple retains legacy warmup
+until its host opts in and completes device validation.
 
 ## What changes
 
@@ -122,7 +122,16 @@ external-files `ui-startup-audit` directory. The old runner exceeded Binder's
 result budget after saving its full report; the new runner returns the path.
 Use an unminified benchmark plus its matching test APK for white-box Android tests.
 
-## Apple / Windows integration
+## Windows integration
+
+Windows enables demand shaders on its live, file-open and resumed-tab renderers;
+color candidates inherit the live device setting. Window pointer, chrome, key and
+action traffic already reaches the shared `UiSession` on the render owner, which
+forwards `shader_input()`, so no separate observer is needed. Startup no longer
+reloads the embedded catalog or stages `Assets/filters`; `CAPY_FILTERS_DIR` remains
+an explicit override, and identical library refreshes are no-ops.
+
+## Apple integration
 
 Call `enable_demand_shaders()` on every staged renderer, including private
 open/resume/color candidates, before preparing it. Keep polling actual

@@ -82,7 +82,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // the renderer to compile every unused program again.
         // Demand-driven hosts retain asynchronous first-use readiness. Legacy
         // native hosts still use this transaction for catalog warmup.
-        if matches!(self.state.platform, Platform::Web | Platform::Android | Platform::Gtk) && !migrate_instances && changed.is_empty() {
+        if matches!(self.state.platform, Platform::Web | Platform::Android | Platform::Gtk | Platform::Windows) && !migrate_instances && changed.is_empty() {
             if candidate.filters() == self.effect_catalog.filters()
                 && candidate.categories() == self.effect_catalog.categories()
             {

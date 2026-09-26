@@ -21,7 +21,7 @@ fn merge_mode() -> EffectInstallMode {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Request {
-    /// None reloads the installed/overridden resources. Paths never enter the
+    /// None reloads `CAPY_FILTERS_DIR`. Paths never enter the
     /// optional workspace query queue or a per-frame JSON payload.
     directory: Option<PathBuf>,
     #[serde(default = "merge_mode")]
@@ -99,25 +99,12 @@ fn read_directory(
         library,
     })
 }
-fn resources(request: Request) -> Result<Option<Package>, String> {
+fn resources(request: Request) -> Result<Package, String> {
     let directory = request
         .directory
-        .or_else(|| std::env::var_os("CAPY_FILTERS_DIR").map(PathBuf::from));
-    let directory = if let Some(directory) = directory {
-        directory
-    } else {
-        let path = std::env::current_exe()
-            .map_err(|_| "Could not locate installed filter resources.")?
-            .parent()
-            .ok_or("Could not locate installed filter resources.")?
-            .join("Assets")
-            .join("filters");
-        if !path.exists() {
-            return Ok(None);
-        } // Embedded startup fallback remains usable.
-        path
-    };
-    read_directory(&directory, request.mode, request.library).map(Some)
+        .or_else(|| std::env::var_os("CAPY_FILTERS_DIR").map(PathBuf::from))
+        .ok_or("No filter package directory was selected.")?;
+    read_directory(&directory, request.mode, request.library)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -138,7 +125,7 @@ impl Default for Status {
     }
 }
 pub(crate) struct FilterService {
-    task: AsyncTask<Result<Option<Package>, String>>,
+    task: AsyncTask<Result<Package, String>>,
     acquired: Option<Package>,
     validating: Option<u64>,
     document_epoch: Option<u64>,
@@ -158,6 +145,9 @@ impl FilterService {
         &self.status
     }
     pub(crate) fn startup(&mut self, native: &mut NativeHost) {
+        if std::env::var_os("CAPY_FILTERS_DIR").is_none() {
+            return;
+        }
         let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "merge".into());
         match serde_json::from_value(serde_json::Value::String(mode)) {
             Ok(mode) => {
@@ -241,13 +231,9 @@ impl FilterService {
         }
         if let Some(result) = completed {
             match result {
-                Ok(Some(package)) => {
+                Ok(package) => {
                     self.acquired = Some(package);
                     self.status.phase = "waiting_for_canvas";
-                }
-                Ok(None) => {
-                    self.status.pending = false;
-                    self.status.phase = "embedded_fallback";
                 }
                 Err(error) => self.failed(native, error),
             }

@@ -27,7 +27,7 @@ function Model {try{$s=Get-Content -LiteralPath $StateFile -Raw|ConvertFrom-Json
 function Wait-Until([scriptblock]$Test,[string]$Message,[int]$Seconds=8){
  $w=[Diagnostics.Stopwatch]::StartNew();do{if(& $Test){return};$app.Refresh();if($app.HasExited){throw 'Owned shortcut review exited'};Start-Sleep -Milliseconds 75}while($w.Elapsed.TotalSeconds -lt $Seconds);throw $Message
 }
-Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_filter_load.phase -eq 'ready'} 'Isolated review did not become ready' 45
+Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated review did not become ready' 45
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 function Find([string]$Value,[switch]$Name){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}

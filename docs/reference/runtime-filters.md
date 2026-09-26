@@ -121,7 +121,7 @@ safety from GPU watchdog resets, or a particular execution time.
 
 ## Windows file transport
 
-Windows builds stage editable resources in `Assets/filters` beside the executable.
+Windows uses the embedded catalog and does not stage a duplicate resource copy.
 `CAPY_FILTERS_DIR` and `CAPY_FILTERS_MODE` select a startup library override. The
 render-owner API `capy_load_filter_directory` accepts an optional directory,
 installation mode and `library` flag; the default explicit load can migrate live

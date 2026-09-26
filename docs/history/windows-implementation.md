@@ -2880,3 +2880,38 @@ scale in the dark theme, by group bounds, panel measurements and pixels.
 
 Remaining differences are the Windows caption buttons, which fold the
 workspace switcher at this width, and the system accent color.
+
+### On-demand shaders on Windows (2026-09-26)
+
+Windows now uses the shared on-demand shader preparation from `da642acd`.
+The live renderer, file-open renderers and resumed drawing tabs enable demand
+shaders; color candidates inherit the live device setting. Startup compiles
+the paper, the current document and the selected brush and eraser. Other
+brushes, masks, region tools and filters compile when first used, behind the
+existing readiness gate. Pointer, chrome, key and action input already reach
+the shared `UiSession` on the render owner, which delays optional compilation
+while input is active. Windows needs no separate input observer.
+
+Startup no longer reloads the embedded filter catalog from `Assets/filters`,
+and builds no longer stage that copy. `CAPY_FILTERS_DIR` remains an explicit
+override. Identical library refreshes are no-ops on Windows, as on Android,
+GTK and Web.
+
+Release build, isolated profile, four launches each (first launch after a build
+excluded):
+
+| | Canvas ready | Brush ready | All requested shaders | Working set |
+| --- | ---: | ---: | ---: | ---: |
+| Startup warmup | 1.44-1.48 s | 2.03-2.07 s | 10.16-10.27 s | 721-728 MB |
+| On demand | 1.42 s | 1.96-2.04 s | 1.96-2.04 s | 546-549 MB |
+
+Unit tests pass (host 31, UI 663, Windows 130, workspace 93), as do the
+D3D12 filter-package tests and strict Clippy. In the full fixture sweep,
+38 of 43 fixtures passed. Rerun alone, the lifecycle and HDR fixtures pass;
+tab pickup (H18) and layer pickup (H20) remain open baseline failures.
+`exercise-canvas-editing` read readiness and the active tool from two
+different snapshots and could drag before the transform shaders were ready.
+It now reads both from one snapshot and passes.
+
+Title-bar capsules, the zoom readout and open collapsed-column sources now use
+the fitted squircle radii and square facing corners that Web uses (`b21a58ce`).

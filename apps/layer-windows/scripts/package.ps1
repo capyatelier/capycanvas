@@ -49,7 +49,7 @@ try {
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target))|Out-Null
         Copy-Item -LiteralPath $file.FullName -Destination $target
     }
-    foreach($name in @('CapyCanvas.exe','layer_windows.dll','CapyCanvas.pri','Microsoft.UI.Xaml.dll','Microsoft.WindowsAppRuntime.dll','Assets/filters/manifest.json')){
+    foreach($name in @('CapyCanvas.exe','layer_windows.dll','CapyCanvas.pri','Microsoft.UI.Xaml.dll','Microsoft.WindowsAppRuntime.dll')){
         if(!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)){throw "Incomplete runtime payload: $name"}
     }
     & (Join-Path $PSScriptRoot 'collect-package-notices.ps1') -Destination (Join-Path $payload 'Notices') -PackagesDirectory (Join-Path $repo 'artifacts/windows/packages') -VisualStudio $installation

@@ -198,7 +198,6 @@ try {
         }
         $before=@{}
         foreach($window in @($first,$second)){
-            Wait-Until {(Model $window).windows_filter_load.phase -eq 'ready'} 'Filters must settle before multiwindow removal' 60
             $before[$window.id]=Recovery-Signature $window
         }
         # One removal affects the process/adapter, including its idle sibling.

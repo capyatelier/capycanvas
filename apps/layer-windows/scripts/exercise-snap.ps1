@@ -91,7 +91,7 @@ function Ready {
         $canvas=Find 'Drawing canvas';$origin=[CapySnapWindow+Point]::new()
         if(!$canvas -or ![CapySnapWindow]::ClientToScreen($handle,[ref]$origin)){return $false}
         $bounds=$canvas.Current.BoundingRectangle
-        $model.canvas_ready -and $model.brush_ready -and $model.windows_filter_load.phase -eq 'ready' -and
+        $model.canvas_ready -and $model.brush_ready -and
             $canvas -and $canvas.Current.IsEnabled -and !$canvas.Current.IsOffscreen -and
             [Math]::Abs($model.state.camera.viewport[0]-$bounds.Width) -le .01 -and
             [Math]::Abs($model.state.camera.viewport[1]-$bounds.Height) -le .01 -and
