@@ -225,6 +225,8 @@ try {
     Wait-Until {$null -ne (Find "layer-$paint-name")} 'Scroll did not realize old layer'
     Wait-Until {(Find "layer-$paint-thumbnail").Current.ItemStatus -eq 'Ready'} 'Recycled row thumbnail not restored' 15
     $scroll.SetScrollPercent(-1,0)
+    $top=(Model).state.layers[0].id
+    Wait-Until {$row=Find "layer-$top-name";$row -and !$row.Current.IsOffscreen} 'Scrolling back did not realize the top layer'
     Capture 'virtualized'
     $theme=(Model).state.theme
     Invoke 'settings-button'
