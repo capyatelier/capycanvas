@@ -271,3 +271,198 @@ fn large_photo_transform_latency() {
         "a photo transform drag exceeds the 120 Hz budget"
     );
 }
+
+/// The GTK photo24 workload without its adjustment layers: a 16-bit ProPhoto
+/// photo in a native document.
+fn native_photo_document() -> layer_core::Document {
+    let mut document = layer_core::Document::new("photo", EXTENT[0], EXTENT[1]);
+    document.color = layer_core::color::DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: SampleDepth::U16,
+    };
+    let mut builder = SourceBuilder::new(
+        EXTENT,
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
+            profile_assumed: false,
+        },
+        512 * 1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..EXTENT[1] {
+        let row: Vec<_> = (0..EXTENT[0])
+            .flat_map(|x| {
+                [
+                    ((x * 55000 / EXTENT[0] + (x * 7 + y * 13) % 1024) % 65536) as u16,
+                    ((y * 55000 / EXTENT[1] + (x * 11 + y * 5) % 1024) % 65536) as u16,
+                    (((x + y) * 13 % 60000) + (x ^ y) % 1024) as u16,
+                    65535,
+                ]
+            })
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        builder.push_row(&row).unwrap();
+    }
+    document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    document
+}
+
+fn native_submit(r: &mut WgpuRasterizer, layers: &[Layer], reset: bool) {
+    let [width, height] = [1600u32, 1000];
+    let zoom = (width as f32 / EXTENT[0] as f32).min(height as f32 / EXTENT[1] as f32) * 0.95;
+    let offset = [
+        (width as f32 - EXTENT[0] as f32 * zoom) * 0.5,
+        (height as f32 - EXTENT[1] as f32 * zoom) * 0.5,
+    ];
+    r.submit(FramePacket {
+        view: ViewState {
+            width_px: width,
+            height_px: height,
+            document_to_surface: [zoom, 0., 0., zoom, offset[0], offset[1]],
+            ..view()
+        },
+        document_extent: EXTENT,
+        layers,
+        dabs: &[],
+        dab_batches: &[],
+        restore_rasters: &[],
+        reset_layers: reset,
+        time_seconds: 0.,
+        composite_all: reset,
+    })
+    .unwrap();
+}
+
+/// Free drags translate the selected photo; Distort drags one corner.
+fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], label: &str) -> f64 {
+    let photo = layers.iter().find(|l| l.source.is_some()).unwrap().id;
+    let selection = Selection::polygon(vec![
+        Point { x: 0., y: 0. },
+        Point {
+            x: EXTENT[0] as f32,
+            y: 0.,
+        },
+        Point {
+            x: EXTENT[0] as f32,
+            y: EXTENT[1] as f32,
+        },
+        Point {
+            x: 0.,
+            y: EXTENT[1] as f32,
+        },
+    ])
+    .unwrap();
+    let [w, h] = EXTENT.map(|v| v as f32);
+    let bounds = layer_core::Rect {
+        min: Point::default(),
+        max: Point { x: w, y: h },
+    };
+    let cases: [(&str, Box<dyn Fn(f32) -> TransformMap>); 2] = [
+        (
+            "free",
+            Box::new(|t: f32| {
+                TransformMap::Affine(Affine([
+                    1.,
+                    0.,
+                    0.,
+                    1.,
+                    w * 0.17 * t.sin(),
+                    h * 0.13 * (t * 1.3).sin(),
+                ]))
+            }),
+        ),
+        (
+            "distort",
+            Box::new(move |t: f32| {
+                TransformMap::Projective(
+                    Projective::rect_to_quad(
+                        bounds,
+                        [
+                            [w * 0.17 * t.sin(), h * 0.13 * (t * 1.3).sin()],
+                            [w, 0.],
+                            [w, h],
+                            [0., h],
+                        ]
+                        .map(|[x, y]| Point { x, y }),
+                    )
+                    .unwrap(),
+                )
+            }),
+        ),
+    ];
+    let mut worst = 0f64;
+    for (transaction, (name, map)) in cases.into_iter().enumerate() {
+        let mut cpu = Vec::new();
+        let mut completed = Vec::new();
+        r.telemetry = telemetry::Telemetry::new(r.device(), r.queue());
+        r.set_telemetry_enabled(true);
+        let mut preview = layer_render::TransformPreview {
+            transaction: transaction as u64 + 1,
+            moving: true,
+            layer: photo,
+            selection: Some(selection.clone()),
+            transform: ImageTransform {
+                map: map(0.),
+                interpolation: Interpolation::Bicubic,
+            },
+        };
+        for i in 0..FRAMES {
+            preview.transform.map = map(i as f32 / 120. * 2.);
+            let start = Instant::now();
+            r.set_transform_preview(Some(&preview)).unwrap();
+            native_submit(r, layers, false);
+            let submitted = start.elapsed().as_secs_f64() * 1000.;
+            r.wait_idle().unwrap();
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            if i == 0 {
+                eprintln!("{label} {name}: first frame {elapsed:.3}ms");
+            } else if i >= WARMUP {
+                cpu.push(submitted);
+                completed.push(elapsed);
+            }
+        }
+        let gpu = r
+            .telemetry()
+            .gpu
+            .ordered()
+            .into_iter()
+            .map(f64::from)
+            .collect();
+        let (cpu, gpu, completed) = (percentiles(cpu), percentiles(gpu), percentiles(completed));
+        preview.moving = false;
+        let start = Instant::now();
+        r.set_transform_preview(Some(&preview)).unwrap();
+        native_submit(r, layers, false);
+        r.wait_idle().unwrap();
+        let settled = start.elapsed().as_secs_f64() * 1000.;
+        eprintln!(
+            "{label} {name}: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms; release {settled:.3}ms"
+        );
+        worst = worst.max(completed[2]);
+        r.set_transform_preview(None).unwrap();
+        native_submit(r, layers, false);
+        r.wait_idle().unwrap();
+    }
+    worst
+}
+
+#[test]
+#[ignore = "hardware 24-megapixel native photo transform benchmark; release, serial"]
+fn native_photo_transform_latency() {
+    let document = native_photo_document();
+    let mut r = WgpuRasterizer::new_native_headless(document.color).unwrap();
+    native_submit(&mut r, &document.layers, true);
+    r.wait_idle().unwrap();
+    for _ in 0..3 {
+        native_submit(&mut r, &document.layers, false);
+        r.wait_idle().unwrap();
+    }
+    let worst = native_photo_drag(&mut r, &document.layers, "photo");
+    assert!(
+        worst < 8.333,
+        "a native photo transform drag exceeds the 120 Hz budget"
+    );
+}
+

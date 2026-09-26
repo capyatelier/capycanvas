@@ -249,6 +249,7 @@ pub(super) fn encode(
                 sources: &coordinates,
                 source_size: job.source_size,
             }],
+            None,
         )
         .map_err(GpuRasterError::InvalidTransform)?;
     let views: Vec<_> = job

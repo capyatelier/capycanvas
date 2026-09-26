@@ -176,6 +176,8 @@ pub(super) struct CompleteUpdates {
     columns: u32,
     stride: u32,
     pending: Vec<[u32; 2]>,
+    /// The level pending tiles were written at; coarser levels are reduced.
+    written: usize,
 }
 impl CompleteUpdates {
     pub(super) const BATCH: usize = 128;
@@ -236,7 +238,7 @@ impl CompleteUpdates {
         }).collect();
         Self { records, bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
             fused_pipeline: pipelines.fused_reduce.clone(), columns, stride,
-            pending: Vec::with_capacity(Self::BATCH) }
+            pending: Vec::with_capacity(Self::BATCH), written: 0 }
     }
 
     pub fn storage_bytes(&self) -> u64 { self.records.size() }
@@ -248,7 +250,20 @@ impl CompleteUpdates {
         if self.pending.len() == Self::BATCH { self.flush(encoder); }
     }
 
+    /// Reduce the tiles, by level-0 coordinate, whose pixels were written
+    /// directly at `level` into every coarser level.
+    pub fn tiles_written_at(&mut self, encoder: &mut crate::submission::CommandEncoder,
+        level: usize, coordinates: &[[u32; 2]]) {
+        self.flush(encoder);
+        for chunk in coordinates.chunks(Self::BATCH) {
+            self.pending.extend_from_slice(chunk);
+            self.written = level;
+            self.flush(encoder);
+        }
+    }
+
     pub fn flush(&mut self, encoder: &mut crate::submission::CommandEncoder) {
+        let written = std::mem::take(&mut self.written);
         if self.pending.is_empty() { return; }
         let _trace = crate::performance_trace::Span::new(c"capy.mip_encode");
         // Same pixels and per-level dependency order, fewer driver commands.
@@ -257,7 +272,7 @@ impl CompleteUpdates {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce retained display tiles"), timestamp_writes: None,
         });
-        let mut level = 0;
+        let mut level = written;
         while level < self.bindings.len() {
             let fused = level % 4 == 0 && level / 4 < self.fused_bindings.len();
             let binding = if fused { &self.fused_bindings[level / 4] } else { &self.bindings[level] };

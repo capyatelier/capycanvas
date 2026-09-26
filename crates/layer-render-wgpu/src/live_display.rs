@@ -761,6 +761,26 @@ impl Cache {
             self.coarse.tile_target()
         }
     }
+    /// The level a complete display samples for the current view.
+    pub fn sampled_level(&self) -> Option<u32> {
+        self.is_complete().then(|| self.retained_level.unwrap_or(self.coarse.plan.level))
+    }
+    /// A complete display's image at `level`, to draw into directly.
+    pub fn level_view(&self, level: u32) -> Option<&wgpu::TextureView> {
+        if !self.is_complete() {
+            return None;
+        }
+        if level == self.coarse.plan.level {
+            return Some(&self.coarse.view);
+        }
+        self.retained.iter().find(|r| r.level == level).map(|r| &r.view)
+    }
+    /// Reduce level-0 tiles whose pixels were drawn directly at `level`.
+    pub fn tiles_written_at(&mut self, encoder: &mut crate::submission::CommandEncoder,
+        level: u32, coordinates: &[[u32; 2]]) {
+        self.complete_updates.as_mut().expect("direct target admitted")
+            .tiles_written_at(encoder, level as usize, coordinates);
+    }
     pub fn direct_tile_written(&mut self, encoder: &mut crate::submission::CommandEncoder, coordinate: [u32; 2]) {
         self.complete_updates.as_mut().expect("direct target admitted").tile(encoder, coordinate);
     }

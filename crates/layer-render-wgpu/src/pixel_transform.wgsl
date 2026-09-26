@@ -2,7 +2,12 @@
 // Sample color * selection together, never filter them independently (halos).
 // Rows x, y and w map a destination pixel to homogeneous source coordinates.
 // attachment holds its origin in layer pixels, the flags and the background.
-struct Transform { x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, attachment:vec4<f32> }
+// A reduced display level reads display: layer pixels per texel side, layer
+// opacity and the layer extent, and composites over the backdrop.
+struct Transform {
+    x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, attachment:vec4<f32>,
+    display:vec4<f32>, backdrop:vec4<f32>,
+}
 override scalar:bool=false;
 override visibility:bool=false;
 @group(0) @binding(0) var<uniform> transform:Transform;
@@ -143,18 +148,71 @@ fn transformed(world:vec2<f32>)->vec4<f32> {
     if (flags()&BICUBIC)!=0u {return bicubic(s.xy);}
     return bilinear(s.xy);
 }
-@fragment fn fragment_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
-    let world=position.xy+transform.attachment.xy;
-    let base=original(vec2<i32>(floor(world)));
+fn layer_pixel(world:vec2<f32>)->vec4<f32> {
+    let p=vec2<i32>(floor(world));
     // Exact no-op must not cut and recomposite fractional selection coverage.
-    if (flags()&UNMOVED)!=0u {return base;}
+    if (flags()&UNMOVED)!=0u {return original(p);}
     let moved=transformed(world);
     if (flags()&PLACEMENT)!=0u {return moved;}
+    let selection=brush_selection_at(world);
     if visibility {
-        let remainder=mix(base.r,background(),brush_selection_at(world));
+        let remainder=mix(original(p).r,background(),selection);
         return vec4(moved.r+remainder*(1.-moved.a));
     }
-    let remainder=base*(1.-brush_selection_at(world));
+    if selection>=1. && !scalar {return moved;}
+    let remainder=original(p)*(1.-selection);
     if scalar {return max(moved,remainder);}
     return moved+remainder*(1.-moved.a);
+}
+@fragment fn fragment_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
+    return layer_pixel(position.xy+transform.attachment.xy);
+}
+// The mean layer value over the pixels of a 2x2 block around the pixel
+// corner `center`, within the layer extent. Unmoved pixels are exact; moved
+// ones sample their source once at the block center, a bilinear filter over
+// the block's footprint.
+fn layer_block(center:vec2<f32>)->vec4<f32> {
+    let moved=transformed(center);
+    if moved.a>=1. {return moved;}
+    var remainder=vec4(0.);
+    var count=0.;
+    for (var j=0;j<2;j++) {
+        for (var i=0;i<2;i++) {
+            let world=center+vec2(f32(i),f32(j))-.5;
+            if all(world<transform.display.zw) {
+                let kept=1.-brush_selection_at(world);
+                if kept>0. {remainder+=original(vec2<i32>(floor(world)))*kept;}
+                count+=1.;
+            }
+        }
+    }
+    return moved+remainder/max(count,1.)*(1.-moved.a);
+}
+// One texel of a reduced display level, `side` layer pixels across, over a
+// constant backdrop: the mean of its layer pixels, sampling moved pixels once
+// per 2x2 block. A full-resolution level draws each layer pixel exactly.
+@fragment fn display_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
+    let side=transform.display.x;
+    let corner=floor(position.xy)*side+transform.attachment.xy;
+    var layer=vec4(0.);
+    if side<2. {
+        layer=layer_pixel(corner+.5);
+    } else {
+        let blocks=u32(side*.5);
+        var count=0.;
+        for (var j=0u;j<blocks;j++) {
+            for (var i=0u;i<blocks;i++) {
+                let low=corner+vec2(f32(i),f32(j))*2.;
+                if all(low<transform.display.zw) {
+                    let pixels=min(transform.display.zw-low,vec2(2.));
+                    let weight=pixels.x*pixels.y;
+                    layer+=layer_block(low+1.)*weight;
+                    count+=weight;
+                }
+            }
+        }
+        layer/=max(count,1.);
+    }
+    layer*=transform.display.y;
+    return layer+transform.backdrop*(1.-layer.a);
 }

@@ -16,7 +16,7 @@ impl PaintTransforms {
         let companion = primary.fork();
         Self([primary, companion])
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
+    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
         self.0[0].pipelines()
     }
     pub fn begin_frame(&mut self) {
@@ -102,6 +102,24 @@ impl PaintTransforms {
         }
         Ok(damage)
     }
+    /// Draw a moving preview of a layer without a mask straight into a
+    /// reduced display `level`, from the transaction's captured originals.
+    /// The layer's pages keep the last full preview. Returns the layer region
+    /// drawn, or None when the transaction has not captured this layer yet.
+    pub fn render_display(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        layers: &[Layer],
+        level: &wgpu::TextureView,
+        display: pixel_transform::DisplayLevel,
+    ) -> Result<Option<PixelRect>, GpuRasterError> {
+        if next.companion(layers).is_some() || self.0[1].has_preview() {
+            return Ok(None);
+        }
+        self.0[0].render_display(r, encoder, next, r.target_extent(next.layer), level, display)
+    }
 }
 
 struct ImageTransformState {
@@ -118,6 +136,9 @@ struct ImageTransformState {
     source_bounds: [PixelRect; 3],
     preview: Option<layer_render::TransformPreview>,
     preview_regions: [PixelRect; 2],
+    /// The moving preview last drawn into a display level instead of pages,
+    /// and its regions.
+    displayed: Option<(layer_render::TransformPreview, [PixelRect; 2])>,
     spares: PreviewPages,
     atlases: [Option<Atlas>; 2],
     #[cfg(test)]
@@ -271,15 +292,17 @@ impl ImageTransformState {
             source_bounds: [PixelRect::EMPTY; 3],
             preview: None,
             preview_regions: [PixelRect::EMPTY; 2],
+            displayed: None,
             spares: PreviewPages::default(),
             atlases: Default::default(),
             #[cfg(test)]
             source_captures: 0,
         }
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
+    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
         [
             &self.color.pipeline,
+            self.color.display.as_ref().expect("color transform"),
             &self.scalar.pipeline,
             &self.visibility.pipeline,
         ]
@@ -515,9 +538,6 @@ impl ImageTransformState {
                     .unwrap_or_else(|| r.create_page(c, "transformed paint page"));
                 page.coordinate = c;
                 page.active_secondary = false;
-                r.encode_clear(encoder, &page.primary.view, "initialize transformed paint");
-                page.primary_needs_clear = false;
-                r.paint_layers[index].pages.push(page);
                 if self.sources[0]
                     .as_ref()
                     .unwrap()
@@ -528,7 +548,11 @@ impl ImageTransformState {
                     })
                 {
                     initialize_original.insert(c);
+                } else {
+                    r.encode_clear(encoder, &page.primary.view, "initialize transformed paint");
                 }
+                page.primary_needs_clear = false;
+                r.paint_layers[index].pages.push(page);
             }
             if material
                 && support[1].iter().any(|b| !b.page_local(c).is_empty())
@@ -741,6 +765,7 @@ impl ImageTransformState {
                 self.background.unwrap_or(0.),
                 transform,
                 &records,
+                None,
             )
             .map_err(GpuRasterError::InvalidTransform)?;
         let selection = self.has_selection.then_some(self.selection.as_ref()).flatten();
@@ -938,6 +963,7 @@ impl ImageTransformState {
     pub fn discard_preview(&mut self) {
         self.preview = None;
         self.preview_regions = [PixelRect::EMPTY; 2];
+        self.displayed = None;
         self.spares.clear();
         self.release_snapshot();
     }
@@ -984,6 +1010,7 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<(LayerId, PixelRect)>, GpuRasterError> {
+        self.displayed = None;
         let Some(previous) = self.preview.take() else {
             return Ok(None);
         };
@@ -1008,6 +1035,7 @@ impl ImageTransformState {
         next: &layer_render::TransformPreview,
         extent: [u32; 2],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
+        self.displayed = None;
         if self.preview.as_ref() == Some(next) {
             return Ok(Vec::new());
         }
@@ -1044,6 +1072,120 @@ impl ImageTransformState {
         self.preview = Some(next.clone());
         self.preview_regions = regions;
         Ok(damage)
+    }
+    fn render_display(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        extent: [u32; 2],
+        level: &wgpu::TextureView,
+        display: pixel_transform::DisplayLevel,
+    ) -> Result<Option<PixelRect>, GpuRasterError> {
+        let captured = self.preview.as_ref().is_some_and(|p| {
+            p.transaction == next.transaction
+                && p.layer == next.layer
+                && p.selection == next.selection
+        });
+        if !captured
+            || self.background.is_some()
+            || self.sources[0].is_none()
+            || self.sources[1].is_some()
+            || self.sources[2].is_some()
+            || matches!(next.transform.map, layer_core::TransformMap::Mesh(_))
+        {
+            return Ok(None);
+        }
+        if self.displayed.as_ref().is_some_and(|(shown, _)| shown == next) {
+            return Ok(Some(PixelRect::EMPTY));
+        }
+        let regions = next
+            .transform
+            .affected_regions(self.cut)
+            .map(|b| pixel_rect(b, extent));
+        let previous = self.displayed.as_ref().map_or(self.preview_regions, |(_, shown)| *shown);
+        let side = display.side;
+        let drawn = [previous[0], previous[1], regions[0], regions[1]]
+            .into_iter()
+            .fold(PixelRect::EMPTY, PixelRect::union);
+        let drawn = PixelRect::new(
+            drawn.min_x() / side * side,
+            drawn.min_y() / side * side,
+            drawn.max_x().div_ceil(side).saturating_mul(side).min(extent[0]),
+            drawn.max_y().div_ceil(side).saturating_mul(side).min(extent[1]),
+        );
+        self.displayed = Some((next.clone(), regions));
+        if drawn.is_empty() {
+            return Ok(Some(drawn));
+        }
+        let transform = next.drawn();
+        let snapshot = self.sources[0].as_ref().unwrap();
+        let splitter = snapshot.splitter(&transform)?.aligned(side);
+        let mut blocks = std::collections::BTreeMap::new();
+        for c in page_coordinates(drawn) {
+            blocks
+                .entry([c[0] / 2, c[1] / 2])
+                .and_modify(|b: &mut PixelRect| *b = b.union(page_rect(c).intersect(drawn)))
+                .or_insert(page_rect(c).intersect(drawn));
+        }
+        let mut jobs = Vec::new();
+        for block in blocks.into_values() {
+            splitter.split(block, &mut jobs)?;
+        }
+        let bounds = [
+            snapshot.bounds.min_x() as i32,
+            snapshot.bounds.min_y() as i32,
+            snapshot.bounds.width() as i32,
+            snapshot.bounds.height() as i32,
+        ];
+        let records: Vec<_> = jobs
+            .iter()
+            .map(|job| pixel_transform::TiledTransformRecord {
+                source_size: [PAGE_SIZE; 2],
+                target: [0; 2],
+                sources: &job.sources,
+            })
+            .collect();
+        let offsets = self
+            .color
+            .prepare_tiled(
+                &r.device,
+                &r.queue,
+                &mut r.uploads,
+                encoder,
+                bounds,
+                0.,
+                &transform,
+                &records,
+                Some(display),
+            )
+            .map_err(GpuRasterError::InvalidTransform)?;
+        let selection = self.has_selection.then_some(self.selection.as_ref()).flatten();
+        let captured = |c| snapshot.pages.contains_key(&c);
+        let pieces: Vec<_> = jobs.into_iter().map(|job| (job, false)).collect();
+        for batch in source_batches(&pieces, captured) {
+            let mut sources = Vec::with_capacity(batch.len());
+            for (job, _) in &pieces[batch.clone()] {
+                let snapshot = self.sources[0].as_ref().unwrap();
+                sources.push(snapshot.binding(r, &mut self.color, &job.sources, selection, encoder)?);
+            }
+            let draws: Vec<_> = batch
+                .zip(&sources)
+                .map(|(index, source)| {
+                    let region = pieces[index].0.region;
+                    let low = [region.min_x() / side, region.min_y() / side];
+                    let high = [region.max_x().div_ceil(side), region.max_y().div_ceil(side)];
+                    pixel_transform::BatchDraw {
+                        source,
+                        job: index,
+                        identity: false,
+                        scissor: [low[0], low[1], high[0] - low[0], high[1] - low[1]],
+                    }
+                })
+                .collect();
+            self.color.encode_display(encoder, level, offsets, &draws);
+        }
+        Ok(Some(drawn))
     }
     fn channel_regions(
         &self,

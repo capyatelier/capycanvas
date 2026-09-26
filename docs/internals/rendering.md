@@ -97,6 +97,15 @@ single brush mark. Animated effects also need updates without new pen input.
 The [clipping regression record](../history/filter-clipping-regression.md)
 provides a concrete example of a cache invalidation bug and the work it caused.
 
+A moving transform of the only visible layer over the paper skips both the
+full-resolution pages and composition. When a native document keeps a complete
+display pyramid, [`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs)
+draws the preview into the level the view samples, at most four layer pixels per
+texel side, and the coarser levels are reduced from it. Full-resolution levels
+are drawn exactly; reduced levels sample moved pixels once per 2x2 block. The
+first still frame redraws the pages and recomposes every region the drag drew,
+so still frames, Apply and commits never depend on the reduced preview.
+
 ## Filters
 
 Filters are stored as effect layers in the document. An adjustment processes the

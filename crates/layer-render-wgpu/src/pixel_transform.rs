@@ -7,8 +7,9 @@ use std::hash::{Hash, Hasher};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
-/// Destination-to-source rows, attachment origin and options of one region.
-const REGION_BYTES: u64 = 64;
+/// Destination-to-source rows, attachment origin and options of one region,
+/// and how a reduced display level composites it.
+const REGION_BYTES: u64 = 96;
 /// Enough source neighborhoods for every job of a large layer's frame, so a
 /// continuous drag reuses them instead of cycling through a smaller cache.
 const BINDING_CAPACITY: usize = 4096;
@@ -39,6 +40,16 @@ pub(super) struct TiledTransformRecord<'a> {
     pub sources: &'a [[u32; 2]],
     pub source_size: [u32; 2],
 }
+/// Draw a reduced display level: each texel is the mean of `side` x `side`
+/// layer pixels within `extent`, times `opacity`, over the premultiplied
+/// `backdrop`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct DisplayLevel {
+    pub side: u32,
+    pub opacity: f32,
+    pub extent: [u32; 2],
+    pub backdrop: [f32; 4],
+}
 /// One region drawn into a shared attachment by `encode_batch`.
 pub(super) struct BatchDraw<'a> {
     pub source: &'a TransformSource,
@@ -59,6 +70,8 @@ pub struct PixelTransform {
     scalar: bool,
     visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
+    /// Color transforms drawn straight into a reduced display level.
+    pub(super) display: Option<Deferred<wgpu::RenderPipeline>>,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
@@ -135,66 +148,15 @@ impl PixelTransform {
             label: Some("bounded immutable transform inputs"),
             entries: &entries,
         });
-        let compile_device = device.clone();
-        let parameters = layout.clone();
-        let source = source_layout.clone();
-        let pipeline = Deferred::pipeline(move |mode| {
-            let device = &compile_device;
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("affine pixels with selection"),
-                source: wgpu::ShaderSource::Wgsl(super::compose_wgsl(&[
-                    include_str!("pixel_transform.wgsl"),
-                    &source_shader(),
-                    &include_str!("selection_clip.wgsl")
-                        .replace("@group(1) @binding(1)", "@group(1) @binding(17)"),
-                ])),
-            });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("affine pixels"),
-                bind_group_layouts: &[Some(&parameters), Some(&source)],
-                immediate_size: 0,
-            });
-            mode.render(&device, &wgpu::RenderPipelineDescriptor {
-                label: Some("affine cut and place"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vertex_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fragment_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[
-                            ("scalar", f64::from(scalar)),
-                            ("visibility", f64::from(visibility)),
-                        ],
-                        ..Default::default()
-                    },
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: if scalar {
-                            device.scalar_format()
-                        } else {
-                            device.working_format()
-                        },
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
+        let pipeline = transform_pipeline(device, &layout, &source_layout, scalar, visibility, "fragment_main");
+        let display = (!scalar && !visibility)
+            .then(|| transform_pipeline(device, &layout, &source_layout, false, false, "display_main"));
         Self {
             placement: false,
             scalar,
             visibility,
             pipeline,
+            display,
             layout,
             source_layout,
             empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
@@ -233,6 +195,7 @@ impl PixelTransform {
             scalar: self.scalar,
             visibility: self.visibility,
             pipeline: self.pipeline.clone(),
+            display: self.display.clone(),
             layout: self.layout.clone(),
             source_layout: self.source_layout.clone(),
             empty_selection: self.empty_selection.clone(),
@@ -424,6 +387,7 @@ impl PixelTransform {
         background: f32,
         transform: &ImageTransform,
         jobs: &[TiledTransformRecord<'_>],
+        display: Option<DisplayLevel>,
     ) -> Result<[u32; 2], &'static str> {
         let rows = inverse_rows(transform)?;
         let identity = transform.is_identity();
@@ -484,6 +448,7 @@ impl PixelTransform {
                         + 2. * f32::from(unmoved || identity)
                         + 4. * f32::from(self.placement),
                     background,
+                    display,
                 );
                 let offset = (i * 2 + usize::from(unmoved)) * self.stride as usize;
                 for (dst, value) in self.records[offset..][..REGION_BYTES as usize]
@@ -585,6 +550,45 @@ impl PixelTransform {
             pass.draw(0..3, 0..1);
         }
     }
+    /// Draw prepared regions straight into a reduced display level, keeping
+    /// its other texels. Each draw's scissor is in that level's texels.
+    pub(super) fn encode_display(
+        &self,
+        encoder: &mut crate::submission::CommandEncoder,
+        level: &wgpu::TextureView,
+        offsets: [u32; 2],
+        draws: &[BatchDraw<'_>],
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transform into display level"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: level,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(self.display.as_ref().expect("color transform"));
+        for draw in draws {
+            let region = offsets[0] + (draw.job as u32 * 2 + u32::from(draw.identity)) * self.stride;
+            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region]);
+            pass.set_bind_group(
+                1,
+                &draw.source.binding,
+                &[offsets[1] + draw.job as u32 * self.source_stride],
+            );
+            let [x, y, w, h] = draw.scissor;
+            pass.set_scissor_rect(x, y, w, h);
+            pass.draw(0..3, 0..1);
+        }
+    }
     fn draw(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
@@ -653,11 +657,85 @@ fn region_record(
     target: [f32; 2],
     flags: f32,
     background: f32,
+    display: Option<DisplayLevel>,
 ) -> [f32; REGION_BYTES as usize / 4] {
+    let level = display.unwrap_or(DisplayLevel {
+        side: 1,
+        opacity: 1.,
+        extent: [0; 2],
+        backdrop: [0.; 4],
+    });
+    let [r, g, b, a] = level.backdrop;
     [
         x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
-        flags, background,
+        flags, background, level.side as f32, level.opacity, level.extent[0] as f32,
+        level.extent[1] as f32, r, g, b, a,
     ]
+}
+
+fn transform_pipeline(
+    device: &PipelineDevice,
+    layout: &wgpu::BindGroupLayout,
+    source_layout: &wgpu::BindGroupLayout,
+    scalar: bool,
+    visibility: bool,
+    entry: &'static str,
+) -> Deferred<wgpu::RenderPipeline> {
+    let compile_device = device.clone();
+    let parameters = layout.clone();
+    let source = source_layout.clone();
+    Deferred::pipeline(move |mode| {
+        let device = &compile_device;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("affine pixels with selection"),
+            source: wgpu::ShaderSource::Wgsl(super::compose_wgsl(&[
+                include_str!("pixel_transform.wgsl"),
+                &source_shader(),
+                &include_str!("selection_clip.wgsl")
+                    .replace("@group(1) @binding(1)", "@group(1) @binding(17)"),
+            ])),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("affine pixels"),
+            bind_group_layouts: &[Some(&parameters), Some(&source)],
+            immediate_size: 0,
+        });
+        mode.render(device, &wgpu::RenderPipelineDescriptor {
+            label: Some("affine cut and place"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("scalar", f64::from(scalar)),
+                        ("visibility", f64::from(visibility)),
+                    ],
+                    ..Default::default()
+                },
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: if scalar {
+                        device.scalar_format()
+                    } else {
+                        device.working_format()
+                    },
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    })
 }
 
 fn source_metadata(

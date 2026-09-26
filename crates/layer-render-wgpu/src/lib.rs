@@ -106,6 +106,7 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
+
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
 const SOURCE_SLOTS: usize = 16;
@@ -880,6 +881,11 @@ pub struct WgpuRasterizer {
     transforms: Option<paint_transform::PaintTransforms>,
     transform_preview: Option<layer_render::TransformPreview>,
     transform_damage: Vec<(LayerId, PixelRect)>,
+    /// Layer regions a moving transform preview drew straight into the
+    /// display, still to be recomposed at full resolution.
+    displayed_transform: Option<(LayerId, PixelRect)>,
+    /// Draw eligible moving transform previews into the sampled display level.
+    display_previews: bool,
     thumbnails: thumbnails::Thumbnails,
     ui_preview_space: layer_core::color::RgbSpace,
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
@@ -1267,6 +1273,8 @@ impl WgpuRasterizer {
             transforms,
             transform_preview: None,
             transform_damage: Vec::with_capacity(2),
+            displayed_transform: None,
+            display_previews: true,
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
@@ -1601,6 +1609,73 @@ impl WgpuRasterizer {
             transport_bind_group,
         });
         Ok(())
+    }
+
+    /// A moving transform of the only visible content, over the constant
+    /// paper, draws straight into the display level the view samples, at
+    /// most four layer pixels per texel side, rather than into full-resolution
+    /// pages that are then recomposed. Returns that level and its compositing.
+    fn display_preview(
+        &self,
+        packet: &FramePacket<'_>,
+        preview: &layer_render::TransformPreview,
+        background: [f32; 4],
+    ) -> Option<(u32, pixel_transform::DisplayLevel)> {
+        let cache = self.live_display.as_ref()?;
+        if !self.artwork_frame.as_ref()?.same_artwork(*packet, background) {
+            return None;
+        }
+        let layer = packet.layers.iter().find(|l| l.id == preview.layer)?;
+        let empty = |l: &Layer| {
+            !l.visible
+                || !l.is_artwork()
+                || l.kind == LayerKind::Background
+                || (l.kind == LayerKind::Paint
+                    && l.source.is_none()
+                    && self.native_color_coordinates(l.id).next().is_none()
+                    && self.paint_layers.iter().all(|p| p.id != l.id || p.pages.is_empty()))
+        };
+        let alone = self.display_previews
+            && preview.moving
+            && self.native_edit.is_some()
+            && packet.dabs.is_empty()
+            && packet.dab_batches.is_empty()
+            && packet.restore_rasters.is_empty()
+            && !packet.reset_layers
+            && !packet.composite_all
+            && layer.visible
+            && layer.kind == LayerKind::Paint
+            && layer.mask.is_none()
+            && layer.effect.is_none()
+            && layer.pending_operations.is_empty()
+            && layer.properties.parent.is_none()
+            && !layer.properties.clipped
+            && layer.properties.blend == layer_core::LayerBlend::Normal
+            && layer_core::target_transform(packet.layers, layer.id) == layer_core::Affine::IDENTITY
+            && self
+                .paint_layers
+                .iter()
+                .find(|p| p.id == layer.id)
+                .is_none_or(|p| p.watercolor.is_none())
+            && packet.layers.iter().all(|l| l.id == layer.id || empty(l))
+            && packet
+                .layers
+                .iter()
+                .all(|l| l.mask.as_ref().is_none_or(|m| !(m.enabled && m.show_area)));
+        if !alone {
+            return None;
+        }
+        let level = cache.sampled_level()?.min(2);
+        let [r, g, b, a] = packet.view.background_rgba_linear;
+        Some((
+            level,
+            pixel_transform::DisplayLevel {
+                side: 1 << level,
+                opacity: layer.opacity,
+                extent: packet.document_extent,
+                backdrop: [r * a, g * a, b * a, a],
+            },
+        ))
     }
 
     fn validate_and_prepare_brush_resources(
@@ -4311,7 +4386,30 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_requires_base = new_preview_requires_base;
         self.preview_direct_to_composite = new_preview_direct_to_composite;
 
+        let mut displayed = false;
         if let Some(preview) = self.transform_preview.clone() {
+            if dirty.is_empty() && self.transform_damage.is_empty()
+                && let Some((level, display)) =
+                    self.display_preview(&packet, &preview, requested_view.background_rgba_linear)
+            {
+                let mut transforms = self.transforms.take().expect("retained transform renderer");
+                let mut cache = self.live_display.take().expect("complete display");
+                cache.make_writable(self, self.display_pipelines.as_ref().unwrap(), &mut encoder);
+                let target = cache.level_view(level).expect("sampled level").clone();
+                let result = transforms.render_display(self, &mut encoder, &preview, packet.layers, &target, display);
+                self.transforms = Some(transforms);
+                if let Ok(Some(drawn)) = &result && !drawn.is_empty() {
+                    let tiles: Vec<_> = page_coordinates(*drawn).collect();
+                    cache.tiles_written_at(&mut encoder, level, &tiles);
+                    let region = self.displayed_transform.map_or(*drawn, |(_, shown)| shown.union(*drawn));
+                    self.displayed_transform = Some((preview.layer, region));
+                    self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
+                    self.composite_revision = self.composite_revision.wrapping_add(1);
+                }
+                self.live_display = Some(cache);
+                displayed = result?.is_some();
+            }
+            if !displayed {
             let mut transforms = self.transforms.take().expect("retained transform renderer");
             let result = transforms.update_preview(
                 self,
@@ -4322,6 +4420,13 @@ impl CanvasRenderer for WgpuRasterizer {
             );
             self.transforms = Some(transforms);
             self.transform_damage.extend(result?);
+            }
+            if self.transform_damage.iter().any(|(_, damage)| !damage.is_empty()) {
+                scene::Scene::submit_commands(self, &mut encoder, "transform preview");
+            }
+        }
+        if !displayed && let Some(shown) = self.displayed_transform.take() {
+            self.transform_damage.push(shown);
         }
         // Pointwise edits need only their touched tiles, not the rectangle
         // enclosing a fast curved stroke. Global effects and full rebuilds

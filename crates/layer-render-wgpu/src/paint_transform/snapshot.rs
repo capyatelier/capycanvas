@@ -138,6 +138,8 @@ pub(crate) struct Splitter<F> {
     map: SourceMap,
     bounds: PixelRect,
     contains: F,
+    /// Pieces start and end on multiples of this, unless at the region's edge.
+    align: u32,
 }
 impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
     pub fn new(
@@ -149,7 +151,12 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
             map: SourceMap::new(transform, bounds)?,
             bounds,
             contains,
+            align: 1,
         })
+    }
+    /// Keep every split on a multiple of `align` pixels.
+    pub fn aligned(self, align: u32) -> Self {
+        Self { align, ..self }
     }
     /// Append the pieces of `start` and the pages each one reads.
     pub fn split(&self, start: PixelRect, jobs: &mut Vec<Footprint>) -> Result<(), GpuRasterError> {
@@ -191,8 +198,8 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
                     region,
                     sources: required,
                 });
-            } else if region.width() >= region.height() && region.width() > 1 {
-                let middle = split_point(region.min_x(), region.max_x());
+            } else if region.width() >= region.height() && region.width() > self.align {
+                let middle = split_point(region.min_x(), region.max_x(), self.align);
                 pending.push(PixelRect::new(
                     middle,
                     region.min_y(),
@@ -205,8 +212,8 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
                     middle,
                     region.max_y(),
                 ));
-            } else if region.height() > 1 {
-                let middle = split_point(region.min_y(), region.max_y());
+            } else if region.height() > self.align {
+                let middle = split_point(region.min_y(), region.max_y(), self.align);
                 pending.push(PixelRect::new(
                     region.min_x(),
                     middle,
@@ -230,15 +237,20 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
 }
 
 /// Halve a span, on a page boundary when it crosses one, so pieces bind as
-/// few destination pages as possible.
-fn split_point(start: u32, end: u32) -> u32 {
+/// few destination pages as possible, and otherwise on a multiple of `align`.
+fn split_point(start: u32, end: u32, align: u32) -> u32 {
     let middle = start + (end - start) / 2;
     let lower = middle / PAGE_SIZE * PAGE_SIZE;
+    let aligned = middle / align * align;
     [lower, lower + PAGE_SIZE]
         .into_iter()
         .filter(|b| *b > start && *b < end)
         .min_by_key(|b| b.abs_diff(middle))
-        .unwrap_or(middle)
+        .unwrap_or(if aligned > start {
+            aligned
+        } else {
+            aligned + align
+        })
 }
 
 /// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
@@ -629,11 +641,14 @@ mod tests {
     }
 
     #[test]
-    fn splits_fall_on_page_boundaries() {
-        assert_eq!(split_point(0, 512), 256);
-        assert_eq!(split_point(250, 760), 512);
-        assert_eq!(split_point(0, 300), 256);
-        assert_eq!(split_point(10, 200), 105);
-        assert_eq!(split_point(300, 1300), 768);
+    fn splits_fall_on_page_boundaries_or_the_alignment() {
+        assert_eq!(split_point(0, 512, 1), 256);
+        assert_eq!(split_point(250, 760, 1), 512);
+        assert_eq!(split_point(0, 300, 1), 256);
+        assert_eq!(split_point(10, 200, 1), 105);
+        assert_eq!(split_point(300, 1300, 1), 768);
+        assert_eq!(split_point(0, 200, 8), 96);
+        assert_eq!(split_point(4, 12, 4), 8);
+        assert_eq!(split_point(300, 1300, 4), 768);
     }
 }

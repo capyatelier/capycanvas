@@ -1,5 +1,6 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
+use layer_core::Point;
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterError> {
@@ -1288,4 +1289,165 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
                 .unwrap()
         );
     }
+}
+
+fn display_levels(r: &WgpuRasterizer, from: u32) -> Vec<Vec<[f32; 4]>> {
+    let cache = r.live_display.as_ref().unwrap();
+    cache
+        .retained
+        .iter()
+        .filter(|level| level.level >= from)
+        .map(|level| &level.texture)
+        .chain(std::iter::once(&cache.coarse.texture))
+        .map(|texture| pixels(r, texture))
+        .collect()
+}
+
+fn complete_pair(doc: &layer_core::Document) -> [WgpuRasterizer; 2] {
+    std::array::from_fn(|i| {
+        let mut r = bounded_renderer(doc.color).unwrap();
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.set_complete_display_allowance(256 * 1024 * 1024);
+        r.display_previews = i == 0;
+        r
+    })
+}
+
+fn preview(
+    layer: LayerId,
+    moving: bool,
+    selection: Option<layer_core::Selection>,
+    map: layer_core::TransformMap,
+) -> layer_render::TransformPreview {
+    layer_render::TransformPreview {
+        transaction: 1,
+        moving,
+        layer,
+        selection,
+        transform: layer_core::ImageTransform {
+            map,
+            interpolation: layer_core::Interpolation::Bicubic,
+        },
+    }
+}
+
+#[test]
+fn moving_transforms_drawn_into_the_display_approximate_recomposition_and_release_exactly() {
+    let mut doc = document([1537, 1025]);
+    doc.layers[0].opacity = 0.8;
+    let [mut direct, mut reference] = complete_pair(&doc);
+    for scale in [0.2, 1., 0.4, 0.6] {
+        let v = centered_view([doc.width, doc.height], [320, 240], scale, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap().min(2);
+        let layer = doc.layers[0].id;
+        let selection = layer_core::Selection::polygon(vec![
+            Point { x: 100.5, y: 80. },
+            Point { x: 1300., y: 140.25 },
+            Point { x: 1200., y: 900. },
+            Point { x: 160., y: 700.5 },
+        ])
+        .unwrap();
+        let center = Point { x: 700., y: 500. };
+        let keystone = layer_core::Projective::rect_to_quad(
+            layer_core::Rect {
+                min: Point::default(),
+                max: Point { x: 1537., y: 1025. },
+            },
+            [[40., 30.], [1500., 70.], [1400., 1000.], [90., 960.]].map(|[x, y]| Point { x, y }),
+        )
+        .unwrap();
+        let steps = [
+            (true, layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 13.25, y: -7.5 }))),
+            (true, layer_core::TransformMap::Affine(layer_core::Affine::around(center, [0.7, 0.9], 0.3, Point { x: 31., y: 5. }))),
+            (true, layer_core::TransformMap::Projective(keystone)),
+            (true, layer_core::TransformMap::Affine(layer_core::Affine::around(center, [1.3, 1.1], -0.2, Point::default()))),
+            (false, layer_core::TransformMap::Projective(keystone)),
+        ];
+        for (step, (moving, map)) in steps.into_iter().enumerate() {
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                r.set_transform_preview(Some(&preview(layer, moving, Some(selection.clone()), map.clone())))
+                    .unwrap();
+                submit(r, &doc, v, false);
+            }
+            if moving {
+                assert_eq!(
+                    direct.metrics.composited_pixels == composed,
+                    step > 0,
+                    "later moving frames draw into the display"
+                );
+                let shown = display_levels(&direct, level);
+                let expected = display_levels(&reference, level);
+                let (mut largest, mut total, mut count) = (0f32, 0f64, 0usize);
+                for (a, b) in shown.iter().zip(&expected) {
+                    for (a, b) in a.iter().zip(b) {
+                        for c in 0..4 {
+                            largest = largest.max((a[c] - b[c]).abs());
+                            total += f64::from((a[c] - b[c]).abs());
+                            count += 1;
+                        }
+                    }
+                }
+                if level == 0 {
+                    assert!(largest <= 2e-5, "scale {scale} step {step}: full resolution differs by {largest}");
+                } else {
+                    let mean = total / count as f64;
+                    assert!(mean <= 5e-4, "level {level} step {step}: mean difference {mean}");
+                }
+            } else {
+                assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+            }
+        }
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(None).unwrap();
+            submit(r, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+    }
+}
+
+#[test]
+fn display_previews_skip_recomposition_only_for_a_lone_unmasked_layer() {
+    let doc = document([1025, 769]);
+    let [mut direct, _] = complete_pair(&doc);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+    submit(&mut direct, &doc, v, true);
+    let layer = doc.layers[0].id;
+    let moving = |dx: f32| {
+        preview(
+            layer,
+            true,
+            None,
+            layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: dx, y: 3. })),
+        )
+    };
+    let frame = |r: &mut WgpuRasterizer, doc: &layer_core::Document, dx: f32| {
+        let before = r.metrics.composited_pixels;
+        r.set_transform_preview(Some(&moving(dx))).unwrap();
+        submit(r, doc, v, false);
+        r.metrics.composited_pixels - before
+    };
+    assert!(frame(&mut direct, &doc, 1.) > 0, "the first frame captures the transaction");
+    assert_eq!(frame(&mut direct, &doc, 2.), 0);
+    assert_eq!(frame(&mut direct, &doc, 3.), 0);
+    let mut hidden = doc.clone();
+    let id = hidden.allocate_layer_id();
+    hidden.layers.insert(0, Layer::paint(id, "empty above"));
+    assert!(frame(&mut direct, &hidden, 4.) > 0, "a changed layer list recomposes");
+    assert_eq!(frame(&mut direct, &hidden, 5.), 0, "empty layers do not contribute");
+    let mut adjusted = hidden.clone();
+    adjusted.layers[0].kind = LayerKind::Effect;
+    adjusted.layers[0].effect = Some(Arc::new(layer_core::EffectInstance::new(
+        layer_core::bundled_effect_catalog().get("exposure").unwrap().program(),
+    )));
+    assert!(frame(&mut direct, &adjusted, 6.) > 0);
+    assert!(frame(&mut direct, &adjusted, 7.) > 0, "an adjustment recomposes");
+    assert!(frame(&mut direct, &hidden, 8.) > 0);
+    assert_eq!(frame(&mut direct, &hidden, 9.), 0);
+    hidden.layers[1].opacity = 0.5;
+    assert!(frame(&mut direct, &hidden, 10.) > 0, "a changed opacity recomposes");
+    assert_eq!(frame(&mut direct, &hidden, 11.), 0, "opacity folds into the display");
 }

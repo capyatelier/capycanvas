@@ -66,7 +66,9 @@ pub(super) struct Scene {
     jobs: Vec<Job>,
     // Retain table capacity across tile batches, but release resource handles
     // after encoding so these tables cannot pin evicted paint/source pages.
-    source_bindings: std::collections::HashMap<[wgpu::TextureView; 3], wgpu::BindGroup>,
+    source_bindings: RecentBindings<[wgpu::TextureView; 3]>,
+    compute_bindings: RecentBindings<[wgpu::TextureView; 3]>,
+    output_bindings: RecentBindings<wgpu::TextureView>,
     mask_bindings: std::collections::HashMap<[wgpu::TextureView; effects::MASK_SLOTS], wgpu::BindGroup>,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::BindGroupLayout,
@@ -235,7 +237,7 @@ impl Scene {
         let submission = Self::submit_commands(r, encoder, label);
         Self::wait_submission(r, submission)
     }
-    fn submit_commands(
+    pub(super) fn submit_commands(
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         label: &'static str,
@@ -322,6 +324,9 @@ impl Scene {
     }
     pub fn begin_frame(&mut self) {
         self.placement.begin_frame();
+        self.source_bindings.begin_frame();
+        self.compute_bindings.begin_frame();
+        self.output_bindings.begin_frame();
         self.record_count = 0;
         self.effect_passes = 0;
     }
@@ -359,6 +364,8 @@ impl Scene {
             used: Vec::new(),
             jobs: Vec::new(),
             source_bindings: Default::default(),
+            compute_bindings: Default::default(),
+            output_bindings: Default::default(),
             mask_bindings: Default::default(),
             layout,
             uniforms,
@@ -1610,13 +1617,17 @@ impl Scene {
                 continue;
             }
             if display_tiles >= display_batch || self.jobs.len() >= DISPLAY_JOBS_PER_SUBMISSION {
+                let uploads = self.jobs.iter().any(|job| {
+                    matches!(job, Job::DecodedTile(_) | Job::SourceUpload { .. } | Job::Placement(_))
+                });
                 self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
                 direct_count = 0;
-                // Keep at most two batches live. Finish and submit this batch
-                // while the previous batch can execute, then wait before
-                // preparing a third. Native command finalization is costly.
+                // Keep at most two batches with source uploads live. Finish and
+                // submit this batch while the previous batch can execute, then
+                // wait before preparing a third. Native command finalization is
+                // costly. Batches that only read resident pages need no wait.
                 let current = Self::submit_commands(r, encoder, "bounded display composition");
-                if let Some(previous) = submitted.replace(current) {
+                if uploads && let Some(previous) = submitted.replace(current) {
                     Self::wait_submission(r, previous)?;
                 }
                 r.metrics.display_composition_submissions += 1;
@@ -1844,7 +1855,6 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let result = self.encode_jobs_inner(r, encoder);
-        self.source_bindings.clear();
         self.mask_bindings.clear();
         if result.is_err() {
             // Dropping unencoded reservations invalidates their source keys.
@@ -1899,8 +1909,8 @@ impl Scene {
             Job::Draw { data, over: false, clip, .. } if data[8] == 15. || (data[8] == 13. && clip.is_some()));
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
-        let mut output_bindings = std::collections::HashMap::new();
-        let mut compute_bindings = std::collections::HashMap::new();
+        let output_bindings = &mut self.output_bindings;
+        let compute_bindings = &mut self.compute_bindings;
         let mut encoded_through = 0;
         for (i, job) in self.jobs.iter().enumerate() {
             if i < encoded_through {
@@ -1917,12 +1927,11 @@ impl Scene {
                 pass.set_pipeline(pipeline);
                 for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
                     let Job::Draw { target, sources, data, .. } = job else { unreachable!() };
-                    let input = compute_bindings.entry(sources.clone())
-                        .or_insert_with(|| compute_source_binding(r, inputs, sources));
+                    let input = compute_bindings.get(sources, || compute_source_binding(r, inputs, sources));
                     // All independent tiles in a complete image share this
                     // destination. Source-specific state belongs in the input
                     // group, not a new destination binding for every tile.
-                    let output = output_bindings.entry(target.clone()).or_insert_with(|| {
+                    let output = output_bindings.get(target, || {
                         r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("scene normal layers destination"), layout,
                             entries: &[wgpu::BindGroupEntry {
@@ -1931,8 +1940,8 @@ impl Scene {
                         })
                     });
                     pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
-                    pass.set_bind_group(1, &*input, &[]);
-                    pass.set_bind_group(2, &*output, &[]);
+                    pass.set_bind_group(1, input, &[]);
+                    pass.set_bind_group(2, output, &[]);
                     pass.dispatch_workgroups((data[2] as u32).div_ceil(32), (data[3] as u32).div_ceil(2), 1);
                 }
                 encoded_through = end;
@@ -2039,8 +2048,7 @@ impl Scene {
                             Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
                             _ => unreachable!(),
                         };
-                        let binding = source_bindings.entry(sources.clone())
-                            .or_insert_with(|| source_binding(r, &self.layout, sources));
+                        let binding = source_bindings.get(sources, || source_binding(r, &self.layout, sources));
                         if let Job::Effect {
                             prepared, masks, ..
                         } = job
@@ -2062,7 +2070,7 @@ impl Scene {
                             pass.set_pipeline(&self.pipeline[usize::from(*over)]);
                         }
                         pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
-                        pass.set_bind_group(1, &*binding, &[]);
+                        pass.set_bind_group(1, binding, &[]);
                         let (data, clip) = match job {
                             Job::Draw { data, clip, .. } => (data, *clip),
                             // A fullscreen triangle extends beyond its rectangle.
@@ -2362,6 +2370,38 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effec
         }
     }
     result
+}
+
+/// Bind groups by the views they bind, kept while the current or previous
+/// frame uses them: a drag redraws the same pages every frame. A scene that
+/// never begins frames keeps at most BINDINGS entries.
+const BINDINGS: usize = 4096;
+struct RecentBindings<K> {
+    frame: u64,
+    entries: std::collections::HashMap<K, (u64, wgpu::BindGroup)>,
+}
+impl<K> Default for RecentBindings<K> {
+    fn default() -> Self {
+        Self { frame: 0, entries: Default::default() }
+    }
+}
+#[allow(clippy::mutable_key_type)] // Texture views hash by stable resource identity.
+impl<K: std::hash::Hash + Eq + Clone> RecentBindings<K> {
+    fn begin_frame(&mut self) {
+        self.frame += 1;
+        let frame = self.frame;
+        self.entries.retain(|_, (used, _)| frame - *used <= 1);
+    }
+    fn get(&mut self, key: &K, create: impl FnOnce() -> wgpu::BindGroup) -> &wgpu::BindGroup {
+        if self.entries.len() >= BINDINGS && !self.entries.contains_key(key) {
+            self.frame += 1;
+            self.entries.clear();
+        }
+        let frame = self.frame;
+        let entry = self.entries.entry(key.clone()).or_insert_with(|| (frame, create()));
+        entry.0 = frame;
+        &entry.1
+    }
 }
 
 fn compute_source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
