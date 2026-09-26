@@ -105,9 +105,9 @@ import org.json.JSONObject
                                 (entryFocused && native.keyCode in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) ||
                                 (parameter == null && native.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN))
                         }
+                        else if (native.keyCode == KeyEvent.KEYCODE_ESCAPE) { back(); true }
                         else if (text.composition != null) false
                         else when (native.keyCode) {
-                            KeyEvent.KEYCODE_ESCAPE -> { back(); true }
                             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (entryFocused) { commit(); true } else false
                             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (parameter == null) {
                                 send(obj("type" to "move", "delta" to if (native.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)); true

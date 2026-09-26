@@ -73,6 +73,19 @@ class AndroidCommandSearchTest {
         fail("Timed out: $label")
     }
     private fun action(value: JSONObject) { main { host.dispatch(value) }; SystemClock.sleep(150) }
+    private fun closeWithEscape(label: String) {
+        for (attempt in 0 until 2) {
+            key(KeyEvent.KEYCODE_ESCAPE)
+            val until = SystemClock.uptimeMillis() + 1_000
+            var closed = false
+            while (!closed && SystemClock.uptimeMillis() < until) {
+                main { closed = tagged("command-bar") == null }
+                if (!closed) SystemClock.sleep(16)
+            }
+            if (closed) break
+        }
+        waitFor(label) { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+    }
     private fun key(code: Int, meta: Int = 0) {
         val now = SystemClock.uptimeMillis()
         for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
@@ -230,10 +243,10 @@ class AndroidCommandSearchTest {
         waitFor("parameter step") { tagged("command-search")?.second?.config?.getOrNull(SemanticsProperties.ContentDescription)?.any { it.startsWith("Brush size") } == true }
         key(KeyEvent.KEYCODE_ESCAPE)
         waitFor("back to query") { search()?.objectOrNull("parameter") == null && search()?.optString("query") == "brush size" }
-        key(KeyEvent.KEYCODE_ESCAPE); waitFor("menu search closed") { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+        closeWithEscape("menu search closed")
         key(KeyEvent.KEYCODE_P, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON)
         waitFor("primary opener") { tagged("command-search")?.second?.config?.getOrNull(SemanticsProperties.Focused) == true }
-        key(KeyEvent.KEYCODE_ESCAPE); waitFor("primary opener closed") { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+        closeWithEscape("primary opener closed")
         // Large-screen Android can ignore requestedOrientation; rotate the
         // native test display and restore the device's rotation policy afterward.
         assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
