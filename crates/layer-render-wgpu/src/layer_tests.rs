@@ -17,6 +17,8 @@ mod submissions;
 mod transforms;
 #[path = "transform_latency_tests.rs"]
 mod transform_latency;
+#[path = "transform_oracle_tests.rs"]
+mod transform_oracles;
 #[path = "placement_tests.rs"]
 mod placement;
 
