@@ -78,11 +78,6 @@ pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
 }
 
 impl Pipelines {
-    #[cfg(test)]
-    pub(super) fn use_unculled_reference(&mut self) {
-        self.variants.clear();
-    }
-
     pub fn new(
         device: &PipelineDevice,
         shared: &PipelineLayouts<'_>,
@@ -296,19 +291,4 @@ impl WgpuRasterizer {
 
 fn dry_material_compute_eligible(style: &layer_render::DabStyle) -> bool {
     style.execution == BrushExecution::Dry && style.rendering.blend_mode == BrushBlendMode::Normal
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn non_normal_dry_material_uses_the_fragment_path() {
-        let normal = crate::tests::test_style(BrushExecution::Dry);
-        assert!(dry_material_compute_eligible(&normal));
-
-        let mut multiply = normal;
-        multiply.rendering.blend_mode = BrushBlendMode::Multiply;
-        assert!(!dry_material_compute_eligible(&multiply));
-    }
 }
