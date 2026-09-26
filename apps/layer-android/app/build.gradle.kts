@@ -45,12 +45,12 @@ android {
             matchingFallbacks += "release"
             // White-box regression APKs keep their existing unminified ABI.
             // The self-instrumenting runner also tests full release optimization.
-            isMinifyEnabled = providers.gradleProperty("capyOptimize").isPresent
+            isMinifyEnabled = providers.gradleProperty("capyOptimize").map { it != "false" }.getOrElse(false)
             isShrinkResources = isMinifyEnabled
             buildConfigField("boolean", "WORKSPACE_BENCHMARK", "true")
         }
     }
-    testBuildType = if (providers.gradleProperty("capyBenchmark").isPresent) "benchmark" else "debug"
+    testBuildType = if (providers.gradleProperty("capyBenchmark").map { it != "false" }.getOrElse(false)) "benchmark" else "debug"
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

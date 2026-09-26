@@ -17,8 +17,8 @@ if [[ ! -x "$ANDROID_HOME/platform-tools/adb" || ! -d "$ANDROID_NDK_HOME" ]]; th
     exit 1
 fi
 if ! adb get-state >/dev/null 2>&1; then
-    if ! "$ANDROID_HOME/emulator/emulator" -list-avds | rg -Fxq "$capy_avd"; then
-        echo "Create the tablet first: android --sdk=\"$ANDROID_HOME\" emulator create medium_tablet" >&2
+    if ! "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fxq "$capy_avd"; then
+        echo "Create an AVD named $capy_avd in Device Manager" >&2
         exit 1
     fi
     mkdir -p "$capy_repo_dir/target/android-tools"

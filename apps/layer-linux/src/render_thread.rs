@@ -974,8 +974,7 @@ impl Worker {
                 && last_canvas_frame.elapsed() >= Duration::from_millis(50);
             let next = if document_drawn && !deferred.is_empty() {
                 Ok(deferred.pop_front().unwrap())
-            } else if cfg!(test)
-                || !startup_progress.complete
+            } else if !startup_progress.complete
                 || self.renderer.effect_validation_pending()
                 || self.renderer.filter_previews_pending()
                 || self.pending_present

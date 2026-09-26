@@ -30,7 +30,7 @@ PLIST
 fi
 CAPY_SOURCES=()
 while IFS= read -r CAPY_SOURCE; do CAPY_SOURCES+=("$CAPY_SOURCE"); done < <(
-  rg --files "$CAPY_APP/Shared" "$CAPY_APP/macOS" "$CAPY_APP/tests/support" -g '*.swift' | rg -v '/Tests/|/CapyCanvasMacApp.swift$'
+  find "$CAPY_APP/Shared" "$CAPY_APP/macOS" "$CAPY_APP/tests/support" -name '*.swift' | grep -Ev '/Tests/|/CapyCanvasMacApp.swift$'
 )
 cargo build --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple --target aarch64-apple-darwin
 xcrun swiftc -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \

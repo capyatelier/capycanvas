@@ -881,9 +881,10 @@ Related readers are updated before observation signals are published, so even
 synchronous observers see a coherent revision. Camera patches update the same
 canonical state without rebuilding the command, panel or menu indexes.
 
-Interactive publication uses C request 5 (`NativeHost::take_update_bytes`). A
-full snapshot establishes `workspace_update.model_revision`; later motion must
-match that revision and cannot precede the last accepted presentation revision.
+Interactive publication uses C request 7
+(`NativeHost::take_layout_update_bytes`). A full snapshot establishes
+`workspace_update.model_revision`; later motion must match that revision and
+cannot precede the last accepted presentation revision.
 `WorkspaceMotion` stages group positions, tab previews and drop hints atomically
 with the models. `WorkspacePlacement` moves each native panel and resize handle,
 including its hit areas, tab clipping and live Navigator allocation. Controls
