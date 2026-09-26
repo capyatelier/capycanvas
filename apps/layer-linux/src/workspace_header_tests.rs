@@ -1881,7 +1881,7 @@ fn native_header_drawer_controls_input() {
     // Every content-panel family also works from an individual header item.
     let controls = Panel::ALL
         .into_iter()
-        .filter(|p| p.kind() == PanelKind::Content && p.available_on(Platform::Gtk))
+        .filter(|p| p.kind() == PanelKind::Content)
         .map(|panel| ToolbarControl::Panel { panel })
         .chain([
             ToolbarControl::Opacity,

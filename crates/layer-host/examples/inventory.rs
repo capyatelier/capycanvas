@@ -194,10 +194,7 @@ fn platform_inventory(platform: Platform) -> Value {
                 "invocation": {"dispatched":dispatched,"error":error,"requests":candidate.session.state().requests}})
         })
         .collect();
-    let panels: Vec<_> = Panel::ALL
-        .iter()
-        .map(|&id| json!({"id": id, "available": id.available_on(platform)}))
-        .collect();
+    let panels: Vec<_> = Panel::ALL.iter().map(|&id| json!({"id": id})).collect();
     let mut preferences = Vec::new();
     for page in SettingsPage::ALL {
         host.dispatch(UiAction::OpenSettings { page }).unwrap();

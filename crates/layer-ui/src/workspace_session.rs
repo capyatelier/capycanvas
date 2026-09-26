@@ -408,9 +408,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// changing the user's arrangement. Native views only forward the request.
     pub fn reveal_panel(&mut self, panel: Panel) -> Result<UiChange, String> {
         use crate::{CustomizationAction as Edit, DrawerAnchor, UiAction};
-        if !panel.available_on(self.state.platform) {
-            return Err("This panel is not available on this platform".into());
-        }
         let mut change = self.dispatch(UiAction::Customize {
             action: Edit::SetPanelVisible {
                 panel,

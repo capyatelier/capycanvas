@@ -447,16 +447,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command(CommandId::UndoWorkspace),
                     command(CommandId::RedoWorkspace),
                 ],
-                self.state.workspace.layout.panel_items(
-                    PanelKind::Content,
-                    None,
-                    self.state.platform,
-                ),
-                self.state.workspace.layout.panel_items(
-                    PanelKind::Tiles,
-                    None,
-                    self.state.platform,
-                ),
+                self.state.workspace.layout.panel_items(PanelKind::Content, None),
+                self.state.workspace.layout.panel_items(PanelKind::Tiles, None),
                 vec![
                     command(CommandId::NewToolbar),
                     command(CommandId::ManageToolbars),
@@ -2615,17 +2607,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 let layout = &mut self.state.workspace.layout;
-                if matches!(
-                    self.state.platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) && layout.collapsible_column_for_group(group).is_some()
-                {
+                if layout.collapsible_column_for_group(group).is_some() {
                     layout.set_column_collapsed(group, true, viewport)?;
                 } else {
                     layout.double_click_panel_handle(group, viewport)?;
@@ -9616,12 +9598,12 @@ mod tests {
                 menu.sections[1].len(),
                 Panel::ALL
                     .iter()
-                    .filter(|p| p.available_on(platform) && p.kind() == PanelKind::Content)
+                    .filter(|p| p.kind() == PanelKind::Content)
                     .count()
             );
             assert_eq!(
                 menu.sections[2].len(),
-                1 + usize::from(Panel::Commands.available_on(platform))
+                2
             );
             assert_eq!(
                 menu.sections[1]
@@ -11260,57 +11242,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn panel_availability_is_consistent_across_controls_and_menus() {
-        for platform in [
-            Platform::Windows,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-        ] {
-            let mut app = session();
-            app.set_platform(platform);
-            for panel in [Panel::ToolSettings, Panel::Color, Panel::Navigator] {
-                let available = match panel {
-                    Panel::ToolSettings | Panel::Color => matches!(
-                        platform,
-                        Platform::Gtk
-                            | Platform::Windows
-                            | Platform::Android
-                            | Platform::Web
-                            | Platform::Ios
-                            | Platform::Mac
-                    ),
-                    Panel::Navigator => matches!(
-                        platform,
-                        Platform::Gtk
-                            | Platform::Windows
-                            | Platform::Android
-                            | Platform::Web
-                            | Platform::Ios
-                            | Platform::Mac
-                    ),
-                    _ => unreachable!(),
-                };
-                assert_eq!(
-                    !app.panel_view(panel).unwrap().controls.is_empty(),
-                    available
-                );
-                assert_eq!(app.workspace_menu().sections.iter().flatten().any(|i| matches!(
-                        i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
-                    )), available);
-                let result = app.dispatch(UiAction::Customize {
-                    action: CustomizationAction::SetPanelVisible {
-                        panel,
-                        visible: true,
-                    },
-                });
-                assert_eq!(result.is_ok(), available);
-            }
-        }
-    }
 
     #[test]
     fn group_tab_presentation_selection_moves_and_history_are_shared() {
@@ -15985,8 +15916,6 @@ mod tests {
             assert_eq!(app.state.customization.drawer.is_some(), open);
             assert!(app.state.customization.control.is_none());
         }
-        assert!(Panel::Navigator.available_on(Platform::Android));
-        assert!(Panel::Navigator.available_on(Platform::Windows));
     }
 
     #[test]

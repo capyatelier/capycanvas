@@ -420,7 +420,7 @@ impl WorkspacePreset {
             }
         }
 
-        if self != Self::Painter && Panel::Proof.available_on(platform) {
+        if self != Self::Painter {
             if let Some(group)=layout.panel_group(Panel::Color) {
                 if let Some(DockNode::Tabs {panels,..})=layout.node_mut(group) {
                     let index=panels.iter().position(|p| *p==Panel::Color).unwrap()+1;
@@ -745,7 +745,6 @@ mod tests {
             for panel in [Panel::BrushSets, Panel::SculptSets, Panel::Tools, Panel::FilterTypes] {
                 assert!(layout.panel(panel).is_ok());
                 assert!(layout.panel_group(panel).is_none());
-                assert!(panel.available_on(platform));
             }
             assert!(crate::CommandId::DrawingBrush.available_on(platform));
             assert!(crate::CommandId::Sculpt.available_on(platform));
@@ -893,10 +892,8 @@ mod tests {
                     14,
                     if Panel::palettes_presented_on(platform) {
                         vec![Panel::Color, Panel::Palettes]
-                    } else if Panel::Proof.available_on(platform) {
-                        vec![Panel::Color, Panel::Proof, Panel::Stats]
                     } else {
-                        vec![Panel::Color, Panel::Stats]
+                        vec![Panel::Color, Panel::Proof, Panel::Stats]
                     },
                 ),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
@@ -1192,12 +1189,10 @@ mod tests {
                         !matches!(t.control, ToolbarControl::Command { command: RectangleSelect | EllipseSelect | PolygonSelect | ColorSelect }));
                     current.next_tile_id = previous.next_tile_id;
                 }
-                if Panel::Proof.available_on(platform) {
-                    assert_eq!(current.panel_group(Panel::Proof),current.panel_group(Panel::Color));
-                    let group=previous.panel_group(Panel::Color).unwrap();
-                    let DockNode::Tabs {panels,..}=previous.node_mut(group).unwrap() else {panic!()};
-                    panels.insert(1,Panel::Proof);
-                }
+                assert_eq!(current.panel_group(Panel::Proof),current.panel_group(Panel::Color));
+                let group=previous.panel_group(Panel::Color).unwrap();
+                let DockNode::Tabs {panels,..}=previous.node_mut(group).unwrap() else {panic!()};
+                panels.insert(1,Panel::Proof);
                 assert_eq!(current,previous);
             }
             assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);

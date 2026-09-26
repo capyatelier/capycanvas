@@ -138,19 +138,6 @@ impl TileStyle {
             _ => 0,
         }
     }
-    fn available_on(self, platform: Platform) -> bool {
-        !matches!(self, Self::Medium | Self::MediumLabeled)
-            || matches!(
-                platform,
-                Platform::Generic
-                    | Platform::Android
-                    | Platform::Web
-                    | Platform::Gtk
-                    | Platform::Mac
-                    | Platform::Ios
-                    | Platform::Windows
-            )
-    }
     pub(crate) fn floating_width(self) -> f32 {
         let columns = if self.label_lines() > 0 { 2.0 } else { 3.0 };
         columns * (self.size()[0] + self.gap()) - self.gap()
@@ -657,11 +644,11 @@ impl DockLayout {
                     vec![
                         ContextMenuItem::submenu(
                             "Add built-in panel",
-                            vec![self.panel_items(PanelKind::Content, Some(group), platform)],
+                            vec![self.panel_items(PanelKind::Content, Some(group))],
                         ),
                         ContextMenuItem::submenu(
                             "Add Toolbar",
-                            vec![self.panel_items(PanelKind::Tiles, Some(group), platform)],
+                            vec![self.panel_items(PanelKind::Tiles, Some(group))],
                         ),
                     ],
                     vec![entry(
@@ -705,7 +692,7 @@ impl DockLayout {
                 if panel.kind() != PanelKind::Tiles {
                     return Err("Choose a toolbar".into());
                 }
-                (p.menu_name(), self.toolbar_options_on(panel, platform)?)
+                (p.menu_name(), self.toolbar_options(panel)?)
             }
         };
         Ok(ContextMenu { title, sections })
@@ -772,16 +759,11 @@ impl DockLayout {
             },
         )
     }
-    pub fn panel_items(
-        &self,
-        kind: PanelKind,
-        group: Option<u32>,
-        platform: Platform,
-    ) -> Vec<ContextMenuItem> {
+    pub fn panel_items(&self, kind: PanelKind, group: Option<u32>) -> Vec<ContextMenuItem> {
         let mut items: Vec<_> = self
             .panels
             .iter()
-            .filter(|p| p.id.kind() == kind && p.id.available_on(platform))
+            .filter(|p| p.id.kind() == kind)
             .map(|p| {
                 let selected = if let Some(group) = group {
                     self.panel_group(p.id) == Some(group)
@@ -809,7 +791,7 @@ impl DockLayout {
             items.extend(
                 [Panel::Toolbar, Panel::Commands]
                     .into_iter()
-                    .filter(|p| p.available_on(platform) && self.panel(*p).is_err())
+                    .filter(|p| self.panel(*p).is_err())
                     .map(|panel| {
                         ContextMenuItem::edit(
                             format!("Restore {} toolbar", panel.label()),
@@ -821,13 +803,6 @@ impl DockLayout {
         items
     }
     pub fn toolbar_options(&self, panel: Panel) -> Result<Vec<Vec<ContextMenuItem>>, String> {
-        self.toolbar_options_on(panel, Platform::Generic)
-    }
-    fn toolbar_options_on(
-        &self,
-        panel: Panel,
-        platform: Platform,
-    ) -> Result<Vec<Vec<ContextMenuItem>>, String> {
         let p = self.panel(panel)?;
         if panel.kind() != PanelKind::Tiles {
             return Err("Choose a toolbar".into());
@@ -855,7 +830,6 @@ impl DockLayout {
                 TileStyle::Labeled,
             ]
             .into_iter()
-            .filter(|style| style.available_on(platform))
             .map(|style| {
                 let mut item = ContextMenuItem::edit(
                     style.label(),
@@ -1175,7 +1149,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .chain(
             Panel::ALL
                 .into_iter()
-                .filter(move |p| p.kind() == PanelKind::Content && p.available_on(platform))
+                .filter(move |p| p.kind() == PanelKind::Content)
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
         .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
@@ -1265,7 +1239,6 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
     let expanded = state.customization.expanded == Some(panel);
     let controls = PanelControl::available(panel)
         .iter()
-        .filter(|_| panel.available_on(state.platform))
         .map(|&control| PanelControlView {
             control,
             label: control.label(),
@@ -1299,10 +1272,6 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 ToolbarControl::Size { pixels } => {
                     (state.brush.diameter - pixels as f32).abs() < 0.01
                 }
-                ToolbarControl::Panel { panel } => {
-                    enabled = panel.available_on(state.platform);
-                    false
-                }
                 _ => false,
             };
             TileView {
@@ -1335,7 +1304,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
             let mut options = state
                 .workspace
                 .layout
-                .toolbar_options_on(panel, state.platform)?;
+                .toolbar_options(panel)?;
             options[0].remove(0); // The configuration column is already open.
             ContextMenu {
                 title: String::new(),
@@ -1643,17 +1612,6 @@ impl CustomizationState {
         viewport: [f32; 2],
     ) -> Result<u32, String> {
         use CustomizationAction::*;
-        if let SetPanelVisible {
-            panel,
-            visible: true,
-        }
-        | AddPanel { panel, .. }
-        | RestoreBuiltinToolbar { panel, .. }
-        | ShowAllControls { panel } = &action
-            && !panel.available_on(platform)
-        {
-            return Err("This panel is not available on this platform yet".into());
-        }
         let mut changed = regions::CUSTOMIZATION;
         let header_picker_action = self
             .picker
@@ -1775,9 +1733,6 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetTileStyle { panel, style } => {
-                if !style.available_on(platform) {
-                    return Err("This tile size is not available on this platform yet".into());
-                }
                 layout.set_tile_style(panel, style, viewport)?;
                 changed |= regions::LAYOUT;
             }
@@ -1877,18 +1832,6 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ToggleToolDrawer { .. } | ToggleHeaderDrawer { .. } => {
-                if !matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) {
-                    return Err("Tool drawers are not available on this platform yet".into());
-                }
                 let mut drawer = match action {
                     ToggleToolDrawer { anchor } => ContentDrawer::for_tile(layout, anchor)?,
                     ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
@@ -1897,15 +1840,6 @@ impl CustomizationState {
                 drawer.configure_picker(layout, platform);
                 if Panel::palettes_presented_on(platform) && drawer.columns == [vec![Panel::Color]] {
                     drawer.columns[0].push(Panel::Palettes);
-                }
-                if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {
-                    drawer.columns = vec![vec![Panel::Adjustments]];
-                }
-                // Keep the existing tool list on hosts awaiting the Tools panel.
-                if !Panel::Tools.available_on(platform) {
-                    for panel in drawer.columns.iter_mut().flatten() {
-                        if *panel == Panel::Tools { *panel = Panel::Brushes; }
-                    }
                 }
                 if self
                     .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
@@ -2213,78 +2147,22 @@ mod tests {
     }
 
     #[test]
-    fn medium_tile_choice_is_limited_to_supported_hosts() {
+    fn toolbar_context_menu_offers_every_tile_style() {
         let layout = DockLayout::default();
-        for platform in [
-            Platform::Generic,
-            Platform::Android,
-            Platform::Web,
-            Platform::Gtk,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
-            let supported = matches!(
-                platform,
-                Platform::Generic
-                    | Platform::Android
-                    | Platform::Web
-                    | Platform::Gtk
-                    | Platform::Mac
-                    | Platform::Ios
-                    | Platform::Windows
-            );
-            let context = layout
-                .context_menu_on(
-                    ContextTarget::Ribbon {
-                        panel: Panel::Toolbar,
-                    },
-                    platform,
-                )
+        let target = ContextTarget::Ribbon { panel: Panel::Toolbar };
+        let context = layout.context_menu_on(target, Platform::Gtk).unwrap();
+        let options = layout.toolbar_options(Panel::Toolbar).unwrap();
+        assert_eq!(serde_json::to_value(context.sections).unwrap(), serde_json::to_value(&options).unwrap());
+        for style in [TileStyle::Medium, TileStyle::MediumLabeled] {
+            assert!(options.iter().flatten().any(|item| item.label == style.label()));
+            let mut changed = layout.clone();
+            CustomizationState::default()
+                .edit(&mut changed, CustomizationAction::SetTileStyle { panel: Panel::Toolbar, style }, Platform::Gtk, VIEWPORT)
                 .unwrap();
-            let options = layout.toolbar_options_on(Panel::Toolbar, platform).unwrap();
-            assert_eq!(
-                serde_json::to_value(context.sections).unwrap(),
-                serde_json::to_value(&options).unwrap()
-            );
-            for style in [TileStyle::Medium, TileStyle::MediumLabeled] {
-                assert_eq!(
-                    options
-                        .iter()
-                        .flatten()
-                        .any(|item| item.label == style.label()),
-                    supported
-                );
-                let mut state = CustomizationState::default();
-                let mut changed = layout.clone();
-                assert_eq!(
-                    state
-                        .edit(
-                            &mut changed,
-                            CustomizationAction::SetTileStyle {
-                                panel: Panel::Toolbar,
-                                style
-                            },
-                            platform,
-                            VIEWPORT
-                        )
-                        .is_ok(),
-                    supported
-                );
-                assert_eq!(
-                    changed.panel(Panel::Toolbar).unwrap().tile_style,
-                    if supported { style } else { TileStyle::Small }
-                );
-            }
+            assert_eq!(changed.panel(Panel::Toolbar).unwrap().tile_style, style);
         }
         assert_eq!(TileStyle::Medium.icon_size(), 24);
-        assert_eq!(TileStyle::MediumLabeled.icon_size(), 16);
         assert_eq!(TileStyle::MediumLabeled.label_lines(), 2);
-        assert_eq!(TileStyle::Labeled.label_lines(), 3);
-        assert_eq!(
-            serde_json::from_str::<TileStyle>("\"labeled\"").unwrap(),
-            TileStyle::Labeled
-        );
     }
 
     #[test]
@@ -2781,7 +2659,6 @@ mod tests {
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
-                + Panel::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
         );
         assert!(native.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(web.iter().any(|c| c.control == ToolbarControl::ColorPicker));

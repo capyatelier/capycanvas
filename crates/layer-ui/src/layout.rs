@@ -729,41 +729,6 @@ impl Panel {
         )
     }
 
-    /// Keep saved panel identities while hosts add their native projections.
-    pub fn available_on(self, platform: crate::Platform) -> bool {
-        if self == Self::Palettes {
-            return Self::palettes_presented_on(platform) || platform == crate::Platform::Generic;
-        }
-        if matches!(self, Self::FilterTypes | Self::BrushSets | Self::SculptSets | Self::Tools) {
-            return true;
-        }
-        if self == Self::Proof { return crate::color_management::enabled(platform) || platform == crate::Platform::Generic; }
-        if matches!(
-            self,
-            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
-        ) && platform == crate::Platform::Windows
-        {
-            return true;
-        }
-        if matches!(
-            self,
-            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
-        ) && matches!(platform, crate::Platform::Android | crate::Platform::Web)
-        {
-            return true;
-        }
-        if matches!(
-            self,
-            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
-        ) && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
-        {
-            return true;
-        }
-        !matches!(
-            self,
-            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
-        ) || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
-    }
     pub fn kind(self) -> PanelKind {
         if matches!(
             self,
@@ -4793,7 +4758,6 @@ mod tests {
             let mut expected = DockLayout::editor_default();
             expected.header = crate::HeaderLayout::for_platform(platform);
             assert_eq!(DockLayout::for_platform(platform), expected);
-            assert!(Panel::Commands.available_on(platform));
         }
         use crate::CommandId::*;
         let layout = DockLayout::editor_default();

@@ -927,7 +927,6 @@ pub fn tool_state(state: &UiState, control: ToolbarControl) -> (bool, bool) {
         ToolbarControl::Size { pixels } => {
             (true, (state.brush.diameter - pixels as f32).abs() < 0.01)
         }
-        ToolbarControl::Panel { panel } => (panel.available_on(state.platform), false),
         _ => (true, false),
     }
 }

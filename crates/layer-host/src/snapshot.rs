@@ -289,14 +289,12 @@ impl NativeHost {
         if state.platform.color_picker() { map.serialize_entry("color_preview", &self.color_preview())?; }
         let colors = state.display_colors();
         map.serialize_entry("color_panel", &self.color_view(colors))?;
-        if layer_ui::Panel::Palettes.available_on(state.platform) {
-            map.serialize_entry(
-                "palette_panel",
-                &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
-                    self.swatch_preview(colors, color)
-                }),
-            )?;
-        }
+        map.serialize_entry(
+            "palette_panel",
+            &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
+                self.swatch_preview(colors, color)
+            }),
+        )?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
