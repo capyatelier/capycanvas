@@ -56,12 +56,10 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   `ToolbarControl::components_available` and the platform lists in
   `layout_presets.rs`). Add `Platform::Mac | Platform::Ios` only together with
   the Swift presentation, and extend the shared tests that loop over platforms.
-- **Included workspace migration.** Enabling a gate can change the Apple Sketch,
+- **Included workspace defaults.** Enabling a gate can change the Apple Sketch,
   Paint or Photo defaults. Before changing shared code, serialize
   `WorkspacePreset::layout(platform)` for every preset and platform, then make
-  sure each previously shipped Apple default remains an accepted baseline in
-  `layer-workspace/src/manager_migration.rs` and that other platforms' defaults
-  are unchanged.
+  sure other platforms' defaults are unchanged.
 - **Coverage audit.** Keep `apps/layer-apple/command-coverage.json` in sync and
   run `cargo run --locked -p layer-host --example inventory -- --gpu` followed by
   `apps/layer-apple/scripts/audit-commands.py`.

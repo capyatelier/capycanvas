@@ -84,10 +84,8 @@ retain the application drag and reorder convention.
   mode rows, Selection Actions and the compact Tonal range form) with mouse,
   touch and pen. In Photo it checks presented outlines after a rectangle and an
   Alt-latched Subtract, one-step Undo/Redo, Grow, the Tool Options range,
-  Quick Mask rows and colors, and a renamed Selection Layer with Load. Windows
-  migrates untouched Sketch/Photo defaults shipped before the rollout through
-  `WorkspacePreset::legacy_windows_without_selection_layouts`. Ctrl-click a
-  thumbnail to load it (Shift adds, Alt subtracts).
+  Quick Mask rows and colors, and a renamed Selection Layer with Load.
+  Ctrl-click a thumbnail to load it (Shift adds, Alt subtracts).
 - `native_selection_options_input` exercises mode controls on every tool,
   feather-radius entry, selection combinations, and single-step undo/redo.
 - `native_selection_tools_input` exercises GTK mouse/touch tool selection,

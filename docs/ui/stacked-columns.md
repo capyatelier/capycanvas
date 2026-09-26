@@ -72,10 +72,8 @@ in the middle, and Layers at the bottom. Its collapsed strip immediately to the
 left contains Tool Set, Tool / Brush size, then Navigator, with Auto-hide and
 Open individual panels disabled. The strip starts closed on load, preview and
 reset. Paint retains its original expanded left panels and initially open
-right stack. Untouched older Photo defaults migrate to the new arrangement;
-untouched Paint defaults using it return to Paint's original arrangement.
-Customized workspaces retain their layouts until Restore Starting Layout is
-chosen. Other saved stacks start closed.
+right stack. Saved workspaces retain their layouts until Restore Starting
+Layout is chosen. Other saved stacks start closed.
 
 Apple uses the ordinary SwiftUI dock groups, dividers and existing drawer
 connector shape for full-column opening. Column grips expose the shared stack

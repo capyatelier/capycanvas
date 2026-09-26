@@ -27,8 +27,7 @@ stretch/resize dividers.
 
 Sketch's default places size and opacity in the centered left region on every host.
 Dragging the handle to the centered right target moves the same toolbar there.
-Only untouched included defaults migrate from the previous bottom toolbar;
-custom layouts, edited histories, working tool state, and unsupported hosts are kept.
+Saved layouts keep their toolbar placement until Restore Starting Layout.
 
 `DockBand.alignment` is optional in saved layouts. A compact region contains
 standalone toolbar nodes joined along the edge axis. They use the normal dock

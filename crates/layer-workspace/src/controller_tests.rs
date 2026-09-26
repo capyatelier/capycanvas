@@ -410,11 +410,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
         let baseline = if let Some((id, preset)) = builtin {
             // Persist an older baseline with user edits, so ordinary adoption must
             // preserve it and only explicit Restore selects the current default.
-            let mut old = match preset {
-                layer_ui::WorkspacePreset::Painter => layer_ui::WorkspacePreset::legacy_painter_layout(Platform::Web),
-                layer_ui::WorkspacePreset::Illustrator => layer_ui::WorkspacePreset::legacy_illustrator_layout(Platform::Web),
-                layer_ui::WorkspacePreset::Photographer => layer_ui::WorkspacePreset::legacy_photographer_layout(Platform::Web),
-            };
+            let mut old = layer_ui::DockLayout::for_platform(Platform::Web);
             old.header.size = layer_ui::HeaderSize::Large;
             let mut edited = old.clone();
             edited.header.size = layer_ui::HeaderSize::Small;

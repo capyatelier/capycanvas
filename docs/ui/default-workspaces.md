@@ -71,13 +71,11 @@ including disconnected matching regions. Expansion and edge smoothing apply to
 all matching regions; gap closing remains specific to the contiguous tool.
 
 Photo on these hosts adds the four new tools to the existing selection group in the Tools
-toolbar. Untouched included Sketch/Photo layouts upgrade automatically;
-customized workspaces retain their layout and can use Restore Starting Layout.
+toolbar. Saved workspaces retain their layout and can use Restore Starting Layout.
 Other platforms retain their existing selection defaults. The SVGs use the shared
 icon bank. See [selection behavior and checks](../development/selection-tools.md).
 
-Untouched included GTK, Android and Web Sketch workspaces receive the new default automatically.
-Customized layouts keep their arrangement; Restore Starting Layout adopts the
+Saved layouts keep their arrangement; Restore Starting Layout adopts the
 new default. Saved brush choices, settings, and color are preserved.
 
 Drawer regression coverage lives in GTK's `native_brush_drawer_input`, Android's
