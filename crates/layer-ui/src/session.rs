@@ -5364,6 +5364,17 @@ mod tests {
             );
             assert_eq!(app.state.workspace.layout.bottom_inset, 36.);
         }
+        let insets = [72., 140., 38.];
+        let change = app.dispatch(UiAction::MeasureTitlebar { insets }).unwrap();
+        assert_ne!(change.regions & regions::LAYOUT, 0);
+        assert_eq!(app.dispatch(UiAction::MeasureTitlebar { insets }).unwrap().regions, 0);
+        assert_eq!(app.capture_workspace().unwrap(), initial);
+        for (index, value) in [-1., f32::NAN, 1_000_000.].into_iter().enumerate() {
+            let mut invalid = insets;
+            invalid[index] = value;
+            assert!(app.dispatch(UiAction::MeasureTitlebar { insets: invalid }).is_err());
+            assert_eq!(app.state.workspace.layout.titlebar_insets, insets);
+        }
         app.dispatch(UiAction::MovePanel {
             panel: Panel::Layers,
             target: DockTarget::Float {
@@ -5378,6 +5389,7 @@ mod tests {
         let saved = app.capture_workspace().unwrap();
         for revision in saved.history.revisions.values() {
             assert_eq!(revision.layout.bottom_inset, 0.);
+            assert_eq!(revision.layout.titlebar_insets, [0.; 3]);
         }
         app.begin_workspace_transition().unwrap();
         app.begin_workspace_layout_preview().unwrap();
@@ -5390,19 +5402,23 @@ mod tests {
         app.cancel_workspace_layout_preview();
         app.end_workspace_transition();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        assert_eq!(app.state.workspace.layout.titlebar_insets, insets);
         app.adopt_workspace(PreparedWorkspace::new(saved).unwrap())
             .unwrap();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        assert_eq!(app.state.workspace.layout.titlebar_insets, insets);
         app.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(WorkspaceState::default()),
         })
         .unwrap();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        assert_eq!(app.state.workspace.layout.titlebar_insets, insets);
         let encoded = serde_json::to_value(&app.state.workspace).unwrap();
         assert!(encoded["layout"].get("bottom_inset").is_none());
         assert_eq!(app.durable_workspace().layout.bottom_inset, 0.);
         app.dispatch(UiAction::MeasureWorkspaceBottom { inset: 0. })
             .unwrap();
+        app.dispatch(UiAction::MeasureTitlebar { insets: [0.; 3] }).unwrap();
         assert_eq!(
             serde_json::to_value(app.layout(viewport)).unwrap(),
             serde_json::to_value(original).unwrap()
@@ -6015,8 +6031,13 @@ mod tests {
             uri: "file:///drawing.capy".into(),
             name: "drawing.capy".into(),
         };
+        assert!(s.retarget_project_save(id, location.clone()).is_err());
+        let first = DocumentLocation {
+            uri: "file:///first.capy".into(),
+            name: "first.capy".into(),
+        };
         let project = s
-            .capture_project_save(id, location.clone())
+            .capture_project_save(id, first)
             .unwrap()
             .pruned()
             .unwrap();
@@ -6025,6 +6046,10 @@ mod tests {
             &pixels
         ));
         assert!(s.capture_project_save(id, location.clone()).is_err());
+        let invalid = DocumentLocation { uri: String::new(), ..location.clone() };
+        assert!(s.retarget_project_save(id, invalid).is_err());
+        assert!(s.retarget_project_save(id + 1, location.clone()).is_err());
+        s.retarget_project_save(id, location.clone()).unwrap();
         // The writer holds its snapshot while drawing/editing continues.
         invoke(&mut s, CommandId::AddLayer);
         s.complete_document_request(id, Ok(true)).unwrap();
@@ -6055,6 +6080,23 @@ mod tests {
             .write(&mut reopened_stream)
             .unwrap();
         assert_eq!(reopened_stream, stream);
+    }
+
+    #[test]
+    fn prepared_drawings_take_their_location_or_recovery_protection() {
+        let project = crate::new_drawing(64, 48).unwrap();
+        let mut s = UiSession::from_project(Recorder::default(), project, None, [800, 600], Platform::Gtk).unwrap();
+        let location = |uri: &str, name: &str| DocumentLocation { uri: uri.into(), name: name.into() };
+        for (uri, name) in [("", "a.capy"), ("file:///a.capy", ""), ("file:///a\0.capy", "a.capy"), ("file:///a.capy", "a\n")] {
+            assert!(s.initialize_document_location(Some(location(uri, name))).is_err());
+        }
+        s.initialize_document_location(Some(location("file:///a.capy", "a.capy"))).unwrap();
+        assert_eq!(s.state.document_file.title(), "a.capy");
+        assert!(!s.state.document_file.modified);
+        s.mark_recovered();
+        assert!(s.state.document_file.location.is_none() && s.state.document_file.modified);
+        invoke(&mut s, CommandId::AddLayer);
+        assert!(s.initialize_document_location(None).is_err());
     }
 
     #[test]
@@ -6689,6 +6731,8 @@ mod tests {
         invoke(&mut s, CommandId::Ruler);
         assert_eq!(s.state.tool_set.groups.len(), 3);
         assert_eq!(s.state.tool_actions.len(), 3);
+        assert!(s.command(CommandId::ShowRulers).checkable);
+        assert!(s.command(CommandId::SnapRulers).checkable);
         let composites = s.renderer_mut().composites;
         let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
             let m = s.state.camera.document_to_surface();
@@ -13059,6 +13103,35 @@ mod tests {
             .is_err()
         );
         assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), valid);
+    }
+
+    #[test]
+    fn choice_and_toggle_effect_properties_set_reset_and_undo() {
+        use layer_core::EffectValue;
+        let mut s = session(Platform::Gtk);
+        for (effect, key, value) in [
+            (None, "blend", EffectValue::Choice(2)),
+            (Some("black_white"), "tint", EffectValue::Toggle(true)),
+        ] {
+            if let Some(effect) = effect {
+                s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } }).unwrap();
+            }
+            let layer = s.state.layer_properties.layer.unwrap();
+            let control = |s: &UiSession<Recorder>| {
+                s.state.layer_properties.controls.iter().find(|c| c.key == key).unwrap().clone()
+            };
+            let (before, default) = (control(&s).value, control(&s).default);
+            assert_ne!(before, value);
+            s.dispatch(UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value: value.clone() } })
+                .unwrap();
+            assert_eq!(control(&s).value, value);
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(control(&s).value, before);
+            invoke(&mut s, CommandId::Redo);
+            assert_eq!(control(&s).value, value);
+            s.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: key.into() } }).unwrap();
+            assert_eq!(control(&s).value, default);
+        }
     }
 
     #[test]

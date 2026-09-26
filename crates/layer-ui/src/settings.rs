@@ -1894,7 +1894,7 @@ mod copy_tests {
 
     #[test]
     fn reset_metadata_and_empty_commits_share_schema_defaults() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in Platform::ALL {
             let mut settings = Settings::default();
             for row in settings
                 .pages(platform)
@@ -1903,10 +1903,28 @@ mod copy_tests {
                 .flat_map(|g| g.rows)
             {
                 assert_eq!(row.reset.is_some(), row.kind.value().is_some());
-                if let Some(reset) = row.reset {
-                    assert!(!reset.enabled);
-                    assert!(!reset.value.is_empty());
+                let Some(reset) = row.reset else { continue };
+                assert!(!reset.enabled);
+                assert!(!reset.value.is_empty());
+                if !row.visible || !row.enabled {
+                    continue;
                 }
+                let value = match &row.kind {
+                    PreferenceKind::Switch { active } => PreferenceValue::Bool(!active),
+                    PreferenceKind::Choice { options, selected, .. } => {
+                        PreferenceValue::Choice((selected + 1) % options.len() as u32)
+                    }
+                    PreferenceKind::Number { control, .. } => PreferenceValue::Number(control.max as f32),
+                    PreferenceKind::Swatches { .. } => PreferenceValue::Text("#123456".into()),
+                    PreferenceKind::Info { .. } | PreferenceKind::Link { .. } => unreachable!(),
+                };
+                settings.edit(row.id, value, platform).unwrap();
+                let edited = settings.field(row.id, platform).unwrap().reset.unwrap();
+                assert!(edited.enabled, "{platform:?} {:?}", row.id);
+                let mut state = PreferencesState::default();
+                state.edit(&mut settings, PreferenceAction::Reset { id: row.id }, platform);
+                assert!(state.error.is_none());
+                assert_eq!(settings, Settings::default(), "{platform:?} {:?}", row.id);
             }
             for (id, value) in [
                 (
