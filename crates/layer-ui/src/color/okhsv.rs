@@ -20,10 +20,6 @@ pub(super) use layer_core::color::oklab::{from_lab, to_lab};
 /// CSS OKLCH units: lightness percent, unscaled chroma, hue degrees.
 /// Neutrals retain the picker's hue instead of exposing matrix roundoff.
 /// https://www.w3.org/TR/css-color-4/#oklch
-#[cfg(test)]
-pub(super) fn to_oklch(rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
-    to_oklch_in(RgbSpace::Srgb, rgb, previous_hue)
-}
 pub(super) fn to_oklch_in(space: RgbSpace, rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
     let [l, a, b] = Gamut::get(space).lab(rgb.map(|v| space.decode(v as f64)));
     let chroma = a.hypot(b);
@@ -51,10 +47,6 @@ pub(super) struct Hue {
     t_max: f64,
 }
 impl Hue {
-    #[cfg(test)]
-    pub(super) fn new(degrees: f32) -> Self {
-        Self::new_in(RgbSpace::Srgb, degrees)
-    }
     pub(super) fn new_in(space: RgbSpace, degrees: f32) -> Self {
         let angle = (degrees as f64).to_radians();
         Self::from_direction(Gamut::get(space), angle.cos(), angle.sin())
@@ -116,10 +108,6 @@ pub(super) struct RasterHue {
     display: RgbSpace,
 }
 impl RasterHue {
-    #[cfg(test)]
-    pub(super) fn new(degrees: f32) -> Self {
-        Self::new_in(degrees, RgbSpace::Srgb, RgbSpace::Srgb)
-    }
     pub(super) fn new_in(degrees: f32, space: RgbSpace, display: RgbSpace) -> Self {
         let hue = Hue::new_in(space, degrees);
         static TRANSFERS: std::sync::LazyLock<[[f32; 4097]; 4]> = std::sync::LazyLock::new(|| {
@@ -166,16 +154,8 @@ impl RasterHue {
         [encode(rgb[0]), encode(rgb[1]), encode(rgb[2])]
     }
 }
-#[cfg(test)]
-pub(super) fn to_rgb(value: [f32; 3]) -> [f32; 3] {
-    to_rgb_in(RgbSpace::Srgb, value)
-}
 pub(super) fn to_rgb_in(space: RgbSpace, [h, s, v]: [f32; 3]) -> [f32; 3] {
     Hue::new_in(space, h).rgb(s / 100., v / 100.)
-}
-#[cfg(test)]
-pub(super) fn from_rgb(rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
-    from_rgb_in(RgbSpace::Srgb, rgb, previous_hue)
 }
 pub(super) fn from_rgb_in(space: RgbSpace, rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
     let gamut = Gamut::get(space);
@@ -281,7 +261,7 @@ mod tests {
         let reference: Reference =
             serde_json::from_str(include_str!("okhsv-reference.json")).unwrap();
         for case in reference.cases {
-            let actual = to_rgb(case.okhsv);
+            let actual = to_rgb_in(RgbSpace::Srgb, case.okhsv);
             // Independently evaluated author JavaScript, with the documented
             // Halley refinement repeated three times (see fixture provenance).
             for (a, b) in actual.into_iter().zip(case.rgb) {
@@ -291,27 +271,6 @@ mod tests {
                     case.okhsv,
                     case.rgb
                 );
-            }
-        }
-    }
-
-    #[test]
-    fn srgb_grid_roundtrips_including_neutrals_and_gamut_edges() {
-        for r in 0..=20 {
-            for g in 0..=20 {
-                for b in 0..=20 {
-                    let rgb = [r, g, b].map(|v| v as f32 / 20.);
-                    let hsv = from_rgb(rgb, 137.);
-                    assert!(hsv.iter().enumerate().all(|(i, v)| v.is_finite()
-                        && (0.0..=if i == 0 { 360. } else { 100. }).contains(v)));
-                    let actual = to_rgb(hsv);
-                    for (a, b) in actual.into_iter().zip(rgb) {
-                        assert!((a - b).abs() < 0.00002, "{rgb:?} -> {hsv:?} -> {actual:?}");
-                    }
-                    if r == g && g == b {
-                        assert_eq!([hsv[0], hsv[1]], [137., 0.]);
-                    }
-                }
             }
         }
     }
@@ -349,6 +308,9 @@ mod tests {
                                     && (a - b).abs() < 0.25 / 255.),
                             "{space:?} {rgb:?} -> {hsv:?} -> {actual:?}"
                         );
+                        if r == g && g == b {
+                            assert_eq!([hsv[0], hsv[1]], [137., 0.]);
+                        }
                     }
                 }
             }
@@ -363,7 +325,11 @@ mod tests {
     fn builtin_rasters_convert_to_display_after_field_evaluation() {
         for space in RgbSpace::ALL {
             for display in RgbSpace::ALL {
-                for h in (0..360).step_by(3).map(|h| h as f32 + 0.03) {
+                for h in (0..360)
+                    .step_by(3)
+                    .map(|h| h as f32 + 0.03)
+                    .chain([264.05, 264.052, 264.053])
+                {
                     let hue = Hue::new_in(space, h);
                     let raster = RasterHue::new_in(h, space, display);
                     for s in 0..=41 {
@@ -390,35 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn interpolated_raster_matches_exact_colors_within_one_byte() {
-        for h in (0..360)
-            .map(|h| h as f32 + 0.03)
-            .chain([264.05, 264.052, 264.053])
-        {
-            let hue = Hue::new(h);
-            let raster = RasterHue::new(h);
-            for s in 0..=101 {
-                // Off-table saturation samples, including both endpoints;
-                // values cover the sensitive near-black transfer region.
-                for v in [
-                    0., 0.00001, 0.001, 0.01, 0.03, 0.1, 0.25, 0.5, 0.75, 0.9, 1.,
-                ] {
-                    let exact = hue
-                        .rgb(s as f32 / 101., v)
-                        .map(|c| (c * 255.).round() as u8);
-                    let pixel = raster.rgb8(s as f32 / 101., v);
-                    assert!(
-                        exact
-                            .into_iter()
-                            .zip(pixel)
-                            .all(|(a, b)| a.abs_diff(b) <= 1),
-                        "h={h} s={s}/101 v={v}: {exact:?} != {pixel:?}"
-                    );
-                }
-            }
-        }
-    }
-    #[test]
     fn hue_preview_stays_in_gamut_and_continuous_at_every_hue() {
         let mut before = hue_preview(0.);
         for i in 1..=360000 {
@@ -439,7 +376,7 @@ mod tests {
                     .all(|(a, b)| (a - b).abs() < 0.01 / 255.),
                 "hue {hue}: {before:?} -> {color:?}"
             );
-            let actual_hue = to_oklch(color, 0.)[2];
+            let actual_hue = to_oklch_in(RgbSpace::Srgb, color, 0.)[2];
             let difference = (actual_hue - hue + 180.).rem_euclid(360.) - 180.;
             assert!(difference.abs() < 0.001, "hue {hue}: {actual_hue}");
             before = color;
@@ -499,12 +436,12 @@ mod tests {
     #[test]
     fn black_white_and_near_black_are_finite_at_every_hue() {
         for h in 0..360 {
-            assert_eq!(to_rgb([h as f32, 0., 100.]), [1.; 3]);
+            assert_eq!(to_rgb_in(RgbSpace::Srgb, [h as f32, 0., 100.]), [1.; 3]);
             for s in [0., 1., 50., 100.] {
-                assert_eq!(to_rgb([h as f32, s, 0.]), [0.; 3]);
+                assert_eq!(to_rgb_in(RgbSpace::Srgb, [h as f32, s, 0.]), [0.; 3]);
                 for v in [0.000001, 0.01, 50., 100.] {
                     assert!(
-                        to_rgb([h as f32, s, v])
+                        to_rgb_in(RgbSpace::Srgb, [h as f32, s, v])
                             .into_iter()
                             .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
                     );

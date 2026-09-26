@@ -715,7 +715,7 @@ mod wheel {
                 snapshot.translate(&gtk::graphene::Point::new(x, y));
                 let bounds = gtk::graphene::Rect::new(0., 0., size, size);
                 let state = self.color.borrow();
-                let shape = state.wheel_shape();
+                let shape = state.shape;
                 // GSK caches masks by path identity, not just equal geometry.
                 // Rebuilding these paths on hover re-rasterizes full-size masks.
                 let mut paths = self.paths.borrow_mut();
@@ -1162,7 +1162,7 @@ impl ColorPanel {
                 let (size, [ox, oy]) = wheel.drawing_bounds();
                 let point = [x as f32 - ox, y as f32 - oy];
                 let hit = ColorWheelGeometry::new(size)
-                    .and_then(|g| g.hit_shape(point, wheel.imp().color.borrow().wheel_shape()));
+                    .and_then(|g| g.hit_shape(point, wheel.imp().color.borrow().shape));
                 part.set(hit);
                 if let Some(part) = hit {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -1221,7 +1221,6 @@ impl ColorPanel {
         if self.wheel.imp().hdr.replace(hdr) != hdr { self.wheel.queue_resize(); }
         if !hdr { self.wheel.imp().linear_field.borrow_mut().take(); }
         self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
-        let ev = state.definition().brightness_ev(state.rgb_space()).ok().flatten();
         self.intensity.set_sensitive(state.slot != ColorSlot::Transparent);
         if hdr { self.intensity.refresh_color(state, view, headroom, preview); }
         let previous_headroom = self.wheel.imp().headroom.replace(headroom);
@@ -1241,13 +1240,8 @@ impl ColorPanel {
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let gamut = if hdr {
-            let mut text = state.rgb_space().name().to_string();
-            if !state.definition().in_hdr_gamut(state.rgb_space()).unwrap() { text.push_str(" · Outside document gamut"); }
-            if !state.definition().in_hdr_gamut(view.space()).unwrap() { text.push_str(" · Outside display gamut"); }
-            if ev.is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
-            text
-        } else { state.gamut_description_in(view.space()) };
+        let gamut = layer_ui::color_validation(state.definition(), state.rgb_space(), view.space(), hdr)
+            .unwrap_or_default();
         let description = format!("{}. {}", gamut, state.readout_description());
         self.readout.set_tooltip_text(Some(&description));
         self.readout

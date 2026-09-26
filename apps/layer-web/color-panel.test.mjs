@@ -99,7 +99,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
         if(this.canvas===canvas){if(text===${JSON.stringify(model)})glyphs=[];else{const m=this.getTransform();glyphs.push({cell:/^[0-9 ]$/.test(text)?'#':text,font:this.font,transform:[m.a,m.b,m.c,m.d,m.e,m.f]});}}
         return original.call(this,text,...args);
       };
-      try{for(const value of [9,10,100]){for(const index of [0,1,2])layerApp.dispatch({type:'color',action:{op:'component',index,value}});frames.push(glyphs);}}
+      try{for(const value of [9,10,100]){layerApp.dispatch({type:'color',action:{op:'definition',color:{space:'Srgb',rgba:[value/100,value/100,value/100,1]}}});frames.push(glyphs);}}
       finally{prototype.fillText=original;}return frames;
     })()`);
     assert.equal(placements[0].length,model==='OKLCH'?13:12);

@@ -101,30 +101,11 @@ pub enum ColorAction {
         slot: ColorSlot,
     },
     Swap,
-    ToggleSpace,
-    ToggleShape,
     Shape {
         shape: ColorShape,
     },
     ToggleReadout,
-    /// Projection-aware picking. The older Pick action retains its square / triangle contract.
     PickWheel {
-        part: ColorWheelPart,
-        point: [f32; 2],
-        size: f32,
-    },
-    Space {
-        space: ColorSpace,
-    },
-    Component {
-        index: usize,
-        value: f32,
-    },
-    RgbaComponent {
-        index: usize,
-        value: f32,
-    },
-    Pick {
         part: ColorWheelPart,
         point: [f32; 2],
         size: f32,
@@ -142,7 +123,6 @@ pub struct ColorState {
     /// Coordinate system of the picker, independent of each paint definition.
     rgb_space: RgbSpace,
     pub slot: ColorSlot,
-    pub space: ColorSpace,
     #[serde(default)]
     pub shape: ColorShape,
     #[serde(default)]
@@ -181,14 +161,11 @@ pub struct ColorPanelView {
     pub rendition: Option<layer_core::color::hdr::SdrRendition>,
     pub rgb_space: RgbSpace,
     pub definition: RgbColor,
-    pub outside_document_gamut: bool,
-    pub outside_display_gamut: bool,
     pub space: ColorSpace,
     pub shape: ColorShape,
     pub other_shapes: [ColorShape; 2],
     pub readout: ColorReadout,
     pub readout_label: &'static str,
-    pub readout_text: [String; 3],
     /// Leading spaces reserve fixed digit cells; hosts use tabular advances.
     pub readout_layout_text: [String; 3],
     pub readout_description: String,
@@ -198,11 +175,6 @@ pub struct ColorPanelView {
     pub wheel_hue_marker: [f32; 2],
     pub wheel_hue_start_degrees: f32,
     pub geometry: ColorWheelGeometry,
-    pub hue_color: [f32; 3],
-    pub hue_stops: [[f32; 3]; 7],
-    pub hue_start_degrees: f32,
-    pub hue_marker: [f32; 2],
-    pub field_marker: [f32; 2],
     /// Opaque marker preview of the remembered paint, including transparent mode.
     pub marker_color: [f32; 3],
     pub components: [ColorComponentView; 3],
@@ -247,7 +219,6 @@ impl Default for ColorState {
             temporary: RgbColor::BLACK,
             rgb_space: RgbSpace::Srgb,
             slot: ColorSlot::Foreground,
-            space: ColorSpace::Hsv,
             shape: ColorShape::Circle,
             readout: ColorReadout::Shape,
             paint_slot: ColorSlot::Foreground,
@@ -314,7 +285,7 @@ impl ColorState {
     pub fn view_in(&self, display: RgbSpace) -> ColorPanelView {
         let geometry = ColorWheelGeometry::new(1.).unwrap();
         let components = self.components();
-        let names = match self.space {
+        let names = match self.space() {
             ColorSpace::Hsv => ["Hue", "Saturation", "Value"],
             ColorSpace::Hls => ["Hue", "Lightness", "Saturation"],
         };
@@ -327,14 +298,11 @@ impl ColorState {
             rendition: None,
             rgb_space: self.rgb_space,
             definition: self.definition(),
-            outside_document_gamut: !self.definition().in_gamut(self.rgb_space).unwrap(),
-            outside_display_gamut: !self.definition().in_gamut(display).unwrap(),
-            space: self.space,
-            shape: self.wheel_shape(),
+            space: self.space(),
+            shape: self.shape,
             other_shapes: self.other_shapes(),
             readout: self.readout,
             readout_label: self.readout_label(),
-            readout_text: self.readout_text(),
             readout_layout_text: self.readout_layout_text(),
             readout_description: self.readout_description(),
             wheel_marker: self.wheel_marker(&geometry),
@@ -343,11 +311,6 @@ impl ColorState {
             wheel_hue_marker: self.wheel_hue_marker(&geometry, self.wheel_components()[0]),
             wheel_hue_start_degrees: self.wheel_hue_start_degrees(),
             geometry,
-            hue_color: display_rgb(self.rgb_space, display, hue_color(components[0])),
-            hue_stops: std::array::from_fn(|i| display_rgb(self.rgb_space, display, hue_color(i as f32 * 60.))),
-            hue_start_degrees: ColorWheelGeometry::HUE_START_DEGREES,
-            hue_marker: geometry.hue_marker(components[0]),
-            field_marker: self.marker(&geometry),
             marker_color: self.preview_in(self.definition(), display)[..3].try_into().unwrap(),
             components: std::array::from_fn(|i| ColorComponentView {
                 label: self.labels()[i],
@@ -415,27 +378,21 @@ impl ColorState {
             .expect("validated paint color")
             .map(|v| v.clamp(0., 1.))
     }
-    pub fn gamut_description(&self) -> String {
-        self.gamut_description_in(RgbSpace::Srgb)
-    }
-    pub fn gamut_description_in(&self, display: RgbSpace) -> String {
-        let mut text = format!("Document RGB: {}", self.rgb_space.name());
-        if !self.definition().in_gamut(self.rgb_space).unwrap() {
-            text.push_str(" · Outside document gamut");
-        }
-        if !self.definition().in_gamut(display).unwrap() {
-            text.push_str(&format!(" · Outside {} preview gamut", display.name()));
-        }
-        text
-    }
     pub fn transparent(&self) -> bool {
         self.slot == ColorSlot::Transparent
     }
     fn index(&self) -> usize {
         match self.paint_slot { ColorSlot::Background => 1, ColorSlot::Temporary => 2, _ => 0 }
     }
+    pub fn space(&self) -> ColorSpace {
+        if self.shape == ColorShape::Triangle {
+            ColorSpace::Hls
+        } else {
+            ColorSpace::Hsv
+        }
+    }
     pub fn components(&self) -> [f32; 3] {
-        self.components_in(self.space)
+        self.components_in(self.space())
     }
     fn components_in(&self, space: ColorSpace) -> [f32; 3] {
         if let Some(c) = self.coordinates[self.index()]
@@ -449,9 +406,9 @@ impl ColorState {
         }
         components(self.picker_rgba(), space, self.hues[self.index()])
     }
-    /// Circle controls use Okhsv; the legacy numeric / Pick API stays HSV/HLS.
+    /// Circle controls use Okhsv; the square and triangle use HSV and HLS.
     pub fn wheel_components(&self) -> [f32; 3] {
-        if self.wheel_shape() == ColorShape::Circle {
+        if self.shape == ColorShape::Circle {
             self.okhsv_components()
         } else {
             self.components()
@@ -474,11 +431,8 @@ impl ColorState {
             fallback,
         )
     }
-    pub fn wheel_hue_color(&self, hue: f32) -> [f32; 3] {
-        self.wheel_hue_color_in(hue, RgbSpace::Srgb)
-    }
     pub fn wheel_hue_color_in(&self, hue: f32, display: RgbSpace) -> [f32; 3] {
-        if self.wheel_shape() == ColorShape::Circle {
+        if self.shape == ColorShape::Circle {
             // The perceptual reference guide remains sRGB-defined. Its display
             // transform is separate from the full document-gamut field.
             display_rgb(RgbSpace::Srgb, display, okhsv::hue_preview(hue))
@@ -492,13 +446,13 @@ impl ColorState {
         self.render_field_in(side, RgbSpace::Srgb, rgba)
     }
     pub fn render_field_in(&self, side: u32, display: RgbSpace, rgba: &mut [u8]) -> bool {
-        render_color_field(side, self.wheel_shape(), self.wheel_components()[0], self.rgb_space, display, rgba)
+        render_color_field(side, self.shape, self.wheel_components()[0], self.rgb_space, display, rgba)
     }
     /// Only the Okhsv circle rotates: its RGB blue hue is about 264 degrees,
     /// compared with HSV's 240. Keep legacy host geometry and HSV/HLS unchanged.
     pub fn wheel_hue_start_degrees(&self) -> f32 {
         ColorWheelGeometry::HUE_START_DEGREES
-            - if self.wheel_shape() == ColorShape::Circle {
+            - if self.shape == ColorShape::Circle {
                 24.
             } else {
                 0.
@@ -529,7 +483,7 @@ impl ColorState {
                     .collect()
             })
         });
-        if self.wheel_shape() == ColorShape::Circle {
+        if self.shape == ColorShape::Circle {
             &OKHSV
         } else {
             &HSV[RgbSpace::ALL
@@ -539,7 +493,7 @@ impl ColorState {
         }
     }
     pub fn labels(&self) -> [&'static str; 3] {
-        match self.space {
+        match self.space() {
             ColorSpace::Hsv => ["H", "S", "V"],
             ColorSpace::Hls => ["H", "L", "S"],
         }
@@ -616,10 +570,11 @@ impl ColorState {
     }
     fn set_components(&mut self, mut values: [f32; 3]) -> Result<(), String> {
         values[0] = values[0].rem_euclid(360.);
-        self.set_picker_rgba(from_components(values, self.space, self.rgba()[3]))?;
+        self.set_picker_rgba(from_components(values, self.space(), self.rgba()[3]))?;
         let index = self.index();
+        let hsv = self.space() == ColorSpace::Hsv;
         let c = self.coordinates[index].as_mut().unwrap();
-        if self.space == ColorSpace::Hsv {
+        if hsv {
             c.hsv = values;
         } else {
             c.hls = values;
@@ -682,28 +637,16 @@ impl ColorState {
             }
             ColorAction::Definition { color } => self.set_color(color)?,
             ColorAction::ToggleReadout => self.readout = self.readout.next(),
-            ColorAction::ToggleShape => self.apply(ColorAction::Shape {
-                shape: match self.wheel_shape() {
-                    ColorShape::Circle => ColorShape::Square,
-                    ColorShape::Square => ColorShape::Triangle,
-                    ColorShape::Triangle => ColorShape::Circle,
-                },
-            })?,
             ColorAction::Shape { shape } => {
                 self.readout = ColorReadout::Shape;
                 self.shape = shape;
-                self.space = if shape == ColorShape::Triangle {
-                    ColorSpace::Hls
-                } else {
-                    ColorSpace::Hsv
-                };
             }
             ColorAction::PickWheel { part, point, size } => {
                 let g = ColorWheelGeometry::new(size).ok_or("Invalid color wheel size")?;
                 if !point.into_iter().all(f32::is_finite) {
                     return Err("Invalid color wheel position".into());
                 }
-                if self.wheel_shape() == ColorShape::Circle {
+                if self.shape == ColorShape::Circle {
                     let mut values = self.okhsv_components();
                     match part {
                         ColorWheelPart::Hue => values[0] = self.wheel_hue_at(&g, point),
@@ -715,13 +658,7 @@ impl ColorState {
                     }
                     self.set_okhsv(values)?;
                 } else {
-                    self.apply(ColorAction::Pick { part, point, size })?;
-                }
-            }
-            ColorAction::ToggleSpace => {
-                self.space = match self.space {
-                    ColorSpace::Hsv => ColorSpace::Hls,
-                    ColorSpace::Hls => ColorSpace::Hsv,
+                    self.pick_field(part, point, &g)?;
                 }
             }
             ColorAction::Select { slot } => {
@@ -736,91 +673,45 @@ impl ColorState {
                 self.coordinates.swap(0, 1);
                 if let Some(paints) = &mut self.hdr_picker { paints.swap(0, 1); }
             }
-            ColorAction::Space { space } => self.space = space,
-            ColorAction::RgbaComponent { index, value } => {
-                if index > 3 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                    return Err("Invalid RGBA component".into());
-                }
-                if index == 3 {
-                    let mut color = self.definition();
-                    color.rgba[3] = value;
-                    let paint = self.hdr_picker.map(|p| { let mut p = p[self.index()]; p.base.rgba[3] = value; p });
-                    self.set_color_with_picker(color, paint)?;
-                } else {
-                    let mut rgba = self.rgba();
-                    rgba[index] = value;
-                    self.set_color(RgbColor::new(self.rgb_space, rgba)?)?;
-                }
-            }
-            ColorAction::Component { index, value } => {
-                if index > 2
-                    || !value.is_finite()
-                    || !(0.0..=if index == 0 { 360. } else { 100. }).contains(&value)
-                {
-                    return Err("Invalid color component".into());
-                }
-                let mut values = self.components();
-                values[index] = value;
-                self.set_components(values)?;
-            }
-            ColorAction::Pick { part, point, size } => {
-                let geometry = ColorWheelGeometry::new(size).ok_or("Invalid color wheel size")?;
-                if !point.into_iter().all(f32::is_finite) {
-                    return Err("Invalid color wheel position".into());
-                }
-                match part {
-                    ColorWheelPart::Hue => {
-                        let h = geometry.hue_at(point);
-                        self.apply(ColorAction::Component { index: 0, value: h })?;
-                    }
-                    ColorWheelPart::Field => {
-                        let mut values = self.components();
-                        match self.space {
-                            ColorSpace::Hsv => {
-                                let [s, v] = geometry.square_components(point);
-                                values[1] = s * 100.;
-                                values[2] = v * 100.;
-                                self.set_components(values)?;
-                            }
-                            ColorSpace::Hls => {
-                                let weights = triangle_weights(geometry.triangle, point);
-                                let hue = hue_color(values[0]);
-                                let mut rgba = self.rgba();
-                                for c in 0..3 {
-                                    rgba[c] = weights[0] + weights[2] * hue[c];
-                                }
-                                self.set_picker_rgba(rgba)?;
-                            }
-                        }
-                    }
-                }
-            }
         }
         Ok(())
     }
-    /// Older hosts still use `space` to choose between square and triangle.
-    /// An old HLS workspace therefore opens as a triangle even without a saved shape.
-    pub fn wheel_shape(&self) -> ColorShape {
-        if self.space == ColorSpace::Hls {
-            ColorShape::Triangle
-        } else if self.shape == ColorShape::Square {
-            ColorShape::Square
-        } else {
-            ColorShape::Circle
+    fn pick_field(&mut self, part: ColorWheelPart, point: [f32; 2], geometry: &ColorWheelGeometry) -> Result<(), String> {
+        let mut values = self.components();
+        match part {
+            ColorWheelPart::Hue => {
+                values[0] = geometry.hue_at(point);
+                self.set_components(values)
+            }
+            ColorWheelPart::Field if self.space() == ColorSpace::Hsv => {
+                let [s, v] = geometry.square_components(point);
+                values[1] = s * 100.;
+                values[2] = v * 100.;
+                self.set_components(values)
+            }
+            ColorWheelPart::Field => {
+                let weights = triangle_weights(geometry.triangle, point);
+                let hue = hue_color(values[0]);
+                let mut rgba = self.rgba();
+                for c in 0..3 {
+                    rgba[c] = weights[0] + weights[2] * hue[c];
+                }
+                self.set_picker_rgba(rgba)
+            }
         }
     }
     pub fn other_shapes(&self) -> [ColorShape; 2] {
-        match self.wheel_shape() {
+        match self.shape {
             ColorShape::Circle => [ColorShape::Square, ColorShape::Triangle],
             ColorShape::Square => [ColorShape::Circle, ColorShape::Triangle],
             ColorShape::Triangle => [ColorShape::Circle, ColorShape::Square],
         }
     }
     pub fn readout_label(&self) -> &'static str {
-        self.readout.label(self.wheel_shape())
+        self.readout.label(self.shape)
     }
     pub fn wheel_marker(&self, g: &ColorWheelGeometry) -> [f32; 2] {
-        if self.wheel_shape() == ColorShape::Circle {
+        if self.shape == ColorShape::Circle {
             let [_, s, v] = self.wheel_components();
             g.disc_marker([s / 100., v / 100.])
         } else {
@@ -829,7 +720,7 @@ impl ColorState {
     }
     pub fn readout_values(&self) -> [f32; 3] {
         match self.readout {
-            ColorReadout::Shape if self.wheel_shape() == ColorShape::Circle => okhsv::to_oklch_in(
+            ColorReadout::Shape if self.shape == ColorShape::Circle => okhsv::to_oklch_in(
                 self.rgb_space,
                 self.rgba()[..3].try_into().unwrap(),
                 self.okhsv_components()[0],
@@ -845,7 +736,7 @@ impl ColorState {
         let values = self.readout_values();
         let v = values.map(|v| v.round() as i32);
         match self.readout {
-            ColorReadout::Shape if self.wheel_shape() == ColorShape::Circle => [
+            ColorReadout::Shape if self.shape == ColorShape::Circle => [
                 format!("{}%", v[0]),
                 format!("{:.3}", values[1]),
                 format!("{}°", v[2] % 360),
@@ -860,7 +751,7 @@ impl ColorState {
     }
     pub fn readout_description(&self) -> String {
         let v = self.readout_text();
-        let shape = self.wheel_shape();
+        let shape = self.shape;
         let names = match (self.readout, shape) {
             (ColorReadout::Shape, ColorShape::Circle) => ["Lightness", "Chroma", "Hue"],
             (ColorReadout::Shape, ColorShape::Square) => ["Hue", "Saturation", "Brightness"],
@@ -881,7 +772,7 @@ impl ColorState {
     }
     pub fn readout_layout_text(&self) -> [String; 3] {
         let widths = match self.readout {
-            ColorReadout::Shape if self.wheel_shape() == ColorShape::Circle => [4, 5, 4],
+            ColorReadout::Shape if self.shape == ColorShape::Circle => [4, 5, 4],
             ColorReadout::Shape => [4; 3],
             ColorReadout::Rgb => [3; 3],
         };
@@ -890,7 +781,7 @@ impl ColorState {
     }
     pub fn marker(&self, geometry: &ColorWheelGeometry) -> [f32; 2] {
         let [_, a, b] = self.components();
-        match self.space {
+        match self.space() {
             ColorSpace::Hsv => [
                 geometry.square[0] + a / 100. * geometry.square[2],
                 geometry.square[1] + (1. - b / 100.) * geometry.square[2],
@@ -964,7 +855,7 @@ fn from_components([h, a, b]: [f32; 3], space: ColorSpace, alpha: f32) -> [f32; 
     ]
     .map(|v| v.clamp(0., 1.))
 }
-pub fn hue_color(hue: f32) -> [f32; 3] {
+fn hue_color(hue: f32) -> [f32; 3] {
     let h = hue.rem_euclid(360.) / 60.;
     let x = 1. - (h.rem_euclid(2.) - 1.).abs();
     match h as u32 {
@@ -983,11 +874,8 @@ fn display_rgb(space: RgbSpace, display: RgbSpace, rgb: [f32; 3]) -> [f32; 3] {
         .map(|v| v.clamp(0., 1.) as f32)
 }
 
-/// Opaque sRGB pixels for hosts that cache the hue guide instead of using a
+/// Opaque display pixels for hosts that cache the hue guide instead of using a
 /// native conic gradient. The host clips its antialiased ring silhouette.
-pub fn render_hue_guide(side: u32, shape: ColorShape, space: RgbSpace, rgba: &mut [u8]) -> bool {
-    render_hue_guide_in(side, shape, space, RgbSpace::Srgb, rgba)
-}
 pub fn render_hue_guide_in(side: u32, shape: ColorShape, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
     if side == 0
         || (side as usize)
@@ -1031,7 +919,8 @@ pub fn render_hue_guide_in(side: u32, shape: ColorShape, space: RgbSpace, displa
     true
 }
 
-/// Opaque sRGB HSV field. Hosts retain it by hue/size and clip the rounded square.
+/// Opaque display field for a wheel shape. Hosts retain it by hue/size and clip
+/// its silhouette.
 pub fn render_color_field(side: u32, shape: ColorShape, hue: f32, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
     match shape {
         ColorShape::Circle => render_okhsv_disc_in(side, hue, space, display, rgba),
@@ -1040,9 +929,6 @@ pub fn render_color_field(side: u32, shape: ColorShape, hue: f32, space: RgbSpac
     }
 }
 
-pub fn render_hsv_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
-    render_hsv_field_in(side, hue, RgbSpace::Srgb, RgbSpace::Srgb, rgba)
-}
 fn render_hsv_field_in(
     side: u32,
     hue: f32,
@@ -1079,9 +965,6 @@ fn render_hsv_field_in(
 /// Display-encoded RGBA8 for the HLS field, at physical pixel centers. Hosts
 /// cache this by hue and pixel size; markers and the hue ring stay independent.
 /// Transparent pixels outside the triangle have zero RGB. No allocation occurs.
-pub fn render_hls_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
-    render_hls_field_in(side, hue, RgbSpace::Srgb, RgbSpace::Srgb, rgba)
-}
 fn render_hls_field_in(
     side: u32,
     hue: f32,
@@ -1123,12 +1006,9 @@ fn render_hls_field_in(
     true
 }
 
-/// Opaque sRGB pixels for the Okhsv disc. The host clips the smooth circle edge
-/// and caches by hue and physical size. A two-pixel apron extends to the rim;
-/// pixels farther outside the host clip are opaque black.
-pub fn render_okhsv_disc(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
-    render_okhsv_disc_in(side, hue, RgbSpace::Srgb, RgbSpace::Srgb, rgba)
-}
+/// Opaque display pixels for the Okhsv disc. The host clips the smooth circle
+/// edge and caches by hue and physical size. A two-pixel apron extends to the
+/// rim; pixels farther outside the host clip are opaque black.
 fn render_okhsv_disc_in(
     side: u32,
     hue: f32,
@@ -1459,6 +1339,16 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn component(state: &mut ColorState, index: usize, value: f32) {
+        let mut values = state.components();
+        values[index] = value;
+        state.set_components(values).unwrap();
+    }
+    fn alpha(state: &mut ColorState, value: f32) {
+        let mut color = state.definition();
+        color.rgba[3] = value;
+        state.apply(ColorAction::Definition { color }).unwrap();
+    }
     #[test]
     fn circle_rotates_its_guide_and_hits_together_and_reports_oklch() {
         let g = ColorWheelGeometry::new(236.).unwrap();
@@ -1468,7 +1358,6 @@ mod tests {
             assert_eq!(state.readout_label(), "OKLCH");
             assert!((state.readout_values()[2] - state.wheel_components()[0]).abs() < 0.001);
             let model = state.view();
-            assert_eq!(model.hue_start_degrees, -150.);
             assert_eq!(model.wheel_hue_start_degrees, -174.);
             let ok_angle = state.wheel_components()[0] + state.wheel_hue_start_degrees();
             let hsv_angle = state.components()[0] + ColorWheelGeometry::HUE_START_DEGREES;
@@ -1591,12 +1480,7 @@ mod tests {
                         size: 236.,
                     })
                     .unwrap();
-                state
-                    .apply(ColorAction::RgbaComponent {
-                        index: 3,
-                        value: 0.4,
-                    })
-                    .unwrap();
+                alpha(&mut state, 0.4);
                 assert!((state.wheel_components()[1] - saturation * 100.).abs() < 0.001);
                 assert!((state.wheel_components()[0] - 237.).abs() < 0.001);
                 state.validate().unwrap();
@@ -1608,12 +1492,7 @@ mod tests {
                     slot: ColorSlot::Background,
                 })
                 .unwrap();
-            state
-                .apply(ColorAction::Component {
-                    index: 0,
-                    value: 120.,
-                })
-                .unwrap();
+            component(&mut state, 0, 120.);
             state.apply(ColorAction::Swap).unwrap();
             assert_eq!(state.wheel_components(), before);
             state
@@ -1632,7 +1511,7 @@ mod tests {
                 .unwrap();
             assert!((state.wheel_components()[1] - 40.).abs() < 0.001);
             let expected = if shape == ColorShape::Circle {
-                let [r, g, b] = okhsv::to_rgb([237., 40., 75.]);
+                let [r, g, b] = okhsv::to_rgb_in(RgbSpace::Srgb, [237., 40., 75.]);
                 [r, g, b, 0.4]
             } else {
                 from_components([237., 40., 75.], ColorSpace::Hsv, 0.4)
@@ -1652,20 +1531,13 @@ mod tests {
             .unwrap();
         for lightness in [0., 100.] {
             for (index, value) in [(0, 275.), (1, lightness), (2, 73.)] {
-                state
-                    .apply(ColorAction::Component { index, value })
-                    .unwrap();
+                component(&mut state, index, value);
             }
             assert_eq!(state.readout_label(), "HLS");
             assert_eq!(state.readout_values(), [275., lightness, 73.]);
             assert!(state.readout_description().contains("Lightness"));
             state.validate().unwrap();
-            state
-                .apply(ColorAction::Component {
-                    index: 1,
-                    value: 50.,
-                })
-                .unwrap();
+            component(&mut state, 1, 50.);
             assert_eq!(state.components(), [275., 50., 73.]);
         }
         state
@@ -1682,12 +1554,7 @@ mod tests {
     #[test]
     fn saved_coordinates_are_validated_and_legacy_colors_still_load() {
         let mut state = ColorState::default();
-        state
-            .apply(ColorAction::Component {
-                index: 1,
-                value: 80.,
-            })
-            .unwrap();
+        component(&mut state, 1, 80.);
         let mut json = serde_json::to_value(&state).unwrap();
         json["coordinates"][0]["hsv"][1] = 101.into();
         assert!(
@@ -1814,59 +1681,16 @@ mod tests {
         }
     }
     #[test]
-    fn disc_raster_matches_shared_picking() {
-        for side in [31, 100, 236] {
-            let g = ColorWheelGeometry::new(side as f32).unwrap();
-            for hue in [0., 60., 163., 240., 340.] {
-                let mut rgba = vec![0; side as usize * side as usize * 4];
-                assert!(render_okhsv_disc(side, hue, &mut rgba));
-                let mut base = ColorState::default();
-                base.apply(ColorAction::PickWheel {
-                    part: ColorWheelPart::Hue,
-                    point: base.wheel_hue_marker(&g, hue),
-                    size: side as f32,
-                })
-                .unwrap();
-                for y in (0..side).step_by(7) {
-                    for x in (0..side).step_by(7) {
-                        let p = [x as f32 + 0.5, y as f32 + 0.5];
-                        if g.hit_shape(p, ColorShape::Circle) != Some(ColorWheelPart::Field) {
-                            continue;
-                        }
-                        let mut state = base.clone();
-                        state
-                            .apply(ColorAction::PickWheel {
-                                part: ColorWheelPart::Field,
-                                point: p,
-                                size: side as f32,
-                            })
-                            .unwrap();
-                        let expected = state.rgba().map(|c| (c * 255.).round() as u8);
-                        let offset = ((y * side + x) * 4) as usize;
-                        for (a, b) in rgba[offset..offset + 4].iter().zip(expected) {
-                            assert!(a.abs_diff(b) <= 1);
-                        }
-                    }
-                }
-            }
-        }
-        let mut invalid = [17; 4];
-        for (size, hue) in [(0, 0.), (2, 0.), (1, f32::NAN)] {
-            assert!(!render_okhsv_disc(size, hue, &mut invalid));
-            assert_eq!(invalid, [17; 4]);
-        }
-    }
-    #[test]
     fn readout_and_shape_cycles_preserve_paint_and_survive_serialization() {
         let mut state = ColorState::default();
-        assert_eq!(state.wheel_shape(), ColorShape::Circle);
+        assert_eq!(state.shape, ColorShape::Circle);
         assert_eq!(state.readout, ColorReadout::Shape);
         state.set_rgba([0.2, 0.72, 0.58, 0.4]).unwrap();
         let paint = state.rgba();
         for shape in [ColorShape::Square, ColorShape::Triangle, ColorShape::Circle] {
             state.readout = ColorReadout::Rgb;
-            state.apply(ColorAction::ToggleShape).unwrap();
-            assert_eq!(state.wheel_shape(), shape);
+            state.apply(ColorAction::Shape { shape }).unwrap();
+            assert_eq!(state.shape, shape);
             assert_eq!(state.readout, ColorReadout::Shape);
             assert!(state.readout_description().ends_with("Switch to RGB"));
             for model in [ColorReadout::Rgb, ColorReadout::Shape] {
@@ -1881,7 +1705,7 @@ mod tests {
         old.as_object_mut().unwrap().remove("shape");
         old.as_object_mut().unwrap().remove("readout");
         let loaded: ColorState = serde_json::from_value(old.clone()).unwrap();
-        assert_eq!(loaded.wheel_shape(), ColorShape::Circle);
+        assert_eq!(loaded.shape, ColorShape::Circle);
         assert_eq!(loaded.readout, ColorReadout::Shape);
         for legacy in ["hsb", "lab", "oklch", "shape", "rgb"] {
             old["readout"] = legacy.into();
@@ -1897,9 +1721,6 @@ mod tests {
                 if legacy == "rgb" { "rgb" } else { "shape" }
             );
         }
-        old["space"] = "hls".into();
-        let loaded: ColorState = serde_json::from_value(old).unwrap();
-        assert_eq!(loaded.wheel_shape(), ColorShape::Triangle);
         let before = state.clone();
         assert!(
             state
@@ -1960,7 +1781,6 @@ mod tests {
         red.set_rgba([1., 0., 0., 1.]).unwrap();
         assert_eq!(red.view().components[0].value, 0.);
         assert!((red.view().wheel_components[0] - 29.23).abs() < 0.01);
-        assert_eq!(red.view().hue_stops.len(), 7);
         assert!(red.wheel_hue_stops().len() >= 361);
         assert_eq!(red.readout_label(), "OKLCH");
     }
@@ -1969,12 +1789,7 @@ mod tests {
         let mut state = ColorState::default();
         state.set_okhsv([263.5, 84., 0.]).unwrap();
         let black_marker = state.wheel_marker(&ColorWheelGeometry::new(236.).unwrap());
-        state
-            .apply(ColorAction::RgbaComponent {
-                index: 3,
-                value: 0.2,
-            })
-            .unwrap();
+        alpha(&mut state, 0.2);
         state
             .apply(ColorAction::Shape {
                 shape: ColorShape::Square,
@@ -2038,105 +1853,18 @@ mod tests {
         }
     }
     #[test]
-    fn hls_raster_matches_picker_at_physical_pixel_centers() {
-        for side in [1, 31, 160, 320, 452] {
-            for hue in [0., 60., 140.000_02, 150., 240., 340., 360.] {
-                let mut pixels = vec![17; side as usize * side as usize * 4];
-                assert!(render_hls_field(side, hue, &mut pixels));
-                let mut state = ColorState {
-                    space: ColorSpace::Hls,
-                    ..Default::default()
-                };
-                state
-                    .apply(ColorAction::Component {
-                        index: 0,
-                        value: hue,
-                    })
-                    .unwrap();
-                let geometry = ColorWheelGeometry::new(side as f32).unwrap();
-                for y in 0..side {
-                    for x in 0..side {
-                        let point = [x as f32 + 0.5, y as f32 + 0.5];
-                        let pixel = &pixels[((y * side + x) * 4) as usize..][..4];
-                        if geometry.hit(point, ColorSpace::Hls) != Some(ColorWheelPart::Field) {
-                            assert_eq!(pixel, [0; 4]);
-                            continue;
-                        }
-                        // Avoid accumulating tiny hue conversion errors across picks.
-                        let mut picked = state.clone();
-                        picked
-                            .apply(ColorAction::Pick {
-                                part: ColorWheelPart::Field,
-                                point,
-                                size: side as f32,
-                            })
-                            .unwrap();
-                        assert_eq!(pixel[3], 255, "missing pixel {side}/{hue}/{point:?}");
-                        for (actual, expected) in pixel[..3].iter().zip(picked.rgba()) {
-                            assert!(
-                                (*actual as f32 - expected * 255.).abs() <= 0.501,
-                                "{side}/{hue}/{point:?}: {pixel:?} != {:?}",
-                                picked.rgba()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-    #[test]
-    fn hsv_raster_matches_picking_and_hue_guides_keep_shape_orientation() {
-        for side in [31, 92, 130, 198] {
-            let geometry = ColorWheelGeometry::new(side as f32).unwrap();
-            let mut bytes = vec![0; side as usize * side as usize * 4];
-            for hue in [0., 60., 174., 240., 359.] {
-                assert!(render_hsv_field(side, hue, &mut bytes));
-                let mut state = ColorState::default();
-                state
-                    .apply(ColorAction::Shape {
-                        shape: ColorShape::Square,
-                    })
-                    .unwrap();
-                state
-                    .apply(ColorAction::Component {
-                        index: 0,
-                        value: hue,
-                    })
-                    .unwrap();
-                for index in (0..side as usize * side as usize).step_by(17) {
-                    let point = [
-                        (index % side as usize) as f32 + 0.5,
-                        (index / side as usize) as f32 + 0.5,
-                    ];
-                    if geometry.hit_shape(point, ColorShape::Square) != Some(ColorWheelPart::Field)
-                    {
-                        continue;
-                    }
-                    let mut picked = state.clone();
-                    picked
-                        .apply(ColorAction::PickWheel {
-                            part: ColorWheelPart::Field,
-                            point,
-                            size: side as f32,
-                        })
-                        .unwrap();
-                    for (actual, expected) in bytes[index * 4..][..4].iter().zip(picked.rgba()) {
-                        assert!((*actual as f32 - expected * 255.).abs() <= 0.501);
-                    }
-                }
-            }
-        }
+    fn hue_guides_keep_shape_orientation() {
         let side = 101;
         let mut bytes = vec![0; side * side * 4];
         for space in RgbSpace::ALL {
             for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
-                assert!(render_hue_guide(side as u32, shape, space, &mut bytes));
+                assert!(render_hue_guide_in(side as u32, shape, space, RgbSpace::Srgb, &mut bytes));
                 let mut state = ColorState::default();
                 state.set_rgb_space(space).unwrap();
                 state.apply(ColorAction::Shape { shape }).unwrap();
                 for (x, y, hue) in [(95, 50, 150.), (50, 95, 240.), (5, 50, 330.), (50, 5, 60.)] {
                     let hue = hue + if shape == ColorShape::Circle { 24. } else { 0. };
-                    let expected = state.wheel_hue_color(hue);
+                    let expected = state.wheel_hue_color_in(hue, RgbSpace::Srgb);
                     let pixel = &bytes[(y * side + x) * 4..][..4];
                     // Shared guide interpolation is within one byte of the exact
                     // hue curve; RGBA8 rounding adds at most another half byte.
@@ -2147,25 +1875,27 @@ mod tests {
                 }
             }
         }
-        let mut invalid = [23; 16];
-        assert!(!render_hsv_field(2, f32::NAN, &mut invalid));
-        assert!(!render_hsv_field(3, 0., &mut invalid));
-        assert!(!render_hue_guide(0, ColorShape::Circle, RgbSpace::Srgb, &mut invalid));
-        assert!(!render_hue_guide(3, ColorShape::Circle, RgbSpace::Srgb, &mut invalid));
-        assert_eq!(invalid, [23; 16]);
     }
     #[test]
-    fn hls_raster_invalid_requests_preserve_caller_buffer() {
-        for (side, hue) in [
-            (0, 0.),
-            (2, f32::NAN),
-            (2, f32::INFINITY),
-            (3, 60.),
-            (u32::MAX, 0.),
-        ] {
-            let mut bytes = [19; 16];
-            assert!(!render_hls_field(side, hue, &mut bytes));
-            assert_eq!(bytes, [19; 16]);
+    fn invalid_raster_requests_preserve_caller_buffers() {
+        for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
+            for (side, hue) in [
+                (0, 0.),
+                (1, 0.),
+                (2, f32::NAN),
+                (2, f32::INFINITY),
+                (3, 60.),
+                (u32::MAX, 0.),
+            ] {
+                let mut bytes = [19; 16];
+                assert!(!render_color_field(side, shape, hue, RgbSpace::Srgb, RgbSpace::Srgb, &mut bytes));
+                assert_eq!(bytes, [19; 16]);
+            }
+            for side in [0, 3] {
+                let mut bytes = [19; 16];
+                assert!(!render_hue_guide_in(side, shape, RgbSpace::Srgb, RgbSpace::Srgb, &mut bytes));
+                assert_eq!(bytes, [19; 16]);
+            }
         }
     }
     fn close(a: [f32; 4], b: [f32; 4]) {
@@ -2175,71 +1905,24 @@ mod tests {
         );
     }
     #[test]
-    fn rgba_channel_edits_preserve_other_channels_and_reject_invalid_values() {
-        let mut state = ColorState::default();
-        state.set_rgba([0.2, 0.4, 0.6, 0.8]).unwrap();
-        state
-            .apply(ColorAction::RgbaComponent {
-                index: 0,
-                value: 0.3,
-            })
-            .unwrap();
-        state
-            .apply(ColorAction::RgbaComponent {
-                index: 3,
-                value: 0.5,
-            })
-            .unwrap();
-        close(state.rgba(), [0.3, 0.4, 0.6, 0.5]);
-        state
-            .apply(ColorAction::Select {
-                slot: ColorSlot::Transparent,
-            })
-            .unwrap();
-        let before = state.clone();
-        for (index, value) in [
-            (4, 0.5),
-            (0, -0.1),
-            (1, 1.1),
-            (2, f32::NAN),
-            (3, f32::INFINITY),
-        ] {
-            assert!(
-                state
-                    .apply(ColorAction::RgbaComponent { index, value })
-                    .is_err()
-            );
-            assert_eq!(state, before);
-        }
-        state
-            .apply(ColorAction::RgbaComponent {
-                index: 1,
-                value: 0.7,
-            })
-            .unwrap();
-        assert_eq!(state.slot, ColorSlot::Foreground);
-        close(state.rgba(), [0.3, 0.7, 0.6, 0.5]);
-    }
-    #[test]
     fn both_spaces_and_wheel_markers_roundtrip() {
-        for space in [ColorSpace::Hsv, ColorSpace::Hls] {
+        for shape in [ColorShape::Square, ColorShape::Triangle] {
             for r in [0., 0.2, 0.5, 1.] {
                 for g in [0., 0.2, 0.5, 1.] {
                     for b in [0., 0.2, 0.5, 1.] {
                         let rgba = [r, g, b, 0.7];
+                        let mut state = ColorState::default();
+                        state.apply(ColorAction::Shape { shape }).unwrap();
+                        let space = state.space();
                         close(
                             rgba,
                             from_components(components(rgba, space, 123.), space, 0.7),
                         );
-                        let mut state = ColorState {
-                            space,
-                            ..Default::default()
-                        };
                         state.set_rgba(rgba).unwrap();
                         let geometry = ColorWheelGeometry::new(212.).unwrap();
                         let point = state.marker(&geometry);
                         state
-                            .apply(ColorAction::Pick {
+                            .apply(ColorAction::PickWheel {
                                 part: ColorWheelPart::Field,
                                 point,
                                 size: 212.,
@@ -2271,12 +1954,7 @@ mod tests {
             })
             .unwrap();
         assert!(state.transparent());
-        state
-            .apply(ColorAction::Component {
-                index: 2,
-                value: 50.,
-            })
-            .unwrap();
+        component(&mut state, 2, 50.);
         assert_eq!(state.slot, ColorSlot::Background);
         state.apply(ColorAction::Swap).unwrap();
         assert_eq!(state.components()[0], 240.);
@@ -2285,6 +1963,11 @@ mod tests {
     fn hue_geometry_and_outside_drags_are_bounded() {
         let geometry = ColorWheelGeometry::new(128.).unwrap();
         let mut state = ColorState::default();
+        state
+            .apply(ColorAction::Shape {
+                shape: ColorShape::Square,
+            })
+            .unwrap();
         for hue in (0..360).step_by(15) {
             let point = geometry.hue_marker(hue as f32);
             assert_eq!(
@@ -2292,7 +1975,7 @@ mod tests {
                 Some(ColorWheelPart::Hue)
             );
             state
-                .apply(ColorAction::Pick {
+                .apply(ColorAction::PickWheel {
                     part: ColorWheelPart::Hue,
                     point,
                     size: 128.,
@@ -2301,10 +1984,14 @@ mod tests {
             let delta = (state.components()[0] - hue as f32 + 180.).rem_euclid(360.) - 180.;
             assert!(delta.abs() < 0.001);
         }
-        state.space = ColorSpace::Hls;
+        state
+            .apply(ColorAction::Shape {
+                shape: ColorShape::Triangle,
+            })
+            .unwrap();
         for point in [[-100., -100.], [1000., 50.], [64., 500.]] {
             state
-                .apply(ColorAction::Pick {
+                .apply(ColorAction::PickWheel {
                     part: ColorWheelPart::Field,
                     point,
                     size: 128.,
@@ -2315,15 +2002,7 @@ mod tests {
         let before = state.clone();
         assert!(
             state
-                .apply(ColorAction::Component {
-                    index: 3,
-                    value: 0.
-                })
-                .is_err()
-        );
-        assert!(
-            state
-                .apply(ColorAction::Pick {
+                .apply(ColorAction::PickWheel {
                     part: ColorWheelPart::Hue,
                     point: [f32::NAN, 0.],
                     size: 128.
@@ -2357,9 +2036,14 @@ mod managed_view_tests {
                     for index in (0..(side * side) as usize).step_by(11) {
                         let point = [(index % side as usize) as f32 + 0.5,
                             (index / side as usize) as f32 + 0.5];
-                        if geometry.hit_shape(point, shape) != Some(ColorWheelPart::Field) { continue; }
+                        if geometry.hit_shape(point, shape) != Some(ColorWheelPart::Field) {
+                            if shape == ColorShape::Triangle { assert_eq!(bytes[index*4..][..4], [0; 4]); }
+                            continue;
+                        }
                         let mut picked = state.clone();
                         picked.apply(ColorAction::PickWheel { part: ColorWheelPart::Field, point, size: side as f32 }).unwrap();
+                        assert_eq!(picked.definition().space, space);
+                        picked.validate().unwrap();
                         let expected = picked.definition().encoded_in(display).unwrap().map(|v| v.clamp(0.,1.));
                         for (actual, expected) in bytes[index*4..][..4].iter().zip(expected) {
                             assert!((*actual as f32 - expected*255.).abs() <= 0.6,

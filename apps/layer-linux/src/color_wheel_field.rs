@@ -55,7 +55,7 @@ impl Key {
         Self {
             side,
             hue: state.wheel_components()[0],
-            shape: state.wheel_shape(),
+            shape: state.shape,
             space: state.rgb_space(),
             view,
             intensity: state.hdr_intensity(),

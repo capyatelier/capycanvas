@@ -86,7 +86,7 @@ impl WebApp {
     pub fn color_wheel_hit(&self, size: f32, x: f32, y: f32) -> Result<JsValue, JsValue> {
         serialize(
             &layer_ui::ColorWheelGeometry::new(size)
-                .and_then(|g| g.hit_shape([x, y], self.session.state().display_colors().wheel_shape())),
+                .and_then(|g| g.hit_shape([x, y], self.session.state().display_colors().shape)),
         )
     }
     pub fn navigator_geometry(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {

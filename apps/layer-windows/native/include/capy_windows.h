@@ -72,7 +72,6 @@ __declspec(dllimport) char* capy_color_ui(char const* json);
 __declspec(dllimport) char* capy_color_layout(float size);
 __declspec(dllimport) char* capy_color_hue_stops(uint32_t projection);
 __declspec(dllimport) bool capy_color_mapped_field(uint32_t side, char const* input, uint8_t* output, size_t length);
-__declspec(dllimport) bool capy_color_field(uint32_t side, float hue, uint32_t projection, uint8_t* output, size_t length);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */
 __declspec(dllimport) int32_t capy_finish_services(CapyHost*);

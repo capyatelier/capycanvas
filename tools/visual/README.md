@@ -364,14 +364,7 @@ cargo test -p layer-ui color::
 cargo test -p layer-apple compact_color
 cargo test -p layer-apple hls_raster
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-field-cache.swift
-cargo build --release -p layer-ui --example color_field_benchmark
-# Run after compilers, UI automation and GPU profilers have finished.
-target/release/examples/color_field_benchmark
 ```
-
-The benchmark covers all three fields and their guides at the matrix's physical
-sizes. It excludes host allocation, upload and presentation, and measures CPU
-cost rather than editor frame rate or input latency.
 
 ## Complete header components
 

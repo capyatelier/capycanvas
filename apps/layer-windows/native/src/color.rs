@@ -99,36 +99,6 @@ pub extern "C" fn capy_color_hue_stops(projection: u32) -> *mut c_char {
     json(color.wheel_hue_stops())
 }
 
-/// Write display-encoded RGBA8 into a caller-owned field raster.
-/// # Safety
-/// A nonnull output must be writable for length bytes with no concurrent access.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_color_field(
-    side: u32,
-    hue: f32,
-    projection: u32,
-    output: *mut u8,
-    length: usize,
-) -> bool {
-    if !(1..=2048).contains(&side)
-        || !hue.is_finite()
-        || output.is_null()
-        || length != side as usize * side as usize * 4
-        || !matches!(
-            shape(projection),
-            Some(ColorShape::Circle | ColorShape::Triangle)
-        )
-    {
-        return false;
-    }
-    let rgba = unsafe { std::slice::from_raw_parts_mut(output, length) };
-    if projection == 2 {
-        layer_ui::render_okhsv_disc(side, hue, rgba)
-    } else {
-        layer_ui::render_hls_field(side, hue, rgba)
-    }
-}
-
 /// Shared SDR projection of the active HDR picker, including its EV and recipe.
 /// # Safety
 /// Input is a readable C string; output is writable for exactly length bytes.

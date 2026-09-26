@@ -1889,20 +1889,19 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
         );
         let action = |value| app.action(json!({"type":"color","action":value}));
         app.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
-        action(json!({"op":"component","index":0,"value":180}));
+        action(json!({"op":"definition","color":{"space":"Srgb","rgba":[0,1,1,1]}}));
         close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
         action(json!({"op":"select","slot":"background"}));
-        for (index, value) in [0.25, 0.5, 0.75].into_iter().enumerate() {
-            action(json!({"op":"rgba_component","index":index,"value":value}));
-        }
+        action(json!({"op":"definition","color":{"space":"Srgb","rgba":[0.25,0.5,0.75,1]}}));
         close(&app.state()["brush"]["color"], [0.25, 0.5, 0.75, 1.]);
         close(&app.state()["colors"]["foreground"]["rgba"], [0., 1., 1., 1.]);
         action(json!({"op":"select","slot":"transparent"}));
-        action(json!({"op":"pick","part":"hue","point":[0.95,0.5],"size":1}));
+        action(json!({"op":"shape","shape":"square"}));
+        action(json!({"op":"pick_wheel","part":"hue","point":[0.95,0.5],"size":1}));
         assert_eq!(app.state()["colors"]["slot"], "background");
         close(&app.state()["brush"]["color"], [0.25, 0.75, 0.5, 1.]);
-        action(json!({"op":"toggle_space"}));
-        action(json!({"op":"pick","part":"field","point":[0.5,0.5],"size":1}));
+        action(json!({"op":"shape","shape":"triangle"}));
+        action(json!({"op":"pick_wheel","part":"field","point":[0.5,0.5],"size":1}));
         close(&app.state()["brush"]["color"], [1. / 3., 2. / 3., 0.5, 1.]);
         let snapshot = app.request(3, Value::Null).unwrap();
         assert_eq!(snapshot["color_panel"]["components"][1]["label"], "L");

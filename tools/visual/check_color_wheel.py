@@ -58,7 +58,7 @@ if args.oracle_interpreter:
     command.insert(0, str(args.oracle_interpreter.resolve()))
 oracle = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, check=True)
 reference = json.loads(oracle.stdout)
-markers = [reference["model"][key] for key in ["hue_marker", "field_marker"]]
+markers = [reference["model"][key] for key in ["wheel_hue_marker", "wheel_marker"]]
 # Okhsv has a sharp blue gamut cusp. Native conic gradients antialias that
 # internal boundary, just like the ring silhouette. Locate discontinuities from
 # the shared stops, and exclude only their subpixel fringe (never missing alpha).
@@ -97,7 +97,7 @@ for index, (x, y) in enumerate(positions):
     if part == "hue" and discontinuities and alpha.getpixel((x,y)) == 255:
         cx, cy = model["geometry"]["center"]
         dx, dy = point[0]-cx, point[1]-cy
-        angle = math.atan2(dy, dx) - math.radians(model["hue_start_degrees"])
+        angle = math.atan2(dy, dx) - math.radians(model["wheel_hue_start_degrees"])
         radius = math.hypot(dx, dy) * wheel_width * scale
         if any(abs(math.remainder(angle - offset*2*math.pi, 2*math.pi))*radius <= 0.75
                 for offset in discontinuities):

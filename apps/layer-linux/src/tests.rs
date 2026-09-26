@@ -4125,7 +4125,7 @@ fn native_tool_and_color_panels() {
                 .downcast()
                 .unwrap(),
         );
-        assert_eq!(state(&w).colors.wheel_shape(), expected);
+        assert_eq!(state(&w).colors.shape, expected);
     }
     let before = state(&w).colors;
     click(
@@ -4150,15 +4150,15 @@ fn native_tool_and_color_panels() {
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(100);
-        for space in [layer_ui::ColorSpace::Hsv, layer_ui::ColorSpace::Hls] {
+        for shape in [layer_ui::ColorShape::Square, layer_ui::ColorShape::Triangle] {
             w.dispatch(UiAction::Color {
-                action: layer_ui::ColorAction::Space { space },
+                action: layer_ui::ColorAction::Shape { shape },
             });
             pump(100);
             capture_reference(
                 &w,
                 output
-                    .join(format!("color-{space:?}-{theme:?}.png"))
+                    .join(format!("color-{shape:?}-{theme:?}.png"))
                     .to_str()
                     .unwrap(),
                 1.0,

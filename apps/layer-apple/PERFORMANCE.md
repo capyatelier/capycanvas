@@ -1736,8 +1736,7 @@ case corresponds to the wheel in a 226-point panel at 2x scale:
 
 The guide is static during color drags. These Mac measurements exclude host
 allocation, image upload, drawing and presentation; they do not establish iPad
-cost, complete interaction latency or sustained editor cadence. The source
-benchmark is `crates/layer-ui/examples/color_field_benchmark.rs`; raw runs and
+cost, complete interaction latency or sustained editor cadence. Raw runs and
 the earlier implementation remain in `artifacts/apple-compact-color-v1/`.
 
 ## Reserved drawable slot experiment — 2026-09-13

@@ -25,7 +25,7 @@ class ColorWheelCheckTests(unittest.TestCase):
         self.oracle = self.root / "oracle"
         self.oracle.write_text(f"#!{sys.executable}\n" + '''import json, sys
 request = json.load(sys.stdin)
-print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
+print(json.dumps({"model": {"wheel_hue_marker": [-10,-10], "wheel_marker": [-10,-10]},
     "samples": [{"part": "hue" if p[0] < 0.5 else "field",
         "rgba": [1 if p[0] < 0.5 else 0,0.25,0.5,1]} for p in request["points"]]}))
 ''')
@@ -102,7 +102,7 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         self.assertIn("viewport dimensions do not match", result.stderr)
 
     def test_gamut_cusp_excludes_only_its_subpixel_fringe(self):
-        model = {"geometry": {"center": [0.5,0.5]}, "hue_start_degrees": 0,
+        model = {"geometry": {"center": [0.5,0.5]}, "wheel_hue_start_degrees": 0,
             "wheel_hue_stops": [
                 {"offset": 0.625, "color": [0,0,1]},
                 {"offset": 0.6250001, "color": [0,0.2,1]}]}

@@ -8349,9 +8349,12 @@ mod tests {
         );
         assert_eq!(s.state.brush.preset, preset);
         s.dispatch(UiAction::Color {
-            action: ColorAction::Component {
-                index: 0,
-                value: 240.0,
+            action: ColorAction::Definition {
+                color: layer_core::color::RgbColor::new(
+                    layer_core::color::RgbSpace::Srgb,
+                    [0., 0., 1., 1.],
+                )
+                .unwrap(),
             },
         })
         .unwrap();

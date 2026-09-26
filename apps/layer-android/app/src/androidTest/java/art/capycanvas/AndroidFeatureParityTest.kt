@@ -112,7 +112,8 @@ class AndroidFeatureParityTest {
         action(obj("type" to "move_panel", "panel" to "color", "target" to obj("kind" to "float", "position" to JSONArray(listOf(440, 100))), "viewport" to viewport()))
         action(obj("type" to "set_color", "rgba" to JSONArray(listOf(1, 0, 0, 1))))
         for (space in listOf("hsv", "hls")) {
-            action(obj("type" to "color", "action" to obj("op" to "space", "space" to space)))
+            val shape = if (space == "hsv") "square" else "triangle"
+            action(obj("type" to "color", "action" to obj("op" to "shape", "shape" to shape)))
             val wheel = compose.onNodeWithTag("color-wheel").performScrollTo()
             val pixels = wheel.captureToImage().toPixelMap()
             val geometry = host.snapshot!!.getJSONObject("color_panel").getJSONObject("geometry")
@@ -125,7 +126,7 @@ class AndroidFeatureParityTest {
             } * pixels.width.toFloat()
             val shown = pixels[position.x.toInt(), position.y.toInt()]
             wheel.performTouchInput { click(position) }
-            action(obj("type" to "color", "action" to obj("op" to "space", "space" to space))) // Drain the input's shared action.
+            action(obj("type" to "color", "action" to obj("op" to "shape", "shape" to shape))) // Drain the input's shared action.
             val rgba = state().getJSONObject("colors").getJSONObject("foreground").array("rgba")
             for ((index, value) in listOf(shown.red, shown.green, shown.blue).withIndex()) {
                 assertEquals("$space wheel pixel matches picked component $index", value.toDouble(), rgba.getDouble(index), .035)

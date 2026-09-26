@@ -435,10 +435,7 @@ The Okhsv field stays on the CPU. Its raster reuses an interpolated saturation
 curve and sRGB transfer table; picking keeps full-precision conversion. Hosts
 sample the smooth field at logical-pixel resolution and keep the ring, circular
 clip and markers at native resolution. Shared conversion/raster tests and the
-Web 2× interpolation comparison bound the measured color error. For native
-raster timings, run
-`cargo run --locked --release -p layer-ui --example color_wheel_bench`.
-This measures computation only, not GTK snapshotting or display latency.
+Web 2× interpolation comparison bound the measured color error.
 
 GTK retains the hue guide as a native-resolution `GdkTexture`, keyed by pixel
 size and wheel shape. Paint changes and overlapping panel motion reuse it;

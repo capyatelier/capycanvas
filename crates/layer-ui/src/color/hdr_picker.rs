@@ -75,8 +75,6 @@ impl ColorState {
         let preview=|color| self.mapped_swatch(color,recipe);
         view.marker_color=preview(self.definition())[..3].try_into().unwrap();
         for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4],ColorSlot::Temporary=>preview(self.temporary)};}
-        view.outside_document_gamut=!self.definition().in_hdr_gamut(self.rgb_space).unwrap();
-        view.outside_display_gamut=!self.definition().in_hdr_gamut(RgbSpace::Srgb).unwrap();
         view
     }
     pub fn render_field_mapped(&self, side:u32, recipe:layer_core::color::hdr::SdrRendition, bytes:&mut [u8]) -> bool {
@@ -180,7 +178,7 @@ impl ColorState {
                 (i % side as usize) as f32 + 0.5,
                 (i / side as usize) as f32 + 0.5,
             ];
-            let rgb = match self.wheel_shape() {
+            let rgb = match self.shape {
                 ColorShape::Circle => {
                     let [s, v] = g.disc_components(point);
                     okhsv.linear_rgb(s, v).map(|v| v.clamp(0., 1.) as f32)
@@ -238,11 +236,9 @@ mod tests {
             for v in &p[..3] {
                 assert!((*v - 4.).abs() < 3e-6);
             }
-            s.apply(ColorAction::RgbaComponent {
-                index: 3,
-                value: 0.5,
-            })
-            .unwrap();
+            let mut color = s.definition();
+            color.rgba[3] = 0.5;
+            s.apply(ColorAction::Definition { color }).unwrap();
             assert_eq!(s.hdr_intensity(), 2.);
             assert_eq!(s.definition().rgba[3], 0.5);
             s.validate().unwrap();

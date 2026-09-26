@@ -1,5 +1,6 @@
 //! Production compact Color models and CPU fields for matched host captures.
 //! Usage: cargo run -p layer-ui --example compact_color_fixture -- OUTPUT SCALE
+use layer_core::color::RgbSpace;
 use layer_ui::{ColorAction, ColorPanelLayout, ColorShape, ColorState, Platform, Settings, Theme};
 use serde_json::json;
 use std::{fs, path::PathBuf};
@@ -43,12 +44,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let field_file = format!("{name}-{row}-{column}.rgba");
                     if shape != ColorShape::Square {
                         let mut pixels = vec![0; (field_side * field_side * 4) as usize];
-                        let render = if shape == ColorShape::Circle {
-                            layer_ui::render_okhsv_disc
-                        } else {
-                            layer_ui::render_hls_field
-                        };
-                        assert!(render(field_side, model.wheel_components[0], &mut pixels));
+                        assert!(layer_ui::render_color_field(
+                            field_side,
+                            shape,
+                            model.wheel_components[0],
+                            RgbSpace::Srgb,
+                            RgbSpace::Srgb,
+                            &mut pixels
+                        ));
                         fs::write(output.join(&field_file), pixels)?;
                     }
                     items.push(json!({"key":format!("{row}-{column}"),"x":8+column as u32*(size+8),"y":8+row as u32*(size+8),

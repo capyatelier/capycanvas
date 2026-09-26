@@ -9,7 +9,7 @@ pub(super) fn hue_guide(w: &Workspace) -> gtk::gdk::Texture {
         .unwrap();
     let cache = wheel.imp().ring.borrow();
     let (side, shape, space, view, texture) = cache.as_ref().expect("visible wheel caches its hue guide");
-    assert_eq!(*shape, state(w).colors.wheel_shape());
+    assert_eq!(*shape, state(w).colors.shape);
     assert_eq!(*space, state(w).colors.rgb_space());
     assert_eq!(*view, wheel.imp().view.get());
     assert_eq!(
@@ -76,7 +76,7 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
     assert!(
         maximum <= 2,
         "{:?} hue guide differs from native gradient by {maximum}/255 at {worst:?}, side {side}",
-        colors.wheel_shape()
+        colors.shape
     );
 }
 
@@ -442,7 +442,7 @@ fn native_color_panel_input() {
                 .unwrap();
             let p = locate(&format!("color-shape-{index}"), 0.5, 0.5);
             gesture(p, p);
-            assert_eq!(state(&w).colors.wheel_shape(), expected);
+            assert_eq!(state(&w).colors.shape, expected);
             assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Shape);
             assert_eq!(state(&w).colors.readout_label(), match expected {
                 layer_ui::ColorShape::Circle => "OKLCH",

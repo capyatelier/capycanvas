@@ -259,12 +259,12 @@ fn apple_display_previews_keep_p3_chroma_without_changing_paint_definitions() {
         let panel = &snapshot["color_panel"];
         assert_eq!(panel["marker_color"], json!([1.,0.5,0.]));
         assert_eq!(panel["swatches"][0]["rgba"], json!([1.,0.5,0.,0.5]));
-        assert_eq!(panel["outside_display_gamut"], false);
-        assert_eq!(panel["outside_document_gamut"], true);
         assert_eq!(app.state()["colors"], state["colors"]);
         assert_eq!(state["colors"]["foreground"], definition);
         let colors = &unsafe { &*app.0 }.host.session.state().colors;
-        assert!(colors.view().outside_display_gamut, "An sRGB fallback still reports the actual lost gamut");
+        let validation = |display| layer_ui::color_validation(colors.definition(), colors.rgb_space(), display, false).unwrap();
+        assert!(validation(DISPLAY_SPACE).ends_with("Outside document gamut"));
+        assert!(validation(layer_core::color::RgbSpace::Srgb).contains("Outside sRGB preview gamut"), "An sRGB fallback still reports the actual lost gamut");
         assert_ne!(colors.view().marker_color, colors.view_in(DISPLAY_SPACE).marker_color);
     }
 }
