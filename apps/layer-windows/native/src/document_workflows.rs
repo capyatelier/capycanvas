@@ -2,16 +2,14 @@
 //! artwork, converts profiles, or decides how an edit enters history.
 use layer_core::{Project, color::RgbSpace};
 use layer_host::{
-    NativeHost, Renderer,
+    NativeHost,
     export::ExportTask,
     tasks::{ColorTask, SourceTask},
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
-use layer_ui::{DocumentRequest, HostRequestKind, UiSession};
+use layer_ui::{DocumentRequest, HostRequestKind};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::io::Write;
-use std::time::{Duration, Instant};
 
 #[path = "document_proof.rs"]
 mod proof;
@@ -718,8 +716,9 @@ impl Task {
 mod tests {
     use super::*;
     use layer_core::color::{ColorProfile, SampleDepth};
+    use layer_host::Renderer;
     use layer_render_wgpu::WgpuRasterizer;
-    use layer_ui::{CommandId, Platform, UiAction};
+    use layer_ui::{CommandId, Platform, UiAction, UiSession};
     use std::time::{Duration, Instant};
     fn begin(host: &mut NativeHost, command: CommandId) -> Box<Task> {
         host.dispatch(UiAction::Invoke { command }).unwrap();
