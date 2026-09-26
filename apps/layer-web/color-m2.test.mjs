@@ -278,7 +278,7 @@ export async function checkProfileLibrary({evaluate}) {
     const corrupt=(await layerApp.app.profile_library('list')).find(p=>p.id===libraryId).issue;
     let rejected=false;try{await layerApp.app.profile_library('get',libraryId)}catch(e){rejected=String(e).includes('changed')}
     await layerApp.app.profile_library('import',undefined,libraryBytes);
-    const recipe={...layerApp.app.export_form().recipes[0][1],profile};const saved=await layerApp.app.export_presets({type:'save',name:'Library ownership '+Date.now(),recipe});
+    const recipe={...(await layerApp.app.export_presets({type:'get',index:0})).recipe,profile};const saved=await layerApp.app.export_presets({type:'save',name:'Library ownership '+Date.now(),recipe});
     await layerApp.app.profile_library('remove',libraryId);
     const retained=JSON.stringify((await layerApp.app.export_presets({type:'get',index:Number(saved.index)})).recipe.profile.profile.Icc)===JSON.stringify(profile.profile.Icc);
     await layerApp.app.export_presets({type:'remove',index:Number(saved.index)});await layerApp.app.profile_library('import',undefined,libraryBytes);

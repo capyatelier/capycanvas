@@ -118,7 +118,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     // and retry without touching the document or publishing a partial file.
     await begin('avif');
     const cancellation=await evaluate(`(async()=>{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;
-      const recipe=layerApp.app.export_draft(layerApp.app.export_form().recipes[0][1],{type:'format',value:'AvifHdrMapped'}).recipe;
+      const recipe=layerApp.app.export_draft((await layerApp.app.export_presets({type:'get',index:0})).recipe,{type:'format',value:'AvifHdrMapped'}).recipe;
       recipe.size={Fit:{bounds:[1024,1024],enlarge:true}};const c=layerApp.app.capture_control();
       const post=Worker.prototype.postMessage;let timer,encoding=false,started;
       Worker.prototype.postMessage=function(message,...args){const result=post.call(this,message,...args);if(message.request?.operation==='output-encode'){encoding=true;started=performance.now();timer=setTimeout(()=>c.cancel(),25)}return result};

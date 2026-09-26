@@ -173,9 +173,6 @@ impl ExportRecipe {
     /// Validate the complete delivery transform and size on a file worker.
     pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
         self.validate()?;
-        if self.format == ExportFormat::Exr && self.profile != ExportProfile::builtin(document.color.space) {
-            return Err("OpenEXR preserves the document primaries; convert the document color space first".into());
-        }
         if self.format.is_hdr() && !document.color.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
         if layer_color::profile_channels(&self.profile.profile)? != self.profile.channels {
             return Err("Profile channels do not match the ICC data".into());
@@ -259,34 +256,11 @@ impl ExportRecipe {
         }
         self.size.extent([1, 1])?;
         self.encoding.validate(self.depth)?;
-        if self.format == ExportFormat::Exr {
-            if self.depth != SampleDepth::F32 || !matches!(self.profile.profile, ColorProfile::Builtin(_)) || self.profile.channels != ProfileChannels::Rgb || self.background != ExportBackground::Preserve || self.encoding != Default::default() {
-                return Err("OpenEXR requires linear Float32 RGB, a built-in set of primaries, preserved alpha and no dither".into());
-            }
-            return Ok(());
-        }
-        if self.format.is_hdr() && (self.depth != SampleDepth::U16 || self.profile != ExportProfile::builtin(RgbSpace::Srgb) || (self.background != ExportBackground::Preserve && self.format.gainmap()!=Some(layer_color::photo::GainMapFormat::Jpeg)) || self.encoding != OutputEncoding::default()) {
-            return Err("HDR delivery uses its defined encoding with no ICC or dither override".into());
-        }
-        if self.depth.is_float() { return Err("Choose integer SDR or PQ PNG delivery".into()); }
-        if self.profile.channels == ProfileChannels::Cmyk {
-            if self.format == ExportFormat::Png {
-                return Err("Choose TIFF or JPEG for a CMYK profile".into());
-            }
-            if self.background == ExportBackground::Preserve {
-                return Err("Choose a background for CMYK transparency".into());
-            }
-        }
         if !(1..=100).contains(&self.jpeg_quality) {
             return Err("JPEG quality must be between 1 and 100".into());
         }
-        if self.format == ExportFormat::Jpeg {
-            if self.depth != SampleDepth::U8 {
-                return Err("JPEG output requires 8-bit samples".into());
-            }
-            if self.background == ExportBackground::Preserve {
-                return Err("Choose a background for JPEG transparency".into());
-            }
+        if self.clone().draft(ExportDraftAction::Refresh).recipe != *self {
+            return Err("Unsupported export combination".into());
         }
         Ok(())
     }
@@ -404,7 +378,6 @@ impl ExportRecipe {
 #[derive(Serialize)]
 pub struct ExportForm {
     pub profiles: Vec<ExportProfile>,
-    pub recipes: Vec<(&'static str, ExportRecipe)>,
     pub extent: [u32; 2],
 }
 impl ExportForm {
@@ -433,14 +406,6 @@ impl ExportForm {
         }
         Self {
             profiles,
-            recipes: vec![
-                ("Web / Share", ExportRecipe::web_share()),
-                ("Wide-color image", ExportRecipe::wide_color()),
-                (
-                    "Further editing",
-                    ExportRecipe::further_editing(document.color),
-                ),
-            ],
             extent: [document.width, document.height],
         }
     }
@@ -647,5 +612,12 @@ mod tests {
             assert!(integer.formats.iter().all(|f|!f.is_hdr()));
         }
     }
-
+    #[test]
+    fn exr_validates_for_any_document_primaries() {
+        let mut document=layer_core::Document::new("P3",8,8);
+        document.color=DocumentColor{space:RgbSpace::DisplayP3,depth:SampleDepth::F32};
+        let recipe=ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
+        assert_eq!(recipe.profile,ExportProfile::builtin(RgbSpace::Srgb));
+        recipe.validate_for_document(&document).unwrap();
+    }
 }

@@ -208,7 +208,7 @@ export async function checkHdr({call,evaluate,settle}) {
       await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
       await set('Dynamic range',range);if(range==='sdr')await set('Bit depth','U8');
       if(range==='hdr'){
-        const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const base=layerApp.app.export_form().recipes[0][1];const recipe=layerApp.app.export_draft(base,{type:'format',value:'PngHdr'}).recipe;await layerApp.app.export_image(id,recipe,c,false);return null}catch(e){return String(e)}finally{c.free()}})()`);
+        const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;const recipe=layerApp.app.export_draft(base,{type:'format',value:'PngHdr'}).recipe;await layerApp.app.export_image(id,recipe,c,false);return null}catch(e){return String(e)}finally{c.free()}})()`);
         assert.match(failure,/range|BT.2020/i,'Strict HDR rejects unrepresentable colors');
         await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
         assert.ok(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').disabled`));

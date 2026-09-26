@@ -71,6 +71,10 @@ class AndroidRasterTest {
         ColorPreferencesStore.directoryForTest=null
     }
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
+    private fun builtinRecipe(index: Int): JSONObject {
+        val color = native { JSONObject(Native.query(it, obj("type" to "document_color").toString())) }
+        return runBlocking { ColorPreferencesStore.presets(activity, color, obj("type" to "get", "index" to index)) }.getJSONObject("recipe")
+    }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
     @Test fun diagnosticsSampleInOpenColumns() {
@@ -605,7 +609,7 @@ class AndroidRasterTest {
             }
         }
         open(original);refresh()
-        val initial=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)}
+        val initial=builtinRecipe(0)
         val recipe=native{JSONObject(Native.query(it,obj("type" to "export_draft","recipe" to initial,"action" to obj("type" to "format","value" to "AvifHdrMapped")).toString())).getJSONObject("recipe")}
         val color=native{JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
         val preset=runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Portable HDR","recipe" to recipe))}
@@ -677,8 +681,8 @@ class AndroidRasterTest {
             assertTrue(original.getJSONArray("channels").objects().any{it.getLong("above")>0})
             for((format,extension) in listOf("JpegHdrMapped" to "jpg","AvifHdrMapped" to "avif")) {
                 open(File(files,"large-master.capy"));refresh()
+                val basic=builtinRecipe(0)
                 val recipe=native{h->
-                    val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)
                     JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to format)).toString())).getJSONObject("recipe")
                 }.put("jpeg_quality",quality).put("background",if(extension=="jpg")"White" else "Preserve")
                 val entry=obj("format" to format);report.getJSONArray("exports").put(entry)
@@ -851,7 +855,7 @@ class AndroidRasterTest {
         try{task=native{Native.toneTask(it,cancel)};Native.captureCancel(cancel);assertTrue(runCatching{Native.toneWork(task)}.isFailure);assertFalse(native{Native.toneApply(it,task)})}finally{Native.toneRelease(task);Native.captureFree(cancel)}
         File(activity.getExternalFilesDir(null),"hdr-sdr-rendition.json").writeText(form().getJSONObject("rendition").toString())
         val sdr=png("hdr-sdr.png")
-        val recipe=native{h->val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1);JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
+        val basic=builtinRecipe(0);val recipe=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
         assertTrue("Strict PQ delivery rejects out-of-range paint",runCatching{png("hdr-strict-rejected.png",recipe)}.isFailure)
         val clipped=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "PngHdrMapped")).toString())).getJSONObject("recipe")}
         png("hdr-pq.png",clipped)
@@ -1107,7 +1111,7 @@ class AndroidRasterTest {
         compose.onNodeWithText("Choose Profile…").assertExists();SystemClock.sleep(400);cancel()
         assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
-        val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
+        val wide=builtinRecipe(1)
         png("proof-original.png",wide);open(File(files,"proof-original.png"))
         val profiles=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("profiles")}
         val original=profiles.objects().first{it.getJSONObject("profile").has("Icc")}
@@ -1803,8 +1807,7 @@ class AndroidRasterTest {
         val after = manifest(save("wide16-reopened.capy"))
         assertEquals(before.getJSONObject("document").getJSONObject("color").toString(), after.getJSONObject("document").getJSONObject("color").toString())
         assertEquals(before.getJSONArray("blobs").toString(), after.getJSONArray("blobs").toString())
-        val form = native { JSONObject(Native.query(it, obj("type" to "export_form").toString())) }
-        val recipe = JSONObject(form.getJSONArray("recipes").getJSONArray(2).getJSONObject(1).toString()).put("format", "Png")
+        val recipe = builtinRecipe(2).put("format", "Png")
         val output = png("wide16.png", recipe)
         assertEquals("PNG uses 16-bit samples", 16, output[24].toInt())
         open(File(files, "wide16.png"))
@@ -1851,7 +1854,7 @@ class AndroidRasterTest {
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
     @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
-        val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
+        val wide=builtinRecipe(1)
         png("profile-library.png",wide);open(File(files,"profile-library.png"))
         val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
         val profile=form.getJSONArray("profiles").objects().first{it.getJSONObject("profile").has("Icc")}
@@ -1866,7 +1869,7 @@ class AndroidRasterTest {
             try {ProfileStore.get(activity,id);fail("Corrupt profile was accepted")}catch(e:Exception){assertTrue(e.message.orEmpty().contains("changed"))}
             ProfileStore.import(activity,bytes)
             val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
-            val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(0).getJSONObject(1).toString()).put("profile",profile)
+            val recipe=ColorPreferencesStore.presets(activity,color,obj("type" to "get","index" to 0)).getJSONObject("recipe").put("profile",profile)
             val saved=ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Embedded library copy","recipe" to recipe))
             ProfileStore.remove(activity,id)
             assertTrue(ProfileStore.list(activity).isEmpty())
@@ -1895,10 +1898,9 @@ class AndroidRasterTest {
 
     @Test fun exportPresetsPersistAndRestoreEveryDeliveryChoice() {
         val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
-        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
         fun store(action:JSONObject)=runBlocking{ColorPreferencesStore.presets(activity,color,action)}
         fun canonical(recipe:JSONObject)=native{Native.query(it,obj("type" to "export_validate","recipe" to recipe).toString())}
-        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(1).getJSONObject(1).toString())
+        val recipe=store(obj("type" to "get","index" to 1)).getJSONObject("recipe")
             .put("depth","U16").put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(321,123)),"enlarge" to false))).put("resolution",obj("Ppi" to 287))
         val saved=store(obj("type" to "save","name" to "Tablet test delivery","recipe" to recipe))
         val index=saved.getInt("index");assertEquals(4,index)
@@ -1930,8 +1932,7 @@ class AndroidRasterTest {
             native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick()
         }
         fresh("ProPhoto","U16");stroke(0.0)
-        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
-        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(2).getJSONObject(1).toString()).put("format","Png")
+        val recipe=builtinRecipe(2).put("format","Png")
         val pixels=png("placement-original.png",recipe)
         open(File(files,"placement-original.png"))
         val source=manifest(save("placement-original.capy")).getJSONObject("tiled_sources")
@@ -2190,8 +2191,7 @@ class AndroidRasterTest {
             native { Native.documentComplete(it, id, false, "null") }
             assertEquals(0L, file.length())
         } finally { Native.projectFree(outputTask); Native.captureFree(outputControl) }
-        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
-        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(0).getJSONObject(1).toString())
+        val recipe=builtinRecipe(0)
             .put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(128,128)),"enlarge" to false)))
         for(cancelled in listOf(false,true)) {
             val flag=Native.captureControl();if(cancelled)Native.captureCancel(flag)
