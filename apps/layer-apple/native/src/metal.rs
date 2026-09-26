@@ -36,7 +36,7 @@ struct Surface {
 pub struct MetalHost {
     pub(crate) proof: layer_ui::proof_workflow::ProofView,
     surface: Option<Surface>,
-    pub(crate) local_tone: crate::local_tone::LocalTone,
+    pub(crate) local_tone: layer_host::tone::ToneService,
     headroom: f32,
     instance: Option<wgpu::Instance>,
     cursor: CanvasCursor,

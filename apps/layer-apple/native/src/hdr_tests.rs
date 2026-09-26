@@ -146,7 +146,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             assert!(Instant::now() < deadline, "{:?}", a.metal.local_tone.error);
             std::thread::sleep(Duration::from_millis(10));
         }
-        let count = unsafe { &*app.0 }.metal.local_tone.completed;
+        let count = unsafe { &*app.0 }.metal.local_tone.status()["publications"].clone();
         let guide = unsafe { &*app.0 }.metal.local_tone.guide.clone().unwrap();
         let start = Instant::now();
         proof(
@@ -165,7 +165,10 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             &app,
             json!({"type":"number","phase":"up","key":"exposure","value":1.}),
         );
-        assert_eq!(unsafe { &*app.0 }.metal.local_tone.completed, count);
+        assert_eq!(
+            unsafe { &*app.0 }.metal.local_tone.status()["publications"],
+            count
+        );
         assert!(std::sync::Arc::ptr_eq(
             &guide,
             unsafe { &*app.0 }.metal.local_tone.guide.as_ref().unwrap()

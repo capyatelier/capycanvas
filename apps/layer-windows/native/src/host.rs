@@ -206,7 +206,10 @@ impl CapyHost {
             service.poll(&mut self.native)?;
             service.proof.poll(&mut self.native)?;
             if !self.gpu.is_lost(self.native.session.engine().backend().0.as_ref().map(|g| g.device())) {
-                service.tone.poll(&mut self.native, self.gpu_generation)?;
+                if service.tone.tick(&self.native)? {
+                    self.native.dirty = true;
+                    self.native.invalidate_snapshot();
+                }
             }
         }
         self.sync_document();
@@ -382,7 +385,7 @@ impl CapyHost {
         let headroom = if state.preview_sdr || state.soft_proof || state.gamut_warning || state.sdr_appearance_preview.is_some() { 1. }
             else { self.display.available_headroom(config.format) };
         presenter.set_hdr_view(gpu, gpu.document_color().depth.is_float().then(|| self.native.session.effective_sdr_rendition()), headroom).map_err(err)?;
-        presenter.set_gpu_local_tone_guide(gpu, self.documents.as_ref().and_then(|s| s.tone.preview(&self.native, self.gpu_generation))).map_err(err)?;
+        presenter.set_gpu_local_tone_guide(gpu, self.documents.as_ref().and_then(|s| s.tone.current(&self.native))).map_err(err)?;
         presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
         presenter.set_color_picker(gpu, picker);

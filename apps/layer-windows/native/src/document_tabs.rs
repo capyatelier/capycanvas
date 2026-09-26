@@ -78,7 +78,7 @@ impl DocumentService {
             && self.recovery.as_ref().is_none_or(|r| !r.restoring())
     }
     fn retire_gpu(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        self.tone.stop()?;
+        self.tone.clear();
         self.proof.stop()?;
         self.proof.view = Default::default();
         if let Some(gpu) = host.session.renderer_mut().0.take() {

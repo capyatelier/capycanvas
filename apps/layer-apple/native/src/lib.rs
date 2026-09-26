@@ -1,7 +1,6 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
-mod local_tone;
 mod document_tabs;
 pub use document_tabs::*;
 

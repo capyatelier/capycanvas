@@ -293,7 +293,7 @@ pub(crate) struct DocumentService {
     close_window: bool,
     close_next: bool,
     pub proof: crate::proof::Service,
-    pub tone: crate::tone::Service,
+    pub tone: layer_host::tone::ToneService,
     pub palettes: crate::palette_files::Service,
     worker: Worker,
     active: Option<Active>,
@@ -310,7 +310,7 @@ impl DocumentService {
         let notify = wake.clone();
         Ok(Self {
             proof: crate::proof::Service::new(wake.clone()),
-            tone: crate::tone::Service::new(wake.clone()),
+            tone: layer_host::tone::ToneService::new(Some(wake.clone())),
             palettes: crate::palette_files::Service::new(wake.clone()),
             wake,
             tabs: Default::default(),
@@ -344,7 +344,7 @@ impl DocumentService {
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.tab_gpu = None;
-        self.tone.stop()?;
+        self.tone.clear();
         self.proof.stop()?;
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() {
@@ -804,12 +804,12 @@ impl DocumentService {
         for (_, parked) in self.tabs.parked_mut() {
             if let Some(recovery) = &mut parked.owner.recovery { recovery.stop()?; }
         }
-        let tone = self.tone.stop();
+        self.tone.clear();
         let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() { self.worker.retire_workflow(task); }
         let worker = self.worker.stop();
-        proof.and(tone).and(worker)
+        proof.and(worker)
     }
 }
 

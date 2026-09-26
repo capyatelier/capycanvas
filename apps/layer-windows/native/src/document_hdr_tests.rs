@@ -88,10 +88,10 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
         .unwrap();
     capture.preview_linear_document([32, 24]).unwrap().pixels
 }
-fn hdr_wait_tone(service: &mut crate::tone::Service, host: &mut NativeHost, generation: u64) {
+fn hdr_wait_tone(service: &mut layer_host::tone::ToneService, host: &mut NativeHost) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        service.poll(host, generation).unwrap();
+        service.tick(host).unwrap();
         assert!(service.error.is_none(), "{:?}", service.error);
         if service.status()["ready"] == true {
             break;
@@ -160,8 +160,8 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         let master = hdr_linear(&host);
         assert!(master.iter().any(|p| p[0] > 1.));
         let checkpoint = host.session.engine().checkpoint();
-        let mut tone = crate::tone::Service::new(Arc::new(|| {}));
-        hdr_wait_tone(&mut tone, &mut host, 1);
+        let mut tone = layer_host::tone::ToneService::new(Some(Arc::new(|| {})));
+        hdr_wait_tone(&mut tone, &mut host);
         let downloaded = tone
             .guide
             .as_ref()
@@ -250,7 +250,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path),
             sdr
         );
-        tone.poll(&mut host, 1).unwrap();
+        tone.tick(&host).unwrap();
         assert_eq!(
             tone.status()["publications"],
             publications,
@@ -451,14 +451,15 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         drop(cancelled);
         assert_eq!(std::fs::read(&png_path).unwrap(), changed);
         // Stop a pending analysis before releasing a removed process device.
-        tone.poll(&mut host, 2).unwrap();
+        tone.clear();
+        tone.tick(&host).unwrap();
         assert!(
             tone.guide.is_none(),
-            "Old-device guide survived a generation change"
+            "Old-device guide survived a device retirement"
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         while tone.status()["pending"] != true {
-            tone.poll(&mut host, 2).unwrap();
+            tone.tick(&host).unwrap();
             assert!(
                 Instant::now() < deadline,
                 "Recovery fixture never started analysis"
@@ -466,7 +467,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             std::thread::sleep(Duration::from_millis(10));
         }
         crate::gpu_recovery_tests::remove_device(host.session.engine().backend(), &state);
-        tone.stop().unwrap();
+        tone.clear();
         drop(host.session.renderer_mut().0.take());
         let (replacement, next_state) = hdr_renderer(color);
         state = next_state;
@@ -478,8 +479,8 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         settle(&mut host);
         assert_eq!(host.session.engine().document().layers, layers);
         assert_eq!(hdr_linear(&host), master);
-        hdr_wait_tone(&mut tone, &mut host, 3);
-        tone.stop().unwrap();
+        hdr_wait_tone(&mut tone, &mut host);
+        tone.clear();
         state.check().unwrap();
         assert_eq!(
             hdr_delivery(
