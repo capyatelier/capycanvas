@@ -68,13 +68,10 @@ their compact layouts (below 600px/dp wide) keep a 16px edge margin. Escape
 returns from parameter entry to the query, then dismisses. Reopening starts
 with an empty query.
 
-On GTK, Web and Android the bar is panel glass, as described in
+On every host with command search the bar is panel glass, as described in
 [panel transparency](panel-transparency.md): its body uses the panel glass fill
 and publishes its bounds, so the presenter blurs the artwork behind it. The
-search field stays opaque. Menus, popovers and tooltips remain opaque. The
-Windows bar still uses the opaque panel color and composes its own footer from
-the same fields; adopting the glass fill, `detail` and `CommandSearchStyle::top`
-there is Windows follow-up work.
+search field stays opaque. Menus, popovers and tooltips remain opaque.
 
 Hosts retain the meaningful editor focus before opening. Palette focus routes
 Undo/Redo to color reorder history; the search entry taking focus cannot switch
@@ -103,8 +100,10 @@ WindowManager resize when the result count changes. IME insets constrain the
 scrolling results while the entry and selected-result explanation stay visible.
 The entrance uses the native animation duration scale.
 
-Windows uses a light-dismiss WinUI popup placed like GTK's, with a native
-TextBox for text and IME, a search glyph and a close button. Result rows expose
+Windows uses a light-dismiss WinUI popup placed by `CommandSearchStyle`, with a
+native TextBox for text and IME, a search glyph and a close button. Its footer
+shows the shared `detail`, and its body joins the workspace glass regions while
+open. Result rows expose
 UI Automation names, help text and selection. While search is closed, focus
 changes under the window root report canvas, palette or text scope. Search
 packets use their own latest-value slot beside workspace motion and camera,

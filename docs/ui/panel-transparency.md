@@ -6,9 +6,9 @@
 High. It is a shared setting (`Settings::transparency`) presented by GTK, Web,
 Android, macOS, iPadOS and Windows. The other levels show a blurred copy of the
 artwork behind panels, tab strips, drawers, their connectors, title-bar
-controls and the [command bar](command-search.md) on GTK, Web and Android.
-The [canvas action bar](canvas-action-bar.md) is a glass surface in the panel
-layer on every host that presents it, and it keeps its glass in Zen.
+controls and the [command bar](command-search.md) on GTK, Web, Android and
+Windows. The [canvas action bar](canvas-action-bar.md) is a glass surface in
+the panel layer on every host that presents it, and it keeps its glass in Zen.
 Controls inside panels, such
 as inputs, lists and sliders, stay opaque. Menus, popovers and tooltips stay
 opaque.
@@ -68,8 +68,8 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
   editor-workspace space. One `GlassRegistry` per window sends them, once per
   run-loop turn, through `capy_apple_glass_regions`; the render owner scales
   them to surface pixels each frame, so display changes need no republication.
-- Windows: `WorkspaceView` measures panel groups, collapsed columns, drawers
-  and the zoom readout. `HeaderView` walks its tree for backgrounds painted
+- Windows: `WorkspaceView` measures panel groups, collapsed columns, drawers,
+  the zoom readout, the canvas action bar and the open command bar. `HeaderView` walks its tree for backgrounds painted
   with a glass brush and skips their contents. After each workspace or header
   layout pass, `CanvasWindow` sends the regions and drawer connections through
   `capy_glass`, and the host scales them to physical pixels.

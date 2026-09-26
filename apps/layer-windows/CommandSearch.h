@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "WorkspaceGeometry.h"
 
 namespace CapyUi {
 struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
@@ -15,6 +16,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
     J view;
     hstring signature,parameterId,theme,focusScope=L"canvas";
     bool updating=false,open=false;
+    std::function<void()> changed;
     weak_ref<Control> previousFocus;
     std::vector<Button> rows;
     UIElement::GettingFocus_revoker focusChanged;
@@ -67,12 +69,14 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         detail.Opacity(.7);detail.FontSize(12);detail.Height(20);detail.Margin({inset,0,inset,0});
         detail.TextTrimming(TextTrimming::CharacterEllipsis);AutomationProperties::SetAutomationId(detail,L"command-search-detail");
         body.Children().Append(detail);
-        frame.Child(body);frame.Padding({inset,inset,inset,inset});frame.CornerRadius({12,12,12,12});frame.BorderThickness({1,1,1,1});
+        frame.Child(body);frame.Padding({inset,inset,inset,inset});double radius=num(metrics,L"radius",12);frame.CornerRadius({radius,radius,radius,radius});frame.BorderThickness({1,1,1,1});
+        frame.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->open&&self->changed)self->changed();});
         frame.Shadow(ThemeShadow());frame.Translation({0,0,32});
         AutomationProperties::SetAutomationId(frame,L"command-bar");AutomationProperties::SetName(frame,L"Command search");
         popup.Child(frame);popup.IsLightDismissEnabled(true);
         popup.Closed([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->open&&!self->updating){
             self->open=false;self->data->popup(false);self->send(O({{L"type",S(L"close")}}));self->restoreFocus();
+            if(self->changed)self->changed();
         }});
         entry.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->view.Size()&&!self->parameter().Size())
             self->send(O({{L"type",S(L"query")},{L"text",S(self->entry.Text())}}));});
@@ -93,8 +97,13 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         if(auto focus=previousFocus.get();focus&&focus.IsLoaded())focus.Focus(FocusState::Programmatic);
         previousFocus=nullptr;
     }
+    void AppendGlass(A& regions,UIElement const& reference)const{
+        if(!open)return;
+        double radius=num(style(),L"radius",12);
+        appendGlass(regions,frame,reference,{radius,radius,radius,radius});
+    }
     void paint(){
-        frame.Background(data->brush(L"panel"));frame.BorderBrush(data->tint(L"text",26));
+        frame.Background(data->glass(L"panel"));frame.BorderBrush(data->tint(L"text",26));
         close.Content(icon(L"close",data->theme()));
         auto glyph=icon(L"search",data->theme());glyph.Opacity(.65);glyph.Margin({10,0,0,0});
         glyph.HorizontalAlignment(HorizontalAlignment::Left);glyph.VerticalAlignment(VerticalAlignment::Center);
@@ -133,7 +142,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         updating=true;
         if(value.ValueType()!=JsonValueType::Object){
             view=J{};
-            if(open){open=false;popup.IsOpen(false);data->popup(false);restoreFocus();}
+            if(open){open=false;popup.IsOpen(false);data->popup(false);restoreFocus();if(changed)changed();}
             updating=false;return;
         }
         view=value.GetObject();auto input=parameter();bool entering=input.Size()!=0;
@@ -157,18 +166,15 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         }
         results.Visibility(entering?Visibility::Collapsed:Visibility::Visible);
         empty.Visibility(!entering&&!array(view,L"results").Size()?Visibility::Visible:Visibility::Collapsed);
-        auto current=entering?input:selected();
-        hstring text=str(view,L"error");
-        if(text.empty())text=str(current,L"disabled_reason");
-        if(text.empty())text=str(current,L"description");
+        auto text=str(view,L"detail");
         detail.Text(text);ToolTipService::SetToolTip(detail,text.empty()?nullptr:box_value(text));
         if(!open){
             previousFocus=FocusManager::GetFocusedElement(host.XamlRoot()).try_as<Control>();
             double width=std::clamp(host.ActualWidth()-num(style(),L"inset",12)*4,240.,num(style(),L"width",560));
             frame.Width(width);popup.XamlRoot(host.XamlRoot());
-            double inset=num(style(),L"inset",12);
-            popup.HorizontalOffset(std::max(0.,(host.ActualWidth()-width)/2));popup.VerticalOffset(std::clamp(host.ActualHeight()/5,inset*4,inset*16));
-            open=true;data->popup(true);popup.IsOpen(true);entry.Focus(FocusState::Programmatic);
+            popup.HorizontalOffset(std::max(0.,(host.ActualWidth()-width)/2));
+            popup.VerticalOffset(std::clamp(host.ActualHeight()/5,num(style(),L"top_min",48),num(style(),L"top_max",192)));
+            open=true;data->popup(true);popup.IsOpen(true);entry.Focus(FocusState::Programmatic);if(changed)changed();
         }
         updating=false;
     }

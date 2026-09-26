@@ -139,7 +139,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
-        commandSearch->data=data;commandSearch->init(root);
+        commandSearch->data=data;commandSearch->changed=[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();};commandSearch->init(root);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         measureHost.IsHitTestVisible(false);measureHost.Opacity(0);Canvas::SetLeft(measureHost,-100000);root.Children().Append(measureHost);
@@ -756,7 +756,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())appendGlass(regions,group.frame,reference,{group.corners[0],group.corners[1],group.corners[2],group.corners[3]},true);
         collapsed->AppendGlass(regions,connections,reference);drawers->AppendGlass(regions,connections,reference);
         appendGlass(regions,cameraSurface,reference,cornerRadii(cameraSurface.CornerRadius()));
-        canvasBar->AppendGlass(regions,reference);
+        canvasBar->AppendGlass(regions,reference);commandSearch->AppendGlass(regions,reference);
         return regions;
     }
     void updateCamera(J const& view){
