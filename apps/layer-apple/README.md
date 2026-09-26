@@ -901,7 +901,7 @@ action. It does not measure UIKit pixels or hardware presentation cadence:
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
-cargo test -p layer-apple layout_apple_abi -- --nocapture
+cargo test -p layer-apple apple_request_seven_extends_the_shared_layout_update
 ```
 
 Check observation fidelity and actual SwiftUI rendered-value propagation without

@@ -2409,7 +2409,7 @@ compatibility path exactly. Intermediate updates carry no persistence request;
 release, cancellation, Undo and Redo preserve the full workspace state.
 
 ```sh
-cargo test -p layer-apple layout_apple_abi -- --nocapture
+cargo test -p layer-apple apple_request_seven_extends_the_shared_layout_update
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel-measurements.swift
 ```

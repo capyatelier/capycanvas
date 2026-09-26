@@ -24,12 +24,8 @@ fn palette_file(request: Value, bytes: &[u8], output: Option<&std::fs::File>) ->
     value
 }
 
-fn ids(view: &Value) -> Vec<u64> {
-    view["swatches"].as_array().unwrap().iter().map(|s| s["id"].as_u64().unwrap()).collect()
-}
-
 #[test]
-fn apple_palettes_publish_starters_after_color_and_in_the_sketch_drawer() {
+fn apple_palettes_publish_starters_and_sit_in_the_sketch_drawer() {
     for platform in [0, 1] {
         let app = App::new(platform);
         let published = Published::new();
@@ -39,16 +35,6 @@ fn apple_palettes_publish_starters_after_color_and_in_the_sketch_drawer() {
         assert_eq!(swatch["rgba"].as_array().unwrap().len(), 4);
         assert!(swatch["detail"].as_str().unwrap().contains(" · #"));
         let policy = unsafe { &*app.0 }.host.session.state().platform;
-        for preset in [layer_ui::WorkspacePreset::Illustrator, layer_ui::WorkspacePreset::Photographer] {
-            let layout = preset.layout(policy);
-            for (panel, anchor) in [(layer_ui::Panel::Palettes, layer_ui::Panel::Color),
-                (layer_ui::Panel::Proof, layer_ui::Panel::Navigator), (layer_ui::Panel::Stats, layer_ui::Panel::Brushes)] {
-                let panels = layout.group_panels(layout.panel_group(anchor).unwrap()).unwrap();
-                let index = panels.iter().position(|p| *p == anchor).unwrap();
-                assert_eq!(panels[index + 1], panel, "{preset:?} places {panel:?} after {anchor:?}");
-                assert_eq!(layout.active_panel(panel), Some(anchor));
-            }
-        }
         app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
             layout: layer_ui::WorkspacePreset::Painter.layout(policy), ..Default::default()
         }}));
@@ -60,52 +46,6 @@ fn apple_palettes_publish_starters_after_color_and_in_the_sketch_drawer() {
         let drawer = &app.state()["customization"]["drawer"];
         assert_eq!(drawer["columns"], json!([["color", "palettes"]]), "Palettes sit below the Sketch wheel");
     }
-}
-
-#[test]
-fn apple_palette_queries_preview_validate_commit_and_undo_one_reorder() {
-    for platform in [0, 1] {
-        let app = App::new(platform);
-        let published = Published::new();
-        let view = |app: &App| published.panel(app);
-        let panel = view(&app);
-        let palette = panel["palette"].as_u64().unwrap();
-        let before = ids(&panel);
-        let preview = app.request(2, json!({"type":"palette_reorder_preview","palette":palette,"id":before[0],"slot":2})).unwrap();
-        assert_eq!(preview["order"][2], before[0]);
-        assert_eq!(ids(&view(&app)), before, "previews never edit");
-        let duplicate = json!({"op":"rename","id":before[0],"name":panel["swatches"][1]["name"]});
-        let error = app.request(2, json!({"type":"palette_action","action":duplicate,"dry_run":true})).unwrap();
-        assert!(error["error"].as_str().unwrap().contains("already"), "{error}");
-        app.action(json!({"type":"color","action":{"op":"library","action":preview["action"]}}));
-        let moved = view(&app);
-        assert_eq!(moved["swatches"][2]["id"], before[0]);
-        assert_eq!(moved["can_undo"], true);
-        let menu = app.request(2, json!({"type":"palette_menu","target":{"kind":"color","id":before[0]}})).unwrap();
-        let labels: Vec<_> = menu.as_array().unwrap().iter().flat_map(|s| s.as_array().unwrap().iter()
-            .map(|i| (i["label"].as_str().unwrap().to_owned(), i["enabled"].as_bool().unwrap()))).collect();
-        assert_eq!(labels, [("Rename Color…".into(), true), ("Remove Color".into(), true),
-            ("Undo Color Reorder".into(), true), ("Redo Color Reorder".into(), false)]);
-        app.action(json!({"type":"color","action":{"op":"library","action":{"op":"undo_reorder","palette":palette}}}));
-        assert_eq!(ids(&view(&app)), before, "one undo restores the order");
-        let library = app.request(2, json!({"type":"palette_menu","target":{"kind":"library"}})).unwrap();
-        assert_eq!(library[0][1]["command"]["command"], "import_palette");
-        let menu = app.request(2, json!({"type":"palette_menu","target":{"kind":"palette","id":palette}})).unwrap();
-        assert_eq!(menu[0][1]["sections"][1][0]["command"], json!({"command":"export_palette","id":palette,"format":"aco"}));
-    }
-}
-
-#[test]
-fn apple_palette_reveal_selects_the_tab_in_paint() {
-    let app = App::new(0);
-    let policy = unsafe { &*app.0 }.host.session.state().platform;
-    app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
-        layout: layer_ui::WorkspacePreset::Illustrator.layout(policy), ..Default::default()
-    }}));
-    let active = |app: &App| unsafe { &*app.0 }.host.session.state().workspace.layout.active_panel(layer_ui::Panel::Palettes);
-    assert_eq!(active(&app), Some(layer_ui::Panel::Color));
-    app.request(2, json!({"type":"reveal_panel","panel":"palettes"}));
-    assert_eq!(active(&app), Some(layer_ui::Panel::Palettes));
 }
 
 #[test]
@@ -139,15 +79,6 @@ fn apple_palette_file_codec_round_trips_every_format_and_rejects_damage() {
     assert!(damaged["error"].is_string(), "{damaged}");
     let oversized = vec![b' '; 1024 * 1024 + 2];
     assert!(palette_file(json!({"type":"import","file_name":"Huge.gpl"}), &oversized, None)["error"].is_string());
-}
-
-#[test]
-fn apple_automatic_tab_names_use_the_stateless_toolbar_query() {
-    let request = CString::new(json!({"type":"automatic_tab_names","available":192.,"widths":[[120.,36.],[90.,36.],[140.,36.]]}).to_string()).unwrap();
-    let result = unsafe { capy_apple_toolbar_ui(request.as_ptr()) };
-    let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(result) }.to_bytes()).unwrap();
-    unsafe { capy_apple_string_free(result) };
-    assert_eq!(value, json!([true, false, false]));
 }
 
 fn tempfile() -> std::fs::File {

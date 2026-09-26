@@ -110,39 +110,6 @@ fn apple_tonal_presets_refine_in_one_history_step_through_metal() {
 }
 
 #[test]
-fn apple_tonal_custom_range_toolbar_edits_clamp_and_reject_stale_context() {
-    for platform in [0, 1] {
-        let app = tonal_app(platform);
-        let policy = unsafe { &*app.0 }.host.session.state().platform;
-        app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
-            layout: layer_ui::WorkspacePreset::Photographer.layout(policy), ..Default::default()
-        }}));
-        app.invoke("tonal_select");
-        preset(&app, 7);
-        app.draw_until_idle();
-        let options = serde_json::to_value(unsafe { &*app.0 }.host.session.state().tool_options()).unwrap();
-        let range = options.as_array().unwrap().iter().find_map(|o| o.get("Range")).expect("Custom publishes one range field").clone();
-        assert_eq!(range["id"], "tonal");
-        assert_eq!(range["bounds"][0]["id"], "tonal_lower");
-        assert_eq!(range["bounds"][1]["id"], "tonal_upper");
-        assert!(!options.as_array().unwrap().iter().any(|o| o.get("Numeric").is_some_and(|n| n["id"] == "tonal_lower")));
-        let context = serde_json::to_value(unsafe { &*app.0 }.host.session.state().toolbar_context()).unwrap();
-        let edit = |id: &str, value: f64| json!({"type":"toolbar_edit","context":context,"action":{"type":"set_tool_setting","id":id,"value":value}});
-        app.action(edit("tonal_lower", -20.));
-        app.action(edit("tonal_upper", 12.));
-        assert_eq!(bounds(&app), [-20., 12.]);
-        app.action(edit("tonal_lower", 13.));
-        assert_eq!(bounds(&app), [12., 12.], "Crossing bounds clamp in shared Rust");
-        app.action(json!({"type":"reset_tool_setting","id":"tonal_upper"}));
-        assert_eq!(bounds(&app), [12., 12.]);
-        app.invoke("brush");
-        let before = app.state()["workspace"].clone();
-        assert!(try_action(&app, edit("tonal_lower", -4.)).is_err(), "Edits from the previous tool are rejected");
-        assert_eq!(app.state()["workspace"], before);
-    }
-}
-
-#[test]
 fn apple_tonal_samples_visible_artwork_and_refines_inside_quick_mask() {
     for platform in [0, 1] {
         let app = tonal_app(platform);

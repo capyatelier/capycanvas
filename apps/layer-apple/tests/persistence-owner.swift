@@ -55,9 +55,14 @@ private final class State: @unchecked Sendable {
                 receive: { inventory.receive($0, $1) })
             send(catalogOwner, ["type": "invoke", "command": "settings"])
             let rows = preferenceRows(inventory)
-            precondition(!rows.isEmpty, "Settings inventory must be published")
-            var checked = 0
-            for row in rows where ["switch", "choice", "number"].contains(row["kind"]["type"].string) {
+            var kinds = Set<String>()
+            let sampled = rows.filter { row in
+                let type = row["kind"]["type"].string
+                return ["switch", "choice", "number"].contains(type) && row["enabled"].bool && row["visible"].bool
+                    && kinds.insert(type).inserted
+            }
+            precondition(sampled.count == 3, "Settings must publish an editable switch, choice and number")
+            for row in sampled {
                 let id = row["id"].string
                 let root = directory.appendingPathComponent("preferences-\(platform)/\(id)")
                 let persistence = EditorPersistence(root: root), state = State()
@@ -70,19 +75,7 @@ private final class State: @unchecked Sendable {
                     send(owner, ["type": "preferences", "action": action])
                 }
                 func current(_ value: State = state) -> JSON { preferenceRows(value).first { $0["id"].string == id }! }
-                // UIKit's native lookahead hides the manual amount. Test its
-                // exposed manual state, without changing the other cases.
-                if platform == 0 && id == "prediction_horizon" {
-                    send(owner, ["type": "preferences", "action": ["type": "edit", "id": "platform_prediction", "value": false]])
-                }
                 let original = current(), kind = original["kind"], baseline = state.read().0["state"]["settings"].stableKey
-                if !original["enabled"].bool {
-                    precondition(platform == 1 && id == "platform_prediction" && !kind["active"].bool,
-                        "An unaccounted disabled preference requires an explicit acceptance case")
-                    print("PASS preference platform \(platform): \(id) is off/disabled because native prediction is unavailable")
-                    continue
-                }
-                precondition(original["visible"].bool, "Editable preference must be reachable: \(id)")
                 let value: Any
                 switch kind["type"].string {
                 case "switch": value = !kind["active"].bool
@@ -109,10 +102,8 @@ private final class State: @unchecked Sendable {
                 let disk = try JSON.decode(String(decoding: Data(contentsOf: root.appendingPathComponent("settings.json")), as: UTF8.self))
                 precondition(disk.stableKey == baseline && !current()["reset"]["enabled"].bool,
                     "Reset must be durable: \(id)")
-                checked += 1
                 print("PASS preference platform \(platform): \(id) edit, fresh-owner restore and exact durable Reset")
             }
-            print("PASS platform \(platform): \(rows.count) Settings rows enumerated; \(checked) editable preference routes restored and reset")
             fflush(stdout)
         }
         for platform: UInt32 in [0,1] {

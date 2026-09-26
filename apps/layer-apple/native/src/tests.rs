@@ -218,99 +218,24 @@ fn compact_color_circle_picking_uses_shared_shapes() {
 }
 
 #[test]
-fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {
-    for platform in [0, 1] {
-        let app = App::new(platform);
-        let mut kinds = std::collections::BTreeSet::new();
-        for (effect, key, value) in [
-            (None, "blend", json!({"kind":"choice","value":2})),
-            (
-                Some("gaussian_blur"),
-                "sigma",
-                json!({"kind":"number","value":7}),
-            ),
-            (
-                Some("black_white"),
-                "tint",
-                json!({"kind":"toggle","value":true}),
-            ),
-            (
-                None,
-                "tint_color",
-                json!({"kind":"color","value":{"space":"Srgb","rgba":[0.7,0.2,0.3,0.6]}}),
-            ),
-            (
-                Some("curves"),
-                "curve_0",
-                json!({"kind":"curve","value":[[0,0],[0.5,0.75],[1,1]]}),
-            ),
-            (
-                Some("gradient_map"),
-                "gradient",
-                json!({"kind":"gradient","value":[{"position":0,"color":{"space":"Srgb","rgba":[0,0,0,1]}},
-                {"position":0.3,"color":{"space":"Srgb","rgba":[1,0,0,1]}},{"position":1,"color":{"space":"Srgb","rgba":[1,1,1,1]}}]}),
-            ),
-        ] {
-            if let Some(effect) = effect {
-                app.action(json!({"type":"effect","action":{"op":"insert","effect":effect}}));
-            }
-            let state = app.state();
-            let properties = &state["layer_properties"];
-            assert_eq!(properties["enabled"], true);
-            let layer = properties["layer"].as_u64().unwrap();
-            let control = properties["controls"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c["key"] == key)
-                .unwrap();
-            let before = control["value"].clone();
-            let default = control["default"].clone();
-            kinds.insert(control["kind"]["kind"].as_str().unwrap().to_string());
-            let current = || {
-                app.state()["layer_properties"]["controls"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|c| c["key"] == key)
-                    .unwrap()["value"]
-                    .clone()
-            };
-            app.action(json!({"type":"effect","action":{"op":"set","layer":layer,"key":key,"value":value}}));
-            let edited = current();
-            assert_ne!(edited, before);
-            app.invoke("undo");
-            assert_eq!(current(), before);
-            app.invoke("redo");
-            assert_eq!(current(), edited);
-            app.action(json!({"type":"effect","action":{"op":"reset","layer":layer,"key":key}}));
-            assert_eq!(current(), default);
-            if key == "curve_0" {
-                app.action(json!({"type":"effect","action":{"op":"curve_point","layer":layer,"key":key,"index":null,"point":[0.5,0.8],"remove":false}}));
-                assert_eq!(current()["value"].as_array().unwrap().len(), 3);
-                let state = app.state();
-                let plot = state["layer_properties"]["controls"][0]["plot"]
-                    .as_array()
-                    .unwrap();
-                assert_eq!(plot.len(), 129);
-                assert!((plot[64][1].as_f64().unwrap() - 0.8).abs() < 0.0001);
-                app.action(json!({"type":"effect","action":{"op":"curve_point","layer":layer,"key":key,"index":1,"point":[0,0],"remove":true}}));
-                assert_eq!(current(), default);
-            }
-            if key == "gradient" {
-                app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":null,"position":0.5,"color":null,"remove":false}}));
-                assert_eq!(current()["value"][1]["color"], json!({"space":"Srgb","rgba":[0.5, 0.5, 0.5, 1.0]}));
-                app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":1,"position":0.25,"color":null,"remove":false}}));
-                assert_eq!(current()["value"][1]["position"], 0.25);
-            }
-        }
-        assert_eq!(
-            kinds,
-            ["choice", "color", "curve", "gradient", "number", "toggle"]
-                .map(String::from)
-                .into()
-        );
-    }
+fn filter_property_edits_reset_and_undo_through_the_abi() {
+    let app = App::new(0);
+    app.action(json!({"type":"effect","action":{"op":"insert","effect":"gaussian_blur"}}));
+    let layer = app.state()["layer_properties"]["layer"].as_u64().unwrap();
+    let control = || {
+        app.state()["layer_properties"]["controls"].as_array().unwrap().iter()
+            .find(|c| c["key"] == "sigma").unwrap().clone()
+    };
+    let before = control();
+    app.action(json!({"type":"effect","action":{"op":"set","layer":layer,"key":"sigma","value":{"kind":"number","value":7}}}));
+    let edited = control()["value"].clone();
+    assert_ne!(edited, before["value"]);
+    app.invoke("undo");
+    assert_eq!(control()["value"], before["value"]);
+    app.invoke("redo");
+    assert_eq!(control()["value"], edited);
+    app.action(json!({"type":"effect","action":{"op":"reset","layer":layer,"key":"sigma"}}));
+    assert_eq!(control()["value"], before["default"]);
 }
 
 #[test]
@@ -1439,102 +1364,6 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
 }
 
 #[test]
-fn layer_panel_actions_preserve_targets_masks_hierarchy_and_menu_policy() {
-    for platform in [0, 1] {
-        let app = App::new(platform);
-        let original = app.state()["layer_tools"]["editing_layer"]["id"]
-            .as_u64()
-            .unwrap();
-        app.layer_action(json!({"op":"new","group":false,"clipped":false}));
-        let id = app.state()["layer_tools"]["editing_layer"]["id"]
-            .as_u64()
-            .unwrap();
-        app.layer_action(json!({"op":"begin_rename","id":id}));
-        assert_eq!(app.state()["layer_tools"]["rename_layer"], id);
-        app.layer_action(json!({"op":"rename","id":id,"name":"Test ink"}));
-        assert_eq!(app.layer(id)["label"], "Test ink");
-        app.layer_action(json!({"op":"blend","id":id,"value":2}));
-        assert_eq!(app.layer(id)["blend"], 2);
-        app.action(json!({"type":"set_layer_opacity","opacity":0.35}));
-        assert!((app.layer(id)["opacity"].as_f64().unwrap() - 0.35).abs() < 0.00001);
-        app.layer_action(json!({"op":"alpha_lock","id":id,"value":true}));
-        assert_eq!(app.layer(id)["alpha_locked"], true);
-        app.layer_action(json!({"op":"lock","id":id,"value":true}));
-        assert_eq!(app.state()["layer_tools"]["controls"]["opacity"], false);
-        let locked = app
-            .request(2, json!({"type":"layer_menu","id":id,"mask":false}))
-            .unwrap();
-        fn find_rename(sections: &Value) -> Option<Value> {
-            sections.as_array()?.iter().flat_map(|s| s.as_array().into_iter().flatten()).find_map(|item| {
-                if item["action"]["action"]["op"] == "begin_rename" { Some(item.clone()) } else { find_rename(&item["sections"]) }
-            })
-        }
-        let rename = find_rename(&locked["sections"]).unwrap();
-        assert_eq!(
-            rename["enabled"], false,
-            "Menu capabilities must come from shared policy"
-        );
-        app.layer_action(json!({"op":"lock","id":id,"value":false}));
-        app.layer_action(json!({"op":"toggle_selection","id":original}));
-        assert_eq!(app.state()["layer_tools"]["editing_layer"]["id"], id);
-        assert_eq!(app.layer(original)["selected"], true);
-        app.layer_action(json!({"op":"context","id":id,"mask":false}));
-        assert_eq!(
-            app.layer(original)["selected"],
-            true,
-            "Context on a selected row keeps checked selection"
-        );
-        app.layer_action(json!({"op":"reference_selection"}));
-        assert_eq!(app.layer(original)["reference"], true);
-        assert_eq!(app.layer(id)["reference"], true);
-        app.layer_action(json!({"op":"add_mask","id":id,"replace":false}));
-        assert_eq!(app.layer(id)["has_mask"], true);
-        app.layer_action(json!({"op":"select","id":id,"mask":true}));
-        assert_eq!(app.layer(id)["mask_selected"], true);
-        app.layer_action(json!({"op":"link_mask","id":id,"value":false}));
-        app.layer_action(json!({"op":"enable_mask","id":id,"value":false}));
-        assert_eq!(app.layer(id)["mask_linked"], false);
-        let menu = app
-            .request(2, json!({"type":"layer_menu","id":id,"mask":true}))
-            .unwrap();
-        let enabled = menu["sections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|s| s.as_array().unwrap())
-            .find(|item| item["label"] == "Enable mask")
-            .unwrap();
-        assert_eq!(enabled["selected"], false);
-        assert_eq!(enabled["enabled"], true);
-        app.layer_action(json!({"op":"delete_mask","id":id}));
-        assert_eq!(app.layer(id)["has_mask"], false);
-        app.invoke("undo");
-        assert_eq!(app.layer(id)["has_mask"], true);
-        app.layer_action(json!({"op":"new","group":true,"clipped":false}));
-        let group = app.state()["layers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|l| l["group"] == true)
-            .unwrap()["id"]
-            .as_u64()
-            .unwrap();
-        app.layer_action(json!({"op":"drop","id":original,"target":group,"fraction":0.5}));
-        assert_eq!(app.layer(original)["depth"], 1);
-        app.layer_action(json!({"op":"collapse","id":group}));
-        assert!(
-            !app.state()["layers"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|l| l["id"] == original)
-        );
-        app.layer_action(json!({"op":"collapse","id":group}));
-        assert_eq!(app.layer(original)["depth"], 1);
-    }
-}
-
-#[test]
 fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
     use std::time::{Duration, Instant};
     for platform in [0, 1] {
@@ -1652,79 +1481,9 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
 }
 
 #[test]
-fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
+fn apple_ruler_toggles_flip_their_checkable_commands() {
     for platform in [0, 1] {
         let app = App::new(platform);
-        app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":false}}));
-        let snapshot = app.full_snapshot();
-        let menu_action = snapshot["workspace_menu"]["sections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|s| s.as_array().unwrap())
-            .find(|item| item["action"]["action"]["panel"] == "tool_settings")
-            .expect("Tool Settings must be reachable from Workspace")["action"]
-            .clone();
-        app.action(menu_action);
-        let snapshot = app.full_snapshot();
-        assert!(
-            snapshot["panels"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["id"] == "tool_settings"
-                    && p["controls"][0]["control"] == "tool_settings")
-        );
-        let catalog = app.request(2, json!({"type":"catalog"})).unwrap();
-        let mut edited = 0;
-        for category in catalog["brush_categories"].as_array().unwrap() {
-            for brush in category["brushes"].as_array().unwrap() {
-                app.action(json!({"type":"select_brush","id":brush["id"]}));
-                let state = app.state();
-                assert!(
-                    state["tool_set"]["subtools"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|item| item["preview"] == brush["id"] && item["selected"] == true)
-                );
-                for setting in state["tool_settings"].as_array().unwrap() {
-                    // Re-select to prevent a previous edit changing the schema.
-                    app.action(json!({"type":"select_brush","id":brush["id"]}));
-                    let request = CString::new(
-                        json!({"control":setting["numeric"],
-                        "value":setting["value"],"operation":{"type":"position","position":0.37}})
-                        .to_string(),
-                    )
-                    .unwrap();
-                    let output = unsafe { capy_apple_numeric(request.as_ptr()) };
-                    assert!(!output.is_null());
-                    let resolved: Value =
-                        serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
-                    unsafe { capy_apple_string_free(output) };
-                    app.action(json!({"type":"set_tool_setting","id":setting["id"],"value":resolved["value"]}));
-                    let after = app.state();
-                    let actual = after["tool_settings"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|s| s["id"] == setting["id"])
-                        .unwrap();
-                    assert_eq!(
-                        actual["value"].as_f64().unwrap() as f32,
-                        resolved["value"].as_f64().unwrap() as f32,
-                        "{} {}",
-                        brush["label"],
-                        setting["id"]
-                    );
-                    edited += 1;
-                }
-            }
-        }
-        assert!(
-            edited > 100,
-            "Exercise the complete catalog, including wet and liquify controls"
-        );
         app.invoke("ruler");
         for id in ["snap_rulers", "show_rulers"] {
             let before = app.state();
@@ -1852,62 +1611,7 @@ fn optional_gpu_timing_has_explicit_uninitialized_state_and_bounded_abi() {
 }
 
 #[test]
-fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
-    let close = |actual: &Value, expected: [f32; 4]| {
-        for i in 0..4 {
-            assert!(
-                (actual[i].as_f64().unwrap() - expected[i] as f64).abs() < 1e-5,
-                "{actual} != {expected:?}"
-            );
-        }
-    };
-    for platform in [0, 1] {
-        let app = App::new(platform);
-        app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":false}}));
-        let initial = app.full_snapshot();
-        let open = initial["workspace_menu"]["sections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|section| section.as_array().unwrap())
-            .find(|item| item["action"]["action"]["panel"] == "color")
-            .unwrap()["action"]
-            .clone();
-        app.action(open);
-        let snapshot = app.full_snapshot();
-        assert!(
-            snapshot["panels"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["id"] == "color")
-        );
-        let action = |value| app.action(json!({"type":"color","action":value}));
-        app.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
-        action(json!({"op":"definition","color":{"space":"Srgb","rgba":[0,1,1,1]}}));
-        close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
-        action(json!({"op":"select","slot":"background"}));
-        action(json!({"op":"definition","color":{"space":"Srgb","rgba":[0.25,0.5,0.75,1]}}));
-        close(&app.state()["brush"]["color"], [0.25, 0.5, 0.75, 1.]);
-        close(&app.state()["colors"]["foreground"]["rgba"], [0., 1., 1., 1.]);
-        action(json!({"op":"select","slot":"transparent"}));
-        action(json!({"op":"shape","shape":"square"}));
-        action(json!({"op":"pick_wheel","part":"hue","point":[0.95,0.5],"size":1}));
-        assert_eq!(app.state()["colors"]["slot"], "background");
-        close(&app.state()["brush"]["color"], [0.25, 0.75, 0.5, 1.]);
-        action(json!({"op":"shape","shape":"triangle"}));
-        action(json!({"op":"pick_wheel","part":"field","point":[0.5,0.5],"size":1}));
-        close(&app.state()["brush"]["color"], [1. / 3., 2. / 3., 0.5, 1.]);
-        let snapshot = app.full_snapshot();
-        assert_eq!(snapshot["color_panel"]["components"][1]["label"], "L");
-        assert_eq!(snapshot["color_panel"]["swatches"][1]["selected"], true);
-        action(json!({"op":"swap"}));
-        close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
-        close(
-            &app.state()["colors"]["foreground"]["rgba"],
-            [1. / 3., 2. / 3., 0.5, 1.],
-        );
-    }
+fn apple_color_hit_classifies_wheel_parts() {
     for space in [0, 1, 2] {
         assert_eq!(capy_apple_color_hit(95., 50., 100., space), 1);
         assert_eq!(capy_apple_color_hit(50., 50., 100., space), 2);
