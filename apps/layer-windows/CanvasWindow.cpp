@@ -57,9 +57,9 @@ void CapyLifecycle(char const* event) {
     std::ofstream("lifecycle.log",std::ios::app)
         << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
 }
-CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,bool primary,
+CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,
     std::function<void(uint64_t)> preferencesChanged)
-    :windowId(window.AppWindow().Id().Value),primaryWindow(primary),
+    :windowId(window.AppWindow().Id().Value),
      createWindow(std::move(create)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
@@ -95,8 +95,6 @@ void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
         }
     };
     write(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json");
-    // Preserve the initial window's paths for existing single-window fixtures.
-    if(primaryWindow)write(std::string(kind)+".json");
 }
 std::string CanvasWindow::SystemTheme(){
     using winrt::Windows::UI::ViewManagement::UIColorType;

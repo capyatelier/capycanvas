@@ -128,7 +128,7 @@ mouse clicks and guarded OS keyboard input, retained button focus, tool keys,
 text/slider editing, Space/Enter, Tab and nested-menu dismissal:
 
 ~~~powershell
-./apps/layer-windows/scripts/exercise-shortcuts.ps1 -ProcessId <owned-review-pid> -StateFile artifacts/windows/Release/ui-state.json
+./apps/layer-windows/scripts/exercise-shortcuts.ps1 -ProcessId <owned-review-pid> -StateFile artifacts/windows/Release/ui-state-<owned-review-pid>-<window>.json
 ~~~
 
 Run allocation/order checks from a Visual Studio developer PowerShell:
@@ -165,7 +165,7 @@ UI dispatcher timer stops when the status is hidden; it does no work in painting
 For a controlled review instance, set CAPY_TRACE_UI=1 and an absolute disposable CAPY_SETTINGS_DIRECTORY before launch, then run:
 
 ~~~powershell
-./apps/layer-windows/scripts/exercise-header-settings.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
+./apps/layer-windows/scripts/exercise-header-settings.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state-<app-process-id>-<window>.json
 ~~~
 
 The fixture checks shared acknowledgments, native control state, all three
@@ -174,7 +174,7 @@ against a disposable review instance; it edits settings and toggles fullscreen.
 It does not verify physical keyboard or pointer delivery. CAPY_TEST_PRIMARY=1
 with CAPY_TEST_DISPLAY=1 places review windows on the primary display.
 
-The opt-in ui-state.json contains app state and may include private settings.
+The opt-in ui-state-<process>-<window>.json contains app state and may include private settings.
 It stays ignored alongside captures and traces, and must be off for performance
 runs. OS theme changes, complete visual/interaction parity and the full physical
 input, lifecycle, packaging and performance acceptance gates remain separate.
@@ -331,7 +331,7 @@ Run the fixture in a fresh isolated review instance with CAPY_TRACE_UI=1 and
 CAPY_SMOKE_TEST=1 (the latter supplies the controlled stroke for transform):
 
 ~~~powershell
-./apps/layer-windows/scripts/exercise-tools.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
+./apps/layer-windows/scripts/exercise-tools.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state-<app-process-id>-<window>.json
 ~~~
 
 The fixture checks tool/schema projection, numeric edits, field/button/scroll
@@ -834,8 +834,7 @@ checks work with workspace layouts that omit their titlebar buttons.
 
 With CAPY_TRACE_UI enabled, windows-<process>.json records live window IDs/HWNDs
 and ui-state-<process>-<window>.json identifies each window's model. These local
-files can contain private state and stay ignored. The initial window also keeps
-the legacy ui-state.json path for existing single-window fixtures.
+files can contain private state and stay ignored.
 
 ## Native task workspace management
 

@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @"
 using System;using System.Collections.Generic;using System.Runtime.InteropServices;
@@ -21,20 +21,11 @@ public static class CapyShortcutKeys {
  }
 }
 "@
-$app=Get-Process -Id $ProcessId
-if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
-function Model {try{$s=Get-Content -LiteralPath $StateFile -Raw|ConvertFrom-Json;if($s.process_id -eq $ProcessId -and $s.model.windows_isolated_settings){$s.model}}catch{}}
-function Wait-Until([scriptblock]$Test,[string]$Message,[int]$Seconds=8){
- $w=[Diagnostics.Stopwatch]::StartNew();do{if(& $Test){return};$app.Refresh();if($app.HasExited){throw 'Owned shortcut review exited'};Start-Sleep -Milliseconds 75}while($w.Elapsed.TotalSeconds -lt $Seconds);throw $Message
-}
-Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated review did not become ready' 45
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
-function Find([string]$Value,[switch]$Name){
- $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
- $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Value))
-}
-function Control([string]$Value,[switch]$Name){$hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name;$null -ne $hit.item} "Missing control: $Value";$hit.item}
-function Invoke([string]$Name){(Control $Name -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+$review=Get-Process -Id $ProcessId
+if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
+$CapyStateFile=$StateFile
+Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated review did not become ready' 45
+$root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
 function Key([int]$Code,[switch]$Ctrl,[switch]$Shift){[CapyShortcutKeys]::Key([uint32]$ProcessId,[uint16]$Code,[bool]$Ctrl,[bool]$Shift)}
 function Focus($Control){$Control.SetFocus();Wait-Until {$Control.Current.HasKeyboardFocus} 'Native control did not receive focus'}
 function Click([string]$Id){
@@ -56,11 +47,11 @@ function Check-Undo([string]$Button){
  }
 }
 [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-[CapyRowPointer]::SetForegroundWindow($app.MainWindowHandle)|Out-Null
+[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
 [CapyRowPointer]::Initialize([uint32]$ProcessId)
 try{
  if((Model).state.document_file.modified){throw 'Use a clean isolated document for shortcut acceptance'}
- Invoke 'Test stroke';Wait-Until {(Model).state.document_file.modified} 'Test stroke did not finish'
+ Invoke 'Test stroke' -Name;Wait-Until {(Model).state.document_file.modified} 'Test stroke did not finish'
  Check-Undo 'tool-group-0'
  $pen=Tile 'pen';Check-Undo $pen
  foreach($pair in @(@{key=0x42;tool='brush'},@{key=0x45;tool='eraser'},@{key=0x50;tool='pen'})){

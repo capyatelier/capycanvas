@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=10;$CapyEach={[CapyRowPointer]::Verify()}
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @"
 using System;
@@ -31,25 +33,6 @@ public static class CapyEditingCapture {
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/canvas-editing/'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
- try{
-  $s=Get-Content -LiteralPath (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
-  if($s.process_id -ne $app.Id -or !$s.model.windows_isolated_settings){return}
-  $c=Get-Content -LiteralPath (Join-Path $directory 'camera-state.json') -Raw|ConvertFrom-Json
-  if($c.process_id -ne $app.Id -or $c.window_id -ne $s.window_id){return}
-  if($c.camera.revision -ge $s.model.state.camera.revision){$s.model.state.camera=$c.camera};$s.model
- }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=10){
- $watch=[Diagnostics.Stopwatch]::StartNew()
- do{[CapyRowPointer]::Verify();if(& $Condition){return};$app.Refresh();if($app.HasExited){throw 'Owned editing review exited'};Start-Sleep -Milliseconds 60}while($watch.Elapsed.TotalSeconds -lt $Seconds)
- throw $Message
-}
-function Find([string]$Value,[switch]$Name){$property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty};$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Value))}
-function Control([string]$Value,[switch]$Name){$hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name;$null -ne $hit.item} "Missing control: $Value";$hit.item}
-function Invoke([string]$Value,[switch]$Name){(Control $Value -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Select-Tool([string]$Id){
  if(((Model).state.commands|Where-Object id -eq $Id).selected){return}
  $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Id){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No native $Id tile"
@@ -57,7 +40,6 @@ function Select-Tool([string]$Id){
 }
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Signature {$m=Model;@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 25 -Compress}
-function Capture([string]$Name){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $app.Id -ClientOnly -Output (Join-Path $run ($Name+'.png')) *> (Join-Path $run ($Name+'-capture.json'))}
 function Pixels {
  $rect=[CapyEditingCapture+Rect]::new();$origin=[CapyEditingCapture+Point]::new()
  if(![CapyEditingCapture]::GetClientRect($handle,[ref]$rect) -or ![CapyEditingCapture]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas pixels'}
@@ -91,7 +73,7 @@ function Export-Png([string]$Name) {
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not prepare' 60
  Invoke 'Export…' -Name
  $picker=Control 'Save As' -Name
- if($picker.Current.ClassName -ne '#32770' -or $picker.Current.ProcessId -ne $app.Id){throw 'Export picker is not owned'}
+ if($picker.Current.ClassName -ne '#32770' -or $picker.Current.ProcessId -ne $review.Id){throw 'Export picker is not owned'}
  $entry=@{value=$null};Wait-Until {
   $entry.value=$picker.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
    [System.Windows.Automation.OrCondition]::new(
@@ -100,14 +82,14 @@ function Export-Png([string]$Name) {
    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'Edit')))
   $null -ne $entry.value
  } 'Export filename field did not appear'
- [CapyEditingCapture]::TypePath([IntPtr]$entry.value.Current.NativeWindowHandle,[uint32]$app.Id,$path)
+ [CapyEditingCapture]::TypePath([IntPtr]$entry.value.Current.NativeWindowHandle,[uint32]$review.Id,$path)
  $save=@{value=$null};Wait-Until {
   $save.value=$picker.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
   $save.value -and $save.value.Current.IsEnabled -and $save.value.Current.ClassName -eq 'Button'
  } 'Export Save button did not become ready'
  $owner=[uint32]0;$button=[IntPtr]$save.value.Current.NativeWindowHandle
  [CapyEditingCapture]::GetWindowThreadProcessId($button,[ref]$owner)|Out-Null
- if($owner -ne $app.Id -or ![CapyEditingCapture]::PostMessage($button,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke owned export Save button'}
+ if($owner -ne $review.Id -or ![CapyEditingCapture]::PostMessage($button,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke owned export Save button'}
  Wait-Until {(Test-Path -LiteralPath $path) -and !(Model).state.document_file.busy -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'PNG export did not complete' 45
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'PNG export changed the document checkpoint'}
  $bitmap=[Drawing.Bitmap]::new($path)
@@ -157,13 +139,13 @@ function Apply-Preview([string]$Name) {
 }
 try{
  if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated editing review'}
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
- $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$app.Handle
- @{process_id=$app.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
- Write-Output "Owned canvas editing review $($app.Id): $run"
- Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated editing canvas did not start' 45
- $handle=$app.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+ $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
+ @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
+ Write-Output "Owned canvas editing review $($review.Id): $run"
+ Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated editing canvas did not start' 45
+ $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
@@ -173,7 +155,7 @@ try{
  if($area[2] -lt 900 -or $area[3] -lt 600){throw 'Canvas too small for artwork gesture checks'}
  # Sample inside the artwork and away from drag endpoints/cursor overlays.
  $sx=$cx-60;$sampleCenters=@(@($sx,($cy+25)),@(($sx+300),($cy+25)),@(($cx+70),($cy+25)))
- [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$app.Id)
+ [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
  foreach($device in @('mouse','pen')){
   if((Model).state.document_file.modified){throw 'Editing journey requires a clean document'}
   $empty=Stable-Pixels
@@ -230,12 +212,12 @@ try{
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
  }
- [CapyRowPointer]::Dispose();$app.CloseMainWindow()|Out-Null
- if(!$app.WaitForExit(5000) -or $app.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
+ [CapyRowPointer]::Dispose();$review.CloseMainWindow()|Out-Null
+ if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
  @{checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='scale/rotation: exact full exported PNG history; translation: three 16x16 artwork interiors; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas editing acceptance passed: $run"
 }catch{
- if($app -and !$app.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}
+ if($review -and !$review.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}
  throw
-}finally{[CapyRowPointer]::Dispose();foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}}
+}finally{[CapyRowPointer]::Dispose();Exit-CapyEnvironment}

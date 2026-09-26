@@ -1,7 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailGpu)
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -33,7 +34,6 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/document-ui/'+[Guid]::NewGuid().ToString('N'))
 $settingsProfile=Join-Path $run 'profile'
 [IO.Directory]::CreateDirectory($settingsProfile)|Out-Null
-$stateFile=Join-Path $directory 'ui-state.json'
 $first=Join-Path $run 'Drawing one 日本語.capy'
 $second=Join-Path $run 'Drawing two.capy'
 $corrupt=Join-Path $run 'Corrupt.capy'
@@ -46,10 +46,8 @@ try{
     }}
     $bitmap.Save($imageSource,[Drawing.Imaging.ImageFormat]::Png)
 }finally{$bitmap.Dispose()}
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TEST_GPU_UNAVAILABLE')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try {
+Enter-CapyEnvironment @('CAPY_TEST_GPU_UNAVAILABLE')
 $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
 if($FailGpu){$env:CAPY_TEST_GPU_UNAVAILABLE='1'}
 $env:CAPY_TRACE_UI='1'
@@ -60,14 +58,6 @@ $stderr=Join-Path $run 'stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
 Write-Output "Document review process $($review.Id)"
-function Model {
-    try {$snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json;if($snapshot.process_id -eq $review.Id){return $snapshot.model}}catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8) {
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Document review exited unexpectedly'};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Request-Close([switch]$WithPreferences) {
     # Shared completion precedes native dialog teardown. RequestClose ignores
     # window close while a document dialog is open; wait for native readiness.
@@ -244,7 +234,6 @@ function Start-RecoveryReview([string]$label){
     $script:stderr=Join-Path $run ($label+'.stderr.log')
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
-    $script:lastModel=$null
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
     Write-Output "GPU save review process $($review.Id), $label"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No GPU save review window' 30
@@ -521,8 +510,5 @@ if($FailGpu){
     scope='isolated native controls and pickers; controlled stroke replay, not physical pen or cadence acceptance'
 }|ConvertTo-Json
 } finally {
-    foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

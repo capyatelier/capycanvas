@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet('Pointer','Automation')][string]$InputMode='Pointer')
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition '
 using System;
@@ -18,35 +18,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/new-features/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
-            }
-        }
-        if($script:statePath){$value=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id){return $value.model}}
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8,[switch]$Closing){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){if($Closing){return};throw 'Owned feature review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Id,[switch]$Name,$Within=$root,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Id,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing native control: $Id";$hit.item
-}
-function Invoke([string]$Id,[switch]$Name){(Control $Id -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 
 function At([string]$Id) {
     $ready=@{box=$null}
@@ -83,10 +54,6 @@ function Drawer([string[]]$Panels) {
     Wait-Until {$d=(Model).state.customization.drawer; $d -and (@($d.columns|ForEach-Object {$_}) -join ',') -eq ($Panels -join ',')} "Wrong drawer: $Panels"
     foreach($panel in $Panels){$null=Control ('drawer-panel-'+$panel)}
 }
-function Capture([string]$Name) {
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-    (Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json'))
-}
 function Swipe([int]$Id,[int]$Dx,[string]$Device) {
     $at=At "layer-$Id-name";[CapyRowPointer]::Down($Device,$at.x,$at.y)
     for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move($at.x+[int]($Dx*$i/8),$at.y);Start-Sleep -Milliseconds 20}
@@ -115,7 +82,7 @@ function Check-InputPreferences {
     (Preference-Switch 'Use Windows stroke prediction').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     (Control 'Cursor shape' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control 'Brush size' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Capture 'input-preferences'
+    Capture 'input-preferences' -WithModel
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Close' -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Model).preferences} 'Input preferences did not close'
@@ -134,7 +101,7 @@ function Set-Theme([string]$Theme) {
     $null=[CapyStackCoordinates]::Focus($review.MainWindowHandle);Start-Sleep -Milliseconds 200
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -161,11 +128,11 @@ try {
         Tap 'tool-subtool-0' $pair[0];Wait-Until {(Model).state.brush.preset -eq $preset} 'Subtool did not activate'
     }
     $drawing=(Model).state.brush.preset
-    foreach($theme in @('Light','Dark')){Set-Theme $theme;Tap $brush;if(!(Model).state.customization.drawer){Tap $brush};Drawer @('brush_sets','tools','tool_settings');Capture ('brush-'+$theme.ToLowerInvariant())}
+    foreach($theme in @('Light','Dark')){Set-Theme $theme;Tap $brush;if(!(Model).state.customization.drawer){Tap $brush};Drawer @('brush_sets','tools','tool_settings');Capture ('brush-'+$theme.ToLowerInvariant()) -WithModel}
     Tap $sculpt 'pen';Drawer @('sculpt_sets','tools','tool_settings')
     foreach($device in @('mouse','touch','pen')){foreach($choice in @((Model).state.tool_panels.sculpt_sets.groups)){Tap ('sculpt-set-'+$choice.icon) $device;Drawer @('sculpt_sets','tools','tool_settings')}}
-    $sculptPreset=(Model).state.brush.preset;Capture 'sculpt-dark'
-    Tap $eraser 'touch';Drawer @('tools','tool_settings');Capture 'eraser-dark'
+    $sculptPreset=(Model).state.brush.preset;Capture 'sculpt-dark' -WithModel
+    Tap $eraser 'touch';Drawer @('tools','tool_settings');Capture 'eraser-dark' -WithModel
     Tap $brush;Drawer @('brush_sets','tools','tool_settings');if((Model).state.brush.preset -ne $drawing){throw 'Drawing tool memory lost'}
     Tap $sculpt;Drawer @('sculpt_sets','tools','tool_settings');if((Model).state.brush.preset -ne $sculptPreset){throw 'Sculpt tool memory lost'}
     Write-Output "PASS: Brush/Sculpt/Eraser drawers, $InputMode input, retained tool memory"
@@ -183,20 +150,20 @@ try {
     }
     Tap $filters;Wait-Until {!(Model).state.customization.drawer} 'Filter drawer did not close'
     Tap $filters;Drawer @('filter_types','adjustments','properties');if((Model).state.layer_properties.layer -ne $filterId){throw 'Filter selection lost on reopen'}
-    Capture 'filters-dark';Set-Theme 'Light';Tap $filters;Drawer @('filter_types','adjustments','properties');Capture 'filters-light'
+    Capture 'filters-dark' -WithModel;Set-Theme 'Light';Tap $filters;Drawer @('filter_types','adjustments','properties');Capture 'filters-light' -WithModel
     Tap 'cancel-filter' 'pen';Wait-Until {!(Model).state.customization.drawer -and @((Model).state.layers).Count -eq $count} 'Cancel did not delete filter and close'
     Tap $layers;$paper=@((Model).state.layers|Where-Object label -eq 'Paper')[0];Tap ('layer-'+$paper.id+'-name')
-    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'paper-color-bucket' 'touch';Capture 'paper-properties'
+    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'paper-color-bucket' 'touch';Capture 'paper-properties' -WithModel
     if(!(Model).state.layer_properties.controls){throw 'Paper properties missing'}
     Write-Output 'PASS: Filter replacement/reopen/cancel, drawing target, paper color'
     Tap $layers;Drawer @('layers')
     Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Paper thumbnail did not finish' 30
-    Capture 'paper-layer'
+    Capture 'paper-layer' -WithModel
     if($InputMode -eq 'Pointer'){
         foreach($device in @('pen','touch')){
             $id=@((Model).state.layers)[0].id;Swipe $id -90 $device
             Wait-Until {$button=Find "layer-$id-swipe-delete";$button -and !$button.Current.IsOffscreen -and $button.Current.BoundingRectangle.Width -gt 60} 'Swipe did not reveal Delete'
-            Capture ('swipe-'+$device);Swipe $id 90 $device
+            Capture ('swipe-'+$device) -WithModel;Swipe $id 90 $device
             Wait-Until {$button=Find "layer-$id-swipe-delete";!$button -or $button.Current.IsOffscreen} 'Reverse swipe did not close'
             Swipe $id -90 $device;[CapyRowPointer]::Key(0x1b)
             Wait-Until {$button=Find "layer-$id-swipe-delete";!$button -or $button.Current.IsOffscreen} 'Escape did not close swipe'
@@ -206,7 +173,7 @@ try {
             Swipe $id -90 $device;Tap "layer-$id-swipe-delete" $device
             Wait-Until {!(@((Model).state.layers|Where-Object id -eq $id).Count)} 'Swipe Delete did not remove layer'
         }
-        if(@((Model).state.layers).Count -ne 0){throw 'Final layer was not deleted'};Capture 'empty-canvas'
+        if(@((Model).state.layers).Count -ne 0){throw 'Final layer was not deleted'};Capture 'empty-canvas' -WithModel
         [CapyRowPointer]::Key(0x1b)
         foreach($step in 1..$count){
             & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
@@ -221,7 +188,7 @@ try {
             $id=@((Model).state.layers)[0].id;Tap ('layer-'+$id+'-name');Tap 'layer-delete'
             Wait-Until {!(@((Model).state.layers|Where-Object id -eq $id).Count)} 'Delete did not remove layer'
         }
-        if(@((Model).state.layers).Count -ne 0){throw 'Final layer was not deleted'};Capture 'empty-canvas'
+        if(@((Model).state.layers).Count -ne 0){throw 'Final layer was not deleted'};Capture 'empty-canvas' -WithModel
         foreach($step in 1..$count){
             & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
             Invoke 'Undo' -Name
@@ -246,8 +213,8 @@ try {
     @{status='passed';captures=$run;input_mode=$InputMode;swipe_tested=($InputMode -eq 'Pointer');scope='Pointer mode uses guarded OS-delivered synthetic input; Automation mode checks accessible commands only. Physical digitizers are not tested.'}|ConvertTo-Json
 } catch {
     $_|Out-String|Set-Content (Join-Path $run 'failure.txt');$_.ScriptStackTrace|Add-Content (Join-Path $run 'failure.txt')
-    if($review){$review.Refresh();if(!$review.HasExited){try{Capture 'failure'}catch{$_|Out-String|Set-Content (Join-Path $run 'capture-error.txt')}}};throw
+    if($review){$review.Refresh();if(!$review.HasExited){try{Capture 'failure' -WithModel}catch{$_|Out-String|Set-Content (Join-Path $run 'capture-error.txt')}}};throw
 } finally {
     [CapyRowPointer]::Dispose()
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    Exit-CapyEnvironment
 }

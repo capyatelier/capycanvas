@@ -1,25 +1,17 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/artwork-recovery/'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $review=$null
 try {
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    function Model {
-        try{$s=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json;if($s.process_id -eq $review.Id){$s.model}}catch{}
-    }
-    function Wait-Until([scriptblock]$Check,[string]$Message,[int]$Seconds=45){
-        $watch=[Diagnostics.Stopwatch]::StartNew()
-        do{if(& $Check){return};$review.Refresh();if($review.HasExited){throw "Application exited: $($review.ExitCode)"};Start-Sleep -Milliseconds 80}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-        throw $Message
-    }
     function Find-Name([string]$Name){
         $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name))
     }
@@ -98,5 +90,5 @@ try {
     [pscustomobject]@{checkpoint_crash_restore='passed';durable_origin_retirement='passed';later_survives_clean_close='passed';explicit_discard='passed';multiple_copies_in_turn='passed';scope='isolated native Windows UI and controlled stroke replay'}|ConvertTo-Json
 } finally {
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id}}
-    foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+    Exit-CapyEnvironment
 }

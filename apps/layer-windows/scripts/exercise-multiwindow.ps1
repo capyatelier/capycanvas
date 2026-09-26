@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailPreferences)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -36,13 +36,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/multiwindow/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Wait-Until([scriptblock]$Predicate,[string]$Message,[int]$Seconds=5){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Predicate){return};$review.Refresh();if($review.HasExited){throw 'Multiwindow review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Windows {
     try{$v=Get-Content (Join-Path $directory ("windows-"+$review.Id+".json")) -Raw|ConvertFrom-Json;if($v.process_id -eq $review.Id){return @($v.windows)}}catch{}
     @()
@@ -58,19 +51,6 @@ function Use-Window($Window){
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$Window.hwnd)
     $script:current=$Window
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Window.hwnd)
-}
-function Find([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing $Value in window $($current.id)"
-    $hit.item
-}
-function Invoke([string]$Value,[switch]$Name,$Within=$root){
-    (Control $Value -Name:$Name -Within $Within).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Ready($Window){
     Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready} "Window $($Window.id) did not become ready" 45
@@ -110,7 +90,7 @@ function Close-Window($Window){
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$Window.hwnd)} 'Window close exceeded five seconds'
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
@@ -292,8 +272,5 @@ try {
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     if($lockedPreferences){$lockedPreferences.Dispose()}
-    foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

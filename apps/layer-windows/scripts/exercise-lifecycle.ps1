@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -15,21 +15,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/lifecycle/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {$snapshot=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json;if($snapshot.process_id -eq $review.Id){$snapshot.model}}catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=5) {
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {
-        if(& $Condition){return}
-        $review.Refresh();if($review.HasExited){throw 'Lifecycle review exited unexpectedly'}
-        Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Button([string]$Name) {
     $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.AndCondition]::new(
@@ -90,7 +75,7 @@ function Check-Closed {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Lifecycle runtime stderr requires inspection'}
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
     $env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
@@ -157,8 +142,5 @@ try {
         scope='isolated native window state and controlled replay; not physical input, mixed DPI or presentation acceptance'
     }|ConvertTo-Json
 } finally {
-    foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

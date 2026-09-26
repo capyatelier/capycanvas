@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition '
 using System;
@@ -15,35 +15,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/header/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
-            }
-        }
-        if($script:statePath){$value=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id){return $value.model}}
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Owned header review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Id,[switch]$Name,$Within=$root,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Id,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing native control: $Id";$hit.item
-}
-function Invoke([string]$Id,[switch]$Name){(Control $Id -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 
 function Header { (Model).header.model }
 function HeaderJson { Header | ConvertTo-Json -Depth 30 -Compress }
@@ -70,9 +41,6 @@ function WindowCommand([string]$Id) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     Invoke $Id
 }
-function Capture([string]$Name) {
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-}
 function Check-Geometry {
     Wait-Until {
         $p=Presentation
@@ -88,7 +56,7 @@ function Check-Geometry {
     } 'Native header does not match shared geometry'
 }
 function Start-Review([string]$Phase) {
-    $script:statePath=$null;$script:stderr=Join-Path $run ($Phase+'-stderr.log')
+    $script:stderr=Join-Path $run ($Phase+'-stderr.log')
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/header-review.json')
@@ -298,7 +266,7 @@ function Check-Catalog {
     WindowCommand 'undo_workspace'
     Wait-Until {(HeaderJson) -eq $initial} 'Recovery menu could not undo the empty titlebar'
     Check-Geometry
-    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -StateFile $script:statePath
+    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -StateFile (State-File)
     Check-Geometry
 }
 
@@ -359,7 +327,7 @@ function Check-Narrow {
 }
 
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     Start-Review 'initial';Capture 'normal'
     if($Catalog){Check-Catalog}
@@ -421,5 +389,5 @@ try {
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     [CapyRowPointer]::Dispose()
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    Exit-CapyEnvironment
 }

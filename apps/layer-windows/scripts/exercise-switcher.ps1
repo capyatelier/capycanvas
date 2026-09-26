@@ -1,46 +1,14 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/switcher/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        $value=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
-        if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$value.model}
-    }catch{}
-}
 function Storage {(Model).windows_workspace}
 function Manager {(Model).windows_workspace_manager}
 function Layout {(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress}
-function Wait-Until([scriptblock]$Predicate,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {
-        if(& $Predicate){return}
-        $review.Refresh();if($review.HasExited){throw 'Owned switcher review exited unexpectedly'}
-        Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null}
-    Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing $Value"
-    $hit.item
-}
-function Invoke([string]$Value,[switch]$Name,$Within=$root){
-    (Control $Value -Name:$Name -Within $Within).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-}
 function Choose([string]$Name){
     (Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
@@ -70,9 +38,6 @@ function Preference([string]$Id,[string]$Action){
     Wait-Until {(Storage).switcher_revision -gt $revision -or (Storage).switcher_error} 'Preference was not acknowledged'
     Settled
 }
-function Capture([string]$Label){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Label+'.png')) -ClientOnly *> (Join-Path $run ($Label+'.json'))
-}
 function Launch([string]$Label){
     $script:stderr=Join-Path $run ($Label+'-stderr.log')
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -90,7 +55,7 @@ function Close {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'initial'
@@ -155,8 +120,5 @@ try {
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace)
     throw
 }finally{
-    foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyCacheModel=$true;$CapyEach={[CapyTabTouch]::Hold()}
+Add-Type -AssemblyName System.Drawing
 # OS-delivered synthetic touch exercises XAML routing/capture. It does not
 # establish physical digitizer behavior or input latency.
 # https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-injecttouchinput
@@ -106,29 +108,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/tab-drag/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
- try{$s=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json;if($s.process_id -eq $review.Id -and $s.model.windows_isolated_settings){$script:lastModel=$s.model}}catch{}
- $script:lastModel
-}
-function Wait-Until([scriptblock]$Predicate,[string]$Message,[int]$Seconds=5){
- $watch=[Diagnostics.Stopwatch]::StartNew()
- do{
-  if(& $Predicate){return}
-  $review.Refresh();if($review.HasExited){throw 'Tab review exited unexpectedly'}
-  [CapyTabTouch]::Hold();Start-Sleep -Milliseconds 35
- }while($watch.Elapsed.TotalSeconds -lt $Seconds)
- throw $Message
-}
-function Find([string]$Id,[switch]$Name){
- $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
- $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Id))
-}
-function Control([string]$Id,[switch]$Name){
- $found=@{item=$null};Wait-Until {$found.item=Find $Id -Name:$Name;$null -ne $found.item} "Missing $Id";$found.item
-}
-function Invoke([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Find-Preview {
  # Preview copies are excluded from the accessible control/content views.
  # Inspect only the workspace's direct raw children for this visual fixture.
@@ -250,7 +229,7 @@ function Undo-Workspace {
  Wait-Until {((Current-Group).panels -join ',') -eq 'tool_settings,sizes' -and !(Current-Group).floating} 'Workspace Undo did not restore the source group'
 }
 try{
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
  $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  $stderr=Join-Path $run 'stderr.log'
@@ -357,8 +336,5 @@ try{
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
  [CapyTabTouch]::Cancel()
- foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+ Exit-CapyEnvironment
 }

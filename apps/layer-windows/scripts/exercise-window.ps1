@@ -44,7 +44,10 @@ if($Action -eq 'Close') {
     if($DiscardUnsaved){
         if($p.ProcessName -ne 'CapyCanvas'){throw 'Discard requires a controlled CapyCanvas review.'}
         if(!$StateDirectory){$StateDirectory=Split-Path -Parent $p.Path}
-        $stateFile=Join-Path $StateDirectory 'ui-state.json'
+        $windows=Get-Content -LiteralPath (Join-Path $StateDirectory "windows-$ProcessId.json") -Raw|ConvertFrom-Json
+        $window=@($windows.windows|Where-Object hwnd -eq ([int64]$handle))[0]
+        if($windows.process_id -ne $ProcessId -or !$window){throw 'Discard requires the traced window of this review.'}
+        $stateFile=Join-Path $StateDirectory "ui-state-$ProcessId-$($window.id).json"
         $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
         if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){
             throw 'Discard is only available for an isolated review with a matching trace.'

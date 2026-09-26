@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 $null=[CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))
@@ -9,35 +9,9 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/color-picker/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
-            }
-        }
-        if($script:statePath){$value=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id){return $value.model}}
-    }catch{}
+function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
+    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Value";$hit.item
 }
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Owned color picker review exited unexpectedly'};Start-Sleep -Milliseconds 40}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Id,[switch]$Name,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Id,[switch]$Name,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Name:$Name -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Id";$hit.item
-}
-function Invoke([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Center([string]$Id){$b=(Control $Id).Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
 function Presentation{$workspace=Find 'Drawing workspace' -Name;if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}}
 function Preview{(Presentation).color_preview}
@@ -81,9 +55,6 @@ function Choices([string]$Id){
     $box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse();Start-Sleep -Milliseconds 150
     $names
 }
-function Capture([string]$Name){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-}
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
     Wait-Until {
@@ -101,7 +72,7 @@ function Canvas-Points{
     $script:paper=@{x=$center.x;y=$center.y-90}
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -224,12 +195,12 @@ try {
     Hover-Until $paper {$null -ne (Preview)} 'No preview before sweep'
     $quiet=@{full=-1;since=[Diagnostics.Stopwatch]::StartNew()}
     Hover-Until $paper {$f=(Presentation).full_updates;if($f -ne $quiet.full){$quiet.full=$f;$quiet.since.Restart()};$quiet.since.ElapsedMilliseconds -gt 1200} 'Workspace publications did not settle before the sweep'
-    $before=Presentation;$modelBefore=Get-Content -LiteralPath $script:statePath -Raw
+    $before=Presentation;$modelBefore=Get-Content -LiteralPath (State-File) -Raw
     for($i=0;$i -lt 45;$i++){[CapyRowPointer]::PenHover(($center.x-90+$i*4),($center.y+[int](30*[Math]::Sin($i/5))));Start-Sleep -Milliseconds 12}
     for($i=0;$i -lt 14;$i++){[CapyRowPointer]::PenHover(($center.x+90+$i%2),$center.y);Start-Sleep -Milliseconds 30}
     $after=Presentation
     if($after.full_updates -ne $before.full_updates){
-        $modelBefore|Set-Content (Join-Path $run 'sweep-before.json');Get-Content -LiteralPath $script:statePath -Raw|Set-Content (Join-Path $run 'sweep-after.json')
+        $modelBefore|Set-Content (Join-Path $run 'sweep-before.json');Get-Content -LiteralPath (State-File) -Raw|Set-Content (Join-Path $run 'sweep-after.json')
         throw 'Hover rebuilt the retained workspace'
     }
     if($after.color_fields -ne $before.color_fields){throw 'Hover rasterized the color field on the UI thread'}
@@ -252,5 +223,5 @@ try {
 }finally{
     [CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose()
     if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force -ErrorAction SilentlyContinue}
-    foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+    Exit-CapyEnvironment
 }

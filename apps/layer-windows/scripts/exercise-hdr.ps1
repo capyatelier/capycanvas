@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16")
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=15;$CapyFind='visible'
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @'
 using System;
@@ -23,20 +25,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/hdr-ui/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TEST_HDR')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name)}
-function Model {
- try {
-  if(!$script:statePath){
-   foreach($candidate in [IO.Directory]::EnumerateFiles($directory,("ui-state-"+$review.Id+"-*.json"))){
-    if([IO.File]::GetLastWriteTimeUtc($candidate) -ge $review.StartTime.ToUniversalTime()){$script:statePath=$candidate;break}
-   }
-  }
-  if(!$script:statePath){return}
-  $snapshot=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json
-  if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){return $snapshot.model}
- }catch{}
-}
 function Assert-CanvasInk([string]$Label){
  $capture=Join-Path $run ($Label+'-canvas.png')
  & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output $capture -ClientOnly *> (Join-Path $run ($Label+'-canvas.json'))
@@ -54,18 +42,6 @@ function Assert-CanvasInk([string]$Label){
   }
   if($ink -lt 20){throw "Visible HDR ink is missing after $Label ($ink samples)"}
  }finally{$bitmap.Dispose()}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=15){
- $watch=[Diagnostics.Stopwatch]::StartNew()
- do {if(& $Condition){return};$review.Refresh();if($review.HasExited){throw "HDR review exited: $Message"};Start-Sleep -Milliseconds 65}while($watch.Elapsed.TotalSeconds -lt $Seconds)
- throw $Message
-}
-function Find([string]$Value,[switch]$Name,$Type){
- $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
- $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
- foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
-  if(!$item.Current.IsOffscreen -and (!$Type -or $item.Current.ControlType -eq $Type)){return $item}
- }
 }
 function Control([string]$Value,[switch]$Name,$Type){
  $hit=@{item=$null};Wait-Until {
@@ -168,6 +144,7 @@ function Delivery([string]$Name,[string]$Format){
  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }
 try {
+ Enter-CapyEnvironment @('CAPY_TEST_HDR')
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1';$env:CAPY_TEST_HDR='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;Write-Output "HDR review $($review.Id), $Depth, $run"
@@ -403,5 +380,5 @@ try {
  if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
- foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ("Env:"+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name])}}
+ Exit-CapyEnvironment
 }

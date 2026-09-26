@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyFind='visible'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 $null=[CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))
@@ -9,8 +10,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/selection/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $ControlType=[System.Windows.Automation.ControlType]
 Add-Type -AssemblyName System.Drawing
 Add-Type -Name SelectionDpi -Namespace Capy -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);[DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,int[] point);'
@@ -29,29 +28,6 @@ function Outline([string]$Name,[int]$Left,[int]$Right,[int]$Y){
         $marked/[Math]::Max(1,$Right-$Left+1)
     }finally{$image.Dispose()}
 }
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
-            }
-        }
-        if($script:statePath){$value=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id){return $value.model}}
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{try{if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{};$review.Refresh();if($review.HasExited){throw 'Owned selection review exited unexpectedly'};Start-Sleep -Milliseconds 40}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Id,[switch]$Name,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    foreach($entry in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){if(!$entry.Current.IsOffscreen){return $entry}}
-}
 function Desktop-Find([string]$Value,$Type){
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Value),
@@ -61,10 +37,6 @@ function Desktop-Find([string]$Value,$Type){
         if($hit){return $hit}
     }
 }
-function Control([string]$Id,[switch]$Name,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Name:$Name -Type $Type;$null -ne $hit.item} "Missing native control: $Id";$hit.item
-}
-function Invoke([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Center($element){$b=$element.Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
 function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up()}
 function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id}
@@ -72,9 +44,6 @@ function Tools{(Model).state.layer_tools}
 function Key([uint16]$Code){
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Drawing canvas stayed disabled'
     (Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::KeyAt($Code,$paper.x,$paper.y)
-}
-function Capture([string]$Name){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
 }
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
@@ -132,7 +101,7 @@ function Check-Modes([string[]]$Expected,[bool]$Compact){
     }
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -342,5 +311,5 @@ try {
 }finally{
     [CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose()
     if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force -ErrorAction SilentlyContinue}
-    foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+    Exit-CapyEnvironment
 }

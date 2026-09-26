@@ -1,51 +1,13 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyFind='visible'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/compact-color/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name)}
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($candidate in [IO.Directory]::EnumerateFiles($directory,("ui-state-"+$review.Id+"-*.json"))){
-                if([IO.File]::GetLastWriteTimeUtc($candidate) -ge $review.StartTime.ToUniversalTime()){$script:statePath=$candidate;break}
-            }
-        }
-        if(!$script:statePath){return}
-        $stream=[IO.File]::Open($script:statePath,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-        $reader=[IO.StreamReader]::new($stream)
-        try{$snapshot=$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
-        if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){return $snapshot.model}
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {
-        if(& $Condition){return}
-        $review.Refresh();if($review.HasExited){throw "Owned color fixture exited: $Message"}
-        Start-Sleep -Milliseconds 60
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Value,[switch]$Name){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
-    $scope=if($script:pickerScope){$script:pickerScope}else{$root}
-    $items=$scope.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)
-    foreach($item in $items){if(!$item.Current.IsOffscreen){return $item}}
-}
-function Control([string]$Value,[switch]$Name){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name;$null -ne $hit.item} "Missing color control: $Value";$hit.item
-}
-function Invoke([string]$Value,[switch]$Name){
-    (Control $Value -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-}
 function Paint { (Model).state.colors.foreground|ConvertTo-Json -Compress }
 function Shape([string]$Shape){
     if((Model).color_panel.shape -eq $Shape){return}
@@ -58,10 +20,8 @@ function Point([double]$X,[double]$Y){
     $bounds=(Control 'color-wheel').Current.BoundingRectangle
     @([int][Math]::Round($bounds.X+$X*$bounds.Width),[int][Math]::Round($bounds.Y+$Y*$bounds.Height))
 }
-function Capture([string]$Name){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-}
 try{
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     # The smoke command strip covers the bottom swatches at this window size.
@@ -144,7 +104,7 @@ try{
     $tileId=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -ExpandProperty id
     Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -ne (Find 'tool-drawer')} 'Color drawer did not open'
-    $script:pickerScope=Control 'tool-drawer'
+    $windowRoot=$root;$root=Control 'tool-drawer'
     # A visible drawer can still be moving from its opening animation.
     # Require the complete wheel to stay at its final coordinates before input.
     $settled=@{bounds='';count=0}
@@ -169,7 +129,7 @@ try{
     Invoke 'color-readout'
     if(((Control 'color-shape-0').GetRuntimeId() -join ':') -ne $drawerButton){throw 'Drawer edits replaced retained color controls'}
     Capture 'retained-drawer'
-    $script:pickerScope=$null
+    $root=$windowRoot
     Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -eq (Find 'tool-drawer')} 'Color drawer did not close'
     if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Picker input painted or changed the document'}
@@ -186,5 +146,5 @@ try{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     [CapyRowPointer]::Dispose()
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name])}
+    Exit-CapyEnvironment
 }

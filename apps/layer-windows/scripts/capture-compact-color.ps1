@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,[Parameter(Mandatory)][string]$FixtureFile)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @'
 using System;
@@ -33,15 +35,6 @@ try{
 }finally{$env:CAPY_COLOR_FIXTURE=$previousFixture}
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $output 'review-process.txt'),[string]$review.Id)
-function Wait-Until([scriptblock]$Condition,[string]$Message){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{
-        if(& $Condition){return}
-        $review.Refresh();if($review.HasExited){throw "Color fixture exited with code $($review.ExitCode): $Message"}
-        Start-Sleep -Milliseconds 100
-    }while($watch.Elapsed.TotalSeconds -lt 45)
-    throw "$Message (owned process $($review.Id) retained for inspection)"
-}
 Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'Color review window did not open'
 $handle=$review.MainWindowHandle
 Wait-Until {

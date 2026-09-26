@@ -1,16 +1,13 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/prediction/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_LATENCY_TRACE','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
- try {$value=Get-Content -LiteralPath (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$value.model}}catch{}
-}
+$CapyTraceDirectory=$run
 function Row([string]$Title){@((Model).preferences.pages.groups.rows|Where-Object title -eq $Title)[0]}
 function Control([string]$Title,[string]$Class){$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Title))|Where-Object {$_.Current.ClassName -eq $Class}|Select-Object -First 1}
 function Switch([string]$Title){Control $Title 'ToggleSwitch'}
@@ -40,14 +37,15 @@ function Draw([string]$Device){
  Start-Sleep -Milliseconds 200
 }
 try {
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_LATENCY_TRACE='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned prediction review $($review.Id): $run"
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
- . (Join-Path $repo 'tools/performance/windows-pen-ui.ps1') -ProcessId $review.Id
+ [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Prediction review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  Wait-Until {(Find 'tool-setting-size').Current.IsEnabled} 'Brush did not become editable'
@@ -81,5 +79,5 @@ try {
  [pscustomobject]@{settings_toggle=$true;survives_mouse_touch_pen=$true;prediction=$prediction;evidence=$run}|ConvertTo-Json -Depth 5|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
  [CapyRowPointer]::Dispose()
- foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+ Exit-CapyEnvironment
 }

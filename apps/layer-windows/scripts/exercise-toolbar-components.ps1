@@ -1,41 +1,15 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/toolbar-components/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        if(!$script:statePath){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
-            }
-        }
-        if($script:statePath){$value=Get-Content -LiteralPath $script:statePath -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id){return $value.model}}
-    }catch{}
+function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
+    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Value";$hit.item
 }
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8,[switch]$Closing){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){if($Closing){return};throw 'Owned toolbar review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Id,[switch]$Name,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
-    if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-}
-function Control([string]$Id,[switch]$Name,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Name:$Name -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Id";$hit.item
-}
-function Invoke([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Box([string]$Id){
     $ready=@{box=$null}
     Wait-Until {$c=Find $Id;if(!$c -or $c.Current.IsOffscreen){return $false};$ready.box=$c.Current.BoundingRectangle;$ready.box.Width -gt 0 -and $ready.box.Height -gt 0} "Unarranged $Id"
@@ -55,10 +29,6 @@ function Drag($from,$to){
 }
 function Release{[CapyRowPointer]::Up();Start-Sleep -Milliseconds 250}
 function Focus-Review{$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle);Start-Sleep -Milliseconds 120}
-function Capture([string]$Name){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-    (Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json'))
-}
 function Switch-Workspace([string]$Name,[string]$Id){
     $switch=Find ('workspace-switch-'+$Name.ToLowerInvariant())
     if(!$switch -or $switch.Current.IsOffscreen){Invoke 'header-workspace-menu';$switch=Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
@@ -66,7 +36,7 @@ function Switch-Workspace([string]$Name,[string]$Id){
     Wait-Until {(Model).windows_workspace.id -eq $Id -and !(Model).windows_workspace.busy} "$Name did not open" 20
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -82,7 +52,7 @@ try {
     if(!$size -or !$opacity -or !$size.component -or !$opacity.component){throw 'Sketch lacks the shared brush sliders'}
     $band=@((Model).state.workspace.layout.bands)
     if($band.Count -ne 1 -or $band[0].edge -ne 'left' -or $band[0].alignment -ne 'center'){throw 'Sketch sliders are not docked in the centered left compact region'}
-    Capture 'sketch-dark'
+    Capture 'sketch-dark' -WithModel
 
     $track="component-slider-$($size.id)";$preview="slider-bookmark-$($size.id)"
     Focus-Review
@@ -101,7 +71,7 @@ try {
     $marked=(Brush).diameter
     Invoke "slider-bookmark-$($size.id)"
     Wait-Until {@((Tile 'brush_size_slider').component.bookmarks).Count -eq 1} 'Bookmark was not added'
-    Capture 'size-preview'
+    Capture 'size-preview' -WithModel
     [CapyRowPointer]::Key(0x1B);Start-Sleep -Milliseconds 200
     Wait-Until {$null -eq (Find $preview)} 'Escape did not close the size preview'
     Press 'mouse' (Along (Box $track) .2);Release
@@ -145,10 +115,10 @@ try {
     $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('37')
     [CapyRowPointer]::Key(0x0D)
     Wait-Until {[Math]::Abs((Brush).diameter-37) -lt 0.001} 'Tool Options size entry did not apply'
-    Capture 'photo-brush-options'
+    Capture 'photo-brush-options' -WithModel
     Invoke "toolbar-more-$($options.id)"
     Wait-Until {$null -ne (Model).state.customization.drawer} 'More did not open the Tool Options drawer'
-    Capture 'photo-more-drawer'
+    Capture 'photo-more-drawer' -WithModel
     [CapyRowPointer]::Key(0x1B);Start-Sleep -Milliseconds 300
     Write-Output 'PASS: Photo Tool Options field edit and More drawer'
 
@@ -167,9 +137,9 @@ try {
     @{status='passed';captures=$run;scope='Guarded OS-delivered synthetic mouse, touch and pen input. Physical digitizers are not tested.'}|ConvertTo-Json
 } catch {
     $_|Out-String|Set-Content (Join-Path $run 'failure.txt');$_.ScriptStackTrace|Add-Content (Join-Path $run 'failure.txt')
-    if($review){$review.Refresh();if(!$review.HasExited){try{Capture 'failure'}catch{$_|Out-String|Set-Content (Join-Path $run 'capture-error.txt')}}};throw
+    if($review){$review.Refresh();if(!$review.HasExited){try{Capture 'failure' -WithModel}catch{$_|Out-String|Set-Content (Join-Path $run 'capture-error.txt')}}};throw
 } finally {
     [CapyRowPointer]::Dispose()
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    Exit-CapyEnvironment
 }

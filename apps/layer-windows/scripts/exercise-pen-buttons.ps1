@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Name PenButtonsWindow -Namespace Capy -MemberDefinition '[DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,int[] point);'
@@ -8,14 +9,7 @@ $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/pen-buttons/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
- try {
-  $value=Get-Content -LiteralPath (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json
-  if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$value.model}
- }catch{}
-}
+$CapyTraceDirectory=$run
 function Point($Element) {
  $b=$Element.Current.BoundingRectangle
  if($Element.Current.IsOffscreen -or $b.IsEmpty -or $b.Width -le 0 -or $b.Height -le 0){throw 'Input target is not visible'}
@@ -52,14 +46,14 @@ function Barrel-Stroke([int]$X,[int]$Y,[switch]$Held) {
  [CapyRowPointer]::PenLeave()
 }
 try {
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned pen button review $($review.Id): $run"
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
- . (Join-Path $repo 'tools/performance/windows-pen-ui.ps1') -ProcessId $review.Id
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Pen review did not start'
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
@@ -132,5 +126,5 @@ try {
  throw $failure
 } finally {
  [CapyRowPointer]::Dispose()
- foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+ Exit-CapyEnvironment
 }

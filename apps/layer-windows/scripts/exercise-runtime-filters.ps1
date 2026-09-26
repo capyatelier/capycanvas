@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyCacheModel=$true;$CapyCaptureDelay=250
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Drawing;
@@ -18,35 +20,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/runtime-filters/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-
-$script:latestSnapshot=$null
-function Model {
-    # Trace publication can overlap this read. Keep only the last complete,
-    # isolated snapshot from this exact process; new-value waits still time out.
-    try{
-        $s=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
-        if($s.process_id -eq $review.Id -and $s.model.windows_isolated_settings){$script:latestSnapshot=$s}
-    }catch{}
-    if($script:latestSnapshot.process_id -eq $review.Id){$script:latestSnapshot.model}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=5){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Effects review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Value,[switch]$Name,$Type){
-    $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
-    $match=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
-    if($Type){$match=[System.Windows.Automation.AndCondition]::new($match,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$match)
-}
-function Control([string]$Value,[switch]$Name,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Type $Type;$null -ne $hit.item} "Missing $Value"
-    $hit.item
-}
 function Invoke([string]$Value,[switch]$Name){
     $hit=@{item=$null}
     Wait-Until {
@@ -117,10 +90,6 @@ function Preview-Hash([string]$Id,[switch]$Tinted){
         finally{$crop.Dispose();$stream.Dispose();$sha.Dispose()}
     }finally{$bitmap.Dispose()}
 }
-function Capture([string]$Name){
-    Start-Sleep -Milliseconds 250 # Allow acknowledged layout/theme changes to reach composition.
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-}
 
 function Load-State {(Model).windows_filter_load}
 function Reload([switch]$Failure) {
@@ -134,7 +103,7 @@ function Reload([switch]$Failure) {
     }
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment @('CAPY_FILTERS_DIR','CAPY_FILTERS_MODE')
     $package=Join-Path $run 'package'
     [IO.Directory]::CreateDirectory($package)|Out-Null
     foreach($name in @('manifest.json','tent.wgsl','prepare.wgsl')){
@@ -221,8 +190,5 @@ try {
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

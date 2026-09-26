@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=10
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @"
 using System;
@@ -54,28 +56,6 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/snap/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try{
-        $snapshot=Get-Content -LiteralPath (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
-        if($snapshot.process_id -ne $review.Id -or !$snapshot.model.windows_isolated_settings){return}
-        $camera=Get-Content -LiteralPath (Join-Path $directory 'camera-state.json') -Raw|ConvertFrom-Json
-        if($camera.process_id -ne $review.Id -or $camera.window_id -ne $snapshot.window_id){return}
-        if($camera.camera.revision -ge $snapshot.model.state.camera.revision){$snapshot.model.state.camera=$camera.camera}
-        $snapshot.model
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=10) {
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Owned Snap review exited unexpectedly'};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
-function Find([string]$Name) {
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name))
-}
-function Invoke([string]$Name) {(Find $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Signature {
     $model=Model
     @($model.state.document_file,$model.state.layers,$model.state.brush,$model.windows_workspace.id)|ConvertTo-Json -Depth 60 -Compress
@@ -88,7 +68,7 @@ function Ready {
     Wait-Until {
         $model=Model;$client=[CapySnapWindow+Rect]::new()
         if(!$model -or [CapySnapWindow]::IsIconic($handle) -or ![CapySnapWindow]::GetClientRect($handle,[ref]$client)){return $false}
-        $canvas=Find 'Drawing canvas';$origin=[CapySnapWindow+Point]::new()
+        $canvas=Find 'Drawing canvas' -Name;$origin=[CapySnapWindow+Point]::new()
         if(!$canvas -or ![CapySnapWindow]::ClientToScreen($handle,[ref]$origin)){return $false}
         $bounds=$canvas.Current.BoundingRectangle
         $model.canvas_ready -and $model.brush_ready -and
@@ -101,9 +81,6 @@ function Ready {
     } 'Canvas did not settle at the native client size' 45
     $model=Model
     if($model.error -or $model.state.host_error -or $model.titlebar_insets[1] -le 0 -or $model.titlebar_insets[2] -le 0){throw 'Invalid native caption or editor error after resize'}
-}
-function Capture([string]$Name) {
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'-capture.json'))
 }
 function Patch-Hash {
     $client=[CapySnapWindow+Rect]::new()
@@ -136,7 +113,7 @@ function Check-Paint([string]$Name) {
     $script:sample=[Drawing.Rectangle]::new([int]($area[0]+($area[2]-$width)/2),[int]($area[1]+($area[3]-$height)/2),$width,$height)
     $origin=[CapySnapWindow+Point]::new()
     if(![CapySnapWindow]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas'}
-    $bounds=(Find 'Drawing canvas').Current.BoundingRectangle
+    $bounds=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
     $script:sample.Offset([int]($bounds.Left-$origin.x),[int]($bounds.Top-$origin.y))
     $parkX=[int]($bounds.Left+$area[0]+$area[2]/2);$parkY=[int]($bounds.Top+$area[1])+20
     [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null
@@ -150,11 +127,11 @@ function Check-Paint([string]$Name) {
         Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Resized canvas did not accept a stroke'
         Wait-Until {(Patch-Hash) -ne $before} 'Resized stroke did not appear in the canvas'
         $painted=Stable-Patch;Capture ($Name+'-'+$device)
-        $revision=(Model).state.document_file.revision;Invoke 'Undo'
+        $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
         Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'One Undo did not restore original canvas pixels'
-        $revision=(Model).state.document_file.revision;Invoke 'Redo'
+        $revision=(Model).state.document_file.revision;Invoke 'Redo' -Name
         Wait-Until {(Model).state.document_file.revision -gt $revision -and (Patch-Hash) -eq $painted} 'One Redo did not restore stroke pixels'
-        $revision=(Model).state.document_file.revision;Invoke 'Undo'
+        $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
         Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'Final Undo did not restore the pre-stroke drawing'
         [CapyRowPointer]::Verify()
         Write-Output "$Name ${device}: visible stroke and one-step Undo/Redo passed"
@@ -170,7 +147,7 @@ function Record([string]$Name,[string]$Before) {
     Check-Paint $Name
 }
 try{
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -182,7 +159,7 @@ try{
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Ready
     if((Model).state.document_file.modified){throw 'Snap fixture requires a clean document'}
-    $revision=(Model).state.document_file.revision;Invoke 'Test stroke'
+    $revision=(Model).state.document_file.revision;Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed drawing did not finish'
     $work=[CapySnapWindow]::WorkArea($handle)
     foreach($side in @('left','right')){
@@ -209,7 +186,7 @@ try{
     $before=Signature;[CapySnapWindow]::ShowWindowAsync($handle,9)|Out-Null
     Wait-Until {![CapySnapWindow]::IsZoomed($handle)} 'Maximized window did not restore'
     Record 'restored-after-maximize' $before
-    $revision=(Model).state.document_file.revision;Invoke 'Undo'
+    $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
     Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'One final Undo did not remove the preserved seed drawing'
     $review.CloseMainWindow()|Out-Null
     if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Clean Snap review did not close with zero exit within five seconds'}
@@ -221,5 +198,5 @@ try{
     throw
 }finally{
     [CapyRowPointer]::Dispose()
-    foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+    Exit-CapyEnvironment
 }

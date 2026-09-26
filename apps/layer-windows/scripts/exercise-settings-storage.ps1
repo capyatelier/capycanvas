@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -8,25 +8,9 @@ $run=Join-Path $repo ('artifacts/windows/settings-storage/'+[Guid]::NewGuid().To
 $settingsProfile=Join-Path $run 'profile'
 [IO.Directory]::CreateDirectory($settingsProfile)|Out-Null
 $settingsFile=Join-Path $settingsProfile 'settings.json'
-$script:stateFile=$null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{}
-foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $script:review=$null
 $script:launch=0
 $locked=$null
-function Model {
-    try {
-        if(!$script:stateFile){
-            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
-                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
-                $snapshot=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-                if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){$script:stateFile=$path;break}
-            }
-        }
-        if($script:stateFile){$snapshot=Get-Content -LiteralPath $script:stateFile -Raw|ConvertFrom-Json;if($snapshot.process_id -eq $review.Id){return $snapshot.model}}
-    } catch {} # Opt-in snapshot may be finishing a write.
-}
 function Saved {
     try {Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json} catch {}
 }
@@ -88,7 +72,6 @@ function Close-Preferences {
 }
 function Start-App {
     $script:launch++
-    $script:stateFile=$null
     $script:stderr=Join-Path $run ("launch-$launch.stderr.log")
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
@@ -139,7 +122,7 @@ function Recovery-Choice([string]$Name) {
     $choice.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
     $env:CAPY_TRACE_UI='1'
     $env:CAPY_SMOKE_TEST='1'
@@ -267,5 +250,5 @@ try {
     throw
 } finally {
     if($locked){$locked.Dispose()}
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    Exit-CapyEnvironment
 }

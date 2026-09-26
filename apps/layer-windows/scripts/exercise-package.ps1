@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Archive)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.IO.Compression.FileSystem
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Archive=(Resolve-Path -LiteralPath $Archive).Path
 $run=Join-Path $repo ('artifacts/windows/package-review/'+[Guid]::NewGuid().ToString('N'))
@@ -31,25 +32,9 @@ foreach($file in $manifest.files){
     if((Get-Item -LiteralPath $path).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256){throw "Package file does not match its hash: $($file.path)"}
 }
 if($names.Count -ne $declared.Count+1){throw 'Archive has files absent from its manifest'}
-$environment=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
-$previous=@{};foreach($name in $environment){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
-    try {
-        $snapshot=Get-Content (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json
-        if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){$snapshot.model}
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{
-        if(& $Condition){return}
-        $review.Refresh();if($review.HasExited){throw "Package process exited: $($review.ExitCode)"}
-        Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
+$CapyTraceDirectory=$run
 try {
-    foreach($name in $environment){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment @('CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
     # A build shell adds SDK shader compilers to PATH; exercise the bundled runtime.
     $env:PATH=(Join-Path $env:WINDIR 'System32')+[IO.Path]::PathSeparator+$env:WINDIR
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
@@ -90,8 +75,5 @@ try {
     }
     throw $failure
 }finally{
-    foreach($name in $environment){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
+    Exit-CapyEnvironment
 }

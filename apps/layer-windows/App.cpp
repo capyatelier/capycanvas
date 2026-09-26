@@ -77,7 +77,6 @@ void ReceiveForwardedFiles() {
 struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata{nullptr};
     std::map<uint64_t,std::shared_ptr<CanvasWindow>> windows;
-    bool launchedWindow=false;
     void TraceWindows()const {
         if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
         auto name=L"windows-"+std::to_wstring(GetCurrentProcessId())+L".json",pending=name+L".pending";
@@ -108,11 +107,9 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         auto next=std::make_shared<CanvasWindow>(
             [weak=get_weak()]{if(auto self=weak.get())self->AddWindow();},
             [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
-            !launchedWindow,
             [weak=get_weak()](uint64_t source){if(auto self=weak.get())for(auto const& [id,window]:self->windows)
                 if(id!=source)window->RefreshWorkspaceSwitcher();});
         windows.emplace(next->Id(),next);
-        launchedWindow=true;
         TraceWindows();
         if(!files.empty())next->OpenFiles(std::move(files));
         next->Open();

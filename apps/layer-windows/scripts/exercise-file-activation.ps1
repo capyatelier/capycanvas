@@ -1,23 +1,16 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/file-activation/'+[Guid]::NewGuid().ToString('N'))
 $elsewhere=Join-Path $run 'elsewhere'
 [IO.Directory]::CreateDirectory($elsewhere)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
+$CapyTraceDirectory=$run
 $review=$null;$other=$null
-function Model {
-    try{$s=Get-Content -LiteralPath (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json;if($s.process_id -eq $review.Id -and $s.model.windows_isolated_settings){$s.model}}catch{}
-}
 function Tabs {@((Model).windows_tabs.tabs)}
-function Wait-Until([scriptblock]$Check,[string]$Message,[int]$Seconds=45){
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{if(& $Check){return};$review.Refresh();if($review.HasExited){throw "Application exited: $($review.ExitCode)"};Start-Sleep -Milliseconds 80}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Image([string]$Name,[Drawing.Color]$Color){
     $path=Join-Path $run $Name
     $bitmap=[Drawing.Bitmap]::new(24,16,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -30,7 +23,7 @@ function Forward([string]$Directory,[string[]]$Arguments){
     if($launch.ExitCode -ne 0){throw "A forwarding launch failed: $($launch.ExitCode)"}
 }
 try {
-    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
@@ -61,5 +54,5 @@ try {
 } finally {
     if($other -and !$other.HasExited){Stop-Process -Id $other.Id -Force}
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}
-    foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+    Exit-CapyEnvironment
 }

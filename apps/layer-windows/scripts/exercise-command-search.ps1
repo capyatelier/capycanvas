@@ -1,19 +1,15 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/command-search/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
+$CapyTraceDirectory=$run
 $checks=[ordered]@{}
-function Model {
- try {$value=Get-Content -LiteralPath (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$value.model}}catch{}
-}
 function Visible([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
-function Capture([string]$Name){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -ClientOnly -Output (Join-Path $run ($Name+'.png')) *> (Join-Path $run ($Name+'.json'))}
 function Size {((Model).state.tool_settings|Where-Object id -eq 'size').value}
 function Canvas-Point([double]$FractionX,[double]$FractionY){
  $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
@@ -32,14 +28,15 @@ function Row([int]$Index){Visible ('command-result-'+$Index)}
 function Key([uint16]$Code){[CapyRowPointer]::Key([uint32]$review.Id,$Code)}
 function Closed {Wait-Until {!(Visible 'command-bar') -and !(Visible 'command-search')} 'Command search did not close' 5}
 try {
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned command search review $($review.Id): $run"
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
- . (Join-Path $repo 'tools/performance/windows-pen-ui.ps1') -ProcessId $review.Id
+ [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Command search review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
@@ -152,5 +149,5 @@ try {
 } finally {
  [CapyRowPointer]::Dispose()
  if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force}
- foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+ Exit-CapyEnvironment
 }

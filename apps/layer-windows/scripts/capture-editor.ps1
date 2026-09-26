@@ -4,7 +4,9 @@ param(
     [int]$Width=960,[int]$Height=660
 )
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyWaitSeconds=45
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -24,7 +26,7 @@ public static class CapyEditorCapture {
 $review=Get-Process -Id $ProcessId
 $null=$review.Handle
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected the controlled native editor'}
-$statePath=Join-Path (Split-Path -Parent $review.Path) 'ui-state.json'
+$directory=Split-Path -Parent $review.Path
 $startup=[Diagnostics.Stopwatch]::StartNew()
 do{
     $review.Refresh();if($review.HasExited){throw 'The native editor exited before creating its window'}
@@ -36,25 +38,6 @@ if($handle -eq [IntPtr]::Zero){throw 'The native editor did not create a window'
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($OutputDirectory)|Out-Null
-function Model {
-    try{
-        $s=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json
-        if($s.process_id -ne $ProcessId){return}
-        $camera=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $statePath) 'camera-state.json') -Raw|ConvertFrom-Json
-        if($camera.process_id -ne $ProcessId -or $camera.window_id -ne $s.window_id){return}
-        if($camera.camera.revision -ge $s.model.state.camera.revision){$s.model.state.camera=$camera.camera}
-        $s.model
-    }catch{}
-}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=45) {
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{
-        if(& $Condition){return}
-        $review.Refresh();if($review.HasExited){throw 'Owned editor exited during capture'}
-        Start-Sleep -Milliseconds 100
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
     $property=if($Id){[System.Windows.Automation.AutomationElement]::AutomationIdProperty}else{[System.Windows.Automation.AutomationElement]::NameProperty}
     $Scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,

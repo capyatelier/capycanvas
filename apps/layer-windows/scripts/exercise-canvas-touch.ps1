@@ -1,27 +1,13 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyEach={[CapyCanvasTouch]::Verify()}
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/canvas-touch/'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
-$previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-function Model {
- try{
-  $s=Get-Content -LiteralPath (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
-  if($s.process_id -ne $app.Id -or !$s.model.windows_isolated_settings){return}
-  $c=Get-Content -LiteralPath (Join-Path $directory 'camera-state.json') -Raw|ConvertFrom-Json
-  if($c.process_id -ne $app.Id -or $c.window_id -ne $s.window_id){return}
-  if($c.camera.revision -ge $s.model.state.camera.revision){$s.model.state.camera=$c.camera};$s.model
- }catch{}
-}
-function Wait-Until([scriptblock]$Test,[string]$Message,[int]$Seconds=8){$w=[Diagnostics.Stopwatch]::StartNew();do{[CapyCanvasTouch]::Verify();if(& $Test){return};$app.Refresh();if($app.HasExited){throw 'Owned touch review exited'};Start-Sleep -Milliseconds 50}while($w.Elapsed.TotalSeconds -lt $Seconds);throw $Message}
-function Find([string]$Value,[switch]$Name){$property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty};$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Value))}
-function Control([string]$Value,[switch]$Name){$hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name;$null -ne $hit.item} "Missing control: $Value";$hit.item}
-function Invoke([string]$Value,[switch]$Name){(Control $Value -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Select-Tool([string]$Id){
  if(((Model).state.commands|Where-Object id -eq $Id).selected){return}
  $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.kind -eq 'command' -and $tile.control.command -eq $Id){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No native $Id tile"
@@ -48,18 +34,17 @@ function Matches-Gesture($actual,$expected){
  $true
 }
 function Signature {$m=$null;for($i=0;$i -lt 40 -and !$m;$i++){$m=Model;if(!$m){Start-Sleep -Milliseconds 25}};@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 30 -Compress}
-function Capture([string]$Name){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $app.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'-capture.json'))}
 $checks=[Collections.Generic.List[object]]::new()
 function Check([string]$Name,[scriptblock]$Condition){Wait-Until $Condition $Name;if((Signature) -ne $drawing){throw "Touch changed the drawing: $Name"};$checks.Add(@{name=$Name;camera=Camera});Write-Output "$Name passed"}
 function Stable([string]$Name,$Expected){Start-Sleep -Milliseconds 160;Check $Name {(Same-Camera (Camera) $Expected)}}
 try{
- foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+ Enter-CapyEnvironment
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
- $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$app.Handle
- @{process_id=$app.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
- Write-Output "Owned touch review $($app.Id): $run"
- Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated canvas did not start' 45
- $handle=$app.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+ $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
+ @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
+ Write-Output "Owned touch review $($review.Id): $run"
+ Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated canvas did not start' 45
+ $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=Camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close for gesture space'}
@@ -70,7 +55,7 @@ try{
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
  if($area[2] -lt 600 -or $area[3] -lt 500){throw 'Available canvas is too small for multi-touch acceptance'}
  [CapyCanvasTouch]::SetForegroundWindow($handle)|Out-Null
- [CapyRowPointer]::Initialize([uint32]$app.Id)
+ [CapyRowPointer]::Initialize([uint32]$review.Id)
  [CapyRowPointer]::Down('mouse',($cx-60),($cy-50))
  try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-50+[int](10*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
  Wait-Until {(Model).state.document_file.modified} 'Visible mouse seed stroke did not finish'
@@ -80,7 +65,7 @@ try{
  if((Signature) -ne $seeded){throw 'Mouse right-drag painted'}
  [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
  $drawing=Signature;Capture 'before-touch'
- [CapyCanvasTouch]::Initialize([uint32]$app.Id)
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id)
  $before=Camera;[CapyCanvasTouch]::Down(1,($cx-100),$cy)
  for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Move(1,($cx-100+$i*4),($cy+$i*3));Start-Sleep -Milliseconds 12}
  Stable 'single finger neither paints nor navigates with Pen' $before
@@ -123,7 +108,7 @@ try{
  Stable 'Hand release preserves the drawing and camera' (Camera)
  Select-Tool 'pen';Invoke 'canvas-fit';Start-Sleep -Milliseconds 200
  Check 'returning to Pen and Fit preserves the drawing' {$true}
- [CapyCanvasTouch]::Initialize([uint32]$app.Id)
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id)
  $resting=Camera;[CapyCanvasTouch]::Down(1,($cx-100),$cy);Start-Sleep -Milliseconds 120
  Invoke 'settings-button'
  Wait-Until {$null -ne (Find 'Preferences' -Name)} 'Preferences did not open over a resting finger'
@@ -135,7 +120,7 @@ try{
  for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Move(1,($cx+40+$i*6),($cy+$i*4));Start-Sleep -Milliseconds 12}
  Stable 'a finger lifted under a modal dialog does not pair with the next finger' $resting
  [CapyCanvasTouch]::Up(1);[CapyCanvasTouch]::Dispose()
- [CapyRowPointer]::Initialize([uint32]$app.Id)
+ [CapyRowPointer]::Initialize([uint32]$review.Id)
  $revision=(Model).state.document_file.revision
  [CapyRowPointer]::Down('pen',($cx-70),($cy+60))
  try{for($i=1;$i -le 28;$i++){[CapyRowPointer]::Move(($cx-70+$i*5),($cy+60+[int](12*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
@@ -147,10 +132,10 @@ try{
  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'One Undo did not leave the seed drawing'
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
  Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'Two independent Undo steps did not remove pen and seed strokes'
- $app.CloseMainWindow()|Out-Null
- if(!$app.WaitForExit(5000) -or $app.ExitCode -ne 0){throw 'Touch review did not close successfully within five seconds'}
+ $review.CloseMainWindow()|Out-Null
+ if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Touch review did not close successfully within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Touch runtime stderr requires inspection'}
  @{checks=$checks;drawing='preserved throughout navigation';pen_after_touch='new stroke and independent Undo';close='zero exit within five seconds';scope='OS-injected multi-touch and pen; physical digitizers, pressure/tilt and 120 Hz acceptance remain separate'}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas touch acceptance passed: $run"
-}catch{@{camera=Camera;last_expected=$expected;checks=$checks;drawing=$drawing;signature=(Signature)}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'failure-state.json');if($app -and !$app.HasExited -and $root){try{Capture 'failure'}catch{}};throw}
-finally{[CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose();foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}}
+}catch{@{camera=Camera;last_expected=$expected;checks=$checks;drawing=$drawing;signature=(Signature)}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'failure-state.json');if($review -and !$review.HasExited -and $root){try{Capture 'failure'}catch{}};throw}
+finally{[CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose();Exit-CapyEnvironment}

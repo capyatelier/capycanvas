@@ -299,8 +299,7 @@ On failure, run `./apps/layer-windows/scripts/inspect-window.ps1 -ProcessId $rev
 and inspect stderr before relaunching. Opt-in `ui-state-<pid>-<window>.json`,
 `camera-state-<pid>-<window>.json` and `lifecycle.log` are in the app's working
 directory. Check snapshot `process_id`, `window_id` and freshness. The per-window
-JSON files use atomic replacement; compatibility files `ui-state.json` and
-`camera-state.json` can be read mid-write. Read relevant fields from one snapshot
+JSON files use atomic replacement. Read relevant fields from one snapshot
 per assertion rather than dumping whole models or mixing revisions. Compare a
 suspect snapshot's workspace revision with the native workspace's UIA ItemStatus;
 a leftover `.pending` file can indicate failed diagnostic replacement even when
