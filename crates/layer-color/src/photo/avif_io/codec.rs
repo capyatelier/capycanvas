@@ -1,5 +1,6 @@
 //! Ownership wrapper around the Rust rav1d decoder's dav1d-compatible API.
 use super::container::Result;
+use crate::photo::check_cancel;
 use rav1d::{
     include::dav1d::{
         data::Dav1dData,
@@ -9,19 +10,8 @@ use rav1d::{
     },
     src::{error::Rav1dError, lib::*},
 };
-use std::{
-    mem::MaybeUninit,
-    ptr::NonNull,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{mem::MaybeUninit, ptr::NonNull, sync::atomic::AtomicBool};
 
-pub(super) fn check(cancel: &AtomicBool) -> Result<()> {
-    if cancel.load(Ordering::Acquire) {
-        Err("Image read cancelled".into())
-    } else {
-        Ok(())
-    }
-}
 struct Context(Option<Dav1dContext>);
 impl Drop for Context {
     fn drop(&mut self) {
@@ -103,7 +93,7 @@ fn headers(bytes: &[u8], expected: [u32; 2], cancel: &AtomicBool) -> Result<(boo
     let mut frames = 0usize;
     let mut count = 0usize;
     while at < bytes.len() {
-        check(cancel)?;
+        check_cancel(cancel)?;
         count += 1;
         if count > 65_536 {
             return Err("Too many AV1 OBUs".into());
@@ -181,7 +171,7 @@ pub(super) fn decode(
     budget: usize,
     cancel: &AtomicBool,
 ) -> Result<Picture> {
-    check(cancel)?;
+    check_cancel(cancel)?;
     super::super::validate_extent(expected, 32768)?;
     let (in_config, config_frames) = headers(config, expected, cancel)?;
     let (in_data, frames) = headers(bytes, expected, cancel)?;
@@ -249,7 +239,7 @@ pub(super) fn decode(
     let mut result = None;
     let mut rounds = 0;
     loop {
-        check(cancel)?;
+        check_cancel(cancel)?;
         rounds += 1;
         if rounds > 65_536 {
             return Err("AV1 decoder did not finish the image".into());
@@ -314,6 +304,6 @@ pub(super) fn decode(
         picture.full_range = header.color_range != 0;
         result = Some(picture);
     }
-    check(cancel)?;
+    check_cancel(cancel)?;
     result.ok_or_else(|| "AV1 payload contains no decoded image".into())
 }

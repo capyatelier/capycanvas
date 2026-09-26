@@ -44,9 +44,8 @@ pub(super) fn read_with_cancel(
     }
     if let Some(cicp) = info.coding_independent_code_points
         && matches!(cicp.transfer_function, 16 | 18) {
-        let mut source = super::hdr_png::read(reader, limits, cancelled)?;
-        source.resolution = resolution;
-        return super::orientation::normalize(source, metadata.orientation, limits.source_bytes);
+        let source = super::hdr_png::read(reader, limits, cancelled)?;
+        return super::orientation::normalize(source, resolution, metadata.orientation, limits.source_bytes);
     }
     let (color, depth) = reader.output_color_type();
     let channels = match color {
@@ -89,7 +88,7 @@ pub(super) fn read_with_cancel(
     } else {
         let mut converted = Vec::new();
         while let Some(row) = reader.next_row().map_err(err)? {
-            if cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("Image read cancelled".into()); }
+            check_cancel(cancelled)?;
             if depth == SampleDepth::U16 {
                 converted.clear();
                 converted.extend_from_slice(row.data());
@@ -101,9 +100,24 @@ pub(super) fn read_with_cancel(
         }
     }
     reader.finish().map_err(err)?;
-    let mut source = builder.finish()?;
-    source.resolution = resolution;
-    super::orientation::normalize(source, metadata.orientation, limits.source_bytes)
+    super::orientation::normalize(builder.finish()?, resolution, metadata.orientation, limits.source_bytes)
+}
+
+/// A PNG header with pHYs print density in pixels per metre.
+pub(super) fn info(
+    extent: [u32; 2],
+    resolution: Option<layer_core::ImageResolution>,
+) -> Result<png::Info<'static>, String> {
+    let mut info = png::Info::with_size(extent[0], extent[1]);
+    if let Some(resolution) = resolution {
+        let [xppu, yppu] = resolution.png_density()?;
+        info.pixel_dims = Some(png::PixelDimensions {
+            xppu,
+            yppu,
+            unit: png::Unit::Meter,
+        });
+    }
+    Ok(info)
 }
 
 fn profile_chunk_present(
@@ -219,15 +233,7 @@ pub fn write_png_rows(
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
-    let mut info = png::Info::with_size(extent[0], extent[1]);
-    if let Some(resolution) = resolution {
-        let [xppu, yppu] = resolution.png_density()?;
-        info.pixel_dims = Some(png::PixelDimensions {
-            xppu,
-            yppu,
-            unit: png::Unit::Meter,
-        });
-    }
+    let mut info = info(extent, resolution)?;
     info.bit_depth = match interpretation.depth {
         SampleDepth::U8 => png::BitDepth::Eight,
         SampleDepth::U16 => png::BitDepth::Sixteen,
@@ -245,16 +251,7 @@ pub fn write_png_rows(
     if interpretation.profile == ColorProfile::default() {
         info.srgb = Some(png::SrgbRenderingIntent::RelativeColorimetric);
     } else {
-        let profile = if matches!(
-            interpretation.channels,
-            SourceChannels::Gray | SourceChannels::GrayAlpha
-        ) && let ColorProfile::Builtin(space) = interpretation.profile
-        {
-            crate::gray_profile(space)?
-        } else {
-            interpretation.profile.clone()
-        };
-        info.icc_profile = Some(profile_bytes(&profile)?.into());
+        info.icc_profile = Some(delivery_icc(interpretation)?.into());
     }
     let mut encoder = png::Encoder::with_info(&mut output, info).map_err(err)?;
     encoder.set_deflate_compression(png::DeflateCompression::Level(1));

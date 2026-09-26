@@ -12,49 +12,8 @@ mod output;
 mod properties;
 mod sequence;
 use container::{Container, Reader};
-pub(super) use output::{preview, write};
+pub(super) use output::{encode, preview};
 use properties::{Color, Geometry, Properties};
-
-// Probe brands without buffering the image or selecting a host-specific codec.
-pub(super) fn is_avif(
-    input: &mut (impl BufRead + Seek),
-    cancel: &AtomicBool,
-) -> Result<bool, String> {
-    let origin = input.stream_position().map_err(err)?;
-    let result = (|| {
-        let mut header = [0; 8];
-        input.read_exact(&mut header).map_err(err)?;
-        if &header[4..] != b"ftyp" {
-            return Ok(false);
-        }
-        let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
-        let header_size = if size == 1 {
-            input.read_exact(&mut header).map_err(err)?;
-            size = u64::from_be_bytes(header);
-            16
-        } else {
-            8
-        };
-        let payload = size
-            .checked_sub(header_size)
-            .ok_or("Invalid HEIF/AVIF file type size")?;
-        if payload < 8 || payload > 256 * 1024 || payload % 4 != 0 {
-            return Err("Invalid HEIF/AVIF brand list".into());
-        }
-        let mut found = false;
-        for index in 0..payload / 4 {
-            codec::check(cancel)?;
-            let mut brand = [0; 4];
-            input.read_exact(&mut brand).map_err(err)?;
-            if index != 1 && matches!(&brand, b"avif" | b"avis") {
-                found = true;
-            }
-        }
-        Ok(found)
-    })();
-    input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
-    result
-}
 
 // Chroma remains in its encoded sampling grid until all derived tiles are
 // joined. Converting tiles independently would clamp bilinear filtering at
@@ -69,6 +28,18 @@ struct RawImage {
     pixels: Vec<[u16; 4]>,
 }
 impl RawImage {
+    fn merge_alpha(&mut self, alpha: &RawImage, cancel: &AtomicBool) -> Result<(), String> {
+        if alpha.extent != self.extent || alpha.depth != self.depth {
+            return Err("AVIF color and alpha geometry or precision disagree".into());
+        }
+        for (i, (pixel, alpha)) in self.pixels.iter_mut().zip(&alpha.pixels).enumerate() {
+            if i % self.extent[0] as usize == 0 {
+                check_cancel(cancel)?;
+            }
+            pixel[3] = alpha[0];
+        }
+        Ok(())
+    }
     fn plane_extent(&self, plane: usize) -> [u32; 2] {
         if plane == 0 {
             self.extent
@@ -177,7 +148,7 @@ fn decode_coded(
         full_range: plane.full_range,
     });
     for (y, row) in output.chunks_exact_mut(extent[0] as usize).enumerate() {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         for (x, pixel) in row.iter_mut().enumerate() {
             let (x, y) = (x as u32, y as u32);
             let (cx, cy) = (
@@ -223,7 +194,7 @@ fn decode_item(
     budget: usize,
     cancel: &AtomicBool,
 ) -> Result<RawImage, String> {
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     if stack.len() == 8 || stack.contains(&id) {
         return Err("Cyclic or excessively nested AVIF derivation".into());
     }
@@ -317,7 +288,7 @@ fn decode_item(
                     let (x, y) = ((i as u32 % columns) * tw, (i as u32 / columns) * th);
                     let width = tw.min(extent[0] - x) as usize;
                     for yy in 0..th.min(extent[1] - y) {
-                        codec::check(cancel)?;
+                        check_cancel(cancel)?;
                         let at = (y + yy) as usize * extent[0] as usize + x as usize;
                         let source = yy as usize * tw as usize;
                         output[at..at + width]
@@ -365,22 +336,22 @@ fn decode_item(
                     .checked_sub(image.pixels.len() * 8)
                     .ok_or("AVIF alpha exceeds the codec budget")?;
                 let alpha = decode_item(container, alpha_id, None, true, stack, remaining, cancel)?;
-                if alpha.extent != image.extent || alpha.depth != image.depth {
-                    return Err("AVIF color and alpha geometry or precision disagree".into());
-                }
+                image.merge_alpha(&alpha, cancel)?;
                 image.premultiplied = container.targets(id, b"prem")?.contains(&alpha_id);
-                for (i, (pixel, alpha)) in image.pixels.iter_mut().zip(&alpha.pixels).enumerate() {
-                    if i % extent[0] as usize == 0 {
-                        codec::check(cancel)?;
-                    }
-                    pixel[3] = alpha[0];
-                }
             }
         }
         Ok(image)
     })();
     stack.pop();
     result
+}
+
+/// Print density of an Exif item: a TIFF header offset, then the TIFF data.
+fn exif_resolution(payload: &[u8]) -> Result<Option<layer_core::ImageResolution>, String> {
+    let mut r = Reader::new(payload);
+    let offset = r.u32()? as usize;
+    r.take(offset)?;
+    Ok(super::metadata::exif(r.data)?.resolution)
 }
 
 pub(super) fn read(
@@ -391,43 +362,22 @@ pub(super) fn read(
     read_rendition(input, limits, cancel, true)
 }
 
-pub(super) fn read_heif(
-    input: impl BufRead + Seek,
-    limits: DecodeLimits,
-    cancel: &AtomicBool,
-) -> Result<DecodedPhoto, String> {
-    read_kind(input, limits, cancel, true, true)
-}
-
 fn read_rendition(
     input: impl BufRead + Seek,
     limits: DecodeLimits,
     cancel: &AtomicBool,
     reconstruct: bool,
 ) -> Result<DecodedPhoto, String> {
-    read_kind(input, limits, cancel, reconstruct, false)
-}
-
-fn read_kind(
-    input: impl BufRead + Seek,
-    limits: DecodeLimits,
-    cancel: &AtomicBool,
-    reconstruct: bool,
-    heif: bool,
-) -> Result<DecodedPhoto, String> {
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     let mut input = super::raster_io::Input::new(input, limits)?;
     let length = usize::try_from(input.length).map_err(|_| "AVIF input is too large")?;
     let mut encoded = super::raster_io::allocate(length)?;
     for chunk in encoded.chunks_mut(64 * 1024) {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         input.read_exact(chunk).map_err(err)?;
     }
-    let container = if heif {
-        Container::parse_heif(&encoded, limits.codec_bytes - length, cancel)?
-    } else {
-        Container::parse(&encoded, limits.codec_bytes - length, cancel)?
-    };
+    let container = Container::parse(&encoded, limits.codec_bytes - length, cancel)?;
+    let heif = container.heif;
     if heif && container.movie.is_some() {
         return Err("HEIF image sequences are not yet supported by the Rust decoder".into());
     }
@@ -539,10 +489,7 @@ fn read_kind(
             continue;
         }
         let payload = container.payload(reference.from, remaining.min(crate::MAX_ICC_BYTES))?;
-        let mut r = Reader::new(&payload);
-        let offset = r.u32()? as usize;
-        r.take(offset)?;
-        resolution = super::metadata::exif(r.data)?.resolution;
+        resolution = exif_resolution(&payload)?;
     }
     if properties.geometry.rotation % 2 != 0 {
         resolution = resolution.map(|v| v.swapped());
@@ -553,7 +500,7 @@ fn read_kind(
     let max = (1u32 << image.depth) - 1;
     let converter = color::Converter::new(image.color, image.layout)?;
     for y in 0..extent[1] {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         let mut at = 0;
         for x in 0..extent[0] {
             let [sx, sy] = properties.geometry.source_pixel(crop, x, y);
@@ -600,7 +547,7 @@ fn read_kind(
     }
     let mut source = builder.finish()?;
     source.resolution = resolution;
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     Ok(DecodedPhoto {
         source,
         first_frame: sequence.is_some(),

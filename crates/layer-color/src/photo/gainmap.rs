@@ -2,7 +2,8 @@
 //! coverage, never an input to gain calculation. Container adapters use the
 //! same RGB log gain and identical channel metadata (required by Adobe XMP).
 use super::*;
-use layer_core::color::hdr::SdrRendition;
+use layer_core::color::hdr::{self, SdrRendition};
+use layer_core::color::rgb;
 use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,147 @@ impl GainMapMetadata {
     pub fn encode(self, gain: f32) -> f32 {
         ((gain - self.min_log2) / (self.max_log2 - self.min_log2)).clamp(0., 1.)
     }
+    /// ISO 21496-1 fields from the minimum version onward: one channel in the
+    /// base color space, in millionths.
+    pub fn iso_bytes(self, common_denominator: bool) -> Result<Vec<u8>, String> {
+        const DENOMINATOR: u32 = 1_000_000;
+        let mut bytes = vec![0, 0, 0, 0, if common_denominator { 0x48 } else { 0x40 }];
+        if common_denominator {
+            bytes.extend(DENOMINATOR.to_be_bytes());
+        }
+        for v in [
+            0., self.headroom, self.min_log2, self.max_log2, 1., self.offset, self.offset,
+        ] {
+            let n = f64::from(v) * f64::from(DENOMINATOR);
+            if !n.is_finite() || n.abs() > f64::from(i32::MAX) {
+                return Err("Invalid gain-map output metadata".into());
+            }
+            bytes.extend((n.round() as i32).to_be_bytes());
+            if !common_denominator {
+                bytes.extend(DENOMINATOR.to_be_bytes());
+            }
+        }
+        Metadata::parse_iso(&bytes, common_denominator)?;
+        Ok(bytes)
+    }
+}
+
+const OFFSET: f32 = 1. / 64.;
+
+/// Validated linear BT.2020 HDR and tone-mapped SDR for each output pixel,
+/// composited over `matte`. Returns clipping statistics and the HDR peak.
+pub(in crate::photo) fn render_pair(
+    extent: [u32; 2],
+    space: RgbSpace,
+    rendition: SdrRendition,
+    guide: &hdr::LocalToneGuide,
+    quality: u8,
+    matte: Option<[f32; 3]>,
+    clip: bool,
+    cancelled: &AtomicBool,
+    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+    mut emit: impl FnMut([f32; 3], [f32; 3], f32) -> Result<(), String>,
+) -> Result<(crate::OutputStatistics, f32), String> {
+    check_cancel(cancelled)?;
+    rendition.validate().map_err(str::to_string)?;
+    if !(1..=100).contains(&quality) {
+        return Err("Invalid HDR quality".into());
+    }
+    if matte.is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v))) {
+        return Err("Invalid HDR background".into());
+    }
+    let matrix = hdr::to_bt2020(space);
+    let mapper = rendition.mapper(space, RgbSpace::Srgb);
+    let mut row = vec![[0.; 4]; extent[0] as usize];
+    let mut stats = crate::OutputStatistics::default();
+    let mut peak = 1f32;
+    for y in 0..extent[1] {
+        check_cancel(cancelled)?;
+        read(y, &mut row)?;
+        for (x, p) in row.iter().enumerate() {
+            if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
+                return Err("Invalid HDR output pixel".into());
+            }
+            let a = p[3];
+            let raw = std::array::from_fn(|c| if a > 0. { f64::from(p[c] / a) } else { 0. });
+            let mut hdr = rgb::apply(matrix, raw).map(|v| v as f32);
+            let position = [
+                (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
+                (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
+            ];
+            let mapped = mapper.map_local_premultiplied(*p, position, guide);
+            let mut sdr = rgb::apply(
+                hdr::srgb_to_bt2020(),
+                std::array::from_fn(|c| if a > 0. { f64::from(mapped[c] / a) } else { 0. }),
+            )
+            .map(|v| v as f32);
+            for c in 0..3 {
+                sdr[c] = sdr[c].clamp(0., 1.);
+                if let Some(background) = matte {
+                    hdr[c] = hdr[c] * a + background[c] * (1. - a);
+                    sdr[c] = sdr[c] * a + background[c] * (1. - a);
+                }
+                if !hdr[c].is_finite() {
+                    return Err("Invalid HDR output pixel".into());
+                }
+                if hdr[c] < -1e-6 || hdr[c] > hdr::MAX_LINEAR {
+                    if !clip {
+                        return Err("HDR gain-map output exceeds BT.2020 or the half-float range. Enable Clip out-of-range colors to export a mapped copy.".into());
+                    }
+                    stats.clipped_channels += 1;
+                }
+                hdr[c] = hdr[c].clamp(0., hdr::MAX_LINEAR);
+                peak = peak.max(hdr[c]);
+            }
+            emit(hdr, sdr, a)?;
+        }
+    }
+    Ok((stats, peak))
+}
+
+/// Replaces HDR values by their log2 gain over the decoded SDR base and tracks
+/// the gain range.
+#[derive(Default)]
+pub(in crate::photo) struct LogGain {
+    low: f32,
+    high: f32,
+}
+impl LogGain {
+    pub fn apply(&mut self, value: &mut f32, sdr_code: f64) {
+        *value = ((*value + OFFSET) / (RgbSpace::Srgb.decode(sdr_code) as f32 + OFFSET)).log2();
+        self.low = self.low.min(*value);
+        self.high = self.high.max(*value);
+    }
+    pub fn metadata(self, peak: f32) -> GainMapMetadata {
+        GainMapMetadata {
+            min_log2: self.low,
+            max_log2: self.high.max(self.low + 0.001),
+            offset: OFFSET,
+            headroom: peak.log2().max(0.001),
+        }
+    }
+}
+
+/// Gain at a base pixel center, bilinear over the gain grid with clamped borders.
+pub(in crate::photo) fn bilinear(
+    base: [u32; 2],
+    gain: [u32; 2],
+    x: u32,
+    y: u32,
+    sample: impl Fn(u32, u32) -> [f32; 3],
+) -> [f32; 3] {
+    let tap = |at: u32, base: u32, gain: u32| {
+        let v = ((f64::from(at) + 0.5) * f64::from(gain) / f64::from(base) - 0.5)
+            .clamp(0., f64::from(gain - 1));
+        let low = v.floor();
+        (low as u32, (low as u32 + 1).min(gain - 1), (v - low) as f32)
+    };
+    let (x0, x1, wx) = tap(x, base[0], gain[0]);
+    let (y0, y1, wy) = tap(y, base[1], gain[1]);
+    let [a, b, c, d] = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| sample(x, y));
+    std::array::from_fn(|i| {
+        (a[i] * (1. - wx) + b[i] * wx) * (1. - wy) + (c[i] * (1. - wx) + d[i] * wx) * wy
+    })
 }
 
 mod jpeg;
@@ -48,7 +190,7 @@ mod jpeg_container;
 mod metadata;
 pub(super) use metadata::Metadata;
 pub fn write_gainmap_rows(
-    output: impl Write,
+    mut output: impl Write,
     extent: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
@@ -62,11 +204,19 @@ pub fn write_gainmap_rows(
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
     let options = options.into();
-    if format == GainMapFormat::Jpeg {
-        return jpeg::write(output, extent, space, rendition, guide, options, resolution, matte, clip, cancelled, read);
+    let (bytes, stats) = if format == GainMapFormat::Jpeg {
+        jpeg::encode(extent, space, rendition, guide, options.quality, resolution, matte, clip, options.memory, cancelled, read)
+    } else {
+        super::avif_io::encode(extent, space, rendition, guide, options.quality, resolution, matte,
+            clip, options.memory.encode_bytes, cancelled, read)
+    }?;
+    for chunk in bytes.chunks(65536) {
+        check_cancel(cancelled)?;
+        output.write_all(chunk).map_err(err)?;
     }
-    super::avif_io::write(output, extent, space, rendition, guide, options, resolution, matte,
-        clip, cancelled, read)
+    check_cancel(cancelled)?;
+    output.flush().map_err(err)?;
+    Ok(stats)
 }
 
 pub fn preview_gainmap_rows(
@@ -89,6 +239,9 @@ pub fn preview_gainmap_rows(
     ),
     String,
 > {
+    if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
+        return Err("Invalid preview dimensions".into());
+    }
     let options = options.into();
     if format == GainMapFormat::Jpeg {
         return jpeg::preview(extent, bounds, space, rendition, guide, options, matte, cancelled, read);

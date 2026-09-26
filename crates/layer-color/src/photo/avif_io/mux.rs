@@ -172,7 +172,7 @@ impl<'a> Builder<'a> {
         self.image_properties(root, grid.extent, channels, 12, color, None)?;
         let mut tiles = Vec::new();
         for p in &grid.pictures {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             let id = self.item(b"av01", true, Cow::Borrowed(&p.bytes))?;
             self.image_properties(id, p.extent, channels, 12, color, Some(&p.config))?;
             tiles.push(id);
@@ -186,41 +186,14 @@ impl<'a> Builder<'a> {
     }
 }
 
-fn tone_map(metadata: GainMapMetadata) -> Result<Vec<u8>, String> {
-    if !metadata.min_log2.is_finite()
-        || !metadata.max_log2.is_finite()
-        || !metadata.offset.is_finite()
-        || !metadata.headroom.is_finite()
-        || metadata.min_log2 < -64.
-        || metadata.max_log2 > 64.
-        || metadata.min_log2 >= metadata.max_log2
-        || !(0. ..=1.).contains(&metadata.offset)
-        || !(0. ..=64.).contains(&metadata.headroom)
-        || metadata.headroom == 0.
-    {
-        return Err("Invalid AVIF output gain-map metadata".into());
-    }
-    let mut w = Writer::new(62)?;
-    w.u8(0)?; // ToneMappedImageBox version
-    w.u16(0)?; // minimum metadata version
-    w.u16(0)?; // writer version
-    w.u8(0x40)?; // single-channel metadata, use base color space
-    w.u32(0)?;
-    w.u32(1)?; // base headroom
-    w.u32((metadata.headroom * 1_000_000.).round() as u32)?;
-    w.u32(1_000_000)?;
-    for n in [metadata.min_log2, metadata.max_log2] {
-        w.u32((n * 1_000_000.).round() as i32 as u32)?;
-        w.u32(1_000_000)?;
-    }
-    w.u32(1)?;
-    w.u32(1)?; // gamma
-    for _ in 0..2 {
-        w.u32((metadata.offset * 1_000_000.).round() as u32)?;
-        w.u32(1_000_000)?;
-    }
-    Ok(w.bytes)
-}
+pub(super) const BASE: Color = Color {
+    cicp: [9, 13, 0],
+    full_range: true,
+};
+pub(super) const GAIN: Color = Color {
+    cicp: [2, 2, 0],
+    full_range: true,
+};
 
 pub(super) fn assemble(
     base: &Grid,
@@ -239,15 +212,7 @@ pub(super) fn assemble(
         properties: Vec::new(),
         references: Vec::new(),
     };
-    let base_id = b.grid(
-        base,
-        Some(Color {
-            cicp: [9, 13, 0],
-            full_range: true,
-        }),
-        false,
-        cancel,
-    )?;
+    let base_id = b.grid(base, Some(BASE), false, cancel)?;
     if let Some(alpha) = alpha {
         let alpha_id = b.grid(alpha, None, true, cancel)?;
         let mut aux = vec![0; 4];
@@ -259,16 +224,12 @@ pub(super) fn assemble(
             to: vec![base_id],
         });
     }
-    let gain_id = b.grid(
-        gain,
-        Some(Color {
-            cicp: [2, 2, 0],
-            full_range: true,
-        }),
-        true,
-        cancel,
+    let gain_id = b.grid(gain, Some(GAIN), true, cancel)?;
+    let tmap_id = b.item(
+        b"tmap",
+        false,
+        Cow::Owned([&[0], metadata.iso_bytes(false)?.as_slice()].concat()),
     )?;
-    let tmap_id = b.item(b"tmap", false, Cow::Owned(tone_map(metadata)?))?;
     b.image_properties(
         tmap_id,
         base.extent,
@@ -324,7 +285,7 @@ pub(super) fn assemble(
             w.u32(0)?;
             w.u16(b.items.len() as u16)?;
             for (index, item) in b.items.iter().enumerate() {
-                codec::check(cancel)?;
+                check_cancel(cancel)?;
                 w.boxed(b"infe", |w| {
                     w.u32((2 << 24) | u32::from(item.hidden))?;
                     w.u16(index as u16 + 1)?;
@@ -408,7 +369,7 @@ pub(super) fn assemble(
     output.put(&meta.bytes)?;
     output.boxed(b"mdat", |w| {
         for item in &b.items {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             w.put(&item.data)?;
         }
         Ok(())

@@ -1,10 +1,11 @@
 //! First AVIS sample selection. Tables remain borrowed and counts are checked
 //! against their actual bytes; importing one frame never expands a timeline.
 use super::{
-    RawImage, codec,
+    RawImage,
     container::{Container, Reader, Result, boxes},
     properties::Properties,
 };
+use crate::photo::check_cancel;
 use std::sync::atomic::AtomicBool;
 
 fn child<'a>(data: &'a [u8], kind: &[u8; 4]) -> Result<Option<&'a [u8]>> {
@@ -51,7 +52,7 @@ impl<'a> Sequence<'a> {
         };
         let mut tracks = Vec::new();
         for view in boxes(movie) {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             let view = view?;
             if &view.kind != b"trak" {
                 continue;
@@ -97,16 +98,7 @@ impl<'a> Sequence<'a> {
                 remaining,
                 cancel,
             )?;
-            if alpha_image.depth != image.depth || alpha_image.extent != image.extent {
-                return Err("AVIF alpha track precision or extent mismatch".into());
-            }
-            for (i, (pixel, alpha)) in image.pixels.iter_mut().zip(&alpha_image.pixels).enumerate()
-            {
-                if i % image.extent[0] as usize == 0 {
-                    codec::check(cancel)?;
-                }
-                pixel[3] = alpha[0];
-            }
+            image.merge_alpha(&alpha_image, cancel)?;
             image.premultiplied = self.color.prem_to == Some(alpha.id);
         }
         Ok(image)
@@ -130,10 +122,7 @@ impl<'a> Sequence<'a> {
                 item.id,
                 crate::MAX_ICC_BYTES.min(budget.saturating_sub(metadata.metadata_bytes)),
             )?;
-            let mut r = Reader::new(&payload);
-            let offset = r.u32()? as usize;
-            r.take(offset)?;
-            result = super::super::metadata::exif(r.data)?.resolution;
+            result = super::exif_resolution(&payload)?;
         }
         Ok(result)
     }

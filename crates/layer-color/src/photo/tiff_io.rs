@@ -149,9 +149,7 @@ pub(super) fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result
             builder.push_row(row)?;
         }
     }
-    let mut source = builder.finish()?;
-    source.resolution = resolution;
-    super::orientation::normalize(source, orientation, limits.source_bytes)
+    super::orientation::normalize(builder.finish()?, resolution, orientation, limits.source_bytes)
 }
 
 // The pinned TIFF encoder exposes RGB alpha types but no gray-alpha types.
@@ -203,16 +201,7 @@ pub fn write_tiff_rows(
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
-    let profile = if matches!(
-        interpretation.channels,
-        SourceChannels::Gray | SourceChannels::GrayAlpha
-    ) && let ColorProfile::Builtin(space) = interpretation.profile
-    {
-        crate::gray_profile(space)?
-    } else {
-        interpretation.profile.clone()
-    };
-    let icc = profile_bytes(&profile)?;
+    let icc = delivery_icc(interpretation)?;
     let density = resolution
         .map(layer_core::ImageResolution::tiff_density)
         .transpose()?;

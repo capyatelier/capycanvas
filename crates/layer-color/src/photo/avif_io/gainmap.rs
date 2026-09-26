@@ -17,7 +17,7 @@ fn preferred(
 ) -> Result<bool, String> {
     let mut result = None;
     for view in container::boxes(container.groups.unwrap_or_default()) {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         let view = view?;
         if &view.kind != b"altr" {
             continue;
@@ -45,66 +45,6 @@ fn preferred(
     Ok(result.unwrap_or(false))
 }
 
-fn metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
-    let mut r = Reader::new(bytes);
-    // Forward-compatible unsupported versions leave the SDR primary usable.
-    if r.u8()? != 0 || r.u16()? != 0 {
-        return Ok(None);
-    }
-    let writer = r.u16()?;
-    let flags = r.u8()?;
-    if flags & 0x3f != 0 {
-        return Err("Invalid AVIF gain-map flags".into());
-    }
-    let mut fraction = |signed| -> Result<f32, String> {
-        let n = r.u32()?;
-        let d = r.u32()?;
-        if d == 0 {
-            return Err("Invalid AVIF gain-map denominator".into());
-        }
-        let n = if signed {
-            f64::from(n as i32)
-        } else {
-            f64::from(n)
-        };
-        Ok((n / f64::from(d)) as f32)
-    };
-    let mut m = Metadata {
-        min: [0.; 3],
-        max: [0.; 3],
-        gamma: [1.; 3],
-        base_offset: [0.; 3],
-        alternate_offset: [0.; 3],
-        base_headroom: fraction(false)?,
-        alternate_headroom: fraction(false)?,
-        use_base_space: flags & 0x40 != 0,
-    };
-    let channels = if flags & 0x80 != 0 { 3 } else { 1 };
-    for c in 0..channels {
-        m.min[c] = fraction(true)?;
-        m.max[c] = fraction(true)?;
-        m.gamma[c] = fraction(false)?;
-        m.base_offset[c] = fraction(true)?;
-        m.alternate_offset[c] = fraction(true)?;
-    }
-    if channels == 1 {
-        for values in [
-            &mut m.min,
-            &mut m.max,
-            &mut m.gamma,
-            &mut m.base_offset,
-            &mut m.alternate_offset,
-        ] {
-            let first = values[0];
-            values.fill(first);
-        }
-    }
-    if writer == 0 {
-        r.end()?;
-    }
-    Ok(Some(m.validate()?))
-}
-
 impl Descriptor {
     pub fn find(
         container: &Container<'_>,
@@ -114,7 +54,7 @@ impl Descriptor {
     ) -> Result<Option<Self>, String> {
         let mut found = None;
         for item in &container.items {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             if &item.kind != b"tmap" {
                 continue;
             }
@@ -129,7 +69,12 @@ impl Descriptor {
                 continue;
             }
             let payload = container.payload(item.id, budget.min(64 * 1024))?;
-            let Some(metadata) = metadata(&payload)? else {
+            let metadata = match payload.split_first() {
+                Some((0, iso)) => Metadata::parse_iso(iso, false)?,
+                Some(_) => None,
+                None => return Err("Invalid AVIF tone-map metadata".into()),
+            };
+            let Some(metadata) = metadata else {
                 if item.id == primary {
                     return Err("Unsupported primary AVIF tone-map version".into());
                 }
@@ -236,23 +181,9 @@ impl GainMap {
                 value
             }
         });
-        // Sample the gain grid at base pixel centers, clamping its borders.
-        let coordinate = |pixel: u32, base: u32, gain: u32| {
-            let v = ((pixel as f64 + 0.5) * f64::from(gain) / f64::from(base) - 0.5)
-                .clamp(0., f64::from(gain - 1));
-            (
-                v.floor() as u32,
-                (v.floor() as u32 + 1).min(gain - 1),
-                (v - v.floor()) as f32,
-            )
-        };
-        let (x0, x1, wx) = coordinate(x, base.extent[0], self.image.extent[0]);
-        let (y0, y1, wy) = coordinate(y, base.extent[1], self.image.extent[1]);
-        let samples = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
-            .map(|(x, y)| self.converter.pixel_at_depth(&self.image, x, y, 16));
-        let gain = std::array::from_fn(|c| {
-            let v = samples.map(|p| f32::from(p[c]) / 65535.);
-            (v[0] * (1. - wx) + v[1] * wx) * (1. - wy) + (v[2] * (1. - wx) + v[3] * wx) * wy
+        let gain = crate::photo::gainmap::bilinear(base.extent, self.image.extent, x, y, |x, y| {
+            let p = self.converter.pixel_at_depth(&self.image, x, y, 16);
+            std::array::from_fn(|c| f32::from(p[c]) / 65535.)
         });
         let linear = self.metadata.reconstruct(self.color.linear_base(rgb), gain);
         let rgb = self.color.to_srgb(linear);

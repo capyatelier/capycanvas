@@ -45,14 +45,10 @@ pub(super) fn read<R: BufRead + Seek>(
         profile_assumed: false,
     };
     let mut builder = SourceBuilder::new(extent, interpretation, limits.source_bytes)?;
-    let table: Vec<_> = (0..=65535)
-        .map(|v| hdr::pq_decode(v as f64 / 65535.) / f64::from(hdr::REFERENCE_WHITE_NITS))
-        .collect();
+    let table = pq_table();
     let mut output = vec![0u8; extent[0] as usize * channels.count() * 2];
     while let Some(row) = reader.next_row().map_err(err)? {
-        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-            return Err("Image read cancelled".into());
-        }
+        check_cancel(cancelled)?;
         for (p, o) in row
             .data()
             .chunks_exact(channels.count() * 2)
@@ -126,7 +122,7 @@ pub fn preview_hdr_rows(
     let from_2020 = hdr::bt2020_to_srgb();
     let to_2020 = hdr::srgb_to_bt2020();
     let mut statistics = crate::OutputStatistics::default();
-    let table: Vec<_> = (0..=65535).map(|code| hdr::pq_decode(code as f64 / 65535.) / f64::from(hdr::REFERENCE_WHITE_NITS)).collect();
+    let table = pq_table();
     for y in 0..extent[1] {
         read(y, &mut row)?;
         for p in &mut row {
@@ -141,6 +137,13 @@ pub fn preview_hdr_rows(
     Ok((extent, pixels, statistics))
 }
 
+/// Linear light relative to SDR reference white for every 16-bit PQ code.
+fn pq_table() -> Vec<f64> {
+    (0..=65535)
+        .map(|code| hdr::pq_decode(code as f64 / 65535.) / f64::from(hdr::REFERENCE_WHITE_NITS))
+        .collect()
+}
+
 /// Rows are unmodified linear-premultiplied artwork in `space`. Mapping to PQ's
 /// gamut/range is an explicit delivery choice; strict mode fails before publish.
 /// Metadata defines BT.2020 PQ in absolute nits, independently of the monitor.
@@ -153,17 +156,9 @@ pub fn write_hdr_png_rows(
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
     validate_extent(extent, 32768)?;
-    let mut info = png::Info::with_size(extent[0], extent[1]);
+    let mut info = super::png_io::info(extent, resolution)?;
     info.bit_depth = png::BitDepth::Sixteen;
     info.color_type = png::ColorType::Rgba;
-    if let Some(r) = resolution {
-        let [xppu, yppu] = r.png_density()?;
-        info.pixel_dims = Some(png::PixelDimensions {
-            xppu,
-            yppu,
-            unit: png::Unit::Meter,
-        });
-    }
     let mut encoder = png::Encoder::with_info(&mut output, info).map_err(err)?;
     encoder.set_deflate_compression(png::DeflateCompression::Level(1));
     let mut writer = encoder.write_header().map_err(err)?;

@@ -1,17 +1,9 @@
 //! Portable JPEG gain-map encoding, reconstruction and encoded previews.
 use super::super::jpeg_codec;
 use super::*;
-use layer_core::color::{hdr, rgb};
+use layer_core::color::hdr;
 use libjpeg_turbo_rs::{ColorSpace, Encoder, Image, PixelFormat, Subsampling};
-use std::sync::atomic::Ordering;
 
-fn check(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) {
-        Err("HDR operation cancelled".into())
-    } else {
-        Ok(())
-    }
-}
 fn admit(extent: [u32; 2], compressed: usize, budget: usize) -> Result<usize, String> {
     validate_extent(extent, 32768)?;
     // Master/gain floats, JPEG planes and metadata insertion copies coexist.
@@ -30,7 +22,7 @@ fn decode(
     limits: DecodeLimits,
     cancel: &AtomicBool,
 ) -> Result<Image, String> {
-    check(cancel)?;
+    check_cancel(cancel)?;
     let mut decoder = jpeg_codec::decoder(bytes, retained, limits)?;
     if decoder.header().precision != 8
         || !matches!(
@@ -43,11 +35,11 @@ fn decode(
     decoder.set_output_format(PixelFormat::Rgb);
     decoder.output_buffer_size().map_err(err)?;
     let image = decoder.decode_image().map_err(err)?;
-    check(cancel)?;
+    check_cancel(cancel)?;
     Ok(image)
 }
 
-fn encode(
+pub(super) fn encode(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
@@ -58,79 +50,32 @@ fn encode(
     clip: bool,
     budget: PhotoMemoryBudget,
     cancel: &AtomicBool,
-    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+    read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(Vec<u8>, crate::OutputStatistics), String> {
-    check(cancel)?;
-    rendition.validate().map_err(str::to_string)?;
-    if !(1..=100).contains(&quality) {
-        return Err("Invalid HDR quality".into());
-    }
-    if matte.is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v))) {
-        return Err("Invalid HDR background".into());
-    }
     let count = admit(extent, 0, budget.encode_bytes)?;
     let profile = crate::icc::nclx_profile(
         [0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290],
         13,
     )?;
     let icc = profile_bytes(&profile)?;
-    let matrix = hdr::to_bt2020(space);
-    let mapper = rendition.mapper(space, RgbSpace::Srgb);
     let mut base = Vec::new();
     base.try_reserve_exact(count * 3).map_err(err)?;
     let mut master = Vec::<f32>::new();
     master.try_reserve_exact(count * 3).map_err(err)?;
-    let mut row = vec![[0.; 4]; extent[0] as usize];
-    let mut stats = crate::OutputStatistics::default();
-    let mut peak = 1f32;
-    for y in 0..extent[1] {
-        check(cancel)?;
-        read(y, &mut row)?;
-        for (x, p) in row.iter().enumerate() {
-            if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
-                return Err("Invalid HDR output pixel".into());
-            }
-            let a = p[3];
+    let (stats, peak) = render_pair(
+        extent, space, rendition, guide, quality, matte, clip, cancel, read,
+        |hdr, sdr, a| {
             if a < 1. && matte.is_none() {
                 return Err("Enable Flatten transparency for HDR JPEG".into());
             }
-            let raw = std::array::from_fn(|c| if a > 0. { f64::from(p[c] / a) } else { 0. });
-            let mut hdr = rgb::apply(matrix, raw).map(|v| v as f32);
-            let position = [
-                (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
-                (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
-            ];
-            let mapped = mapper.map_local_premultiplied(*p, position, guide);
-            let mut sdr = rgb::apply(
-                hdr::srgb_to_bt2020(),
-                std::array::from_fn(|c| if a > 0. { f64::from(mapped[c] / a) } else { 0. }),
-            )
-            .map(|v| v as f32);
-            for c in 0..3 {
-                sdr[c] = sdr[c].clamp(0., 1.);
-                if let Some(background) = matte {
-                    hdr[c] = hdr[c] * a + background[c] * (1. - a);
-                    sdr[c] = sdr[c] * a + background[c] * (1. - a);
-                }
-                if !hdr[c].is_finite() {
-                    return Err("Invalid HDR output pixel".into());
-                }
-                if hdr[c] < -1e-6 || hdr[c] > hdr::MAX_LINEAR {
-                    if !clip {
-                        return Err("HDR gain-map output exceeds BT.2020 or the half-float range. Enable Clip out-of-range colors to export a mapped copy.".into());
-                    }
-                    stats.clipped_channels += 1;
-                }
-                hdr[c] = hdr[c].clamp(0., hdr::MAX_LINEAR);
-                peak = peak.max(hdr[c]);
-                master.push(hdr[c]);
-                base.push(
-                    (RgbSpace::Srgb.encode(f64::from(sdr[c])).clamp(0., 1.) * 255.).round() as u8,
-                );
-            }
-        }
-    }
-    check(cancel)?;
+            master.extend(hdr);
+            base.extend(sdr.map(|v| {
+                (RgbSpace::Srgb.encode(f64::from(v)).clamp(0., 1.) * 255.).round() as u8
+            }));
+            Ok(())
+        },
+    )?;
+    check_cancel(cancel)?;
     let exif = resolution
         .map(super::super::metadata::exif_output)
         .transpose()?;
@@ -143,7 +88,7 @@ fn encode(
         exif.as_deref(),
         resolution,
     )?;
-    check(cancel)?;
+    check_cancel(cancel)?;
     drop(base);
     let mut limits = DecodeLimits::from_memory_budget(budget);
     limits.codec_bytes = budget
@@ -151,33 +96,22 @@ fn encode(
         .checked_sub(master.capacity() * 4)
         .ok_or(jpeg_codec::MEMORY_ERROR)?;
     let decoded_base = decode(&encoded_base, encoded_base.capacity(), limits, cancel)?;
-    let mut low = 0f32;
-    let mut high = 0f32;
-    const OFFSET: f32 = 1. / 64.;
+    let mut gains = LogGain::default();
     for (logs, codes) in master
         .chunks_mut(extent[0] as usize * 3)
         .zip(decoded_base.data.chunks(extent[0] as usize * 3))
     {
-        check(cancel)?;
+        check_cancel(cancel)?;
         for (value, code) in logs.iter_mut().zip(codes) {
-            *value = ((*value + OFFSET)
-                / (RgbSpace::Srgb.decode(f64::from(*code) / 255.) as f32 + OFFSET))
-                .log2();
-            low = low.min(*value);
-            high = high.max(*value);
+            gains.apply(value, f64::from(*code) / 255.);
         }
     }
     drop(decoded_base);
-    let metadata = GainMapMetadata {
-        min_log2: low,
-        max_log2: high.max(low + 0.001),
-        offset: OFFSET,
-        headroom: peak.log2().max(0.001),
-    };
+    let metadata = gains.metadata(peak);
     let mut gains = Vec::new();
     gains.try_reserve_exact(count * 3).map_err(err)?;
     for row in master.chunks(extent[0] as usize * 3) {
-        check(cancel)?;
+        check_cancel(cancel)?;
         gains.extend(
             row.iter()
                 .map(|v| (metadata.encode(*v) * 255.).round() as u8),
@@ -198,35 +132,10 @@ fn encode(
     .force_baseline(true)
     .encode()
     .map_err(err)?;
-    check(cancel)?;
+    check_cancel(cancel)?;
     let bytes = super::jpeg_container::assemble(&encoded_base, &gain, metadata)?;
-    check(cancel)?;
+    check_cancel(cancel)?;
     Ok((bytes, stats))
-}
-
-pub(super) fn write(
-    mut output: impl Write,
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &hdr::LocalToneGuide,
-    options: impl Into<GainMapEncodeOptions>,
-    resolution: Option<layer_core::ImageResolution>,
-    matte: Option<[f32; 3]>,
-    clip: bool,
-    cancel: &AtomicBool,
-    read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<crate::OutputStatistics, String> {
-    let options = options.into();
-    let (bytes, stats) = encode(
-        extent, space, rendition, guide, options.quality, resolution, matte, clip, options.memory, cancel, read,
-    )?;
-    for chunk in bytes.chunks(65536) {
-        check(cancel)?;
-        output.write_all(chunk).map_err(err)?;
-    }
-    output.flush().map_err(err)?;
-    Ok(stats)
 }
 
 struct Pair {
@@ -242,7 +151,7 @@ impl Pair {
         limits: DecodeLimits,
         cancel: &AtomicBool,
     ) -> Result<Self, String> {
-        check(cancel)?;
+        check_cancel(cancel)?;
         let images = super::jpeg_container::parse(bytes)?;
         let header = jpeg_codec::decoder(images.base, retained, limits)?;
         let extent = [header.header().width as u32, header.header().height as u32];
@@ -291,26 +200,13 @@ impl Pair {
         [self.base.width as u32, self.base.height as u32]
     }
     fn row(&self, y: u32, hdr: &mut [[f32; 4]], sdr: &mut [[f32; 4]]) -> Result<(), String> {
-        let sample_gain =
-            |x: usize, y: usize, c| self.gain.data[(y * self.gain.width + x) * 3 + c] as f32 / 255.;
+        let extent = self.extent();
+        let gain_extent = [self.gain.width as u32, self.gain.height as u32];
         for x in 0..self.base.width {
-            // Sample-center bilinear interpolation also handles reduced grayscale
-            // gain maps. RGB output from the codec replicates their one channel.
-            let gx =
-                ((x as f32 + 0.5) * self.gain.width as f32 / self.base.width as f32 - 0.5).max(0.);
-            let gy = ((y as f32 + 0.5) * self.gain.height as f32 / self.base.height as f32 - 0.5)
-                .max(0.);
-            let (x0, y0) = (gx as usize, gy as usize);
-            let (x1, y1) = (
-                (x0 + 1).min(self.gain.width - 1),
-                (y0 + 1).min(self.gain.height - 1),
-            );
-            let gain = std::array::from_fn(|c| {
-                let top = sample_gain(x0, y0, c) * (1. - gx.fract())
-                    + sample_gain(x1, y0, c) * gx.fract();
-                let bottom = sample_gain(x0, y1, c) * (1. - gx.fract())
-                    + sample_gain(x1, y1, c) * gx.fract();
-                top * (1. - gy.fract()) + bottom * gy.fract()
+            // RGB output from the codec replicates a grayscale gain map's channel.
+            let gain = bilinear(extent, gain_extent, x as u32, y, |x, y| {
+                let at = (y as usize * self.gain.width + x as usize) * 3;
+                std::array::from_fn(|c| self.gain.data[at + c] as f32 / 255.)
             });
             let at = (y as usize * self.base.width + x) * 3;
             let base = self.color.linear_base(std::array::from_fn(|c| {
@@ -353,7 +249,7 @@ pub(in crate::photo) fn read(
     let mut sdr = hdr.clone();
     let mut row = vec![0; extent[0] as usize * 8];
     for y in 0..extent[1] {
-        check(cancel)?;
+        check_cancel(cancel)?;
         pair.row(y, &mut hdr, &mut sdr)?;
         for (pixel, bytes) in hdr.iter().zip(row.chunks_exact_mut(8)) {
             let bits = layer_core::color::hdr::encode_pixel(*pixel).map_err(str::to_string)?;
@@ -385,9 +281,6 @@ pub(super) fn preview(
     ),
     String,
 > {
-    if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
-        return Err("Invalid preview dimensions".into());
-    }
     let options = options.into();
     let (bytes, stats) = encode(
         extent, space, rendition, guide, options.quality, None, matte, true, options.memory, cancel, read,
@@ -404,7 +297,7 @@ pub(super) fn preview(
     let mut hdr = vec![[0.; 4]; extent[0] as usize];
     let mut sdr = hdr.clone();
     for y in 0..extent[1] {
-        check(cancel)?;
+        check_cancel(cancel)?;
         pair.row(y, &mut hdr, &mut sdr)?;
         hdr_preview.push(&hdr)?;
         sdr_preview.push(&sdr)?;
@@ -434,7 +327,7 @@ mod tests {
     }
     fn encoded(quality: u8, exposure: f32) -> Vec<u8> {
         let mut bytes = Vec::new();
-        write(
+        write_gainmap_rows(
             &mut bytes,
             EXTENT,
             RgbSpace::Srgb,
@@ -443,6 +336,7 @@ mod tests {
                 ..Default::default()
             },
             &test_guide(EXTENT, rows),
+            GainMapFormat::Jpeg,
             quality,
             Some(layer_core::ImageResolution::ppi(300)),
             None,
@@ -548,12 +442,13 @@ mod tests {
         };
         let guide = test_guide([16, 16], transparent);
         let run = |matte, c: &AtomicBool| {
-            write(
+            write_gainmap_rows(
                 std::io::sink(),
                 [16, 16],
                 RgbSpace::Srgb,
                 Default::default(),
                 &guide,
+                GainMapFormat::Jpeg,
                 90,
                 None,
                 matte,

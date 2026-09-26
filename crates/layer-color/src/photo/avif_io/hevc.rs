@@ -94,7 +94,7 @@ pub(super) fn decode(
     budget: usize,
     cancel: &AtomicBool,
 ) -> Result<RawImage, String> {
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     let extent = properties.extent.ok_or("Missing HEIF spatial extent")?;
     validate_extent(extent, 32768)?;
     if properties.config.is_some() {
@@ -126,7 +126,7 @@ pub(super) fn decode(
     let mut count = parameter_sets.len();
     let mut annex_size = parameter_sets.iter().map(|v| v.len() + 4).sum::<usize>();
     while r.left() != 0 {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         let nal = next_nal(&mut r, length_size)?;
         valid_nal(nal)?;
         count += 1;
@@ -158,7 +158,7 @@ pub(super) fn decode(
     }
     let mut r = Reader::new(payload);
     while r.left() != 0 {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         annex.extend_from_slice(&[0, 0, 0, 1]);
         annex.extend_from_slice(next_nal(&mut r, length_size)?);
     }
@@ -204,7 +204,7 @@ pub(super) fn decode(
     let mut output = pixels(extent, budget)?;
     let maximum = (1u16 << frame.bit_depth) - 1;
     for (y, row) in output.chunks_exact_mut(extent[0] as usize).enumerate() {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         for (x, p) in row.iter_mut().enumerate() {
             let chroma = y / 2 * cw + x / 2;
             *p = [

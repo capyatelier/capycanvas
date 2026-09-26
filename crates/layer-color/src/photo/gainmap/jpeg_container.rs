@@ -12,75 +12,7 @@ const HDRGM: &[u8] = b"http://ns.adobe.com/hdr-gain-map/1.0/";
 const INVALID: &str = "Invalid JPEG gain-map metadata";
 
 fn iso_metadata(bytes: &[u8]) -> Result<Metadata, String> {
-    let mut bytes = bytes;
-    fn take<const N: usize>(bytes: &mut &[u8]) -> Result<[u8; N], String> {
-        let (head, tail) = bytes.split_at_checked(N).ok_or(INVALID)?;
-        *bytes = tail;
-        Ok(head.try_into().unwrap())
-    }
-    if u16::from_be_bytes(take(&mut bytes)?) != 0 {
-        return Err("Unsupported ISO gain-map version".into());
-    }
-    let _writer = u16::from_be_bytes(take(&mut bytes)?);
-    let flags = take::<1>(&mut bytes)?[0];
-    if flags & 4 != 0 {
-        return Err("HDR-base JPEG gain maps are not supported".into());
-    }
-    if flags & 0x33 != 0 {
-        return Err(INVALID.into());
-    }
-    let common = if flags & 8 != 0 {
-        Some(u32::from_be_bytes(take(&mut bytes)?))
-    } else {
-        None
-    };
-    let mut fraction = |signed| -> Result<f32, String> {
-        let bits = take(&mut bytes)?;
-        let n = if signed {
-            i32::from_be_bytes(bits) as f64
-        } else {
-            u32::from_be_bytes(bits) as f64
-        };
-        let d = match common {
-            Some(d) => d,
-            None => u32::from_be_bytes(take(&mut bytes)?),
-        };
-        if d == 0 {
-            return Err(INVALID.into());
-        }
-        Ok((n / f64::from(d)) as f32)
-    };
-    let mut m = Metadata {
-        min: [0.; 3],
-        max: [0.; 3],
-        gamma: [1.; 3],
-        base_offset: [0.; 3],
-        alternate_offset: [0.; 3],
-        base_headroom: fraction(false)?,
-        alternate_headroom: fraction(false)?,
-        use_base_space: flags & 0x40 != 0,
-    };
-    let channels = if flags & 0x80 != 0 { 3 } else { 1 };
-    for c in 0..channels {
-        m.min[c] = fraction(true)?;
-        m.max[c] = fraction(true)?;
-        m.gamma[c] = fraction(false)?;
-        m.base_offset[c] = fraction(true)?;
-        m.alternate_offset[c] = fraction(true)?;
-    }
-    if channels == 1 {
-        for v in [
-            &mut m.min,
-            &mut m.max,
-            &mut m.gamma,
-            &mut m.base_offset,
-            &mut m.alternate_offset,
-        ] {
-            let first = v[0];
-            v.fill(first);
-        }
-    }
-    m.validate()
+    Metadata::parse_iso(bytes, true)?.ok_or_else(|| "Unsupported ISO gain-map version".into())
 }
 
 fn xmp_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
@@ -308,20 +240,7 @@ pub(super) fn assemble(base: &[u8], gain: &[u8], m: GainMapMetadata) -> Result<V
     if scan(base)?.0 != base.len() || scan(gain)?.0 != gain.len() {
         return Err(INVALID.into());
     }
-    let mut iso = ISO.to_vec();
-    iso.extend([0, 0, 0, 0, 0x48]); // version 0, base color space, common denominator
-    let denominator = 1_000_000u32;
-    iso.extend(denominator.to_be_bytes());
-    for v in [
-        0., m.headroom, m.min_log2, m.max_log2, 1., m.offset, m.offset,
-    ] {
-        if !v.is_finite() || (v as f64 * f64::from(denominator)).abs() > i32::MAX as f64 {
-            return Err(INVALID.into());
-        }
-        iso.extend(((v as f64 * f64::from(denominator)).round() as i32).to_be_bytes());
-    }
-    iso_metadata(&iso[ISO.len()..])?;
-    let iso_gain = segment(0xe2, &iso)?;
+    let iso_gain = segment(0xe2, &[ISO, &m.iso_bytes(true)?].concat())?;
     let xmp_gain = xmp(&format!(
         "<rdf:Description xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\" hdrgm:Version=\"1.0\" hdrgm:GainMapMin=\"{}\" hdrgm:GainMapMax=\"{}\" hdrgm:Gamma=\"1\" hdrgm:OffsetSDR=\"{}\" hdrgm:OffsetHDR=\"{}\" hdrgm:HDRCapacityMin=\"0\" hdrgm:HDRCapacityMax=\"{}\" hdrgm:BaseRenditionIsHDR=\"False\"/>",
         m.min_log2, m.max_log2, m.offset, m.offset, m.headroom

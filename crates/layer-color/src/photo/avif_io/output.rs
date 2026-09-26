@@ -1,19 +1,10 @@
 //! Shared AVIF gain-map export and previews of the delivered file.
 use super::*;
-use crate::photo::GainMapMetadata;
-use layer_core::color::{hdr, rgb};
+use crate::photo::gainmap::{LogGain, render_pair};
+use layer_core::color::hdr;
 
 const MEMORY: &str =
     "HDR AVIF output exceeds the available memory budget. Choose a smaller export size.";
-const OFFSET: f32 = 1. / 64.;
-const BASE: Color = Color {
-    cicp: [9, 13, 0],
-    full_range: true,
-};
-const GAIN: Color = Color {
-    cicp: [2, 2, 0],
-    full_range: true,
-};
 
 #[cfg(test)]
 #[path = "output_tests.rs"]
@@ -108,7 +99,7 @@ fn grid(
         pictures: buffer((layout.columns * layout.rows) as usize)?,
     };
     for index in 0..layout.columns as usize * layout.rows as usize {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         let origin = layout.origin(index);
         let remaining = budget.checked_sub(grid_bytes(&output)).ok_or(MEMORY)?;
         let coded = encode::encode(layout.tile, color, quality, remaining, cancel, |x, y| {
@@ -119,7 +110,7 @@ fn grid(
     Ok(output)
 }
 
-fn encode(
+pub(in crate::photo) fn encode(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: hdr::SdrRendition,
@@ -130,78 +121,30 @@ fn encode(
     clip: bool,
     budget: usize,
     cancel: &AtomicBool,
-    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+    read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(Vec<u8>, crate::OutputStatistics), String> {
-    codec::check(cancel)?;
-    rendition.validate().map_err(str::to_string)?;
-    if !(1..=100).contains(&quality) {
-        return Err("Invalid HDR quality".into());
-    }
-    if matte.is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v))) {
-        return Err("Invalid HDR background".into());
-    }
     let layout = Layout::new(extent)?;
     let count = admit(layout, budget)?;
-    let matrix = hdr::to_bt2020(space);
-    let mapper = rendition.mapper(space, RgbSpace::Srgb);
     let mut master = buffer::<[f32; 3]>(count)?;
     let mut base = buffer::<[u16; 4]>(count)?;
-    let mut row = vec![[0.; 4]; extent[0] as usize];
-    let mut stats = crate::OutputStatistics::default();
-    let mut peak = 1f32;
     let mut transparent = false;
-    for y in 0..extent[1] {
-        codec::check(cancel)?;
-        read(y, &mut row)?;
-        for (x, p) in row.iter().enumerate() {
-            if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
-                return Err("Invalid HDR output pixel".into());
-            }
-            let a = p[3];
-            let raw = std::array::from_fn(|c| if a > 0. { f64::from(p[c] / a) } else { 0. });
-            let mut values = rgb::apply(matrix, raw).map(|v| v as f32);
-            let position = [
-                (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
-                (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
-            ];
-            let mapped = mapper.map_local_premultiplied(*p, position, guide);
-            let mut sdr = rgb::apply(
-                hdr::srgb_to_bt2020(),
-                std::array::from_fn(|c| if a > 0. { f64::from(mapped[c] / a) } else { 0. }),
-            )
-            .map(|v| v as f32);
-            let mut codes = [0; 4];
-            codes[3] = if matte.is_some() {
+    let (stats, peak) = render_pair(
+        extent, space, rendition, guide, quality, matte, clip, cancel, read,
+        |hdr, sdr, a| {
+            let alpha = if matte.is_some() {
                 4095
             } else {
                 (a * 4095.).round() as u16
             };
-            transparent |= codes[3] < 4095;
-            for c in 0..3 {
-                sdr[c] = sdr[c].clamp(0., 1.);
-                if let Some(background) = matte {
-                    values[c] = values[c] * a + background[c] * (1. - a);
-                    sdr[c] = sdr[c] * a + background[c] * (1. - a);
-                }
-                if !values[c].is_finite() {
-                    return Err("Invalid HDR output pixel".into());
-                }
-                if values[c] < -1e-6 || values[c] > hdr::MAX_LINEAR {
-                    if !clip {
-                        return Err("HDR gain-map output exceeds BT.2020 or the half-float range. Enable Clip out-of-range colors to export a mapped copy.".into());
-                    }
-                    stats.clipped_channels += 1;
-                }
-                values[c] = values[c].clamp(0., hdr::MAX_LINEAR);
-                peak = peak.max(values[c]);
-                codes[c] =
-                    (RgbSpace::Srgb.encode(f64::from(sdr[c])).clamp(0., 1.) * 4095.).round() as u16;
-            }
-            master.push(values);
-            base.push(codes);
-        }
-    }
-    drop(row);
+            transparent |= alpha < 4095;
+            let [r, g, b] = sdr.map(|v| {
+                (RgbSpace::Srgb.encode(f64::from(v)).clamp(0., 1.) * 4095.).round() as u16
+            });
+            master.push(hdr);
+            base.push([r, g, b, alpha]);
+            Ok(())
+        },
+    )?;
     // Reserve container metadata and row/guide scratch independently of each
     // packet's actual retained capacity. Compressed sizes are checked at every
     // cell, including before assembling the second copy in the final file.
@@ -209,7 +152,7 @@ fn encode(
     let retained = master.capacity() * 12 + base.capacity() * 8;
     let base_grid = grid(
         layout,
-        Some(BASE),
+        Some(mux::BASE),
         quality,
         budget.checked_sub(retained).ok_or(MEMORY)?,
         cancel,
@@ -218,8 +161,7 @@ fn encode(
             [g, b, r]
         },
     )?;
-    let mut low = 0f32;
-    let mut high = 0f32;
+    let mut gains = LogGain::default();
     for (index, coded) in base_grid.pictures.iter().enumerate() {
         let origin = layout.origin(index);
         let plane = codec::decode(
@@ -235,7 +177,7 @@ fn encode(
             return Err("Unexpected encoded AVIF base format".into());
         }
         for y in 0..layout.tile[1].min(extent[1] - origin[1]) {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             for x in 0..layout.tile[0].min(extent[0] - origin[0]) {
                 let logs = &mut master[layout.index(origin, x, y)];
                 for (c, plane_index) in [2, 0, 1].into_iter().enumerate() {
@@ -243,20 +185,12 @@ fn encode(
                     let code = ((u32::from(plane.sample(plane_index, x, y)) * 65535 + 2047) / 4095)
                         as f64
                         / 65535.;
-                    logs[c] =
-                        ((logs[c] + OFFSET) / (RgbSpace::Srgb.decode(code) as f32 + OFFSET)).log2();
-                    low = low.min(logs[c]);
-                    high = high.max(logs[c]);
+                    gains.apply(&mut logs[c], code);
                 }
             }
         }
     }
-    let metadata = GainMapMetadata {
-        min_log2: low,
-        max_log2: high.max(low + 0.001),
-        offset: OFFSET,
-        headroom: peak.log2().max(0.001),
-    };
+    let metadata = gains.metadata(peak);
     let alpha_grid = if transparent {
         Some(grid(
             layout,
@@ -279,7 +213,7 @@ fn encode(
     // Every quality below 100 stays lossy; 100 preserves the 12-bit samples.
     let gain_grid = grid(
         layout,
-        Some(GAIN),
+        Some(mux::GAIN),
         100 - (100 - quality).div_ceil(4),
         budget.checked_sub(retained).ok_or(MEMORY)?,
         cancel,
@@ -301,44 +235,8 @@ fn encode(
         budget.checked_sub(retained).ok_or(MEMORY)?,
         cancel,
     )?;
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     Ok((bytes, stats))
-}
-
-pub(in crate::photo) fn write(
-    mut output: impl Write,
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: hdr::SdrRendition,
-    guide: &hdr::LocalToneGuide,
-    options: impl Into<GainMapEncodeOptions>,
-    resolution: Option<layer_core::ImageResolution>,
-    matte: Option<[f32; 3]>,
-    clip: bool,
-    cancel: &AtomicBool,
-    read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<crate::OutputStatistics, String> {
-    let options = options.into();
-    let (bytes, stats) = encode(
-        extent,
-        space,
-        rendition,
-        guide,
-        options.quality,
-        resolution,
-        matte,
-        clip,
-        options.memory.encode_bytes,
-        cancel,
-        read,
-    )?;
-    for chunk in bytes.chunks(65536) {
-        codec::check(cancel)?;
-        output.write_all(chunk).map_err(err)?;
-    }
-    codec::check(cancel)?;
-    output.flush().map_err(err)?;
-    Ok(stats)
 }
 
 fn preview_rendition(
@@ -366,7 +264,7 @@ fn preview_rendition(
     let mut pixels = vec![[0.; 4]; source.extent[0] as usize];
     let mut rows = source.rows();
     for y in 0..source.extent[1] {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         rows.read(y, &mut row)?;
         decoder.decode_pixels(&row, &mut pixels)?;
         for p in &mut pixels {
@@ -399,9 +297,6 @@ pub(in crate::photo) fn preview(
     String,
 > {
     let options = options.into();
-    if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
-        return Err("Invalid preview dimensions".into());
-    }
     let (bytes, stats) = encode(
         extent,
         space,

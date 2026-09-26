@@ -16,7 +16,7 @@ pub(super) fn encode(
     cancel: &AtomicBool,
     mut pixel: impl FnMut(u32, u32) -> [u16; 3],
 ) -> Result<Coded, String> {
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     validate_extent(extent, 1024)?;
     if !(1..=100).contains(&quality) {
         return Err("Invalid AVIF quality".into());
@@ -46,7 +46,7 @@ pub(super) fn encode(
             0,
         );
         for y in 0..extent[1] {
-            codec::check(cancel)?;
+            check_cancel(cancel)?;
             for x in 0..extent[0] {
                 let values = pixel(x, y);
                 let at = y as usize * extent[0] as usize + x as usize;
@@ -80,7 +80,7 @@ pub(super) fn encode(
         )
         .map_err(err)?
         .gop;
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         // The general YUV encoder defaults to limited range and unspecified
         // CICP. Full-range alpha must also be declared in the AV1 sequence;
         // container nclx cannot override its range in independent decoders.
@@ -167,7 +167,7 @@ pub(super) fn encode(
     let config = context.container_sequence_header();
     let mut frame = context.new_frame();
     for y in 0..extent[1] {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         for x in 0..extent[0] {
             let values = pixel(x, y);
             for (plane, &value) in frame
@@ -185,12 +185,12 @@ pub(super) fn encode(
             }
         }
     }
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     context.send_frame(frame).map_err(err)?;
     context.flush();
     let mut bytes = Vec::new();
     loop {
-        codec::check(cancel)?;
+        check_cancel(cancel)?;
         match context.receive_packet() {
             Ok(packet) => {
                 if !bytes.is_empty() || packet.frame_type != FrameType::KEY {
@@ -203,7 +203,7 @@ pub(super) fn encode(
             Err(e) => return Err(format!("AVIF encoding failed: {e}")),
         }
     }
-    codec::check(cancel)?;
+    check_cancel(cancel)?;
     if bytes.is_empty() || bytes.len() > budget {
         return Err("Invalid AVIF encoder output".into());
     }

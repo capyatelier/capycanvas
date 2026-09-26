@@ -121,7 +121,10 @@ pub(super) fn source(
     for row in pixels.chunks_exact(row_bytes) {
         builder.push_row(row)?;
     }
-    let mut source = builder.finish()?;
-    source.resolution = metadata.resolution;
-    super::orientation::normalize(source, metadata.orientation, limits.source_bytes)
+    super::orientation::normalize(
+        builder.finish()?,
+        metadata.resolution,
+        metadata.orientation,
+        limits.source_bytes,
+    )
 }

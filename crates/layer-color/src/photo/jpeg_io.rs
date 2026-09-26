@@ -9,7 +9,7 @@ pub(super) fn read_jpeg_with_cancel(
 ) -> Result<SourceImage, String> {
     let bytes = jpeg_codec::read_bounded(input, limits.codec_bytes)?;
     let metadata = super::jpeg_markers::read_source(&bytes)?;
-    let mut source = if metadata.gain_map {
+    let source = if metadata.gain_map {
         super::gainmap::read_jpeg(&bytes, bytes.capacity(), limits, cancelled)?
     } else {
         let mut decoder = jpeg_codec::decoder(&bytes, bytes.capacity(), limits)?;
@@ -43,9 +43,9 @@ pub(super) fn read_jpeg_with_cancel(
         }
         builder.finish()?
     };
-    source.resolution = metadata.resolution;
     super::orientation::normalize(
         source,
+        metadata.resolution,
         metadata.orientation.unwrap_or(1),
         limits.source_bytes,
     )
@@ -108,14 +108,7 @@ pub fn write_jpeg_rows(
         4 => PixelFormat::Cmyk,
         _ => return Err("Unsupported JPEG color encoding".into()),
     };
-    let profile = if interpretation.channels == SourceChannels::Gray
-        && let ColorProfile::Builtin(space) = interpretation.profile
-    {
-        crate::gray_profile(space)?
-    } else {
-        interpretation.profile.clone()
-    };
-    let icc = profile_bytes(&profile)?;
+    let icc = delivery_icc(interpretation)?;
     let exif = resolution
         .map(|resolution| {
             resolution.jfif_density()?;

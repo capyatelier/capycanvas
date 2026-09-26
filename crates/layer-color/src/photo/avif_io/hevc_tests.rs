@@ -349,7 +349,7 @@ fn rust_heif_write_validation_fixtures() {
 #[test]
 fn rust_heif_decodes_independent_lossless_red() {
     let cancel = AtomicBool::new(false);
-    let source = read_heif(Cursor::new(RED), Default::default(), &cancel)
+    let source = super::read(Cursor::new(RED), Default::default(), &cancel)
         .unwrap()
         .source;
     assert_eq!(source.extent, [64, 64]);
@@ -386,17 +386,17 @@ fn rust_heif_rejects_unadmitted_and_cancelled_input() {
             ..Default::default()
         },
     ] {
-        assert!(read_heif(Cursor::new(RED), limits, &cancel).is_err());
+        assert!(super::read(Cursor::new(RED), limits, &cancel).is_err());
     }
     cancel.store(true, std::sync::atomic::Ordering::Release);
     assert!(
-        read_heif(Cursor::new(RED), Default::default(), &cancel)
+        super::read(Cursor::new(RED), Default::default(), &cancel)
             .err()
             .unwrap()
             .contains("cancelled")
     );
     cancel.store(false, std::sync::atomic::Ordering::Release);
-    assert!(read_heif(Cursor::new(RED), Default::default(), &cancel).is_ok());
+    assert!(super::read(Cursor::new(RED), Default::default(), &cancel).is_ok());
 }
 
 #[test]
@@ -404,7 +404,7 @@ fn rust_heif_rejects_unadmitted_and_cancelled_input() {
 fn rust_heif_opens_external_photographic_still() {
     let root = std::path::PathBuf::from(std::env::var_os("LAYER_HEIF_REFERENCES").unwrap());
     let bytes = std::fs::read(root.join("examples/example.heic")).unwrap();
-    let photo = read_heif(
+    let photo = super::read(
         Cursor::new(bytes),
         Default::default(),
         &AtomicBool::new(false),
@@ -433,7 +433,7 @@ fn rust_heif_photograph_matches_libde265_planes() {
     let bytes = std::fs::read(root.join("examples/example.heic")).unwrap();
     let expected = std::fs::read(std::env::var_os("LAYER_HEIF_YUV_REFERENCE").unwrap()).unwrap();
     let cancel = AtomicBool::new(false);
-    let container = Container::parse_heif(&bytes, 128 * 1024 * 1024, &cancel).unwrap();
+    let container = Container::parse(&bytes, 128 * 1024 * 1024, &cancel).unwrap();
     let image = decode_item(
         &container,
         container.primary.unwrap(),

@@ -1,9 +1,6 @@
 //! Bounded, borrowing HEIF item reader. AV1 bytes and metadata stay in the
 //! admitted input buffer; only item/property/reference records allocate here.
-use std::{
-    borrow::Cow,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{borrow::Cow, sync::atomic::AtomicBool};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
 const MAX_RECORDS: usize = 65_536;
@@ -117,11 +114,7 @@ struct Budget<'a> {
 }
 impl Budget<'_> {
     fn check(&self) -> Result<()> {
-        if self.cancel.load(Ordering::Acquire) {
-            Err("Image read cancelled".into())
-        } else {
-            Ok(())
-        }
+        crate::photo::check_cancel(self.cancel)
     }
     fn vec<T>(&mut self, count: usize, limit: usize) -> Result<Vec<T>> {
         self.check()?;
@@ -206,6 +199,8 @@ pub(super) struct Container<'a> {
     pub groups: Option<&'a [u8]>,
     idat: Option<&'a [u8]>,
     pub metadata_bytes: usize,
+    /// HEIF brands without an AVIF brand.
+    pub heif: bool,
 }
 impl<'a> Container<'a> {
     fn empty(file: &'a [u8]) -> Self {
@@ -221,6 +216,7 @@ impl<'a> Container<'a> {
             groups: None,
             idat: None,
             metadata_bytes: 0,
+            heif: false,
         }
     }
     pub fn track_metadata(
@@ -241,12 +237,6 @@ impl<'a> Container<'a> {
         Ok(me)
     }
     pub fn parse(file: &'a [u8], budget: usize, cancel: &AtomicBool) -> Result<Self> {
-        Self::parse_kind(file, budget, cancel, false)
-    }
-    pub fn parse_heif(file: &'a [u8], budget: usize, cancel: &AtomicBool) -> Result<Self> {
-        Self::parse_kind(file, budget, cancel, true)
-    }
-    fn parse_kind(file: &'a [u8], budget: usize, cancel: &AtomicBool, heif: bool) -> Result<Self> {
         let mut b = Budget {
             remaining: budget,
             used: 0,
@@ -270,16 +260,16 @@ impl<'a> Container<'a> {
                     if r.left() % 4 != 0 {
                         return Err("Invalid AVIF brands".into());
                     }
-                    ftyp = [major].into_iter().chain(r.data.chunks_exact(4)).any(|v| {
-                        if heif {
+                    let brands = || [major].into_iter().chain(r.data.chunks_exact(4));
+                    me.heif = !brands().any(|v| matches!(v, b"avif" | b"avis"));
+                    if me.heif
+                        && !brands().any(|v| {
                             matches!(v, b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1")
-                        } else {
-                            matches!(v, b"avif" | b"avis")
-                        }
-                    });
-                    if !ftyp {
+                        })
+                    {
                         return Err("Not an AVIF image".into());
                     }
+                    ftyp = true;
                 }
                 b"meta" => {
                     if meta.replace(view.data).is_some() {

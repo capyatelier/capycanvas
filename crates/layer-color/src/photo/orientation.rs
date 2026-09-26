@@ -5,10 +5,12 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Normalize the source's sample positions losslessly. At most four input tiles
 /// and one output tile are decoded; no rotated full-size image is allocated.
 pub(super) fn normalize(
-    source: SourceImage,
+    mut source: SourceImage,
+    resolution: Option<layer_core::ImageResolution>,
     orientation: u16,
     max_bytes: usize,
 ) -> Result<SourceImage, String> {
+    source.resolution = resolution;
     if orientation == 1 {
         return Ok(source);
     }
@@ -101,7 +103,8 @@ mod tests {
             [3, 6, 2, 5, 1, 4],
         ];
         for orientation in 1..=8 {
-            let result = normalize(source.clone(), orientation, 1024 * 1024).unwrap();
+            let result =
+                normalize(source.clone(), source.resolution, orientation, 1024 * 1024).unwrap();
             let mut rows = result.rows();
             let mut values = Vec::new();
             let mut row = vec![0; result.row_bytes()];

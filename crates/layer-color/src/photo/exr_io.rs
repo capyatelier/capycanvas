@@ -12,7 +12,7 @@ use exr::{
     },
 };
 use layer_core::color::hdr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 fn chromaticities(space: RgbSpace) -> Chromaticities {
     let xy = |p: [f64; 2]| Vec2(p[0] as f32, p[1] as f32);
@@ -75,9 +75,7 @@ pub(super) fn read_exr(
     limits: DecodeLimits,
     cancelled: &AtomicBool,
 ) -> Result<SourceImage, String> {
-    if cancelled.load(Ordering::Acquire) {
-        return Err("Image read cancelled".into());
-    }
+    check_cancel(cancelled)?;
     preflight(&mut input, limits.codec_bytes)?;
     let reader = block::read(input, true).map_err(err)?;
     if reader.headers().len() != 1 {
@@ -170,9 +168,7 @@ pub(super) fn read_exr(
     let count = channels.count();
     let mut next_y = 0;
     while let Some(block) = decoder.next() {
-        if cancelled.load(Ordering::Acquire) {
-            return Err("Image read cancelled".into());
-        }
+        check_cancel(cancelled)?;
         let block = block.map_err(err)?;
         if block.index.pixel_position != Vec2(0, next_y)
             || block.index.pixel_size.0 != width

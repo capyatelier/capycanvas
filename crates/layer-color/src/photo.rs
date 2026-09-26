@@ -168,16 +168,9 @@ pub fn read_photo_detailed_with_cancel(
     limits: DecodeLimits,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<DecodedPhoto, String> {
-    let check = || {
-        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-            Err("Image read cancelled".to_string())
-        } else {
-            Ok(())
-        }
-    };
-    check()?;
+    check_cancel(cancelled)?;
     let photo = read_photo_impl(input, limits, cancelled)?;
-    check()?;
+    check_cancel(cancelled)?;
     Ok(photo)
 }
 fn read_photo_impl(
@@ -207,10 +200,7 @@ fn read_photo_impl(
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
         bmp_io::read(input, limits)
     } else if &signature[4..8] == b"ftyp" {
-        if avif_io::is_avif(&mut input, cancelled)? {
-            return avif_io::read(input, limits, cancelled);
-        }
-        return avif_io::read_heif(input, limits, cancelled);
+        return avif_io::read(input, limits, cancelled);
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;
@@ -274,6 +264,25 @@ fn swap_u16(bytes: &mut [u8]) {
 }
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+/// Delivered ICC bytes; built-in spaces describe gray samples with a gray profile.
+fn delivery_icc(interpretation: &SourceInterpretation) -> Result<Vec<u8>, String> {
+    if matches!(
+        interpretation.channels,
+        SourceChannels::Gray | SourceChannels::GrayAlpha
+    ) && let ColorProfile::Builtin(space) = interpretation.profile
+    {
+        profile_bytes(&crate::gray_profile(space)?)
+    } else {
+        profile_bytes(&interpretation.profile)
+    }
+}
+fn check_cancel(cancelled: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        Err("Image operation cancelled".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
