@@ -1,7 +1,10 @@
 use super::*;
-use crate::{InstantFeedbackConfig, SampleFlags, ToolKind};
+use crate::{
+    InstantFeedbackConfig, SampleFlags, ToolKind,
+    recording::{StopReason, compress, write_record},
+};
 
-fn recording(change_future: bool) -> Vec<u8> {
+fn events(change_future: bool) -> (Policy, Vec<Event>) {
     let policy = Policy {
         config: InstantFeedbackConfig {
             prediction_horizon_micros: 16_000,
@@ -40,25 +43,31 @@ fn recording(change_future: bool) -> Vec<u8> {
             events.push(Event::Query(u64::from(i), i * 4000, i * 4000 + 16_000));
         }
     }
-    let header = DatasetHeader {
-        format: "capy-pen-dataset".into(),
-        version: 1,
-        contacts: 1,
-        events: events.len(),
-        metadata: serde_json::Value::Null,
-    };
-    let contact = Contact {
-        id: 1,
-        policy,
-        events,
-        cancelled: false,
-    };
-    format!(
-        "{}\n{}\n",
-        serde_json::to_string(&header).unwrap(),
-        serde_json::to_string(&contact).unwrap()
-    )
-    .into_bytes()
+    (policy, events)
+}
+
+fn encode(policy: Policy, events: Vec<Event>) -> Vec<u8> {
+    let mut records = vec![
+        Record::Metadata("{}".into()),
+        Record::Begin { id: 1, timestamp_ns: 0, policy },
+    ];
+    records.extend(events.into_iter().map(Record::Predictor));
+    records.push(Record::End { cancelled: false, interrupted: false });
+    records.push(Record::Footer {
+        records: records.len() as u64,
+        duration_ns: 0,
+        reason: StopReason::Manual,
+    });
+    let mut data = Vec::new();
+    for record in &records {
+        write_record(&mut data, record);
+    }
+    compress(&data).unwrap()
+}
+
+fn recording(change_future: bool) -> Vec<u8> {
+    let (policy, events) = events(change_future);
+    encode(policy, events)
 }
 
 #[test]
@@ -130,20 +139,26 @@ fn frame_export_is_causal_includes_corrections_and_does_not_change_predictions()
 }
 
 #[test]
-fn refuses_incomplete_unknown_and_invalid_datasets() {
-    let valid = String::from_utf8(recording(false)).unwrap();
-    for malformed in [
-        valid.lines().next().unwrap().to_owned(),
-        valid.replace("\"version\":1", "\"version\":99"),
-        valid.replace("\"contacts\":1", "\"contacts\":2"),
-        valid.replace("\"id\":1", "\"id\":1,\"typo\":0"),
-        valid.replace("\"replace\":[2,", "\"replace\":[9999,"),
-        valid.replace("\"query\":[11,", "\"query\":[10,"),
-    ] {
-        assert!(
-            replay(malformed.as_bytes(), io::sink()).is_err(),
-            "{malformed}"
-        );
+fn refuses_invalid_corrections_and_duplicate_queries() {
+    let (policy, valid) = events(false);
+    let edits: [fn(&mut Event); 2] = [
+        |event| {
+            if let Event::Replace(index, _) = event {
+                *index = 9999;
+            }
+        },
+        |event| {
+            if let Event::Query(id, ..) = event
+                && *id == 11
+            {
+                *id = 10;
+            }
+        },
+    ];
+    for edit in edits {
+        let mut malformed = valid.clone();
+        malformed.iter_mut().for_each(edit);
+        assert!(replay(encode(policy, malformed).as_slice(), io::sink()).is_err());
     }
 }
 

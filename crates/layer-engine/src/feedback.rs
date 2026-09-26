@@ -28,12 +28,11 @@ pub enum PredictionAlgorithm {
 
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
 /// of a brush preset or persisted stroke.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct InstantFeedbackConfig {
     pub enabled: bool,
     pub use_platform_prediction: bool,
     pub use_engine_prediction: bool,
-    #[serde(default)]
     pub prediction_algorithm: PredictionAlgorithm,
     /// Input clock quantum, supplied by the host (GTK/GDK: 1 ms). This is
     /// measurement uncertainty, not prediction time or a user preference.

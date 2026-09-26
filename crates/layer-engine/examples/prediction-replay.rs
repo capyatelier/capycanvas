@@ -3,7 +3,7 @@ use std::io;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let path = args.next().ok_or(
-        "usage: prediction-replay TRACE.capystrokes|TRACE.jsonl[.gz] [--frames PREVIEW.jsonl]",
+        "usage: prediction-replay TRACE.capystrokes [--frames PREVIEW.jsonl]",
     )?;
     let mut frames = None;
     while let Some(arg) = args.next() {
@@ -14,13 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err("expected --frames PATH (once)".into()),
         }
     }
-    let file = std::fs::File::open(&path)?;
-    let input: Box<dyn io::Read> = if path.ends_with(".gz") {
-        Box::new(flate2::read::GzDecoder::new(file))
-    } else {
-        Box::new(file)
-    };
-    let reader = io::BufReader::new(input);
+    let reader = io::BufReader::new(std::fs::File::open(&path)?);
     let csv = io::BufWriter::new(io::stdout().lock());
     let summary = match frames {
         Some(path) => layer_engine::prediction_bench::replay_with_frames(

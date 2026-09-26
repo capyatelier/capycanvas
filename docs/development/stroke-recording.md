@@ -58,7 +58,7 @@ GTK, Android and Windows compress on a worker when saving. Web uses asynchronous
 gzip compression, with a Rust fallback for browsers without CompressionStream.
 Once a successful save is acknowledged, the buffer is released.
 
-## Replay, training export and conversion
+## Replay and training export
 
 From the repository root:
 
@@ -67,8 +67,6 @@ cargo run -p layer-engine --release --features prediction-bench \
   --example prediction-replay -- capture.capystrokes > prediction.csv
 cargo run -p layer-engine --release --features prediction-bench \
   --example stroke-recording -- dump capture.capystrokes > records.jsonl
-cargo run -p layer-engine --release --features prediction-bench \
-  --example stroke-recording -- convert old.jsonl.gz converted.capystrokes
 cargo test -p layer-engine --features prediction-bench --lib
 ```
 
@@ -80,10 +78,8 @@ interrupted contacts distinguishable when preparing labels.
 Replay runs the current Smooth Motion predictor, including its corrections and
 native-prediction precedence, on the recorded inputs, policies and query timing.
 It writes per-query CSV to stdout and summary diagnostics to stderr;
-`--frames frames.jsonl` additionally exports the entire preview and causal actual-sample replacements. Both binary
-v2 and legacy v1 JSONL (optionally gzip compressed) are readable. Conversion
-preserves legacy samples and queries without inventing raw inputs or missing
-clocks; metadata identifies these limitations. The v2 policy wire layout keeps
+`--frames frames.jsonl` additionally exports the entire preview and causal
+actual-sample replacements. The v2 policy wire layout keeps
 the original integer slot: historical values 0–4 read as Optimized, and new
 captures write 3. This includes captures made with the retired Previous choice.
 Unknown values are rejected; the rest of each recorded policy is preserved.

@@ -1,12 +1,13 @@
-use super::{Accuracy, Contact, DatasetHeader, Event, Policy, Sample};
+use super::{Accuracy, Event, Policy, Sample};
 use crate::{
     PenEvent, PenPhase,
     feedback::{PredictionState, TipSource},
+    recording::Record,
 };
 use layer_core::{Point, StrokePoint};
 use std::{
     collections::HashSet,
-    io::{self, BufRead, Read, Write},
+    io::{self, Read, Write},
 };
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -18,6 +19,11 @@ pub struct ReplaySummary {
     pub mean_sample_horizon_ms: f64,
     pub mean_display_lead_ms: f64,
     pub accuracy: Accuracy,
+}
+struct Contact {
+    id: u64,
+    policy: Policy,
+    events: Vec<Event>,
 }
 struct Row {
     id: u64,
@@ -88,7 +94,7 @@ fn reference(points: &[StrokePoint], time: u32, transform: [f32; 6]) -> Option<[
 /// policy, native precedence and the recorded query schedule.
 /// CSV positions and truth are physical surface pixels. Unavailable truth is
 /// blank, never treated as zero error. Query IDs allow exact pair matching.
-pub fn replay(reader: impl BufRead, csv: impl Write) -> io::Result<ReplaySummary> {
+pub fn replay(reader: impl Read, csv: impl Write) -> io::Result<ReplaySummary> {
     replay_inner(reader, csv, None)
 }
 
@@ -98,7 +104,7 @@ pub fn replay(reader: impl BufRead, csv: impl Write) -> io::Result<ReplaySummary
 /// points. This is pre-brush geometry, not a claim to reproduce an unrecorded
 /// brush/material or actual GPU presentation timestamps.
 pub fn replay_with_frames(
-    reader: impl BufRead,
+    reader: impl Read,
     csv: impl Write,
     mut frames: impl Write,
 ) -> io::Result<ReplaySummary> {
@@ -106,7 +112,7 @@ pub fn replay_with_frames(
 }
 
 fn replay_inner(
-    mut reader: impl BufRead,
+    reader: impl Read,
     csv: impl Write,
     mut frames: Option<&mut dyn Write>,
 ) -> io::Result<ReplaySummary> {
@@ -117,49 +123,50 @@ fn replay_inner(
             serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
         )?;
     }
-    let mut prefix = [0; 8];
-    reader.read_exact(&mut prefix)?;
-    let binary = &prefix == crate::recording::MAGIC;
-    let reader = io::BufReader::new(io::Cursor::new(prefix).chain(reader));
-    if binary {
-        return replay_binary(reader, csv, frames);
+    let mut contacts = Vec::new();
+    let mut active: Option<Contact> = None;
+    for record in crate::recording::read(reader)? {
+        match record {
+            Record::Begin { id, policy, .. } => {
+                if active.is_some() {
+                    return Err(invalid("nested contact"));
+                }
+                active = Some(Contact {
+                    id,
+                    policy,
+                    events: Vec::new(),
+                });
+            }
+            Record::Predictor(event) => active
+                .as_mut()
+                .ok_or_else(|| invalid("event outside contact"))?
+                .events
+                .push(event),
+            Record::End { .. } => {
+                contacts.push(active.take().ok_or_else(|| invalid("end outside contact"))?)
+            }
+            _ => (),
+        }
     }
-    let mut lines = reader.lines();
-    let header: DatasetHeader = serde_json::from_str(
-        &lines
-            .next()
-            .ok_or_else(|| invalid("missing dataset header"))??,
-    )?;
-    if header.format != "capy-pen-dataset" || header.version != 1 {
-        return Err(invalid("unsupported dataset format/version"));
+    if active.is_some() {
+        return Err(invalid("unterminated contact"));
     }
-    if header.contacts == 0 || header.events == 0 {
-        return Err(invalid("empty dataset"));
-    }
-    replay_contacts(
-        header,
-        lines.map(|line| Ok(serde_json::from_str::<Contact>(&line?)?)),
-        csv,
-        frames,
-    )
+    replay_contacts(contacts, csv, frames)
 }
 
 fn replay_contacts(
-    header: DatasetHeader,
-    contacts: impl IntoIterator<Item = io::Result<Contact>>,
+    contacts: Vec<Contact>,
     mut csv: impl Write,
     mut frames: Option<&mut dyn Write>,
 ) -> io::Result<ReplaySummary> {
     let mut summary = ReplaySummary::default();
     let mut ids = HashSet::new();
-    let mut event_count = 0;
     let mut predictions = 0;
     writeln!(
         csv,
         "contact,query,frame_us,latest_us,requested_us,target_us,source,x,y,truth_x,truth_y"
     )?;
     for contact in contacts {
-        let contact = contact?;
         if !ids.insert(contact.id) {
             return Err(invalid("duplicate contact"));
         }
@@ -173,7 +180,6 @@ fn replay_contacts(
         let mut queries = HashSet::new();
         let mut traced_real = 0;
         for event in contact.events {
-            event_count += 1;
             match event {
                 Event::Sample(sample) => {
                     real.push(point(sample)?);
@@ -331,9 +337,6 @@ fn replay_contacts(
             )?;
         }
     }
-    if summary.contacts != header.contacts || event_count != header.events {
-        return Err(invalid("incomplete dataset: contact/event counts differ"));
-    }
     if summary.queries > 0 {
         summary.prediction_coverage = predictions as f64 / summary.queries as f64;
         summary.mean_sample_horizon_ms /= summary.queries as f64;
@@ -350,56 +353,3 @@ fn replay_contacts(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
-
-fn replay_binary(
-    reader: impl io::Read,
-    csv: impl Write,
-    frames: Option<&mut dyn Write>,
-) -> io::Result<ReplaySummary> {
-    use crate::recording::Record;
-    let records = crate::recording::read(reader)?;
-    let mut contacts = Vec::new();
-    let mut active: Option<Contact> = None;
-    for record in records {
-        match record {
-            Record::Begin { id, policy, .. } => {
-                if active.is_some() {
-                    return Err(invalid("nested contact"));
-                }
-                active = Some(Contact {
-                    id,
-                    policy,
-                    events: Vec::new(),
-                    cancelled: false,
-                });
-            }
-            Record::Predictor(event) => active
-                .as_mut()
-                .ok_or_else(|| invalid("event outside contact"))?
-                .events
-                .push(event),
-            Record::End {
-                cancelled,
-                interrupted,
-            } => {
-                let mut contact = active
-                    .take()
-                    .ok_or_else(|| invalid("end outside contact"))?;
-                contact.cancelled = cancelled || interrupted;
-                contacts.push(contact);
-            }
-            _ => (),
-        }
-    }
-    if active.is_some() {
-        return Err(invalid("unterminated contact"));
-    }
-    let header = DatasetHeader {
-        format: "capy-pen-dataset".into(),
-        version: 2,
-        contacts: contacts.len(),
-        events: contacts.iter().map(|c| c.events.len()).sum(),
-        metadata: Default::default(),
-    };
-    replay_contacts(header, contacts.into_iter().map(Ok), csv, frames)
-}

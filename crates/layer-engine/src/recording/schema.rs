@@ -96,19 +96,6 @@ mod config_wire {
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<InstantFeedbackConfig, D::Error> {
-        if deserializer.is_human_readable() {
-            let mut value = serde_json::Value::deserialize(deserializer)?;
-            // Legacy JSON captures named experimental predictors that have
-            // since been retired; retain the same default migration as v2.
-            if let Some(fields) = value.as_object_mut()
-                && fields
-                    .get("prediction_algorithm")
-                    .is_some_and(|v| !matches!(v.as_str(), Some("optimized")))
-            {
-                fields.remove("prediction_algorithm");
-            }
-            return serde_json::from_value(value).map_err(serde::de::Error::custom);
-        }
         let (
             enabled,
             use_platform_prediction,
@@ -200,32 +187,6 @@ mod tests {
             assert_eq!(
                 bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap(),
                 bincode::serde::encode_to_vec(current, bincode::config::standard()).unwrap()
-            );
-            let json = serde_json::to_value(policy).unwrap();
-            assert_eq!(
-                serde_json::from_value::<Policy>(json.clone())
-                    .unwrap()
-                    .config,
-                policy.config
-            );
-            let mut legacy = json;
-            legacy["config"]
-                .as_object_mut()
-                .unwrap()
-                .remove("prediction_algorithm");
-            assert_eq!(
-                serde_json::from_value::<Policy>(legacy).unwrap().config,
-                config
-            );
-        }
-        let mut legacy = serde_json::to_value(Policy { config, transform }).unwrap();
-        for retired in ["previous", "trajectory"] {
-            legacy["config"]["prediction_algorithm"] = retired.into();
-            assert_eq!(
-                serde_json::from_value::<Policy>(legacy.clone())
-                    .unwrap()
-                    .config,
-                config
             );
         }
     }
