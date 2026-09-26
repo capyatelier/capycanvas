@@ -56,6 +56,7 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
     let undo = &s.state.command_search.as_ref().unwrap().results[0];
     assert_eq!(undo.id, "command.undo");
     assert_eq!(undo.disabled_reason.as_deref(), Some("Nothing to undo"));
+    assert_eq!(s.state.command_search.as_ref().unwrap().detail, "Nothing to undo");
     search_action(
         &mut s,
         CommandSearchAction::Execute {
@@ -63,7 +64,8 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
             value: None,
         },
     );
-    assert!(s.state.command_search.as_ref().unwrap().error.is_some());
+    let view = s.state.command_search.as_ref().unwrap();
+    assert_eq!(Some(&view.detail), view.error.as_ref());
     search_action(
         &mut s,
         CommandSearchAction::Query {
@@ -84,11 +86,9 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
         s.state.command_search.as_ref().unwrap().results[0].id,
         "tool_setting.size"
     );
-    assert!(
-        s.state.command_search.as_ref().unwrap().results[0]
-            .description
-            .ends_with("Range 0.5–2048 px")
-    );
+    let view = s.state.command_search.as_ref().unwrap();
+    assert!(view.results[0].description.ends_with("Range 0.5–2048 px"));
+    assert_eq!(view.detail, view.results[0].description);
     search_action(
         &mut s,
         CommandSearchAction::Execute {
@@ -96,7 +96,8 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
             value: None,
         },
     );
-    assert!(s.state.command_search.as_ref().unwrap().parameter.is_some());
+    let view = s.state.command_search.as_ref().unwrap();
+    assert_eq!(view.detail, view.parameter.as_ref().unwrap().description);
     search_action(
         &mut s,
         CommandSearchAction::Query {
@@ -113,7 +114,9 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
         },
     );
     assert_eq!(s.state.brush.diameter, before);
-    assert!(s.state.command_search.as_ref().unwrap().error.is_some());
+    let view = s.state.command_search.as_ref().unwrap();
+    assert!(view.error.is_some());
+    assert_eq!(Some(&view.detail), view.error.as_ref());
     search_action(&mut s, CommandSearchAction::Back);
     assert_eq!(s.state.command_search.as_ref().unwrap().query, "brush size");
     search_action(
@@ -374,4 +377,12 @@ fn active_layer_command_ids_resolve_new_targets_and_toggle_values() {
     })
     .unwrap();
     assert!(!s.engine.document().is_locked(second));
+}
+
+#[test]
+fn command_search_top_is_a_fifth_of_the_workspace_within_bounds() {
+    let style = COMMAND_SEARCH_STYLE;
+    assert_eq!(style.top(100.), 48.);
+    assert_eq!(style.top(600.), 120.);
+    assert_eq!(style.top(2160.), 192.);
 }

@@ -358,6 +358,8 @@ window.capy-workspace.glass .palette-cover { background: transparent; }
 .palette-list > row { padding: 4px; border-radius: var(--control-radius); }
 .palette-preview-strip { border-radius: 3px; }
 /* Native popup styling and the tool catalog's 8/12px rhythm. */
-popover.command-bar > contents { padding: var(--command-inset); }
+popover.command-bar > contents { padding: var(--command-inset); border-radius: var(--command-radius); }
+window.capy-workspace.glass popover.command-bar > contents { background-color: var(--glass-panel); }
+popover.command-bar entry { background: var(--input-bg); }
 popover.command-bar list { padding: 0; background: transparent; }
 popover.command-bar row { min-height: 24px; padding: var(--command-gap) var(--command-inset); margin: 0; }

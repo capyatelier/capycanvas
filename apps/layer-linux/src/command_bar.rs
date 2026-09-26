@@ -2,6 +2,7 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gdk, glib};
+use layer_render_wgpu::BackdropRegion;
 use layer_ui::*;
 use std::{
     cell::{Cell, RefCell},
@@ -90,9 +91,45 @@ impl CommandBar {
         }
     }
 
+    pub fn glass(&self, w: &Workspace) -> Option<BackdropRegion> {
+        if !self.is_open() || !self.popup.is_mapped() {
+            return None;
+        }
+        let popup = self.popup.surface()?.downcast::<gdk::Popup>().ok()?;
+        let body = self.popup.child()?.parent()?.compute_bounds(&self.popup)?;
+        let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero())?;
+        let (popover_x, popover_y) = self.popup.surface_transform();
+        let (window_x, window_y) = w.window.surface_transform();
+        let x = popup.position_x() as f64 + popover_x - window_x - origin.x() as f64;
+        let y = popup.position_y() as f64 + popover_y - window_y - origin.y() as f64;
+        Some(BackdropRegion::rounded(
+            [x as f32 + body.x(), y as f32 + body.y(), body.width(), body.height()],
+            [COMMAND_SEARCH_STYLE.radius as f32; 4],
+            BackdropRegion::CIRCULAR,
+        ))
+    }
+
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.popup.set_parent(&w.surface);
         w.watch_popover(&self.popup);
+        self.popup.connect_realize(glib::clone!(
+            #[weak]
+            w,
+            move |popup| {
+                if let Some(surface) = popup.surface() {
+                    surface.connect_layout(glib::clone!(
+                        #[weak]
+                        w,
+                        move |_, _, _| w.wake()
+                    ));
+                }
+            }
+        ));
+        self.popup.connect_unmap(glib::clone!(
+            #[weak]
+            w,
+            move |_| w.wake()
+        ));
         self.entry.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -344,17 +381,9 @@ impl CommandBar {
             self.entry
                 .reset_relation(gtk::AccessibleRelation::ActiveDescendant);
         }
-        let selected = parameter.or_else(|| view.results.get(view.selected));
-        let explanation = view
-            .error
-            .as_deref()
-            .or_else(|| selected.and_then(|d| d.disabled_reason.as_deref()));
-        let detail = explanation
-            .or_else(|| selected.map(|d| d.description.as_str()))
-            .unwrap_or("");
-        self.detail.set_text(detail);
+        self.detail.set_text(&view.detail);
         self.detail
-            .set_tooltip_text((!detail.is_empty()).then_some(detail));
+            .set_tooltip_text((!view.detail.is_empty()).then_some(view.detail.as_str()));
         if !was_open {
             *self.previous_focus.borrow_mut() =
                 gtk::prelude::GtkWindowExt::focus(&w.window).map(|f| f.downgrade());
@@ -362,15 +391,9 @@ impl CommandBar {
                 (w.surface.width() - COMMAND_SEARCH_STYLE.inset * 4)
                     .clamp(240, COMMAND_SEARCH_STYLE.width),
             );
-            // Keep the search field steady as results change, with enough room
-            // above it to feel part of the canvas rather than the title bar.
-            let top = (w.surface.height() / 5).clamp(
-                COMMAND_SEARCH_STYLE.inset * 4,
-                COMMAND_SEARCH_STYLE.inset * 16,
-            );
             self.popup.set_pointing_to(Some(&gdk::Rectangle::new(
                 w.surface.width() / 2,
-                top,
+                COMMAND_SEARCH_STYLE.top(w.surface.height() as f32) as i32,
                 0,
                 0,
             )));

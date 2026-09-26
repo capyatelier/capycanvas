@@ -2217,7 +2217,10 @@ impl Workspace {
                             offset: blur.offset,
                         };
                         g.session.renderer_mut().backdrop_hold = g.session.engine().has_active_stroke();
-                        g.session.renderer_mut().backdrops = this.glass.borrow().iter()
+                        let command_bar = g.session.state().palette.glass.transparency.enabled()
+                            .then(|| this.command_bar.glass(&this))
+                            .flatten();
+                        g.session.renderer_mut().backdrops = this.glass.borrow().iter().chain(&command_bar)
                             .map(|r| layer_render_wgpu::BackdropRegion {
                                 bounds: r.bounds.map(|v| v * scale),
                                 radii: r.radii.map(|v| v * scale),

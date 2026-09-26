@@ -4,20 +4,32 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Shared rhythm for native search surfaces; toolkit themes supply colors,
-/// typography, corners and motion. Touch hosts may increase row_height.
+/// typography and motion. Touch hosts may increase row_height.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct CommandSearchStyle {
     pub width: i32,
     pub inset: i32,
     pub gap: i32,
     pub row_height: i32,
+    pub radius: i32,
+    pub top_min: i32,
+    pub top_max: i32,
 }
 pub const COMMAND_SEARCH_STYLE: CommandSearchStyle = CommandSearchStyle {
     width: 560,
     inset: 12,
     gap: 8,
     row_height: 44,
+    radius: 12,
+    top_min: 48,
+    top_max: 192,
 };
+
+impl CommandSearchStyle {
+    pub fn top(&self, height: f32) -> f32 {
+        (height / 5.).clamp(self.top_min as f32, self.top_max as f32)
+    }
+}
 
 /// Behavior scopes, independent of brush media, cycling families and edit target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +130,19 @@ pub struct CommandSearchView {
     pub selected: usize,
     pub parameter: Option<CommandDescriptor>,
     pub error: Option<String>,
+    pub detail: String,
+}
+
+impl CommandSearchView {
+    fn refresh_detail(&mut self) {
+        let selected = self.parameter.as_ref().or_else(|| self.results.get(self.selected));
+        self.detail = self
+            .error
+            .clone()
+            .or_else(|| selected.and_then(|d| d.disabled_reason.clone()))
+            .or_else(|| selected.map(|d| d.description.clone()))
+            .unwrap_or_default();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -785,6 +810,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.selected = 0;
             view.error = None;
             view.parameter = None;
+            view.refresh_detail();
         }
     }
 
@@ -925,6 +951,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             A::Close | A::Focus { .. } => unreachable!(),
+        }
+        if let Some(view) = &mut self.state.command_search {
+            view.refresh_detail();
         }
         Ok(self.changed(regions::COMMAND_SEARCH, false))
     }

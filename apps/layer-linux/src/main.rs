@@ -55,10 +55,11 @@ use std::{cell::RefCell, rc::Rc};
 
 fn stylesheet() -> String {
     format!(
-        "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; }}\n{}",
+        "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; --command-radius: {}px; }}\n{}",
         layer_ui::UI_TEXT_PT,
         layer_ui::COMMAND_SEARCH_STYLE.inset,
         layer_ui::COMMAND_SEARCH_STYLE.gap,
+        layer_ui::COMMAND_SEARCH_STYLE.radius,
         include_str!("style.css")
     )
 }
