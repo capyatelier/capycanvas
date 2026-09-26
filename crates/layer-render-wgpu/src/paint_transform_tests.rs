@@ -131,6 +131,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                 let before_paint = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
                 let mut preview = layer_render::TransformPreview {
                     transaction: 1,
+                    moving: false,
                     layer: if primary_mask { LayerId(9) } else { paint.id },
                     selection: None,
                     transform: ImageTransform {
@@ -477,6 +478,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
         .unwrap();
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: layer.id,
             selection: Some(selection.clone()),
             transform: ImageTransform::default(),
@@ -627,6 +629,7 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
     );
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1,
+        moving: false,
         layer: LayerId(1),
         selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 20., y: 0. })),
@@ -716,6 +719,7 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
         frame(&mut r);
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: layer.id,
             selection: None,
             transform: ImageTransform {
@@ -737,6 +741,97 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
             }
         }
         assert!(brightest > peak * 0.99, "{depth:?}: bright texels survive, {brightest}");
+    }
+}
+
+#[test]
+fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_place() {
+    let extent = [512, 384];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let frame = |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch]| {
+        r.submit(FramePacket {
+            view,
+            document_extent: extent,
+            layers,
+            dabs,
+            dab_batches: batches,
+            time_seconds: 0.,
+            restore_rasters: &[],
+            reset_layers: false,
+            composite_all: false,
+        })
+        .unwrap();
+    };
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layer = Layer::paint(LayerId(1), "moving preview");
+    let mut d = dab([0.9, 0.2, 0.1, 1.]);
+    d.center = Point { x: 150., y: 140. };
+    d.radii = [70.; 2];
+    frame(&mut r, std::slice::from_ref(&layer), &[d], &[batch(1)]);
+    let affine = Affine::around(d.center, [2.3, 1.7], 0.4, Point { x: 60., y: 30. });
+    let preview = |interpolation, moving, transaction| layer_render::TransformPreview {
+        transaction,
+        moving,
+        layer: layer.id,
+        selection: None,
+        transform: ImageTransform {
+            map: TransformMap::Affine(affine),
+            interpolation,
+        },
+    };
+    let mut shown = Vec::new();
+    for (interpolation, moving) in [
+        (Interpolation::Linear, false),
+        (Interpolation::Bicubic, true),
+        (Interpolation::Bicubic, false),
+    ] {
+        r.set_transform_preview(Some(&preview(interpolation, moving, 1))).unwrap();
+        frame(&mut r, std::slice::from_ref(&layer), &[], &[]);
+        shown.push(r.readback_srgb_rgba8().unwrap());
+    }
+    assert_eq!(shown[0], shown[1], "a moving bicubic preview draws bilinearly");
+    assert_ne!(shown[1], shown[2], "releasing the handle draws the requested filter");
+    for moving in [true, false] {
+        let preview = preview(Interpolation::Bicubic, moving, if moving { 2 } else { 3 });
+        r.set_transform_preview(Some(&preview)).unwrap();
+        frame(&mut r, std::slice::from_ref(&layer), &[], &[]);
+        let captures = r.transforms.as_ref().unwrap().source_captures();
+        let mut op = operation(30, Affine::IDENTITY, None);
+        op.kind = LayerOperationKind::Transform(preview.transform.clone());
+        let apply = DabBatch {
+            damage: op.bounds(extent),
+            ..op_batch(0, &op)
+        };
+        let mut committed = layer.clone();
+        committed.pending_operations.push(op);
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, std::slice::from_ref(&committed), &[], &[apply]);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            shown[2],
+            "apply after a moving={moving} preview shows the bicubic result"
+        );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().source_captures() == captures,
+            !moving,
+            "only a still preview is kept as the commit"
+        );
+        r.submit(FramePacket {
+            view,
+            document_extent: extent,
+            layers: std::slice::from_ref(&layer),
+            dabs: &[d],
+            dab_batches: &[batch(1)],
+            time_seconds: 0.,
+            restore_rasters: &[],
+            reset_layers: true,
+            composite_all: true,
+        })
+        .unwrap();
     }
 }
 
@@ -801,6 +896,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
         .unwrap();
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: layer.id,
             selection: Some(selection.clone()),
             transform: ImageTransform::default(),
@@ -1123,6 +1219,7 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
         let before = render(&mut r, &layers, &dabs, &brushes, true, false);
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: LayerId(target),
             selection: None,
             transform: ImageTransform::default(),
@@ -1286,6 +1383,7 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
     .unwrap();
     let mut preview = layer_render::TransformPreview {
         transaction: 1,
+        moving: false,
         layer: layer.id,
         selection: None,
         transform: Default::default(),

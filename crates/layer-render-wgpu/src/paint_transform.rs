@@ -140,21 +140,66 @@ struct ImageTransformState {
 /// smallest capacity keeps every tile of a batch resident until it is drawn.
 const BATCH_ORIGINAL_TILES: usize = 48;
 
-/// Destination pages drawn together in one pass, then copied into place. A
-/// pass per 256x256 page would dominate the frame for large layers.
+/// A destination page and the page-local part of it a transform draws.
+struct Target {
+    texture: wgpu::Texture,
+    region: PixelRect,
+    initialize: bool,
+}
+
+/// Destination pages drawn together into the atlas, which holds the pages
+/// from `origin`, then copied into place. Jobs may span several pages.
+struct Window {
+    origin: [u32; 2],
+    /// Absolute destination regions, and whether each draws unmoved pixels.
+    jobs: Vec<(snapshot::Footprint, bool)>,
+    pages: Vec<([u32; 2], Target)>,
+}
+
+fn on_page(local: PixelRect, coordinate: [u32; 2]) -> PixelRect {
+    let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
+    PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y())
+}
+
+/// Consecutive jobs that together bind at most BATCH_ORIGINAL_TILES tiles
+/// the transaction has not captured.
+fn source_batches(
+    jobs: &[(snapshot::Footprint, bool)],
+    captured: impl Fn([u32; 2]) -> bool,
+) -> Vec<std::ops::Range<usize>> {
+    let mut batches = Vec::new();
+    let mut originals = std::collections::HashSet::new();
+    let mut start = 0;
+    for (index, (job, _)) in jobs.iter().enumerate() {
+        let needed: Vec<_> = job.sources.iter().filter(|c| !captured(**c)).collect();
+        let fresh = needed.iter().filter(|c| !originals.contains(**c)).count();
+        if index > start && originals.len() + fresh > BATCH_ORIGINAL_TILES {
+            batches.push(start..index);
+            start = index;
+            originals.clear();
+        }
+        originals.extend(needed.into_iter().copied());
+    }
+    batches.push(start..jobs.len());
+    batches
+}
+
+/// Scratch holding a window of destination pages. One pass per 256x256 page
+/// would dominate the frame for large layers.
 struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    columns: u32,
-    slots: usize,
 }
 impl Atlas {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let [columns, rows] = match format.block_copy_size(None).unwrap_or(16) {
+    fn pages(format: wgpu::TextureFormat) -> [u32; 2] {
+        match format.block_copy_size(None).unwrap_or(16) {
             16.. => [4, 4],
             8.. => [8, 4],
             _ => [8, 8],
-        };
+        }
+    }
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let [columns, rows] = Self::pages(format);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("batched transform pages"),
             size: wgpu::Extent3d {
@@ -170,46 +215,7 @@ impl Atlas {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        Self {
-            texture,
-            view,
-            columns,
-            slots: (columns * rows) as usize,
-        }
-    }
-    /// Split jobs into batches that fit the atlas and the source cache, and
-    /// give each destination page its slot within its batch.
-    fn plan<'a>(
-        &self,
-        jobs: impl ExactSizeIterator<Item = &'a snapshot::RegionJob>,
-        captured: impl Fn([u32; 2]) -> bool,
-    ) -> (Vec<std::ops::Range<usize>>, Vec<[u32; 2]>) {
-        let mut batches = Vec::new();
-        let mut slots = Vec::with_capacity(jobs.len());
-        let mut pages = std::collections::HashMap::new();
-        let mut originals = std::collections::HashSet::new();
-        let mut start = 0;
-        for (index, job) in jobs.enumerate() {
-            let needed: Vec<_> = job.sources.iter().filter(|c| !captured(**c)).collect();
-            let fresh = needed.iter().filter(|c| !originals.contains(**c)).count();
-            if (!pages.contains_key(&job.coordinate) && pages.len() == self.slots)
-                || originals.len() + fresh > BATCH_ORIGINAL_TILES
-            {
-                batches.push(start..index);
-                start = index;
-                pages.clear();
-                originals.clear();
-            }
-            let next = pages.len() as u32;
-            let slot = *pages.entry(job.coordinate).or_insert(next);
-            slots.push([
-                slot % self.columns * PAGE_SIZE,
-                slot / self.columns * PAGE_SIZE,
-            ]);
-            originals.extend(needed.into_iter().copied());
-        }
-        batches.push(start..slots.len());
-        (batches, slots)
+        Self { texture, view }
     }
     fn storage_bytes(&self) -> u64 {
         texture_bytes(&self.texture)
@@ -473,22 +479,22 @@ impl ImageTransformState {
             .filter(|b| !b.is_empty())
             .flat_map(page_coordinates)
             .collect();
-        let mut plans: [Vec<snapshot::RegionJob>; 3] = Default::default();
-        for (channel, snapshot) in self.sources.iter().enumerate() {
-            if let Some(snapshot) = snapshot {
-                plans[channel] = snapshot.jobs(
-                    transform,
-                    coordinates.iter().copied().filter(|c| {
-                        channel == 0
-                            || destination(r, layer, channel, false, *c).is_some()
-                            || support[channel]
-                                .iter()
-                                .any(|b| !b.page_local(*c).is_empty())
-                    }),
-                    regions,
-                )?;
+        let channel_pages: [Vec<[u32; 2]>; 3] = std::array::from_fn(|channel| {
+            if self.sources[channel].is_none() {
+                return Vec::new();
             }
-        }
+            coordinates
+                .iter()
+                .copied()
+                .filter(|c| {
+                    channel == 0
+                        || destination(r, layer, channel, false, *c).is_some()
+                        || support[channel]
+                            .iter()
+                            .any(|b| !b.page_local(*c).is_empty())
+                })
+                .collect()
+        });
         let mut initialize_original = std::collections::BTreeSet::new();
         for c in coordinates {
             if let Some(background) = self.background {
@@ -599,27 +605,36 @@ impl ImageTransformState {
                 r.paint_layers[index].watercolor_wetness_pages.push(page);
             }
         }
-        for (channel, jobs) in plans.into_iter().enumerate() {
-            if jobs.is_empty() {
+        for (channel, pages) in channel_pages.into_iter().enumerate() {
+            if pages.is_empty() {
                 continue;
             }
             // Complete copies before sampling any original in this channel.
-            for job in &jobs {
-                self.capture_destination(r, encoder, layer, channel, job.coordinate);
-            }
-            if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
-                self.capture_originals(r, encoder, &jobs)?;
+            for c in &pages {
+                self.capture_destination(r, encoder, layer, channel, *c);
             }
             let mask = self.background.is_some();
-            let targets: Vec<_> = jobs
+            let targets = pages
                 .into_iter()
-                .filter_map(|job| {
-                    let (texture, _) = destination(r, layer, channel, mask, job.coordinate)?;
-                    let initialize = channel == 0 && initialize_original.remove(&job.coordinate);
-                    Some((job, texture.clone(), initialize))
+                .filter_map(|c| {
+                    let region = regions
+                        .iter()
+                        .map(|b| b.intersect(page_rect(c)))
+                        .fold(PixelRect::EMPTY, PixelRect::union);
+                    let (texture, _) = destination(r, layer, channel, mask, c)?;
+                    let target = Target {
+                        texture: texture.clone(),
+                        region: region.page_local(c),
+                        initialize: channel == 0 && initialize_original.remove(&c),
+                    };
+                    (!region.is_empty()).then_some((c, target))
                 })
                 .collect();
-            self.draw_batched(r, encoder, channel, transform, &targets)?;
+            let windows = self.plan_windows(r, channel, transform, targets)?;
+            if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
+                self.capture_originals(r, encoder, &windows)?;
+            }
+            self.draw_windows(r, encoder, channel, transform, &windows)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
@@ -631,44 +646,97 @@ impl ImageTransformState {
         Ok(())
     }
 
-    /// Draw jobs into the atlas in as few passes as the atlas and the source
-    /// cache allow, then copy each region to its target. A target marked for
-    /// initialization first receives its whole unmoved page.
-    fn draw_batched(
+    /// Group target pages into atlas windows and split each window's 2x2
+    /// page blocks into jobs that fit the source bindings. Pages marked for
+    /// initialization first receive their whole unmoved page.
+    fn plan_windows(
+        &self,
+        r: &WgpuRasterizer,
+        channel: usize,
+        transform: &layer_core::ImageTransform,
+        targets: Vec<([u32; 2], Target)>,
+    ) -> Result<Vec<Window>, GpuRasterError> {
+        let [columns, rows] = Atlas::pages(self.atlas_format(r, channel));
+        let mut windows = std::collections::BTreeMap::new();
+        for (c, target) in targets {
+            let key = [c[0] / columns, c[1] / rows];
+            windows
+                .entry(key)
+                .or_insert_with(|| Window {
+                    origin: [key[0] * columns, key[1] * rows],
+                    jobs: Vec::new(),
+                    pages: Vec::new(),
+                })
+                .pages
+                .push((c, target));
+        }
+        let splitter = self.sources[channel].as_ref().unwrap().splitter(transform)?;
+        let mut found = Vec::new();
+        for window in windows.values_mut() {
+            let mut blocks = std::collections::BTreeMap::new();
+            for (c, target) in &window.pages {
+                let region = on_page(target.region, *c);
+                blocks
+                    .entry([c[0] / 2, c[1] / 2])
+                    .and_modify(|b: &mut PixelRect| *b = b.union(region))
+                    .or_insert(region);
+            }
+            window.jobs.extend(window.pages.iter().filter(|(_, t)| t.initialize).map(|(c, _)| {
+                let job = snapshot::Footprint {
+                    region: page_rect(*c),
+                    sources: vec![*c],
+                };
+                (job, true)
+            }));
+            for start in blocks.into_values() {
+                splitter.split(start, &mut found)?;
+            }
+            window.jobs.extend(found.drain(..).map(|job| (job, false)));
+        }
+        Ok(windows.into_values().collect())
+    }
+
+    fn atlas_format(&self, r: &WgpuRasterizer, channel: usize) -> wgpu::TextureFormat {
+        if self.background.is_some() || channel != 0 {
+            r.device.scalar_format()
+        } else {
+            r.device.working_format()
+        }
+    }
+
+    /// Draw each window's jobs into the atlas, in as few passes as the source
+    /// cache allows, then copy each page's region to its target.
+    fn draw_windows(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         channel: usize,
         transform: &layer_core::ImageTransform,
-        targets: &[(snapshot::RegionJob, wgpu::Texture, bool)],
+        windows: &[Window],
     ) -> Result<(), GpuRasterError> {
-        let mask = self.background.is_some();
-        let scalar = mask || channel != 0;
-        let atlas = self.atlases[usize::from(scalar)].get_or_insert_with(|| {
-            Atlas::new(
-                &r.device,
-                if scalar { r.device.scalar_format() } else { r.device.working_format() },
-            )
-        });
+        let format = self.atlas_format(r, channel);
+        let scalar = format != r.device.working_format() || channel != 0;
+        let atlas = self.atlases[usize::from(scalar)]
+            .get_or_insert_with(|| Atlas::new(&r.device, format));
+        let atlas = (atlas.texture.clone(), atlas.view.clone());
         let snapshot = self.sources[channel].as_ref().unwrap();
-        let (batches, slots) = atlas.plan(targets.iter().map(|t| &t.0), |c| snapshot.pages.contains_key(&c));
         let bounds = [
             snapshot.bounds.min_x() as i32,
             snapshot.bounds.min_y() as i32,
             snapshot.bounds.width() as i32,
             snapshot.bounds.height() as i32,
         ];
-        let records: Vec<_> = targets
+        let records: Vec<_> = windows
             .iter()
-            .zip(&slots)
-            .map(|((job, _, _), slot)| pixel_transform::TiledTransformRecord {
-                source_size: [PAGE_SIZE; 2],
-                target: job.coordinate,
-                slot: *slot,
-                sources: &job.sources,
+            .flat_map(|window| {
+                window.jobs.iter().map(|(job, _)| pixel_transform::TiledTransformRecord {
+                    source_size: [PAGE_SIZE; 2],
+                    target: window.origin,
+                    sources: &job.sources,
+                })
             })
             .collect();
-        let pass = if mask {
+        let pass = if self.background.is_some() {
             &mut self.visibility
         } else if channel == 0 {
             &mut self.color
@@ -687,62 +755,58 @@ impl ImageTransformState {
                 &records,
             )
             .map_err(GpuRasterError::InvalidTransform)?;
-        let atlas = self.atlases[usize::from(scalar)].as_ref().unwrap();
         let selection = self.has_selection.then_some(self.selection.as_ref()).flatten();
-        for batch in batches {
-            let mut sources = Vec::with_capacity(batch.len());
-            for (job, _, _) in &targets[batch.clone()] {
-                let snapshot = self.sources[channel].as_ref().unwrap();
-                sources.push(snapshot.binding(r, pass, job, selection, encoder)?);
+        let mut first = 0;
+        for window in windows {
+            let origin = window.origin.map(|v| v * PAGE_SIZE);
+            let snapshot = self.sources[channel].as_ref().unwrap();
+            let batches = source_batches(&window.jobs, |c| snapshot.pages.contains_key(&c));
+            for (n, batch) in batches.into_iter().enumerate() {
+                let mut sources = Vec::with_capacity(batch.len());
+                for (job, _) in &window.jobs[batch.clone()] {
+                    let snapshot = self.sources[channel].as_ref().unwrap();
+                    sources.push(snapshot.binding(r, pass, &job.sources, selection, encoder)?);
+                }
+                let draws: Vec<_> = batch
+                    .zip(&sources)
+                    .map(|(index, source)| {
+                        let (job, unmoved) = &window.jobs[index];
+                        pixel_transform::BatchDraw {
+                            source,
+                            job: first + index,
+                            identity: *unmoved,
+                            scissor: [
+                                job.region.min_x() - origin[0],
+                                job.region.min_y() - origin[1],
+                                job.region.width(),
+                                job.region.height(),
+                            ],
+                        }
+                    })
+                    .collect();
+                pass.encode_batch(encoder, &atlas.1, n == 0, offsets, &draws);
             }
-            let draws: Vec<_> = batch
-                .clone()
-                .zip(&sources)
-                .flat_map(|(index, source)| {
-                    let (job, _, initialize) = &targets[index];
-                    let [x, y] = slots[index];
-                    let full = pixel_transform::BatchDraw {
-                        source,
-                        job: index,
-                        identity: true,
-                        scissor: [x, y, PAGE_SIZE, PAGE_SIZE],
-                    };
-                    let region = pixel_transform::BatchDraw {
-                        source,
-                        job: index,
-                        identity: false,
-                        scissor: [
-                            x + job.region.min_x(),
-                            y + job.region.min_y(),
-                            job.region.width(),
-                            job.region.height(),
-                        ],
-                    };
-                    initialize.then_some(full).into_iter().chain([region])
-                })
-                .collect();
-            pass.encode_batch(encoder, &atlas.view, offsets, &draws);
-            for index in batch {
-                let (job, texture, initialize) = &targets[index];
-                let region = if *initialize {
+            first += window.jobs.len();
+            for (c, target) in &window.pages {
+                let region = if target.initialize {
                     PixelRect::full([PAGE_SIZE; 2])
                 } else {
-                    job.region
+                    target.region
                 };
-                let [x, y] = slots[index];
+                let slot = [0, 1].map(|axis| (c[axis] - window.origin[axis]) * PAGE_SIZE);
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &atlas.texture,
+                        texture: &atlas.0,
                         mip_level: 0,
                         origin: wgpu::Origin3d {
-                            x: x + region.min_x(),
-                            y: y + region.min_y(),
+                            x: slot[0] + region.min_x(),
+                            y: slot[1] + region.min_y(),
                             z: 0,
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyTextureInfo {
-                        texture,
+                        texture: &target.texture,
                         mip_level: 0,
                         origin: wgpu::Origin3d {
                             x: region.min_x(),
@@ -770,12 +834,13 @@ impl ImageTransformState {
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
-        jobs: &[snapshot::RegionJob],
+        windows: &[Window],
     ) -> Result<(), GpuRasterError> {
         let snapshot = self.sources[0].as_ref().unwrap();
-        let missing: std::collections::BTreeSet<_> = jobs
+        let missing: std::collections::BTreeSet<_> = windows
             .iter()
-            .flat_map(|job| job.sources.iter().copied())
+            .flat_map(|window| window.jobs.iter())
+            .flat_map(|(job, _)| job.sources.iter().copied())
             .filter(|c| !snapshot.pages.contains_key(c))
             .collect();
         if missing.is_empty() {
@@ -791,23 +856,25 @@ impl ImageTransformState {
                 if capture.texture.format() != format {
                     *capture = snapshot_page(&r.device, format);
                 }
-                let job = snapshot::RegionJob {
-                    coordinate,
+                let target = Target {
+                    texture: capture.texture.clone(),
                     region: PixelRect::full([PAGE_SIZE; 2]),
-                    sources: vec![coordinate],
+                    initialize: false,
                 };
-                (job, capture.texture.clone(), false)
+                (coordinate, target)
             })
             .collect();
+        let identity = layer_core::ImageTransform::default();
+        let copies = self.plan_windows(r, 0, &identity, targets)?;
         let has_selection = std::mem::replace(&mut self.has_selection, false);
-        let result = self.draw_batched(r, encoder, 0, &Default::default(), &targets);
+        let result = self.draw_windows(r, encoder, 0, &identity, &copies);
         self.has_selection = has_selection;
         result?;
         let snapshot = self.sources[0].as_mut().unwrap();
-        for (job, _, _) in targets {
-            let capture = &self.captures[0][&job.coordinate];
+        for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
+            let capture = &self.captures[0][coordinate];
             snapshot.pages.insert(
-                job.coordinate,
+                *coordinate,
                 snapshot::SnapshotPage {
                     texture: capture.texture.clone(),
                     view: capture.view.clone(),
@@ -915,7 +982,7 @@ impl ImageTransformState {
             .iter()
             .find_map(|l| l.target_operations(preview.layer))?
             .get(index as usize)?;
-        if !matches!(&operation.kind, layer_core::LayerOperationKind::Transform(t) if *t == preview.transform)
+        if !matches!(&operation.kind, layer_core::LayerOperationKind::Transform(t) if *t == *preview.drawn())
             || operation.coverage.initial != preview.selection
         {
             return None;
@@ -976,7 +1043,7 @@ impl ImageTransformState {
             regions[0],
             regions[1],
         ];
-        self.render_source(r, encoder, next.layer, &next.transform, &affected)?;
+        self.render_source(r, encoder, next.layer, &next.drawn(), &affected)?;
         // Drop only pages created for a previous preview and no longer needed.
         // Original sparse pages remain untouched outside the preview footprint.
         self.retain_pages(r, next.layer, &regions, Some(&next.transform));

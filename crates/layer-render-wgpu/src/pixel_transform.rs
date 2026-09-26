@@ -34,9 +34,8 @@ pub struct TransformTarget<'a> {
 }
 
 pub(super) struct TiledTransformRecord<'a> {
+    /// The page drawn at the attachment's origin.
     pub target: [u32; 2],
-    /// Pixel position of the target page within the attachment it is drawn to.
-    pub slot: [u32; 2],
     pub sources: &'a [[u32; 2]],
     pub source_size: [u32; 2],
 }
@@ -481,9 +480,7 @@ impl PixelTransform {
                 let values = region_record(
                     rows,
                     [0.; 2],
-                    [0, 1].map(|axis| {
-                        (job.target[axis] * super::PAGE_SIZE) as f32 - job.slot[axis] as f32
-                    }),
+                    job.target.map(|v| (v * super::PAGE_SIZE) as f32),
                     filter_flags(transform.interpolation)
                         + 2. * f32::from(unmoved || identity)
                         + 4. * f32::from(self.placement),
@@ -545,12 +542,13 @@ impl PixelTransform {
             target,
         );
     }
-    /// Draw prepared regions of several targets into one attachment with a
-    /// single pass. Regions share the attachment through their slots.
+    /// Draw prepared regions of several jobs into one attachment with a
+    /// single pass, clearing the attachment first or keeping earlier passes.
     pub(super) fn encode_batch(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
         attachment: &wgpu::TextureView,
+        clear: bool,
         offsets: [u32; 2],
         draws: &[BatchDraw<'_>],
     ) {
@@ -561,7 +559,11 @@ impl PixelTransform {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: if clear {
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],

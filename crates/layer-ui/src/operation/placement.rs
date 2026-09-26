@@ -82,6 +82,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }),
             request: TransformPreview {
                 transaction: self.operation.serial,
+                moving: false,
                 layer: layer.id,
                 selection: None,
                 transform: Default::default(),

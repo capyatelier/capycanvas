@@ -483,11 +483,26 @@ pub struct RegionResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransformPreview {
     pub transaction: u64,
+    /// A handle is still being dragged. The renderer may draw a bicubic
+    /// transform bilinearly until the preview stops moving; Apply then
+    /// resamples at the requested filter unless a still preview was drawn.
+    pub moving: bool,
     pub layer: LayerId,
     pub selection: Option<layer_core::Selection>,
     pub transform: layer_core::ImageTransform,
 }
 impl TransformPreview {
+    /// The transform the renderer draws for this preview.
+    pub fn drawn(&self) -> std::borrow::Cow<'_, layer_core::ImageTransform> {
+        if self.moving && self.transform.interpolation == layer_core::Interpolation::Bicubic {
+            std::borrow::Cow::Owned(layer_core::ImageTransform {
+                interpolation: layer_core::Interpolation::Linear,
+                ..self.transform.clone()
+            })
+        } else {
+            std::borrow::Cow::Borrowed(&self.transform)
+        }
+    }
     /// A linked paint/mask pair shares one world-space transform, but each has
     /// its own local origin and immutable selection. Other layer kinds have no
     /// raster pigment target to transform alongside their mask.
@@ -508,6 +523,7 @@ impl TransformPreview {
             .then(layer_core::target_transform(layers, target).inverse()?);
         Some(Self {
             transaction: self.transaction,
+            moving: self.moving,
             layer: target,
             selection: self.selection.as_ref().map(|s| s.transformed(to)).transpose().ok()?,
             transform: self.transform.conjugate(to)?,
@@ -731,6 +747,7 @@ mod tests {
         for primary in [LayerId(1), LayerId(9)] {
             let request = TransformPreview {
                 transaction: 7,
+                moving: false,
                 layer: primary,
                 selection: Some(selection.clone()),
                 transform: ImageTransform::affine(Affine::around(
@@ -762,6 +779,7 @@ mod tests {
         layers[0].mask.as_mut().unwrap().linked = false;
         let request = TransformPreview {
             transaction: 1,
+            moving: false,
             layer: LayerId(1),
             selection: None,
             transform: Default::default(),

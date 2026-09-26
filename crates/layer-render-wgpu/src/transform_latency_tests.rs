@@ -1,5 +1,6 @@
 //! Continuous transform drags over 24-megapixel paint and photo layers: a new
-//! transform every frame, with CPU submission and GPU completion kept apart.
+//! moving transform every frame, then the frame that releases it, with CPU
+//! submission, GPU execution and serialized completion kept apart.
 use super::*;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
 use layer_core::{Affine, ImageTransform, Interpolation, Projective, TransformMap};
@@ -153,16 +154,18 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
         let mut cpu = Vec::new();
         let mut completed = Vec::new();
         r.telemetry = telemetry::Telemetry::new(r.device(), r.queue());
+        r.set_telemetry_enabled(true);
+        let mut preview = layer_render::TransformPreview {
+            transaction: transaction as u64 + 1,
+            moving: true,
+            layer: layer.id,
+            selection: Some(selection.clone()),
+            transform: transform(0.),
+        };
         for i in 0..FRAMES {
-            r.set_telemetry_enabled(i >= WARMUP);
+            preview.transform = transform(i as f32 * 0.04);
             let start = Instant::now();
-            r.set_transform_preview(Some(&layer_render::TransformPreview {
-                transaction: transaction as u64 + 1,
-                layer: layer.id,
-                selection: Some(selection.clone()),
-                transform: transform(i as f32 * 0.04),
-            }))
-            .unwrap();
+            r.set_transform_preview(Some(&preview)).unwrap();
             submit(r, layer, false);
             let submitted = start.elapsed().as_secs_f64() * 1000.;
             r.wait_idle().unwrap();
@@ -182,10 +185,16 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
             .map(f64::from)
             .collect();
         let (cpu, gpu, completed) = (percentiles(cpu), percentiles(gpu), percentiles(completed));
+        preview.moving = false;
+        let start = Instant::now();
+        r.set_transform_preview(Some(&preview)).unwrap();
+        submit(r, layer, false);
+        r.wait_idle().unwrap();
+        let settled = start.elapsed().as_secs_f64() * 1000.;
         eprintln!(
-            "{label} {name} 6000x4000, full selection: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms"
+            "{label} {name} 6000x4000, full selection: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms; release {settled:.3}ms"
         );
-        worst = worst.max(completed[2]);
+        worst = worst.max(completed[2]).max(settled);
         r.set_transform_preview(None).unwrap();
         submit(r, layer, false);
         r.wait_idle().unwrap();

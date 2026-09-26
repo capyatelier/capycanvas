@@ -2641,6 +2641,7 @@ mod tests {
         let initial = engine.document().clone();
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: initial.active_layer,
             selection: None,
             transform: layer_core::ImageTransform::default(),
@@ -2699,6 +2700,7 @@ mod tests {
             let origin = doc.layer_offset(target);
             let preview = layer_render::TransformPreview {
                 transaction: 1,
+                moving: false,
                 layer: target,
                 selection: doc.selection.as_ref().map(|s| {
                     s.translated(Point {
@@ -2782,6 +2784,7 @@ mod tests {
         .unwrap();
         let preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer,
             selection: Some(selection.translated(Point { x: -12., y: -7. })),
             transform: ImageTransform::affine(Affine::around(
@@ -2877,6 +2880,7 @@ mod tests {
         let map = TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap());
         let preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer,
             selection: Some(selection.clone()),
             transform: ImageTransform { map: map.clone(), ..Default::default() },

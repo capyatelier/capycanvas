@@ -18,8 +18,13 @@ pub(super) struct TileSnapshot {
     )>,
     pub bounds: PixelRect,
 }
+/// A page-local destination region and the source pages its samples read.
 pub(crate) struct RegionJob {
-    pub coordinate: [u32; 2],
+    pub region: PixelRect,
+    pub sources: Vec<[u32; 2]>,
+}
+/// A destination rectangle and the source pages its samples read.
+pub(crate) struct Footprint {
     pub region: PixelRect,
     pub sources: Vec<[u32; 2]>,
 }
@@ -57,28 +62,22 @@ impl TileSnapshot {
             .get(&coordinate)
             .is_some_and(|p| p.texture == *texture)
     }
-    /// Split output regions until both the unchanged destination and four-tap
-    /// source footprints fit the portable sixteen texture bindings.
-    pub fn jobs(
+    pub fn splitter(
         &self,
         transform: &layer_core::ImageTransform,
-        coordinates: impl Iterator<Item = [u32; 2]>,
-        regions: &[PixelRect],
-    ) -> Result<Vec<RegionJob>, GpuRasterError> {
-        region_jobs(self.bounds, transform, coordinates, regions, |c| {
-            self.contains(c)
-        })
+    ) -> Result<Splitter<impl Fn([u32; 2]) -> bool + '_>, GpuRasterError> {
+        Splitter::new(self.bounds, transform, |c| self.contains(c))
     }
     pub fn binding(
         &self,
         r: &mut WgpuRasterizer,
         pass: &mut PixelTransform,
-        job: &RegionJob,
+        sources: &[[u32; 2]],
         selection: Option<&wgpu::Buffer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<TransformSource, GpuRasterError> {
         let mut originals = Vec::new();
-        for c in &job.sources {
+        for c in sources {
             if self.pages.contains_key(c) {
                 continue;
             }
@@ -99,8 +98,7 @@ impl TileSnapshot {
                 }
             }
         }
-        let views: Vec<_> = job
-            .sources
+        let views: Vec<_> = sources
             .iter()
             .filter_map(|c| {
                 let view = self.pages.get(c).map(|p| &p.view).or_else(|| {
@@ -134,43 +132,46 @@ impl TileSnapshot {
     }
 }
 
-/// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
-pub(crate) fn region_jobs(
+/// Splits destination rectangles until the unchanged destination and the
+/// filter footprint of each piece fit the portable sixteen texture bindings.
+pub(crate) struct Splitter<F> {
+    map: SourceMap,
     bounds: PixelRect,
-    transform: &layer_core::ImageTransform,
-    coordinates: impl Iterator<Item = [u32; 2]>,
-    regions: &[PixelRect],
-    contains: impl Fn([u32; 2]) -> bool,
-) -> Result<Vec<RegionJob>, GpuRasterError> {
-    let map = SourceMap::new(transform, bounds)?;
-    let mut jobs = Vec::new();
-    for coordinate in coordinates {
-        let region = regions
-            .iter()
-            .copied()
-            .map(|b| b.intersect(page_rect(coordinate)))
-            .fold(PixelRect::EMPTY, PixelRect::union);
-        if region.is_empty() {
-            continue;
-        }
-        let mut pending = vec![region];
+    contains: F,
+}
+impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
+    pub fn new(
+        bounds: PixelRect,
+        transform: &layer_core::ImageTransform,
+        contains: F,
+    ) -> Result<Self, GpuRasterError> {
+        Ok(Self {
+            map: SourceMap::new(transform, bounds)?,
+            bounds,
+            contains,
+        })
+    }
+    /// Append the pieces of `start` and the pages each one reads.
+    pub fn split(&self, start: PixelRect, jobs: &mut Vec<Footprint>) -> Result<(), GpuRasterError> {
+        let mut pending = vec![start];
         while let Some(region) = pending.pop() {
-            let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
-            if contains(coordinate) {
-                required.push(coordinate);
+            if region.is_empty() {
+                continue;
             }
-            if let Some([x0, y0, x1, y1]) = map.footprint(region) {
-                let support = map.support;
+            let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
+            required.extend(page_coordinates(region).filter(|c| (self.contains)(*c)));
+            if let Some([x0, y0, x1, y1]) = self.map.footprint(region) {
+                let support = self.map.support;
                 let footprint = PixelRect::new(
                     (x0 - support).floor().max(0.) as u32,
                     (y0 - support).floor().max(0.) as u32,
                     (x1 + support).ceil().max(0.) as u32,
                     (y1 + support).ceil().max(0.) as u32,
                 )
-                .intersect(bounds);
-                if !footprint.is_empty() {
+                .intersect(self.bounds);
+                if !footprint.is_empty() && required.len() <= TRANSFORM_SLOTS {
                     for c in page_coordinates(footprint) {
-                        if c != coordinate && contains(c) {
+                        if !required.contains(&c) && (self.contains)(c) {
                             required.push(c);
                         }
                         if required.len() > TRANSFORM_SLOTS {
@@ -186,13 +187,12 @@ pub(crate) fn region_jobs(
                     ));
                 }
                 required.sort_unstable();
-                jobs.push(RegionJob {
-                    coordinate,
-                    region: region.page_local(coordinate),
+                jobs.push(Footprint {
+                    region,
                     sources: required,
                 });
             } else if region.width() >= region.height() && region.width() > 1 {
-                let middle = region.min_x() + region.width() / 2;
+                let middle = split_point(region.min_x(), region.max_x());
                 pending.push(PixelRect::new(
                     middle,
                     region.min_y(),
@@ -206,7 +206,7 @@ pub(crate) fn region_jobs(
                     region.max_y(),
                 ));
             } else if region.height() > 1 {
-                let middle = region.min_y() + region.height() / 2;
+                let middle = split_point(region.min_y(), region.max_y());
                 pending.push(PixelRect::new(
                     region.min_x(),
                     middle,
@@ -225,8 +225,50 @@ pub(crate) fn region_jobs(
                 ));
             }
         }
+        Ok(())
     }
-    Ok(jobs)
+}
+
+/// Halve a span, on a page boundary when it crosses one, so pieces bind as
+/// few destination pages as possible.
+fn split_point(start: u32, end: u32) -> u32 {
+    let middle = start + (end - start) / 2;
+    let lower = middle / PAGE_SIZE * PAGE_SIZE;
+    [lower, lower + PAGE_SIZE]
+        .into_iter()
+        .filter(|b| *b > start && *b < end)
+        .min_by_key(|b| b.abs_diff(middle))
+        .unwrap_or(middle)
+}
+
+/// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
+pub(crate) fn region_jobs(
+    bounds: PixelRect,
+    transform: &layer_core::ImageTransform,
+    coordinates: impl Iterator<Item = [u32; 2]>,
+    regions: &[PixelRect],
+    contains: impl Fn([u32; 2]) -> bool,
+) -> Result<Vec<RegionJob>, GpuRasterError> {
+    let splitter = Splitter::new(bounds, transform, contains)?;
+    let mut found = Vec::new();
+    let mut owners = Vec::new();
+    for coordinate in coordinates {
+        let region = regions
+            .iter()
+            .copied()
+            .map(|b| b.intersect(page_rect(coordinate)))
+            .fold(PixelRect::EMPTY, PixelRect::union);
+        splitter.split(region, &mut found)?;
+        owners.resize(found.len(), coordinate);
+    }
+    Ok(found
+        .into_iter()
+        .zip(owners)
+        .map(|(job, coordinate)| RegionJob {
+            region: job.region.page_local(coordinate),
+            sources: job.sources,
+        })
+        .collect())
 }
 
 /// How a destination region reaches back into its source, for choosing the
@@ -473,87 +515,125 @@ mod tests {
         (h[6] * u + h[7] * v + h[8] > 0.).then_some([u, v])
     }
 
-    /// Every job binds at most TRANSFORM_SLOTS pages, the jobs of a page cover
-    /// its region exactly once, and every bilinear tap lies in a bound page.
-    fn check(quad: [[f32; 2]; 4]) -> Vec<RegionJob> {
+    /// Split 2x2 page blocks as the renderer does. Every job binds at most
+    /// TRANSFORM_SLOTS pages, the jobs cover the layer exactly once, and every
+    /// tap of a sample anywhere in a pixel lies in a bound page.
+    fn check(quad: [[f32; 2]; 4], interpolation: layer_core::Interpolation) -> Vec<Footprint> {
         let bounds = PixelRect::full(EXTENT);
-        let (transform, h) = perspective(quad);
-        let jobs = region_jobs(
-            bounds,
-            &transform,
-            page_coordinates(bounds),
-            &[bounds],
-            |_| true,
-        )
-        .unwrap();
-        let mut area = std::collections::HashMap::new();
+        let (mut transform, h) = perspective(quad);
+        transform.interpolation = interpolation;
+        let splitter = Splitter::new(bounds, &transform, |_| true).unwrap();
+        let mut jobs = Vec::new();
+        for y in (0..EXTENT[1]).step_by(512) {
+            for x in (0..EXTENT[0]).step_by(512) {
+                let block = PixelRect::new(x, y, x + 512, y + 512).intersect(bounds);
+                splitter.split(block, &mut jobs).unwrap();
+            }
+        }
+        let reach = interpolation.support() as f64;
+        let positions: &[[f64; 2]] = if interpolation == layer_core::Interpolation::Nearest {
+            &[[0.5, 0.5]]
+        } else {
+            &[[0.01, 0.01], [0.99, 0.99], [0.01, 0.99], [0.99, 0.01]]
+        };
+        let mut area = 0;
         for job in &jobs {
             assert!(job.sources.len() <= TRANSFORM_SLOTS);
-            *area.entry(job.coordinate).or_insert(0) += job.region.area();
-            let origin = job.coordinate.map(|v| v * PAGE_SIZE);
+            area += job.region.area();
             let [x0, y0] = [job.region.min_x(), job.region.min_y()];
             let [x1, y1] = [job.region.max_x() - 1, job.region.max_y() - 1];
             for x in (x0..=x1).step_by(7).chain([x1]) {
                 for y in (y0..=y1).step_by(7).chain([y1]) {
-                    let world = [(origin[0] + x) as f64 + 0.5, (origin[1] + y) as f64 + 0.5];
-                    let Some([u, v]) = preimage(h, world[0], world[1]) else {
-                        continue;
-                    };
-                    for [tx, ty] in [
-                        [u - 0.5, v - 0.5],
-                        [u + 0.5, v + 0.5],
-                        [u - 0.5, v + 0.5],
-                        [u + 0.5, v - 0.5],
-                    ] {
-                        let [tx, ty] = [tx.floor(), ty.floor()];
-                        if tx < 0. || ty < 0. || tx >= EXTENT[0] as f64 || ty >= EXTENT[1] as f64 {
+                    for [dx, dy] in positions {
+                        let world = [x as f64 + dx, y as f64 + dy];
+                        let Some([u, v]) = preimage(h, world[0], world[1]) else {
                             continue;
+                        };
+                        for [tx, ty] in [[-1., -1.], [1., 1.], [-1., 1.], [1., -1.]] {
+                            let [tx, ty] = [(u + tx * reach).floor(), (v + ty * reach).floor()];
+                            if tx < 0.
+                                || ty < 0.
+                                || tx >= EXTENT[0] as f64
+                                || ty >= EXTENT[1] as f64
+                            {
+                                continue;
+                            }
+                            let page = [tx as u32 / PAGE_SIZE, ty as u32 / PAGE_SIZE];
+                            assert!(
+                                job.sources.contains(&page),
+                                "{quad:?} {interpolation:?}: pixel {world:?} reads {page:?}"
+                            );
                         }
-                        let page = [tx as u32 / PAGE_SIZE, ty as u32 / PAGE_SIZE];
-                        assert!(
-                            job.sources.contains(&page),
-                            "{quad:?}: pixel {world:?} reads {page:?}"
-                        );
                     }
                 }
             }
         }
-        for c in page_coordinates(bounds) {
-            assert_eq!(area[&c], page_rect(c).intersect(bounds).area(), "{c:?}");
-        }
+        assert_eq!(area, bounds.area());
         jobs
     }
 
     #[test]
     fn perspective_jobs_bind_every_sampled_page_within_the_view_limit() {
-        let keystone = check([[300., 200.], [5700., 400.], [5900., 3900.], [100., 3700.]]);
-        let deep = check([[2900., 100.], [3100., 100.], [5990., 3990.], [10., 3990.]]);
-        let mirrored = check([[5700., 400.], [300., 200.], [100., 3700.], [5900., 3900.]]);
-        for jobs in [&keystone, &deep, &mirrored] {
-            assert!(jobs.len() < 4096, "{} jobs", jobs.len());
+        use layer_core::Interpolation::*;
+        for interpolation in [Nearest, Linear, Bicubic] {
+            let keystone = check(
+                [[300., 200.], [5700., 400.], [5900., 3900.], [100., 3700.]],
+                interpolation,
+            );
+            let deep = check(
+                [[2900., 100.], [3100., 100.], [5990., 3990.], [10., 3990.]],
+                interpolation,
+            );
+            let mirrored = check(
+                [[5700., 400.], [300., 200.], [100., 3700.], [5900., 3900.]],
+                interpolation,
+            );
+            for jobs in [&keystone, &deep, &mirrored] {
+                assert!(jobs.len() < 4096, "{} jobs", jobs.len());
+            }
+            assert!(
+                keystone.len() < 384,
+                "{interpolation:?}: jobs span several pages"
+            );
+            assert!(
+                deep.len() > keystone.len(),
+                "foreshortened regions split further"
+            );
         }
-        assert!(
-            deep.len() > keystone.len(),
-            "foreshortened regions split further"
-        );
     }
 
     #[test]
-    fn regions_beyond_the_horizon_bind_only_their_own_page() {
+    fn regions_beyond_the_horizon_bind_only_their_own_pages() {
         let quad = [[2950., 2000.], [3050., 2000.], [5990., 3990.], [10., 3990.]];
-        let jobs = check(quad);
+        let jobs = check(quad, layer_core::Interpolation::Bicubic);
         let (_, h) = perspective(quad);
         let mut beyond = 0;
         for job in &jobs {
-            let corner = job.coordinate.map(|v| (v * PAGE_SIZE) as f64);
-            let unmapped = [[0., 0.], [256., 0.], [0., 256.], [256., 256.]]
-                .iter()
-                .all(|[x, y]| preimage(h, corner[0] + x, corner[1] + y).is_none());
+            let r = job.region;
+            let unmapped = [
+                [r.min_x(), r.min_y()],
+                [r.max_x(), r.min_y()],
+                [r.min_x(), r.max_y()],
+                [r.max_x(), r.max_y()],
+            ]
+            .iter()
+            .all(|[x, y]| preimage(h, *x as f64, *y as f64).is_none());
             if unmapped {
-                assert_eq!(job.sources, [job.coordinate]);
+                let mut own: Vec<_> = page_coordinates(r).collect();
+                own.sort_unstable();
+                assert_eq!(job.sources, own);
                 beyond += 1;
             }
         }
-        assert!(beyond > 0, "some pages lie wholly beyond the horizon");
+        assert!(beyond > 0, "some regions lie wholly beyond the horizon");
+    }
+
+    #[test]
+    fn splits_fall_on_page_boundaries() {
+        assert_eq!(split_point(0, 512), 256);
+        assert_eq!(split_point(250, 760), 512);
+        assert_eq!(split_point(0, 300), 256);
+        assert_eq!(split_point(10, 200), 105);
+        assert_eq!(split_point(300, 1300), 768);
     }
 }

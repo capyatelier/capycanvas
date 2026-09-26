@@ -268,6 +268,7 @@ fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cance
     for offset in [Point { x: 17., y: -11. }, Point { x: -31., y: 9. }] {
         let preview = layer_render::TransformPreview {
             transaction: 1,
+            moving: false,
             layer: id,
             selection: None,
             transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(offset)),
@@ -571,6 +572,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             if let LayerOperationKind::Transform(transform) = &operation.kind {
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 8,
+                    moving: false,
                     layer: id,
                     selection: None,
                     transform: transform.clone(),

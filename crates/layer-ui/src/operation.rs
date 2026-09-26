@@ -287,6 +287,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut bounds = content_bounds(doc, target);
         let request = TransformPreview {
             transaction: 0,
+            moving: false,
             layer: target,
             selection: None,
             transform: Default::default(),
@@ -325,6 +326,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             placement: None,
             request: TransformPreview {
                 transaction: self.operation.serial,
+                moving: false,
                 layer: target,
                 selection,
                 transform: ImageTransform::default(),
@@ -867,6 +869,7 @@ mod tests {
             placement: None,
             request: TransformPreview {
                 transaction: 1,
+                moving: false,
                 layer: layer_core::LayerId(1),
                 selection: None,
                 transform: Default::default(),
