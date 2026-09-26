@@ -2856,3 +2856,27 @@ inventory, MakeAppx extraction, the activation manifest with the file
 association, repeated logos, normalization, ZIP32, signed-package refusal,
 invalid inputs and lock retry. No signing, installation, update/uninstall or
 clean-machine test occurred.
+
+### Workspace pixel comparison with Web (2026-09-25)
+
+The Paint workspace was compared with the Web build at 945x659 DIP and 1.5
+scale in the dark theme, by group bounds, panel measurements and pixels.
+
+- The color panel's stage, wheel, slots and buttons have Web's exact bounds.
+  The mean pixel difference is 2.2/255, from anti-aliased edges.
+- The Navigator/Proof group was 64 DIP taller than on Web. The Proof panel
+  showed a mode combo box and every print control in Off mode, and reported
+  its stretched height. It now uses Web's Off/SDR/Print buttons, shows only
+  the chosen mode's controls and reports its natural height. The right
+  column now has Web's group bounds exactly.
+- The canvas work area ended 28 DIP above Web's. The startup title-bar
+  measurement was lost and only re-sent after the geometry changed, so the
+  layout reserved the status band. The snapshot now publishes the applied
+  header height, and the title bar re-sends until it matches.
+- Choice properties such as Blend mode fill the property row as on Web.
+- Tooltips are detached while the latest contact is touch. Closing a
+  tooltip after a touch hold opened it was too late: it could take the curve
+  editor's pointer capture during a drag.
+
+Remaining differences are the Windows caption buttons, which fold the
+workspace switcher at this width, and the system accent color.
