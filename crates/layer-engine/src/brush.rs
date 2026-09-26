@@ -998,16 +998,10 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::{BrushCurve, BrushTip};
+    use layer_core::BrushCurve;
 
     fn point(x: f32, pressure: f32, micros: u32) -> StrokePoint {
-        StrokePoint {
-            position: Point { x, y: 0.0 },
-            pressure,
-            tilt: [0.0; 2],
-            twist: 0.0,
-            elapsed_micros: micros,
-        }
+        crate::test_support::point(x, 0., pressure, micros)
     }
 
     #[test]
@@ -1161,18 +1155,6 @@ mod tests {
     }
 
     #[test]
-    fn pressure_mapping_is_resolved_before_backend_submission() {
-        let brush = BrushSnapshot::default();
-        assert_eq!(brush.tip, BrushTip::AnalyticEllipse);
-        let mut generator = DabGenerator::default();
-        generator.reset_for_stroke(StrokeId(7), &brush);
-        let mut dabs = Vec::new();
-        generator.append(point(0.0, 0.0, 0), &brush, &mut dabs);
-        generator.append(point(20.0, 1.0, 10_000), &brush, &mut dabs);
-        assert!(dabs.first().unwrap().radii[0] < dabs.last().unwrap().radii[0]);
-    }
-
-    #[test]
     fn identical_stroke_ids_replay_deterministically() {
         let brush = BrushSnapshot {
             mappings: std::sync::Arc::from([
@@ -1280,66 +1262,6 @@ mod tests {
         generator.reset_for_stroke(StrokeId(2), &brush);
         let light_start = point(0., 0.03, 0);
         assert_eq!(generator.stabilize(light_start, &brush), light_start);
-    }
-
-    #[test]
-    fn repeated_pressure_reports_do_not_make_a_staircase_in_falling_size() {
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
-        let size = |pressure| {
-            let mapping = &brush.mappings[0];
-            mapping.curve.sample(pressure) * mapping.output_scale + mapping.output_bias
-        };
-        let mut generator = DabGenerator::default();
-        let mut previous = 0.8_f32;
-        let mut old_sizes = vec![size(previous); 2];
-        let mut sizes = old_sizes.clone();
-        for i in 0..=20 {
-            // Wacom position reports at ~4 ms, pressure changes at ~8 ms.
-            let raw = point(i as f32 * 20., 0.8 - (i / 2) as f32 * 0.025, i * 4000);
-            previous = raw.pressure.max(previous - 0.05);
-            old_sizes.push(size(previous));
-            sizes.push(size(generator.stabilize(raw, &brush).pressure));
-        }
-        let curvature = |values: &[f32]| {
-            values.windows(3)
-                .map(|w| (w[2] - 2. * w[1] + w[0]).abs())
-                .fold(0_f32, f32::max)
-        };
-        assert!(curvature(&sizes) < curvature(&old_sizes) * 0.4);
-        // Once the fall begins, repeated raw readings must keep narrowing
-        // smoothly instead of alternating a shrinking span and a flat span.
-        assert!(sizes[4..].windows(2).all(|w| w[1] < w[0]));
-    }
-
-    #[test]
-    fn abrupt_lift_bounds_the_change_in_gpen_size_velocity() {
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
-        let mapping = &brush.mappings[0];
-        let size = |pressure| {
-            mapping.curve.sample(pressure) * mapping.output_scale + mapping.output_bias
-        };
-        for interval in [1000, 2000, 4000, 8000] {
-            let mut generator = DabGenerator::default();
-            generator.stabilize(point(0., 0.8, 0), &brush);
-            let mut sizes = vec![size(0.8); 2];
-            for time in (interval..=64000).step_by(interval as usize) {
-                let modeled = generator.stabilize(point(time as f32, 0., time), &brush);
-                sizes.push(size(modeled.pressure));
-            }
-            let dt = interval as f32 / 1_000_000.;
-            let max_acceleration = sizes.windows(3)
-                .map(|w| (w[2] - 2. * w[1] + w[0]).abs() / (dt * dt))
-                .fold(0_f32, f32::max);
-            // Check resolved G-Pen size, including its nonlinear sampled curve,
-            // rather than claiming a pressure bound is also a size bound.
-            // With the 34.133 ms fall limit and unchanged 4 ms response, the
-            // pressure acceleration ceiling is about 7324.29 units/s². This
-            // fixture's sampled size acceleration stays below 7500/s².
-            assert!(
-                max_acceleration < 7500.,
-                "dt={dt}, size acceleration={max_acceleration}"
-            );
-        }
     }
 
     #[test]

@@ -3,19 +3,7 @@
 #[test]
 #[cfg(feature = "prediction-bench")]
 fn recorded_production_queries_replay_exactly() {
-    let (mut input, consumer) = input_queue(64);
-    let transform = ViewTransform {
-        revision: 1,
-        ..ViewTransform::IDENTITY
-    };
-    let mut engine = CanvasEngine::new(
-        RecordingRenderer::default(),
-        Document::new("recording", 512, 512),
-        consumer,
-        view(512, 512),
-        transform,
-    )
-    .unwrap();
+    let (mut input, mut engine) = engine("recording", 512, 512);
     engine
         .set_instant_feedback(InstantFeedbackConfig {
             ..Default::default()
@@ -39,7 +27,7 @@ fn recorded_production_queries_replay_exactly() {
             },
             20. + i as f32 * 4.,
         );
-        engine.record_raw_input(event, transform);
+        engine.record_raw_input(event, TRANSFORM);
         input.push(event).unwrap();
         engine.process_input().unwrap();
         let now = engine
@@ -64,7 +52,7 @@ fn recorded_production_queries_replay_exactly() {
             .unwrap();
     }
     let end = event(162, PenPhase::Up, 176.);
-    engine.record_raw_input(end, transform);
+    engine.record_raw_input(end, TRANSFORM);
     input.push(end).unwrap();
     engine.render_frame_at(end.timestamp_ns).unwrap();
     engine

@@ -2042,9 +2042,39 @@ mod tests {
     include!("canvas_fullscreen_tests.rs");
     include!("recording/canvas_tests.rs");
     use super::*;
-    use crate::input::{SampleFlags, ToolKind, input_queue};
+    use crate::input::{InputProducer, SampleFlags, ToolKind, input_queue};
+    use crate::test_support::{event, view};
     use layer_core::{AssetId, DefaultBrushPreset, Point, default_brush};
     use layer_render::{BackendError, CanvasRenderer, FramePacket, HostImage};
+
+    const TRANSFORM: ViewTransform = ViewTransform {
+        revision: 1,
+        ..ViewTransform::IDENTITY
+    };
+
+    fn engine(
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
+        engine_with(
+            RecordingRenderer::default(),
+            Document::new(name, width, height),
+            view(width, height),
+            TRANSFORM,
+        )
+    }
+
+    fn engine_with(
+        renderer: RecordingRenderer,
+        document: Document,
+        view: ViewState,
+        transform: ViewTransform,
+    ) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
+        let (input, consumer) = input_queue(2 * INPUT_BATCH);
+        let engine = CanvasEngine::new(renderer, document, consumer, view, transform).unwrap();
+        (input, engine)
+    }
 
     #[derive(Default)]
     struct RecordingRenderer {
@@ -2188,18 +2218,7 @@ mod tests {
             DefaultBrushPreset::NaturalBlender,
             DefaultBrushPreset::WatercolorWash,
         ] {
-            let (mut input, consumer) = input_queue(32);
-            let mut canvas = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("device recovery", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut input, mut canvas) = engine("device recovery", 128, 128);
             canvas.set_brush(default_brush(preset)).unwrap();
             for (sequence, phase, x) in [
                 (1, PenPhase::Down, 10.),
@@ -2265,18 +2284,7 @@ mod tests {
 
     #[test]
     fn input_retirement_preserves_only_submitted_raster_boundaries() {
-        let (mut input, consumer) = input_queue(INPUT_BATCH + 10);
-        let mut canvas = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("retirement", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut canvas) = engine("retirement", 128, 128);
         input.push(event(1, PenPhase::Down, 20.)).unwrap();
         input.push(event(2, PenPhase::Up, 80.)).unwrap();
         canvas.render_frame().unwrap();
@@ -2307,18 +2315,7 @@ mod tests {
 
     #[test]
     fn failed_backend_replacement_retains_backend_history_and_pending_input() {
-        let (mut input, consumer) = input_queue(32);
-        let mut canvas = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("failed recovery", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut canvas) = engine("failed recovery", 128, 128);
         canvas.render_frame().unwrap();
         input.push(event(1, PenPhase::Down, 20.)).unwrap();
         input.push(event(2, PenPhase::Up, 80.)).unwrap();
@@ -2339,18 +2336,7 @@ mod tests {
 
     #[test]
     fn document_adoption_restarts_animation_and_rejects_previous_view_input() {
-        let (mut input, consumer) = input_queue(32);
-        let mut canvas = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("adoption", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut canvas) = engine("adoption", 128, 128);
         canvas.render_frame_at(0).unwrap();
         canvas.start_document_view(
             view(128, 128),
@@ -2379,18 +2365,7 @@ mod tests {
     fn material_update_history_preserves_live_and_active_replay() {
         for feedback in [false, true] {
             for coalesced in [1, 2, 4] {
-                let (mut input, consumer) = input_queue(32);
-                let mut canvas = CanvasEngine::new(
-                    RecordingRenderer::default(),
-                    Document::new("material replay", 128, 128),
-                    consumer,
-                    view(128, 128),
-                    ViewTransform {
-                        revision: 1,
-                        ..ViewTransform::IDENTITY
-                    },
-                )
-                .unwrap();
+                let (mut input, mut canvas) = engine("material replay", 128, 128);
                 canvas
                     .set_brush(default_brush(DefaultBrushPreset::WatercolorWash))
                     .unwrap();
@@ -2464,7 +2439,6 @@ mod tests {
         use layer_core::{LayerMask, Selection};
         use std::sync::Arc;
         for mask_target in [false, true] {
-            let (mut producer, consumer) = input_queue(32);
             let selection = Selection::polygon(vec![
                 Point { x: 4., y: 4. },
                 Point { x: 50., y: 4. },
@@ -2493,17 +2467,8 @@ mod tests {
                 x: -offset.x,
                 y: -offset.y,
             }));
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                doc,
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut producer, mut engine) =
+                engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
             producer.push(event(1, PenPhase::Down, 8.)).unwrap();
             engine.render_frame().unwrap();
             assert_eq!(
@@ -2598,15 +2563,7 @@ mod tests {
 
     #[test]
     fn transform_preview_is_not_history_and_edits_or_new_strokes_cancel_it() {
-        let (mut producer, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("preview", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("preview", 128, 128);
         engine.render_frame().unwrap();
         let initial = engine.document().clone();
         let mut preview = layer_render::TransformPreview {
@@ -2649,7 +2606,6 @@ mod tests {
     fn linked_mask_transform_commits_both_histories_and_selection_as_one_edit() {
         use layer_core::{Affine, ImageTransform, LayerMask, LayerOperationKind, Selection};
         for primary_mask in [false, true] {
-            let (_, consumer) = input_queue(32);
             let mut doc = Document::new("linked transform", 128, 128);
             doc.layers[0].properties.offset = Point { x: 7., y: 3. };
             doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 15., y: 11. }));
@@ -2686,14 +2642,8 @@ mod tests {
                 )),
             };
             let companion = preview.companion(&doc.layers).unwrap();
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                doc,
-                consumer,
-                view(128, 128),
-                ViewTransform::IDENTITY,
-            )
-            .unwrap();
+            let (_, mut engine) =
+                engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
             engine.render_frame().unwrap();
             engine.set_transform_preview(Some(preview.clone())).unwrap();
             let moved = engine.display_selection().unwrap().into_owned();
@@ -2733,7 +2683,6 @@ mod tests {
     #[test]
     fn applying_transform_moves_selection_atomically_and_cancel_keeps_original() {
         use layer_core::{Affine, ImageTransform, Selection};
-        let (_, consumer) = input_queue(32);
         let mut doc = Document::new("selection transform", 128, 128);
         let layer = doc.active_layer;
         doc.layers[0].properties.offset = Point { x: 12., y: 7. };
@@ -2744,14 +2693,8 @@ mod tests {
         ])
         .unwrap();
         doc.selection = Some(selection.clone());
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            doc,
-            consumer,
-            view(128, 128),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (_, mut engine) =
+            engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
         let preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
@@ -2819,7 +2762,6 @@ mod tests {
     #[test]
     fn perspective_transform_carries_contours_and_waits_for_pixel_coverage() {
         use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, TransformMap};
-        let (_, consumer) = input_queue(32);
         let mut doc = Document::new("perspective transform", 128, 128);
         let layer = doc.active_layer;
         let selection = Selection::polygon(vec![
@@ -2829,14 +2771,8 @@ mod tests {
         ])
         .unwrap();
         doc.selection = Some(selection.clone());
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            doc,
-            consumer,
-            view(128, 128),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (_, mut engine) =
+            engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
         let source = layer_core::Rect {
             min: Point { x: 20., y: 20. },
             max: Point { x: 60., y: 60. },
@@ -2892,18 +2828,7 @@ mod tests {
                 alpha_locked: false,
             },
         ] {
-            let (mut producer, consumer) = input_queue(32);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("gradient", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut producer, mut engine) = engine("gradient", 128, 128);
             let id = engine.document().active_layer;
             engine.render_frame().unwrap();
             engine.backend.saw_reset = false;
@@ -2966,32 +2891,6 @@ mod tests {
         }
     }
 
-    fn event(sequence: u64, phase: PenPhase, x: f32) -> PenEvent {
-        PenEvent {
-            device_id: 1,
-            sequence,
-            timestamp_ns: sequence * 1_000_000,
-            view_revision: 1,
-            surface_position: Point { x, y: 16.0 },
-            pressure: 0.8,
-            tilt_radians: [0.0; 2],
-            twist_radians: 0.0,
-            distance: 0.0,
-            phase,
-            tool: ToolKind::Pen,
-            flags: SampleFlags::PRIMARY,
-        }
-    }
-
-    fn view(width_px: u32, height_px: u32) -> ViewState {
-        ViewState {
-            width_px,
-            height_px,
-            document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            background_rgba_linear: [1.0; 4],
-        }
-    }
-
     #[test]
     fn captured_rapid_lifts_match_replay_without_repainting_the_committed_prefix() {
         let rows: Vec<Vec<f32>> = include_str!("../tests/fixtures/wacom-rapid-lift.csv")
@@ -3004,15 +2903,7 @@ mod tests {
             let mut reference = None;
             for feedback in [false, true] {
                 for cadence in [1, 4, 64] {
-                    let (mut input, consumer) = input_queue(128);
-                    let mut engine = CanvasEngine::new(
-                        RecordingRenderer::default(),
-                        Document::new("rapid lift", 1024, 512),
-                        consumer,
-                        view(1024, 512),
-                        ViewTransform::IDENTITY,
-                    )
-                    .unwrap();
+                    let (mut input, mut engine) = engine("rapid lift", 1024, 512);
                     let mut brush = default_brush(DefaultBrushPreset::GPen);
                     brush.diameter = samples[0][6];
                     engine.set_brush(brush).unwrap();
@@ -3106,15 +2997,7 @@ mod tests {
             ToolKind::Finger,
             ToolKind::Eraser,
         ] {
-            let (mut input, consumer) = input_queue(16);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("release tools", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform::IDENTITY,
-            )
-            .unwrap();
+            let (mut input, mut engine) = engine("release tools", 128, 128);
             engine
                 .set_brush(default_brush(DefaultBrushPreset::GPen))
                 .unwrap();
@@ -3167,21 +3050,15 @@ mod tests {
                     for correct_after_up in [false, true] {
                         let mut document = Document::new("color dynamics", 128, 128);
                         document.color = color;
-                        let (mut input, consumer) = input_queue(32);
-                        let mut engine = CanvasEngine::new(
+                        let (mut input, mut engine) = engine_with(
                             RecordingRenderer {
                                 color,
                                 ..Default::default()
                             },
                             document,
-                            consumer,
                             view(128, 128),
-                            ViewTransform {
-                                revision: 1,
-                                ..ViewTransform::IDENTITY
-                            },
-                        )
-                        .unwrap();
+                            TRANSFORM,
+                        );
                         let mut brush = BrushSnapshot {
                             color_rgba_linear: [0.8, 0.15, 0.31, 0.37],
                             mappings: [BrushMapping {
@@ -3309,18 +3186,15 @@ mod tests {
                         "color mismatch must fail before resize"
                     );
                 }
-                let (mut input, consumer) = input_queue(8);
-                let mut engine = CanvasEngine::new(
+                let (mut input, mut engine) = engine_with(
                     RecordingRenderer {
                         color,
                         ..Default::default()
                     },
                     document,
-                    consumer,
                     view(64, 64),
-                    ViewTransform::IDENTITY,
-                )
-                .unwrap();
+                    TRANSFORM,
+                );
                 engine.render_frame().unwrap();
                 input.push(event(1, PenPhase::Down, 8.)).unwrap();
                 input.push(event(2, PenPhase::Up, 24.)).unwrap();
@@ -3361,11 +3235,7 @@ mod tests {
     #[test]
     fn color_edits_and_history_reject_an_unprepared_renderer_without_consuming_input() {
         use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(), Document::new("color edit", 64, 64),
-            consumer, view(64, 64), ViewTransform::IDENTITY,
-        ).unwrap();
+        let (mut input, mut engine) = engine("color edit", 64, 64);
         engine.render_frame().unwrap();
         let original = engine.document().clone();
         let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
@@ -3401,11 +3271,7 @@ mod tests {
     #[test]
     fn prepared_color_and_history_publish_together_and_reject_failure_or_staleness() {
         use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
-        let (_, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(), Document::new("atomic color", 64, 64),
-            consumer, view(64, 64), ViewTransform::IDENTITY,
-        ).unwrap();
+        let (_, mut engine) = engine("atomic color", 64, 64);
         engine.render_frame().unwrap();
         let original = engine.document().clone();
         let old_brush = engine.brush().clone();
@@ -3465,13 +3331,12 @@ mod tests {
     #[test]
     fn prepared_color_does_not_consume_queued_input_or_overflow_tool_coordinates() {
         use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
-        let (mut input, consumer) = input_queue(8);
         let mut document = Document::new("color input", 64, 64);
         document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-        let mut engine = CanvasEngine::new(
+        let (mut input, mut engine) = engine_with(
             RecordingRenderer { color: document.color, ..Default::default() }, document,
-            consumer, view(64, 64), ViewTransform::IDENTITY,
-        ).unwrap();
+            view(64, 64), TRANSFORM,
+        );
         engine.render_frame().unwrap();
         let target = DocumentColor::default();
         let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
@@ -3503,15 +3368,7 @@ mod tests {
 
     #[test]
     fn pending_restore_retains_one_prepared_frame_without_consuming_the_next_contact() {
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("deferred frame", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("deferred frame", 64, 64);
         engine.render_frame().unwrap();
         let frames = engine.metrics().frames;
         engine.backend_mut().restore_blocked = true;
@@ -3555,15 +3412,7 @@ mod tests {
 
     #[test]
     fn capture_backpressure_allows_live_moves_and_defers_only_the_commit_boundary() {
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("backpressure", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("backpressure", 64, 64);
         engine.render_frame().unwrap();
         engine.backend_mut().capture_blocked = true;
         for (sequence, phase, x) in [
@@ -3599,15 +3448,7 @@ mod tests {
 
     #[test]
     fn live_contact_budget_cancels_without_committing_partial_pixels() {
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("bounded", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("bounded", 64, 64);
         input.push(event(1, PenPhase::Down, 8.)).unwrap();
         engine.render_frame().unwrap();
         let checkpoint = engine.checkpoint();
@@ -3629,18 +3470,7 @@ mod tests {
     #[test]
     fn unresolved_estimates_bound_the_preview_and_preserve_late_corrections() {
         for platform_prediction in [false, true] {
-            let (mut input, consumer) = input_queue(8);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("unresolved estimates", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut input, mut engine) = engine("unresolved estimates", 128, 128);
             engine
                 .set_instant_feedback(InstantFeedbackConfig {
                     use_platform_prediction: platform_prediction,
@@ -3731,15 +3561,7 @@ mod tests {
 
     #[test]
     fn completed_contact_estimates_expire_without_retaining_historical_input() {
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("expiry", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform::IDENTITY,
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("expiry", 64, 64);
         let mut down = event(1, PenPhase::Down, 8.);
         down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
         input.push(down).unwrap();
@@ -3763,18 +3585,7 @@ mod tests {
     #[test]
     fn estimated_samples_use_original_transforms_and_close_the_window_on_undo() {
         for feedback in [false, true] {
-            let (mut input, consumer) = input_queue(32);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("estimates", 64, 64),
-                consumer,
-                view(64, 64),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut input, mut engine) = engine("estimates", 64, 64);
             engine.instant_feedback.enabled = feedback;
             let mut down = event(1, PenPhase::Down, 8.);
             down.pressure = 0.2;
@@ -3869,18 +3680,7 @@ mod tests {
 
     #[test]
     fn repeated_terminal_estimates_correct_each_copy_without_adding_samples() {
-        let (mut input, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("duplicate-estimate", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("duplicate-estimate", 64, 64);
         let mut down = event(1, PenPhase::Down, 8.);
         down.flags = SampleFlags::ESTIMATED;
         input.push(down).unwrap();
@@ -3903,18 +3703,7 @@ mod tests {
 
     #[test]
     fn estimated_stationary_airbrush_samples_and_cancellation_keep_contact_ownership() {
-        let (mut input, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("stationary", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("stationary", 64, 64);
         engine.brush.path.continuous_rate_hz = 60.;
         let mut down = event(1, PenPhase::Down, 8.);
         down.flags = SampleFlags::ESTIMATED;
@@ -3958,21 +3747,10 @@ mod tests {
 
     #[test]
     fn platform_events_commit_and_render_through_the_renderer_contract() {
-        let (mut producer, consumer) = input_queue(32);
+        let (mut producer, mut engine) = engine("test", 32, 32);
         producer.push(event(1, PenPhase::Down, 4.0)).unwrap();
         producer.push(event(2, PenPhase::Move, 16.0)).unwrap();
         producer.push(event(3, PenPhase::Up, 28.0)).unwrap();
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("test", 32, 32),
-            consumer,
-            view(32, 32),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
         engine.render_frame().unwrap();
         assert_eq!(engine.metrics().committed_strokes, 1);
         assert_eq!(engine.metrics().committed_strokes, 1);
@@ -3988,18 +3766,7 @@ mod tests {
             layer_core::RulerKind::Parallel,
             layer_core::RulerKind::Radial,
         ] {
-            let (mut producer, consumer) = input_queue(64);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("ruler", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut producer, mut engine) = engine("ruler", 128, 128);
             engine
                 .set_brush(default_brush(DefaultBrushPreset::GPen))
                 .unwrap();
@@ -4106,18 +3873,15 @@ mod tests {
     #[test]
     fn ruler_input_and_cursor_respect_view_layer_offsets_and_radial_origin() {
         use layer_core::{Ruler, RulerGeometry};
-        let (mut producer, consumer) = input_queue(64);
-        let mut engine = CanvasEngine::new(
+        let (mut producer, mut engine) = engine_with(
             RecordingRenderer::default(),
             Document::new("ruler-view", 128, 128),
-            consumer,
             view(256, 256),
             ViewTransform {
                 revision: 1,
                 surface_to_document: [0., 0.5, -0.5, 0., 64., 0.],
             },
-        )
-        .unwrap();
+        );
         engine
             .set_brush(default_brush(DefaultBrushPreset::GPen))
             .unwrap();
@@ -4226,18 +3990,7 @@ mod tests {
 
     #[test]
     fn persistent_batches_are_incremental_and_preserve_stroke_boundaries() {
-        let (mut producer, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("incremental-batches", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("incremental-batches", 64, 64);
         engine
             .set_instant_feedback(InstantFeedbackConfig {
                 enabled: false,
@@ -4265,18 +4018,7 @@ mod tests {
 
     #[test]
     fn brush_changes_apply_to_the_next_stroke_only() {
-        let (mut producer, consumer) = input_queue(16);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("brush-snapshot", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("brush-snapshot", 64, 64);
         producer.push(event(1, PenPhase::Down, 8.0)).unwrap();
         engine.render_frame().unwrap();
 
@@ -4296,18 +4038,7 @@ mod tests {
     fn manual_prediction_amount_reaches_beyond_the_cursor_with_display_timing() {
         let mut leads = Vec::new();
         for horizon in [0, 8_000, 16_000, 64_000] {
-            let (mut input, consumer) = input_queue(8);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("manual prediction", 1024, 128),
-                consumer,
-                view(1024, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut input, mut engine) = engine("manual prediction", 1024, 128);
             engine
                 .set_instant_feedback(InstantFeedbackConfig {
                     use_platform_prediction: false,
@@ -4378,18 +4109,7 @@ mod tests {
 
     #[test]
     fn preview_renders_the_prediction_curve_and_expires_without_new_input() {
-        let (mut input, consumer) = input_queue(8);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("trajectory preview", 256, 256),
-            consumer,
-            view(256, 256),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut input, mut engine) = engine("trajectory preview", 256, 256);
         engine
             .set_instant_feedback(InstantFeedbackConfig {
                 use_platform_prediction: false,
@@ -4454,18 +4174,7 @@ mod tests {
     #[test]
     fn prediction_taper_changes_only_predicted_width_and_preserves_swept_joins() {
         let render = |prediction, contact| {
-            let (mut input, consumer) = input_queue(8);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("taper", 256, 128),
-                consumer,
-                view(256, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut input, mut engine) = engine("taper", 256, 128);
             engine
                 .set_instant_feedback(InstantFeedbackConfig {
                     use_platform_prediction: false,
@@ -4545,18 +4254,7 @@ mod tests {
 
     #[test]
     fn feedback_tail_reaches_platform_prediction_without_committing_it() {
-        let (mut producer, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("feedback", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("feedback", 128, 128);
         engine
             .set_brush(BrushSnapshot {
                 diameter: 8.0,
@@ -4608,18 +4306,7 @@ mod tests {
     #[test]
     fn native_lift_prediction_uses_raw_pressure_and_never_changes_commit_or_next_contact() {
         for gamma in [0.5, 2.0] {
-            let (mut producer, consumer) = input_queue(32);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("lift", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
+            let (mut producer, mut engine) = engine("lift", 128, 128);
             engine.set_pressure_curve(PressureCurve { gamma });
             let mut inputs = Vec::new();
             for (i, pressure) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
@@ -4709,18 +4396,7 @@ mod tests {
 
     #[test]
     fn disabled_feedback_has_no_preview_work() {
-        let (mut producer, consumer) = input_queue(16);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("feedback-off", 64, 64),
-            consumer,
-            view(64, 64),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("feedback-off", 64, 64);
         engine
             .set_instant_feedback(InstantFeedbackConfig {
                 enabled: false,
@@ -4738,140 +4414,76 @@ mod tests {
 
     #[test]
     fn finalized_contacts_are_independent_of_frame_cadence() {
-        let render = |one_event_per_frame: bool, feedback: bool| {
-            let (mut producer, consumer) = input_queue(32);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("cadence", 128, 128),
-                consumer,
-                view(128, 128),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
-            engine
-                .set_instant_feedback(InstantFeedbackConfig {
-                    enabled: feedback,
-                    ..Default::default()
-                })
-                .unwrap();
-            let events = [
-                event(1, PenPhase::Down, 8.0),
-                event(2, PenPhase::Move, 19.0),
-                event(3, PenPhase::Move, 37.0),
-                event(4, PenPhase::Move, 54.0),
-                event(5, PenPhase::Up, 72.0),
-            ];
-            for event in events {
-                producer.push(event).unwrap();
-                if one_event_per_frame {
-                    engine.render_frame_at(event.timestamp_ns).unwrap();
-                }
-            }
-            if !one_event_per_frame {
+        let mut smudge = default_brush(DefaultBrushPreset::NaturalBlender);
+        smudge.diameter = 40.0;
+        for brush in [BrushSnapshot::default(), smudge] {
+            let chunked = brush.execution_class() == BrushExecution::Smudge;
+            let render = |one_event_per_frame: bool, feedback: bool| {
+                let (mut producer, mut engine) = engine("cadence", 256, 256);
+                engine.set_brush(brush.clone()).unwrap();
                 engine
-                    .render_frame_at(events.last().unwrap().timestamp_ns)
+                    .set_instant_feedback(InstantFeedbackConfig {
+                        enabled: feedback,
+                        ..Default::default()
+                    })
                     .unwrap();
-            }
-            engine.backend().persistent.clone()
-        };
-        let reference = render(true, false);
-        for feedback in [false, true] {
-            assert_eq!(reference, render(true, feedback));
-            assert_eq!(reference, render(false, feedback));
-        }
-    }
-
-    #[test]
-    fn smudge_chunks_are_live_and_independent_of_frame_cadence() {
-        let render = |one_event_per_frame: bool| {
-            let (mut producer, consumer) = input_queue(32);
-            let mut engine = CanvasEngine::new(
-                RecordingRenderer::default(),
-                Document::new("smudge-cadence", 256, 256),
-                consumer,
-                view(256, 256),
-                ViewTransform {
-                    revision: 1,
-                    ..ViewTransform::IDENTITY
-                },
-            )
-            .unwrap();
-            let mut brush = default_brush(DefaultBrushPreset::NaturalBlender);
-            brush.diameter = 40.0;
-            engine.set_brush(brush).unwrap();
-            engine
-                .set_instant_feedback(InstantFeedbackConfig {
-                    enabled: false,
-                    ..InstantFeedbackConfig::default()
-                })
-                .unwrap();
-            let events = [
-                event(1, PenPhase::Down, 8.0),
-                event(2, PenPhase::Move, 70.0),
-                event(3, PenPhase::Move, 130.0),
-                event(4, PenPhase::Move, 190.0),
-                event(5, PenPhase::Up, 248.0),
-            ];
-            for (index, event) in events.into_iter().enumerate() {
-                producer.push(event).unwrap();
-                if one_event_per_frame {
-                    engine.render_frame_at(event.timestamp_ns).unwrap();
-                    if index == 0 {
-                        assert!(engine.backend().persistent.is_empty());
-                        assert!(!engine.backend().preview.is_empty());
+                let events = [
+                    event(1, PenPhase::Down, 8.0),
+                    event(2, PenPhase::Move, 70.0),
+                    event(3, PenPhase::Move, 130.0),
+                    event(4, PenPhase::Move, 190.0),
+                    event(5, PenPhase::Up, 248.0),
+                ];
+                for event in events {
+                    producer.push(event).unwrap();
+                    if one_event_per_frame {
+                        engine.render_frame_at(event.timestamp_ns).unwrap();
+                        if chunked && event.phase == PenPhase::Down {
+                            assert!(engine.backend().persistent.is_empty());
+                            assert!(!engine.backend().preview.is_empty());
+                        }
                     }
                 }
-            }
-            if !one_event_per_frame {
-                engine
-                    .render_frame_at(events.last().unwrap().timestamp_ns)
-                    .unwrap();
-            }
-            let stroke = engine.completed_stroke.as_ref().unwrap();
-            let mut replay = Vec::new();
-            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
-            assert_eq!(engine.backend().persistent, replay);
-            assert!(engine.backend().preview.is_empty());
-            (
-                engine.backend().persistent.clone(),
-                engine
+                if !one_event_per_frame {
+                    engine
+                        .render_frame_at(events.last().unwrap().timestamp_ns)
+                        .unwrap();
+                }
+                let stroke = engine.completed_stroke.as_ref().unwrap();
+                let mut replay = Vec::new();
+                DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+                assert_eq!(engine.backend().persistent, replay);
+                assert!(engine.backend().preview.is_empty());
+                let batches: Vec<_> = engine
                     .backend()
                     .persistent_batches
                     .iter()
                     .map(|batch| (batch.1, batch.2, batch.3))
-                    .collect::<Vec<_>>(),
-            )
-        };
-
-        let incremental = render(true);
-        let single_frame = render(false);
-        assert_eq!(incremental, single_frame);
-        assert!(incremental.1.iter().any(|batch| batch.2 > 1));
-        assert!(
-            incremental
-                .1
-                .iter()
-                .all(|batch| batch.2 as usize <= MAX_SMUDGE_DABS_PER_BATCH)
-        );
+                    .collect();
+                (replay, batches)
+            };
+            let (reference, batches) = render(true, false);
+            for feedback in [false, true] {
+                for one_event_per_frame in [true, false] {
+                    let (dabs, chunks) = render(one_event_per_frame, feedback);
+                    assert_eq!(dabs, reference);
+                    assert!(!chunked || chunks == batches);
+                }
+            }
+            if chunked {
+                assert!(batches.iter().any(|batch| batch.2 > 1));
+                assert!(
+                    batches
+                        .iter()
+                        .all(|batch| batch.2 as usize <= MAX_SMUDGE_DABS_PER_BATCH)
+                );
+            }
+        }
     }
 
     #[test]
     fn active_smudge_rebuild_restores_only_the_committed_frontier() {
-        let (mut producer, consumer) = input_queue(16);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("active-smudge-rebuild", 256, 256),
-            consumer,
-            view(256, 256),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
+        let (mut producer, mut engine) = engine("active-smudge-rebuild", 256, 256);
         let mut brush = default_brush(DefaultBrushPreset::NaturalBlender);
         brush.diameter = 40.0;
         engine.set_brush(brush).unwrap();

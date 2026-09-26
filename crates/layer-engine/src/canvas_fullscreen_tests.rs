@@ -5,21 +5,18 @@ fn fullscreen_prediction_with_wide_brushes_and_independent_clocks() {
     for rate in [200., 240.] {
         for zoom in [1., 2.] {
             for width in [4., 64., 128.] {
-                let (mut input, consumer) = input_queue(32);
                 let transform = ViewTransform {
                     revision: 1,
                     surface_to_document: [1. / zoom, 0., 0., 1. / zoom, 0., 0.],
                 };
                 let mut surface = view(3840, 2160);
                 surface.document_to_surface = [zoom, 0., 0., zoom, 0., 0.];
-                let mut engine = CanvasEngine::new(
+                let (mut input, mut engine) = engine_with(
                     RecordingRenderer::default(),
                     Document::new("full-screen prediction", 3840, 2160),
-                    consumer,
                     surface,
                     transform,
-                )
-                .unwrap();
+                );
                 let cfg = InstantFeedbackConfig {
 
                     use_platform_prediction: false,

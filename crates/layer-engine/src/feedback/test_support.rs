@@ -1,14 +1,12 @@
 use super::*;
 
-pub(super) const IDENTITY: [f32; 6] = [1., 0., 0., 1., 0., 0.];
+pub(super) use crate::test_support::IDENTITY;
 
 pub(super) fn point(x: f32, y: f32, time: u32) -> StrokePoint {
     StrokePoint {
-        position: Point { x, y },
-        elapsed_micros: time,
-        pressure: 0.6,
         tilt: [0.2, -0.1],
         twist: 0.7,
+        ..crate::test_support::point(x, y, 0.6, time)
     }
 }
 

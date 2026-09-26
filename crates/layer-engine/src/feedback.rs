@@ -803,8 +803,7 @@ pub(crate) fn surface_distance(a: Point, b: Point, transform: [f32; 6]) -> f32 {
 mod tests {
     use super::*;
     use crate::input::PenPhase;
-
-    const IDENTITY: [f32; 6] = [1., 0., 0., 1., 0., 0.];
+    use crate::test_support::IDENTITY;
 
     fn pressure_sample(index: u64, pressure: f32) -> PenEvent {
         PenEvent {
@@ -1000,13 +999,7 @@ mod tests {
     }
 
     fn point(x: f32, y: f32, elapsed_micros: u32) -> StrokePoint {
-        StrokePoint {
-            position: Point { x, y },
-            pressure: 0.5,
-            tilt: [0.0; 2],
-            twist: 0.0,
-            elapsed_micros,
-        }
+        crate::test_support::point(x, y, 0.5, elapsed_micros)
     }
 
     #[test]

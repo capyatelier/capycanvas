@@ -9,6 +9,8 @@ mod canvas;
 mod feedback;
 mod input;
 mod selection_stroke;
+#[cfg(test)]
+mod test_support;
 pub use selection_stroke::SelectionStroke;
 #[cfg(feature = "prediction-bench")]
 pub mod prediction_bench;

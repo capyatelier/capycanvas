@@ -304,25 +304,12 @@ mod tests {
 
     fn event(sequence: u64, predicted: bool) -> PenEvent {
         PenEvent {
-            device_id: 1,
-            sequence,
-            timestamp_ns: sequence * 1_000_000,
-            view_revision: 0,
-            surface_position: Point {
-                x: sequence as f32,
-                y: 2.0,
-            },
-            pressure: 0.5,
-            tilt_radians: [0.0; 2],
-            twist_radians: 0.0,
-            distance: 0.0,
-            phase: PenPhase::Move,
-            tool: ToolKind::Pen,
             flags: if predicted {
                 SampleFlags::PREDICTED
             } else {
                 SampleFlags::NONE
             },
+            ..crate::test_support::event(sequence, PenPhase::Move, sequence as f32)
         }
     }
 

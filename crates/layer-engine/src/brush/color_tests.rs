@@ -2,13 +2,7 @@ use super::*;
 use layer_core::BrushCurve;
 
 fn point(x: f32) -> StrokePoint {
-    StrokePoint {
-        position: Point { x, y: 16. },
-        pressure: 1.,
-        tilt: [0.; 2],
-        twist: 0.,
-        elapsed_micros: (x * 1000.) as u32,
-    }
+    crate::test_support::point(x, 16., 1., (x * 1000.) as u32)
 }
 fn adjusted_brush(space: RgbSpace, rgb: [f64; 3], delta: [f32; 3]) -> BrushSnapshot {
     let linear = rgb.map(|v| space.decode(v) as f32);
