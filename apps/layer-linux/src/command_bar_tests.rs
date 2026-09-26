@@ -53,6 +53,8 @@ fn native_command_bar_input() {
     entry.set_text("undo");
     pump(150);
     let popup = d.named("command-bar").downcast::<gtk::Popover>().unwrap();
+    let detail = d.named("command-detail").downcast::<gtk::Label>().unwrap();
+    assert_eq!(detail.text(), "Nothing to undo");
     capture_popover(
         &popup,
         d.dir.join("command-bar-light.png").to_str().unwrap(),
@@ -75,6 +77,11 @@ fn native_command_bar_input() {
             .parameter
             .is_some()
     );
+    pump(150);
+    capture_popover(
+        &popup,
+        d.dir.join("command-bar-value.png").to_str().unwrap(),
+    );
     entry.set_text("24");
     d.key(0xff0d);
     assert_eq!(state(&d.w).brush.diameter, 24.);
@@ -86,6 +93,9 @@ fn native_command_bar_input() {
     entry.set_text("select");
     pump(150);
     capture_popover(&popup, d.dir.join("command-bar-dark.png").to_str().unwrap());
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        d.perform(serde_json::json!([{ "capture": "command-bar-placement" }]));
+    }
     d.key(0xff54); // Down
     assert_eq!(state(&d.w).command_search.as_ref().unwrap().selected, 1);
     d.key(0xff1b); // Escape

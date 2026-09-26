@@ -66,12 +66,13 @@ impl CommandBar {
         empty.set_margin_bottom(12);
         body.append(&empty);
         let detail = gtk::Label::new(None);
+        detail.set_widget_name("command-detail");
         detail.add_css_class("dim-label");
         detail.add_css_class("caption");
         detail.set_xalign(0.);
         detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        detail.set_margin_start(12);
-        detail.set_margin_end(12);
+        detail.set_margin_start(COMMAND_SEARCH_STYLE.inset);
+        detail.set_margin_end(COMMAND_SEARCH_STYLE.inset);
         detail.set_height_request(20);
         body.append(&detail);
         popup.set_child(Some(&body));
@@ -301,7 +302,7 @@ impl CommandBar {
                     command
                         .disabled_reason
                         .as_deref()
-                        .unwrap_or(&command.category),
+                        .unwrap_or(&command.description),
                 )]);
                 let motion = gtk::EventControllerMotion::new();
                 let id = command.id.clone();
@@ -344,22 +345,16 @@ impl CommandBar {
                 .reset_relation(gtk::AccessibleRelation::ActiveDescendant);
         }
         let selected = parameter.or_else(|| view.results.get(view.selected));
-        self.detail.set_text(
-            view.error
-                .as_deref()
-                .or_else(|| selected.and_then(|d| d.disabled_reason.as_deref()))
-                .unwrap_or_else(|| {
-                    selected
-                        .map(|d| {
-                            if parameter.is_some() {
-                                d.label.as_str()
-                            } else {
-                                d.category.as_str()
-                            }
-                        })
-                        .unwrap_or("")
-                }),
-        );
+        let explanation = view
+            .error
+            .as_deref()
+            .or_else(|| selected.and_then(|d| d.disabled_reason.as_deref()));
+        let detail = explanation
+            .or_else(|| selected.map(|d| d.description.as_str()))
+            .unwrap_or("");
+        self.detail.set_text(detail);
+        self.detail
+            .set_tooltip_text((!detail.is_empty()).then_some(detail));
         if !was_open {
             *self.previous_focus.borrow_mut() =
                 gtk::prelude::GtkWindowExt::focus(&w.window).map(|f| f.downgrade());
@@ -367,8 +362,18 @@ impl CommandBar {
                 (w.surface.width() - COMMAND_SEARCH_STYLE.inset * 4)
                     .clamp(240, COMMAND_SEARCH_STYLE.width),
             );
-            self.popup
-                .set_pointing_to(Some(&gdk::Rectangle::new(w.surface.width() / 2, 72, 0, 0)));
+            // Keep the search field steady as results change, with enough room
+            // above it to feel part of the canvas rather than the title bar.
+            let top = (w.surface.height() / 5).clamp(
+                COMMAND_SEARCH_STYLE.inset * 4,
+                COMMAND_SEARCH_STYLE.inset * 16,
+            );
+            self.popup.set_pointing_to(Some(&gdk::Rectangle::new(
+                w.surface.width() / 2,
+                top,
+                0,
+                0,
+            )));
             self.popup.popup();
             self.entry.grab_focus();
         }

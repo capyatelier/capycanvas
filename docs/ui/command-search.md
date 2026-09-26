@@ -39,8 +39,14 @@ reservation rules filter out Primary+Shift+P on Web.
 The shared search model owns ranking, eight-result limits, five recent choices,
 selection, disabled reasons and numeric entry. Hosts own text/IME, focus,
 accessibility, popup capture and animation. A result contains its name, one
-effective shortcut and optional checked state. Only the selected result shows
-its category or unavailability explanation. Escape returns from parameter entry
+effective shortcut and optional checked state. The footer shows the selected
+result's unavailability explanation or contextual guidance. GTK shows the shared
+catalog's concise behavior/scope description, falling back to the menu location
+when one exists. Tool settings show their name, current value and hard input
+range, formatted by the shared numeric schema. The single footer line prioritizes
+errors and unavailable reasons; it does not repeat basic keyboard navigation.
+The GTK popup opens one-fifth down the workspace (48–192px),
+anchored independently of result count. Escape returns from parameter entry
 to the query, then dismisses. Reopening starts with an empty query.
 
 Hosts retain the meaningful editor focus before opening. Palette focus routes

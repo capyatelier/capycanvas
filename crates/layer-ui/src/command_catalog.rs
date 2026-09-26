@@ -96,6 +96,9 @@ pub struct CommandDescriptor {
     pub id: String,
     pub label: String,
     pub category: String,
+    /// Concise behavior/scope help, or the menu location when available.
+    /// Empty when there is nothing useful beyond the label; never filler.
+    pub description: String,
     pub kind: CommandKind,
     pub target: CommandTarget,
     pub history: CommandHistory,
@@ -308,6 +311,7 @@ fn entry(
             id: identity(&action),
             label: label.into(),
             category: category.into(),
+            description: action_description(&action).into(),
             kind,
             target,
             history,
@@ -324,6 +328,41 @@ fn entry(
     }
 }
 
+fn action_description(action: &UiAction) -> &'static str {
+    use CommandId::*;
+    match action {
+        UiAction::Invoke { command } => match command {
+            DrawingBrush => "Return to the last drawing brush.",
+            Sculpt => "Return to the last sculpting tool.",
+            Pen | Pencil | Brush | Eraser | Airbrush | Decoration | Blend | Liquify => {
+                "Use the last brush selected in this tool family."
+            }
+            Select => "Return to the last selection tool.",
+            SelectionBrush => "Paint the area that subsequent edits will affect.",
+            SelectionIntersect => "Keep only the area shared by the existing and new selections.",
+            SelectionVisible => "Find matching colors across the visible artwork.",
+            SelectionEditing => "Find matching colors in the editing layer only.",
+            SelectionReference => "Find matching colors in layers marked as references.",
+            SelectionFixedRatio => "Keep the selection's width-to-height ratio fixed.",
+            SelectionFixedSize => "Use the configured selection width and height.",
+            QuickMask => "Edit the selection as a painted mask.",
+            Reselect => "Restore the previous pixel selection.",
+            SaveSelectionLayer => "Keep the current selection as a reusable selection layer.",
+            Move => "Move artwork and manage image placement on the canvas.",
+            ScaleRotate => "Resize or rotate the current transform target.",
+            FitCanvas => "Adjust the zoom to show the entire canvas.",
+            FlipHorizontal | FlipVertical => "Mirror the view without changing the artwork.",
+            RotateLeft | RotateRight => "Rotate the view without changing the artwork.",
+            UndoWorkspace => "Restore the previous toolbar, panel or workspace layout.",
+            RedoWorkspace => "Reapply an undone workspace layout change.",
+            ZenMode => "Hide or restore workspace controls to give the canvas more room.",
+            _ => "",
+        },
+        UiAction::CycleTool { .. } => "Cycle through tools in this family.",
+        _ => "",
+    }
+}
+
 fn menu_entries(
     items: Vec<Vec<ContextMenuItem>>,
     path: &str,
@@ -333,7 +372,7 @@ fn menu_entries(
 ) {
     for item in items.into_iter().flatten() {
         if let Some(action) = item.action {
-            entries.push(entry(
+            let mut item_entry = entry(
                 &item.label,
                 path,
                 action,
@@ -341,7 +380,11 @@ fn menu_entries(
                 item.selected,
                 settings,
                 platform,
-            ));
+            );
+            if item_entry.descriptor.description.is_empty() {
+                item_entry.descriptor.description = format!("Menu: {path} › {}", item.label);
+            }
+            entries.push(item_entry);
         }
         if !item.sections.is_empty() {
             menu_entries(
@@ -441,7 +484,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ));
         }
         for brush in brush_catalog() {
-            entries.push(entry(
+            let mut item = entry(
                 brush.label,
                 "Brushes",
                 UiAction::SelectBrush { id: brush.id },
@@ -449,7 +492,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 None,
                 settings,
                 platform,
-            ));
+            );
+            item.descriptor.description = format!("Load this {} brush preset.", brush.category);
+            entries.push(item);
         }
         for tool in self
             .state
@@ -485,6 +530,32 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.search.push_str(" set adjust");
             item.descriptor.id = format!("tool_setting.{}", setting.id);
             item.descriptor.kind = CommandKind::Parameter;
+            let numeric = &setting.numeric;
+            // Compact toolbar readouts round to tenths, which would misstate
+            // bounds such as a pressure minimum of 0.25. Keep schema precision.
+            let number = |value| {
+                let text = numeric
+                    .resolve(value, NumericOperation::Format)
+                    .expect("valid tool numeric schema")
+                    .edit;
+                if text.contains('.') {
+                    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+                } else {
+                    text
+                }
+            };
+            let unit = if numeric.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", numeric.unit)
+            };
+            item.descriptor.description = format!(
+                "{} · Current {}{unit} · Range {}–{}{unit}",
+                setting.label,
+                number(setting.value as f64),
+                number(numeric.min),
+                number(numeric.max),
+            );
             item.descriptor.parameter = Some(CommandParameter {
                 numeric: setting.numeric.clone(),
                 value: setting.value,
@@ -520,6 +591,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         pan.descriptor.id = "canvas.pan".into();
         pan.descriptor.kind = CommandKind::Held;
+        pan.descriptor.description =
+            "Temporarily pan the view; release to return to the tool.".into();
         pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
         pan.action = None;
         entries.push(pan);
@@ -553,6 +626,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     .into();
                     e.descriptor.category = "Palette".into();
+                    e.descriptor.description = if redo {
+                        "Reapply the last undone color reorder in this palette."
+                    } else {
+                        "Restore the previous color order in this palette."
+                    }
+                    .into();
                     e.descriptor.target = CommandTarget::Palette;
                     e.descriptor.history = CommandHistory::Palette;
                     e.descriptor.enabled =

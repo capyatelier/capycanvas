@@ -84,6 +84,11 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
         s.state.command_search.as_ref().unwrap().results[0].id,
         "tool_setting.size"
     );
+    assert!(
+        s.state.command_search.as_ref().unwrap().results[0]
+            .description
+            .ends_with("Range 0.5–2048 px")
+    );
     search_action(
         &mut s,
         CommandSearchAction::Execute {
@@ -125,6 +130,11 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
     assert_eq!(
         s.state.command_search.as_ref().unwrap().results[0].id,
         "tool_setting.size"
+    );
+    assert!(
+        s.state.command_search.as_ref().unwrap().results[0]
+            .description
+            .contains("Current 24 px")
     );
     search_action(&mut s, CommandSearchAction::Back);
     assert!(s.state.command_search.is_none());
