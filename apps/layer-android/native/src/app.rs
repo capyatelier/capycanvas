@@ -1,7 +1,6 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
-    pub documents: crate::document_tabs::Sessions,
-    pub document_gpu: Option<layer_host::GpuContext>,
+    pub window: crate::document_tabs::Window,
     pub tone: crate::hdr::ToneState,
     pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
@@ -31,8 +30,7 @@ impl App {
             )),
         })?;
         Ok(Self {
-            documents: Default::default(),
-            document_gpu: None,
+            window: Default::default(),
             proof: Default::default(),
             tone: Default::default(),
             host,

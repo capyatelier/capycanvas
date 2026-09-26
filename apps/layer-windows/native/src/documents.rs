@@ -78,7 +78,7 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
-    Activate { gpu: layer_host::GpuContext, options: layer_host::RendererOptions, color: layer_core::color::DocumentColor },
+    Activate(Box<layer_host::window::Activation>),
     Spill { tiles: layer_core::raster_storage::RetainedTiles, directory: PathBuf },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
@@ -93,7 +93,7 @@ enum Job {
     },
 }
 enum Completed {
-    Activated(Box<WgpuRasterizer>),
+    Activated(Box<layer_host::window::Activation>),
     Spilled,
     Workflow(Box<crate::document_workflows::Task>),
     Cancelled,
@@ -230,7 +230,7 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
-        Job::Activate { gpu, options, color } => gpu.rasterizer(color, &options, true).map(|g| Completed::Activated(Box::new(g))),
+        Job::Activate(mut activation) => activation.work().map(|()| Completed::Activated(activation)),
         Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
@@ -283,11 +283,10 @@ struct Active {
     cancelled: Option<Arc<AtomicBool>>,
 }
 pub(crate) struct DocumentService {
-    tabs: layer_ui::DocumentSessions<tabs::Parked>,
+    window: layer_host::window::DocumentWindow<tabs::Parked>,
     pub recovery: Option<crate::recovery::Service>,
     wake: Arc<dyn Fn() + Send + Sync>,
-    tab_gpu: Option<layer_host::GpuContext>,
-    activating: Option<(u64, u64)>,
+    activating: bool,
     spilling: bool,
     deferred_action: Option<DocumentAction>,
     close_window: bool,
@@ -313,10 +312,9 @@ impl DocumentService {
             tone: layer_host::tone::ToneService::new(Some(wake.clone())),
             palettes: crate::palette_files::Service::new(wake.clone()),
             wake,
-            tabs: Default::default(),
+            window: Default::default(),
             recovery: None,
-            tab_gpu: None,
-            activating: None,
+            activating: false,
             spilling: false,
             deferred_action: None,
             close_window: false,
@@ -343,7 +341,7 @@ impl DocumentService {
         }))
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        self.tab_gpu = None;
+        self.window.gpu = None;
         self.tone.clear();
         self.proof.stop()?;
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
@@ -388,7 +386,7 @@ impl DocumentService {
     const MAX_QUEUED_OPENS: usize = 64;
     fn open_idle(&self, host: &NativeHost) -> bool {
         let state = host.session.state();
-        self.active.is_none() && self.workflow_control.is_none() && self.activating.is_none()
+        self.active.is_none() && self.workflow_control.is_none() && !self.activating
             && !self.spilling && self.opening.is_none() && self.recovery.as_ref().is_none_or(|r| !r.restoring())
             && !state.document_file.busy && !state.document_file.close_ready
             && !state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { .. }))
@@ -473,7 +471,7 @@ impl DocumentService {
             self.deferred_action = Some(action);
             return Ok(());
         }
-        if self.activating.is_some() { return Err("Wait for the drawing to finish starting".into()); }
+        if self.activating { return Err("Wait for the drawing to finish starting".into()); }
         if let DocumentAction::Cancel { id } = action
             && let Some(active) = self.active.as_ref().filter(|a| a.id == id)
             && let Some(cancelled) = &active.cancelled {
@@ -631,7 +629,7 @@ impl DocumentService {
                     Self::matches(host, epoch, revision)?;
                     options.validate()?;
                     let environment = OpenEnvironment::capture(&host.session,
-                        self.tabs.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
+                        self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     if defaults || !preset.trim().is_empty() {
                         host.dispatch(layer_ui::UiAction::NewDocumentPreferences { action: layer_ui::NewDocumentAction::Remember {
                             options, name: preset, defaults,
@@ -648,7 +646,7 @@ impl DocumentService {
                     Self::matches(host, epoch, revision)?;
                     let selected = location(&path)?;
                     let environment = OpenEnvironment::capture(&host.session,
-                        self.tabs.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
+                        self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     (
                         Job::Prepare {
                             environment,
@@ -693,10 +691,10 @@ impl DocumentService {
         let Some(completed) = self.worker.take() else {
             return Ok(());
         };
-        if self.activating.is_some() { return self.activated(host, completed); }
+        if self.activating { return self.activated(host, completed); }
         if self.spilling {
             self.spilling = false;
-            self.tabs.storage_completed(completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) }));
+            self.window.documents.storage_completed(completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) }));
             host.invalidate_snapshot();
             if let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
             return Ok(());
@@ -766,30 +764,7 @@ impl DocumentService {
                     Err("The completed file belongs to a document that is no longer open".into())
                 }
             }
-            Ok(Completed::Prepared(candidate)) => {
-                let current_device = host
-                    .session
-                    .engine()
-                    .backend()
-                    .0
-                    .as_ref()
-                    .map(|gpu| gpu.device());
-                let prepared_device = candidate
-                    .engine()
-                    .backend()
-                    .0
-                    .as_ref()
-                    .map(|gpu| gpu.device());
-                if current_device != prepared_device {
-                    self.worker.retire(candidate);
-                    return Self::complete(
-                        host,
-                        active.id,
-                        Err("The GPU changed while opening the document. Try again.".into()),
-                    );
-                }
-                return self.append_candidate(host, active, candidate);
-            }
+            Ok(Completed::Prepared(candidate)) => return self.append_candidate(host, active, candidate),
             Err(error) => Err(error),
         };
         Self::complete(host, active.id, result)
@@ -801,7 +776,7 @@ impl DocumentService {
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
         if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { cancelled.store(true, Ordering::Release); }
         if let Some(recovery) = &mut self.recovery { recovery.stop()?; }
-        for (_, parked) in self.tabs.parked_mut() {
+        for (_, parked) in self.window.documents.parked_mut() {
             if let Some(recovery) = &mut parked.owner.recovery { recovery.stop()?; }
         }
         self.tone.clear();

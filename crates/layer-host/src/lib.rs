@@ -7,6 +7,7 @@ mod model_update;
 pub mod open;
 pub mod tasks;
 pub mod tone;
+pub mod window;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;

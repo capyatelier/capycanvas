@@ -24,8 +24,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
-    documents: document_tabs::Sessions,
-    document_gpu: Option<layer_host::GpuContext>,
+    window: document_tabs::Window,
     error: Option<CString>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
@@ -77,8 +76,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
         host.session.set_document_replacement(false);
         Some(Box::into_raw(Box::new(CapyApple {
             host,
-            documents: Default::default(),
-            document_gpu: None,
+            window: Default::default(),
             metal: metal::MetalHost::default(),
             error: None,
             chrome_facts: Default::default(),
@@ -274,7 +272,7 @@ pub unsafe extern "C" fn capy_apple_request(
             };
             let extension = serde_json::to_vec(&serde_json::json!({
                 "display_status": a.metal.display_status(&a.host),
-                "document_tabs": a.tabs_view(a.host.logical[0]),
+                "document_tabs": a.window.view(&a.host, a.host.logical[0]),
             }))
             .map_err(|e| e.to_string())?;
             return CString::new(layer_host::extend_update(bytes, &extension))

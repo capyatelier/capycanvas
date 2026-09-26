@@ -27,7 +27,8 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         if service.idle()
             && !service.close_next
             && !host.session.state().document_file.busy
-            && !(host.session.state().document_file.close_ready && service.tabs.order().len() > 1)
+            && !(host.session.state().document_file.close_ready
+                && service.window.documents.order().len() > 1)
             && host.session.can_park_document()
             && host
                 .session
@@ -143,7 +144,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     service
         .dispatch(&mut host, DocumentAction::Cancel { id })
         .unwrap();
-    assert_eq!(service.tabs.order(), [1]);
+    assert_eq!(service.window.documents.order(), [1]);
     assert_eq!(host.session.engine().checkpoint(), first);
     command(&mut host, CommandId::NewDocument);
     let (id, epoch, revision) = request(&host);
@@ -164,11 +165,12 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         )
         .unwrap();
     settle(&mut service, &mut host);
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     assert_eq!(service.tabs_view(&host)["parked_renderers"], 0);
     assert!(
         service
-            .tabs
+            .window
+            .documents
             .parked_owner_mut(1)
             .unwrap()
             .session
@@ -178,16 +180,16 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     );
     let backing = directory.join("drawing-backing");
     std::fs::write(&backing, b"fixture blocks storage directory").unwrap();
-    service.tabs.budget.inactive_ram = 0;
+    service.window.documents.budget.inactive_ram = 0;
     settle(&mut service, &mut host);
-    assert!(service.tabs.storage_error().is_some());
-    assert!(service.tabs.resident_bytes() > 0);
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert!(service.window.documents.storage_error().is_some());
+    assert!(service.window.documents.resident_bytes() > 0);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     std::fs::remove_file(&backing).unwrap();
     service.tab_action(&mut host, Action::RetryStorage).unwrap();
     settle(&mut service, &mut host);
-    assert!(service.tabs.storage_error().is_none());
-    assert_eq!(service.tabs.resident_bytes(), 0);
+    assert!(service.window.documents.storage_error().is_none());
+    assert_eq!(service.window.documents.resident_bytes(), 0);
     let hits = |order: [u64; 2]| {
         order
             .iter()
@@ -201,15 +203,15 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     let clip = layer_ui::Bounds { x: 10., y: 1., width: 206., height: 32. };
     let slide = |order, point| Action::Slide { id: 1, hits: hits(order), clip, press: [40., 17.], point };
     service.tab_action(&mut host, slide([1, 2], [500., 50.])).unwrap();
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     service.tab_action(&mut host, slide([2, 1], [500., 17.])).unwrap();
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     service.tab_action(&mut host, slide([1, 2], [500., 17.])).unwrap();
-    assert_eq!(service.tabs.order(), [2, 1]);
+    assert_eq!(service.window.documents.order(), [2, 1]);
     service
         .tab_action(&mut host, Action::History { redo: false })
         .unwrap();
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     service
         .tab_action(
             &mut host,
@@ -219,15 +221,15 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
             },
         )
         .unwrap();
-    assert_eq!(service.tabs.order(), [2, 1]);
+    assert_eq!(service.window.documents.order(), [2, 1]);
     service
         .tab_action(&mut host, Action::History { redo: false })
         .unwrap();
-    assert_eq!(service.tabs.order(), [1, 2]);
+    assert_eq!(service.window.documents.order(), [1, 2]);
     service
         .tab_action(&mut host, Action::History { redo: true })
         .unwrap();
-    assert_eq!(service.tabs.order(), [2, 1]);
+    assert_eq!(service.window.documents.order(), [2, 1]);
     service
         .tab_action(&mut host, Action::Select { id: 1 })
         .unwrap();
@@ -294,8 +296,8 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
             },
         )
         .unwrap();
-    assert_eq!(service.tabs.order().len(), 2);
-    assert_eq!(service.tabs.selected(), 2);
+    assert_eq!(service.window.documents.order().len(), 2);
+    assert_eq!(service.window.documents.selected(), 2);
     service
         .tab_action(&mut host, Action::Close { id: 2 })
         .unwrap();
@@ -323,10 +325,10 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         )
         .unwrap();
     settle(&mut service, &mut host);
-    assert_eq!(service.tabs.order(), [1]);
+    assert_eq!(service.window.documents.order(), [1]);
     assert_eq!(host.session.engine().checkpoint(), first);
     assert!(
-        !service.tabs.can_undo(),
+        !service.window.documents.can_undo(),
         "close invalidates order history without resurrecting a drawing"
     );
     command(&mut host, CommandId::OpenDocument);
@@ -343,7 +345,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         )
         .unwrap();
     settle(&mut service, &mut host);
-    assert_eq!(service.tabs.order(), [1, 3]);
+    assert_eq!(service.window.documents.order(), [1, 3]);
     assert!((host.session.engine().document().layers[0].opacity - 0.4).abs() < 1e-6);
     assert!(!host.session.state().document_file.modified);
     // Cancel an accepted background Open and preserve both existing editors.
@@ -364,7 +366,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         .dispatch(&mut host, DocumentAction::Cancel { id })
         .unwrap();
     settle(&mut service, &mut host);
-    assert_eq!(service.tabs.order(), [1, 3]);
+    assert_eq!(service.window.documents.order(), [1, 3]);
     // Failed activation retains selectable/saveable CPU editors and their backing.
     host.session.suspend_renderer().unwrap();
     service.renderer_unavailable(&mut host).unwrap();
@@ -374,7 +376,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     service
         .tab_action(&mut host, Action::Select { id: 1 })
         .unwrap();
-    assert_eq!(service.tabs.selected(), 1);
+    assert_eq!(service.window.documents.selected(), 1);
     assert_eq!(host.document_count, 2);
     assert!(host.session.rendering_suspended());
     assert!(host.error.is_some());

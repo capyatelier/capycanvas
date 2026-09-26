@@ -2,7 +2,7 @@
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
 use layer_core::Project;
-use layer_host::{Renderer, open::OpenEnvironment, tasks::{ColorTask, Preview, SourceTask}};
+use layer_host::{Renderer, open::OpenEnvironment, tasks::{ColorTask, Preview, SourceTask}, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
     };
     app.perform(|app| {
         if opening != 3 && !placement.is_null() { return Err("Only image placement accepts a drop target".into()); }
-        let admission = app.documents.admission(&app.host.session.retained_document_tiles());
+        let admission = app.window.documents.admission(&app.host.session.retained_document_tiles());
         let options = app.host.renderer_options(app.metal.cache.clone());
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
@@ -237,7 +237,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
 pub unsafe extern "C" fn capy_apple_document_recovery(app:*mut CapyApple,id:u64)->*mut CapyProjectTask {
     let Some(app)=(unsafe {app.as_mut()}) else {return std::ptr::null_mut()};
     app.perform(|a| {
-        let s=a.document_session(id)?;
+        let s=a.window.session(&a.host,id)?;
         Ok(CapyProjectTask::new(Payload::Save {snapshot:Some(s.capture_project_recovery()?),project:None},
             s.state().document_file.epoch,s.engine().document().revision,None))
     }).unwrap_or(std::ptr::null_mut())
@@ -563,33 +563,11 @@ unsafe fn adopt_project(
         };
         if *source == layer_ui::ImportSource::Photo && recovered { return Err("Recovery requires a native drawing".into()); }
         let location = source.adoption_location(location);
-        if candidate.as_ref().and_then(|s| s.engine().backend().0.as_ref()).map(|gpu| gpu.device())
-            != app.host.session.engine().backend().0.as_ref().map(|gpu| gpu.device()) {
-            return Err("The canvas changed while preparing this drawing; open it again".into());
-        }
-        if app.host.session.state().document_file.epoch != task.epoch || app.host.session.engine().document().revision != task.revision {
-            return Err("The drawing changed while opening; try again".into());
-        }
-        let next=candidate.as_mut().ok_or("Project preparation is incomplete")?;
-        app.documents.admit(&app.host.session.retained_document_tiles(), &next.capture_project_recovery()?)?;
-        next.initialize_document_location(location)?;
-        if recovered { next.mark_recovered(); }
-        next.set_document_replacement(false);
-        next.inherit_window_state(&app.host.session)?;
-        next.inherit_initial_drawing_tools(&app.host.session)?;
-        // Ready immutable backing is required before changing request ownership.
-        if app.host.session.retained_document_tiles().try_blobs()?.is_none() { return Err("Wait for drawing capture before opening".into()); }
-        if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
-        let requests: Vec<_> = app.host.session.state().requests.iter().filter_map(|r| matches!(r.kind,
-            HostRequestKind::Document {request:DocumentRequest::Open | DocumentRequest::New}).then_some(r.id)).collect();
-        for id in requests { app.host.session.complete_document_request(id, Ok(true))?; }
-        let tiles=app.host.session.park_document()?;
-        let retired=app.retire_document_gpu();
-        let mut outgoing=candidate.take().unwrap();
-        std::mem::swap(&mut app.host.session,outgoing.as_mut());
-        app.documents.append(outgoing,tiles);
+        let open = OpenAdoption { epoch: task.epoch, revision: task.revision, location, recovered };
+        let retired = app.window.adopt(&mut app.host, candidate, open,
+            || unsafe { capy_project_begin_commit(task) } >= 0, Box::new)?;
+        app.document_retired();
         state.payload=Payload::Retired {_renderer:retired};
-        app.tabs_changed();
         Ok(())
     })
     .map_or(-1, |_| 0)

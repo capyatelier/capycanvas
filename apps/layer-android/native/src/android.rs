@@ -357,7 +357,7 @@ impl App {
         self.surface = None;
         let retired = self.host.session.renderer_mut().0.take();
         self.instance = None;
-        self.document_gpu = None;
+        self.window.gpu = None;
         self.blank_presented = false;
         self.cursor = Default::default();
         self.host.document_adopted();

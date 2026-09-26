@@ -7,7 +7,7 @@ use jni::{
     sys::{jboolean, jint, jlong},
 };
 use layer_core::Project;
-use layer_host::{Renderer, open::OpenEnvironment};
+use layer_host::{Renderer, open::OpenEnvironment, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
@@ -70,7 +70,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
 ) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let admission = a.documents.admission(&a.host.session.retained_document_tiles());
+        let admission = a.window.documents.admission(&a.host.session.retained_document_tiles());
         let options = a.host.renderer_options(Some(a.cache_directory.clone().into()));
         let session = &mut a.host.session;
         let request = session
@@ -118,7 +118,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             _ => return Err("This request does not transfer a project".into()),
         };
         Ok(Box::into_raw(Box::new(Task {
-            owner: a.documents.selected(),
+            owner: a.window.documents.selected(),
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
             request: id as u32,
@@ -435,30 +435,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         let Payload::Open { candidate, .. } = &mut t.payload else {
             return Err("Not an open request".into());
         };
-        if t.gpu_generation != a.gpu_generation {
-            return Err("The canvas changed while preparing this drawing; open it again".into());
-        }
-        if t.owner != a.documents.selected()
-            || a.host.session.state().document_file.epoch != t.epoch
-            || a.host.session.engine().document().revision != t.revision {
-            return Err("The drawing changed while opening; try again".into());
-        }
-        let next = candidate.as_mut().ok_or("Project is not prepared")?;
-        a.documents.admit(&a.host.session.retained_document_tiles(), &next.capture_project_recovery()?)?;
-        next.initialize_document_location(location)?;
-        if t.recovered { next.mark_recovered(); }
-        next.set_document_replacement(false);
-        next.inherit_window_state(&a.host.session)?;
-        next.inherit_initial_drawing_tools(&a.host.session)?;
-        if !t.recovered && a.host.session.state().requests.iter().any(|r| r.id==t.request) {
-            a.host.session.complete_document_request(t.request, Ok(true))?;
-        }
-        let tiles=a.host.session.park_document()?;
-        let retired=a.retire_document_gpu();
-        let outgoing=std::mem::replace(&mut a.host.session,*candidate.take().unwrap());
-        a.documents.append(outgoing,tiles);
-        t.payload=Payload::Retired{_renderer:retired};
-        a.tabs_changed();
+        let open = OpenAdoption { epoch: t.epoch, revision: t.revision, location, recovered: t.recovered };
+        let retired = a.window.adopt(&mut a.host, candidate, open, || true, |s| s)?;
+        a.document_retired();
+        t.payload = Payload::Retired { _renderer: retired };
         a.project_adopted();
         Ok(())
     })();
@@ -551,7 +531,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             .ok_or("Canvas is unavailable")?
             .snapshot_gpu();
         Ok(Box::into_raw(Box::new(Task {
-            owner: a.documents.selected(),
+            owner: a.window.documents.selected(),
             epoch,
             revision,
             request: id as u32,
@@ -627,7 +607,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                 environment: Some(Environment {
                     open: OpenEnvironment::capture(
                         session,
-                        a.documents.admission(&session.retained_document_tiles()),
+                        a.window.documents.admission(&session.retained_document_tiles()),
                         a.host.renderer_options(Some(a.cache_directory.clone().into())),
                     )?,
                     source_name: "Recovered drawing".into(),
@@ -640,7 +620,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             Payload::Save(Some(session.capture_project_recovery()?))
         };
         Ok(Box::into_raw(Box::new(Task {
-            owner: a.documents.selected(),
+            owner: a.window.documents.selected(),
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
             request: 0,
@@ -687,13 +667,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
 pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEnv,_:JClass,handle:jlong,transfer:jlong)->jboolean {
     let result=(|| {
         let a=unsafe{app(handle)};let t=unsafe{task(transfer)};
-        if t.owner!=a.documents.selected() || t.epoch!=a.host.session.state().document_file.epoch || t.revision!=a.host.session.engine().document().revision || t.gpu_generation!=a.gpu_generation {
+        if t.owner!=a.window.documents.selected() || t.epoch!=a.host.session.state().document_file.epoch || t.revision!=a.host.session.engine().document().revision || t.gpu_generation!=a.gpu_generation {
             return Err("The drawing changed while opening; try again".into());
         }
         if !t.recovered && a.host.session.state().requests.iter().any(|r|r.id==t.request) {
             a.host.session.complete_document_request(t.request,Ok(true))?;
         }
-        a.document_park_ready()
+        a.window.park_ready(&a.host)
     })();match result{Ok(ready)=>u8::from(ready),Err(e)=>{fail(&mut env,Err(e));0}}
 }
 
@@ -701,7 +681,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEn
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryFor(mut env:JNIEnv,_:JClass,handle:jlong,id:jlong)->jlong {
     let result=(|| {
-        let a=unsafe{app(handle)};let session=a.document_session(id as u64)?;
+        let a=unsafe{app(handle)};let session=a.window.session(&a.host,id as u64)?;
         if session.recovery_document().busy {return Ok(0);}
         Ok(Box::into_raw(Box::new(Task{
             owner:id as u64,epoch:session.state().document_file.epoch,revision:session.engine().document().revision,request:0,

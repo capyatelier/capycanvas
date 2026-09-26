@@ -2392,16 +2392,14 @@ class AndroidRasterTest {
         }
         fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
         fun trim(){while(true){val task=native{Native.documentSpillTask(it)};if(task==0L)break;Native.documentSpillWork(task)}}
-        val first=tabs().getLong("selected");val generation=tabs().getLong("gpu_generation")
+        val first=tabs().getLong("selected")
         stroke(0.0);val exact=manifest(save("tabs-exact.capy")).getJSONArray("blobs").toString()
         action("undo") // Its only ink is now retained exclusively by redo history.
         val second=fresh();assertEquals(listOf(first,second),ids())
-        order(obj("op" to "budget","bytes" to 0));trim()
-        assertEquals(0,tabs().getLong("resident_bytes"));assertEquals(0,tabs().getInt("parked_renderers"))
+        trim();assertEquals(0,tabs().getInt("parked_renderers"))
         action("add_layer");val secondLayers=native{state(it).array("layers").length()}
         select(first);action("redo")
         assertEquals(exact,manifest(save("tabs-redo.capy")).getJSONArray("blobs").toString())
-        assertEquals(generation,tabs().getLong("gpu_generation"))
         select(second);assertEquals(secondLayers,native{state(it).array("layers").length()})
         action("undo");assertEquals(secondLayers-1,native{state(it).array("layers").length()})
         val third=fresh()

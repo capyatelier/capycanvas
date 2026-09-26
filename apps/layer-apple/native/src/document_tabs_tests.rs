@@ -95,7 +95,7 @@ fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
         app.invoke("deselect");
         app.draw_until_idle();
         let second = unsafe { &*app.0 }.host.session.engine().document().clone();
-        app.request(2, json!({"type":"document_tabs","op":"budget","bytes":0}));
+        unsafe { &mut *app.0 }.window.documents.budget.inactive_ram = 0;
         switch(&app, 1, false);
         assert_eq!(tabs(&app)["resident_bytes"], 0);
         assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &first);
