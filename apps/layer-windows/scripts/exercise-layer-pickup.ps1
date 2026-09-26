@@ -84,7 +84,19 @@ function Undo-Redo([string]$Before,[string]$After) {
     Layer-History 'Redo';Wait-Until {(Rows) -eq $After} 'One Redo did not restore the completed layer move'
     Layer-History 'Undo';Wait-Until {(Rows) -eq $Before} 'Final Undo did not restore the fixture'
 }
+function Reveal([string]$Id) {
+    # Accepted drags near the short list's edge legitimately auto-scroll it.
+    $item=Find $Id
+    if($Id -notlike 'layer-*' -or !$item -or !$item.Current.IsOffscreen){return}
+    $scroll=(Find 'layer-list').GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+    if(!$scroll.Current.VerticallyScrollable){return}
+    foreach($percent in @(0,100)){
+        $scroll.SetScrollPercent(-1,$percent);Start-Sleep -Milliseconds 150
+        $item=Find $Id;if($item -and !$item.Current.IsOffscreen){return}
+    }
+}
 function Point([string]$Id,[switch]$Name) {
+    if(!$Name){Reveal $Id}
     $stable=@{bounds=$null;count=0}
     Wait-Until {
         $item=Find $Id -Name:$Name
@@ -154,7 +166,13 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
         Pick-Up $Id $Layer
         Move-To $to
     }
-    Wait-Until {$g=Gesture;$g.phase -eq 'dragging' -and $g.can_drop -and $g.target -eq $Target} 'Layer move did not reach a validated drop target'
+    # Edge auto-scroll can leave the pointer over the next sibling: above it is the same slot.
+    $layers=@((Model).state.layers);$index=[Array]::IndexOf(@($layers.id),[int64]$Target)
+    $next=if($index -ge 0 -and $index+1 -lt $layers.Count -and $layers[$index+1].depth -eq $layers[$index].depth){$layers[$index+1].id}
+    Wait-Until {
+        $g=Gesture
+        $g.phase -eq 'dragging' -and $g.can_drop -and ($g.target -eq $Target -or ($Fraction -gt .5 -and $null -ne $next -and $g.target -eq $next -and $g.position -eq 'above'))
+    } 'Layer move did not reach a validated drop target'
     $admitted=Gesture
     if($admitted.source -ne $Layer -or $admitted.device -ne $Device -or $admitted.grip -ne [bool]$Grip){throw 'The admitted drag used another source or device'}
     if($admitted.menu_open){throw 'Dragging retained the held context menu'}
