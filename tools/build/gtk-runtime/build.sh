@@ -35,7 +35,7 @@ if [[ -f "$gtk_build/build/build.ninja" ]]; then gtk_config+=(--reconfigure); fi
 meson setup "${gtk_config[@]}" "$gtk_build/build" "$gtk_build/gtk-4.22.4" \
     --buildtype=release --wrap-mode=nofallback -Dbuild-demos=false -Dbuild-tests=false \
     -Dbuild-testsuite=false -Dbuild-examples=false -Dintrospection=disabled \
-    -Dmedia-gstreamer=disabled -Ddocumentation=false -Dman-pages=false
+    -Dmedia-gstreamer=disabled -Ddocumentation=false -Dman-pages=false -Dx11-backend=false
 ninja -C "$gtk_build/build" -j "${CAPY_BUILD_JOBS:-8}" gtk/libgtk-4.so.1.2200.4
 cp "$gtk_build/build/gtk/libgtk-4.so.1.2200.4" "$gtk_prefix/lib/libgtk-4.so.1.new"
 mv -f "$gtk_prefix/lib/libgtk-4.so.1.new" "$gtk_prefix/lib/libgtk-4.so.1"

@@ -22,8 +22,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   let switcherRevision;
   let view, lastView, pageKey, rowsKey, formKey, timer, formName, formSource, formError, formSubmit, previousFocus, observePending = false;
   const expectedCloses = new WeakMap();
-  const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("capycanvas.workspace.windows") : null;
-  channel?.addEventListener("message", e => {
+  const channel = new BroadcastChannel("capycanvas.workspace.windows");
+  channel.addEventListener("message", e => {
     if (e.data?.switcher) send({type:"refresh_switcher"});
     if (e.data?.focus === view?.id) { window.focus(); document.title = `CapyCanvas — ${view.name}`; }
   });
@@ -51,9 +51,9 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     recoveryButton.hidden = !view.error;
     if (!view.error) { dismissedError = null; if (recovery?.open) recovery.close(); }
     switcher.render(view);
-    if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel?.postMessage({switcher:true});
+    if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel.postMessage({switcher:true});
     switcherRevision = view.switcher_revision;
-    if (view.focus_window) { channel?.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
+    if (view.focus_window) { channel.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
     if (view.page !== pageKey) { pageKey = view.page; list.scrollTop = 0; }
     heading.textContent = view.title; intro.textContent = view.intro; intro.hidden = !view.intro;
     add.hidden = view.page === "history"; add.disabled = view.busy || view.switcher_busy;

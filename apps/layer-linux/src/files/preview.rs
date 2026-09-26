@@ -4,13 +4,6 @@ use super::*;
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::cell::{Cell, RefCell};
 
-pub(super) fn display_headroom(w: &Workspace) -> f32 {
-    // Cairo cannot preserve HDR through its 8-bit render target. Temporary
-    // canvas SDR/proof toggles do not change the master shown in Export.
-    if !w.window.renderer().is_some_and(|r| matches!(r.type_().name(), "GskVulkanRenderer" | "GskGLRenderer")) { return 1.; }
-    w.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
-}
-
 struct Image {
     extent: [u32; 2],
     bytes: Vec<u8>,
@@ -246,7 +239,7 @@ impl Comparison {
             #[weak(rename_to = this)] self, #[weak] w, #[upgrade_or] glib::ControlFlow::Break,
             move || {
                 if this.closed.get() { return glib::ControlFlow::Break; }
-                if this.set_headroom(display_headroom(&w)) { refresh(); }
+                if this.set_headroom(w.picker_headroom()) { refresh(); }
                 glib::ControlFlow::Continue
             }
         ));

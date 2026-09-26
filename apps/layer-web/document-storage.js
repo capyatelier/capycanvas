@@ -5,7 +5,6 @@ export function createDocumentStorage() {
   let ready,lease,serial=0,reading=0;const waiters=[];
   async function directory(){return ready??=initialize().catch(error=>{ready=null;throw error;});}
   async function initialize(){
-    if(!navigator.storage?.getDirectory||!navigator.locks)throw Error('Drawing cache requires private browser storage and Web Locks.');
     const root=await (await navigator.storage.getDirectory()).getDirectoryHandle('capy-live-tiles',{create:true});
     // A crashed page loses its lock. Never touch chunks belonging to a live
     // window; recovery files use an entirely separate store.

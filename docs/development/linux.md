@@ -133,8 +133,8 @@ colors. The narrowly patched wgpu dependency is documented in
 The app-owned canvas and GTK parent each publish their own color description;
 tagging only the canvas does not qualify the controls. GTK selects its own output
 color state and converts the explicitly tagged artwork textures into it. A
-Wayland protocol trace verifies both surfaces, while physical monitor moves,
-profile changes and alternate GTK renderers still require qualification.
+Wayland protocol trace verifies both surfaces, while physical monitor moves and
+profile changes still require qualification.
 
 Effect colors, gradient stops and retained brush-color controls use the shared
 numeric editor with explicit defining spaces, extended RGB and separate alpha.

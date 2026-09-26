@@ -55,7 +55,7 @@ Never sort inputs before replay or use native predictions as ground truth.
 Capture allocates its bounded byte buffer when started, appends binary records
 without per-sample allocation, and performs no compression in input callbacks.
 GTK, Android and Windows compress on a worker when saving. Web uses asynchronous browser
-gzip compression, with a Rust fallback for browsers without CompressionStream.
+gzip compression.
 Once a successful save is acknowledged, the buffer is released.
 
 ## Replay and training export

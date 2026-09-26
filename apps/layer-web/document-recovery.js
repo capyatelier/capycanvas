@@ -37,7 +37,6 @@ export function createDocumentRecovery({app,call,dialog,element,button,message,r
     const key=keyId(id);if(owners.has(key))return owners.get(key).ready;
     const owner={id:key,key:crypto.randomUUID(),policy:'',jobs:Promise.resolve(),release:null,ready:null};owners.set(key,owner);
     owner.ready=new Promise((resolve,reject)=>{
-      if(!navigator.locks){reject(Error('Recovery storage requires Web Locks'));return;}
       navigator.locks.request(lockName(owner.key),async()=>{resolve(owner);await new Promise(done=>owner.release=done);}).catch(reject);
     });
     return owner.ready;

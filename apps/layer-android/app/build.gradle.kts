@@ -42,7 +42,6 @@ android {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
-            matchingFallbacks += "release"
             // White-box regression APKs keep their existing unminified ABI.
             // The self-instrumenting runner also tests full release optimization.
             isMinifyEnabled = providers.gradleProperty("capyOptimize").map { it != "false" }.getOrElse(false)
@@ -58,7 +57,6 @@ android {
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/capy/assets").get().asFile)
     sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/res").get().asFile)
-    packaging { jniLibs.useLegacyPackaging = false }
     testOptions { animationsDisabled = true }
 }
 

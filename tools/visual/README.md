@@ -274,9 +274,8 @@ field pixels and formatted readout. It covers both Apple presets, light/dark,
 Okhsv circle / HSV square / HLS triangle, shape/RGB readouts, three selected
 paint slots and 128/160/226-point widths: 216 complete panels per host.
 The AppKit entry point needs a built Mac asset bundle and uses temporary native
-windows. The same source also has a UIKit application entry point for an
-independently signed, isolated component-capture app. Neither entry point reads
-artist storage. Captures wait for stable pixels and require all measured bounds.
+windows. It never reads artist storage. Captures wait for stable pixels and
+require all measured bounds.
 
 ```sh
 CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app" \

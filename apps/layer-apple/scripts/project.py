@@ -86,41 +86,39 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         buildPhases=phases, buildRules=[], dependencies=[], name=scheme, productName=scheme,
         productReference=product, productType="com.apple.product-type.application")
     targets.append(target)
-    test_action = ""
-    if platform in ("iOS", "macOS"):
-        test_name = scheme + "Tests"
-        test_product = obj(test_name + "product", "PBXFileReference", explicitFileType="wrapper.cfbundle", path=test_name + ".xctest", sourceTree="BUILT_PRODUCTS_DIR")
-        products.append(test_product)
-        test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items()
-            if name.startswith(platform + "/Tests/") or name.startswith("Shared/Tests/")]
-        test_phase = obj(test_name + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=test_builds, runOnlyForDeploymentPostprocessing=0)
-        test_phases = [test_phase]
-        if platform == "macOS":
-            test_phases.append(obj(test_name + "photo-drag-source", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
-                files=[], inputPaths=["$(SRCROOT)/scripts/photo-drag-source.sh", "$(SRCROOT)/tests/photo-drag-source.swift"],
-                outputPaths=["$(BUILT_PRODUCTS_DIR)/PhotoDragSource.app/Contents/MacOS/PhotoDragSource"],
-                runOnlyForDeploymentPostprocessing=0, name="Build native photo drag fixture", shellPath="/bin/bash",
-                shellScript='/bin/bash "$SRCROOT/scripts/photo-drag-source.sh"\n'))
-        proxy = obj(test_name + "proxy", "PBXContainerItemProxy", containerPortal=ident("project"), proxyType=1, remoteGlobalIDString=target, remoteInfo=scheme)
-        dependency = obj(test_name + "dependency", "PBXTargetDependency", target=target, targetProxy=proxy)
-        test_settings = {
-            "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": "$(CAPY_APPLE_BUNDLE_ID).tests",
-            "CAPY_APPLE_BUNDLE_ID": settings["CAPY_APPLE_BUNDLE_ID"],
-            "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "SDKROOT": "iphoneos",
-            "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "TARGETED_DEVICE_FAMILY": "2",
-            "IPHONEOS_DEPLOYMENT_TARGET": "18.0", "GENERATE_INFOPLIST_FILE": "YES",
-            "TEST_TARGET_NAME": scheme, "ARCHS": "arm64", "CLANG_ENABLE_MODULES": "YES",
-        }
-        if platform == "macOS":
-            for key in ["TARGETED_DEVICE_FAMILY", "IPHONEOS_DEPLOYMENT_TARGET"]:
-                test_settings.pop(key)
-            test_settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0",
-                "ENABLE_USER_SCRIPT_SANDBOXING": "NO"})
-        test_target = obj(test_name, "PBXNativeTarget", buildConfigurationList=configs(test_name, test_settings),
-            buildPhases=test_phases, buildRules=[], dependencies=[dependency], name=test_name,
-            productName=test_name, productReference=test_product, productType="com.apple.product-type.bundle.ui-testing")
-        targets.append(test_target)
-        test_action = f'''<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="{test_name}.xctest" BlueprintName="{test_name}" ReferencedContainer="container:CapyCanvas.xcodeproj"/></TestableReference></Testables></TestAction>'''
+    test_name = scheme + "Tests"
+    test_product = obj(test_name + "product", "PBXFileReference", explicitFileType="wrapper.cfbundle", path=test_name + ".xctest", sourceTree="BUILT_PRODUCTS_DIR")
+    products.append(test_product)
+    test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items()
+        if name.startswith(platform + "/Tests/") or name.startswith("Shared/Tests/")]
+    test_phase = obj(test_name + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=test_builds, runOnlyForDeploymentPostprocessing=0)
+    test_phases = [test_phase]
+    if platform == "macOS":
+        test_phases.append(obj(test_name + "photo-drag-source", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
+            files=[], inputPaths=["$(SRCROOT)/scripts/photo-drag-source.sh", "$(SRCROOT)/tests/photo-drag-source.swift"],
+            outputPaths=["$(BUILT_PRODUCTS_DIR)/PhotoDragSource.app/Contents/MacOS/PhotoDragSource"],
+            runOnlyForDeploymentPostprocessing=0, name="Build native photo drag fixture", shellPath="/bin/bash",
+            shellScript='/bin/bash "$SRCROOT/scripts/photo-drag-source.sh"\n'))
+    proxy = obj(test_name + "proxy", "PBXContainerItemProxy", containerPortal=ident("project"), proxyType=1, remoteGlobalIDString=target, remoteInfo=scheme)
+    dependency = obj(test_name + "dependency", "PBXTargetDependency", target=target, targetProxy=proxy)
+    test_settings = {
+        "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": "$(CAPY_APPLE_BUNDLE_ID).tests",
+        "CAPY_APPLE_BUNDLE_ID": settings["CAPY_APPLE_BUNDLE_ID"],
+        "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "SDKROOT": "iphoneos",
+        "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "TARGETED_DEVICE_FAMILY": "2",
+        "IPHONEOS_DEPLOYMENT_TARGET": "18.0", "GENERATE_INFOPLIST_FILE": "YES",
+        "TEST_TARGET_NAME": scheme, "ARCHS": "arm64", "CLANG_ENABLE_MODULES": "YES",
+    }
+    if platform == "macOS":
+        for key in ["TARGETED_DEVICE_FAMILY", "IPHONEOS_DEPLOYMENT_TARGET"]:
+            test_settings.pop(key)
+        test_settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0",
+            "ENABLE_USER_SCRIPT_SANDBOXING": "NO"})
+    test_target = obj(test_name, "PBXNativeTarget", buildConfigurationList=configs(test_name, test_settings),
+        buildPhases=test_phases, buildRules=[], dependencies=[dependency], name=test_name,
+        productName=test_name, productReference=test_product, productType="com.apple.product-type.bundle.ui-testing")
+    targets.append(test_target)
+    test_action = f'''<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="{test_name}.xctest" BlueprintName="{test_name}" ReferencedContainer="container:CapyCanvas.xcodeproj"/></TestableReference></Testables></TestAction>'''
     scheme_dir = PROJECT / "xcshareddata/xcschemes"
     scheme_dir.mkdir(parents=True, exist_ok=True)
     ref = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="{scheme}.app" BlueprintName="{scheme}" ReferencedContainer="container:CapyCanvas.xcodeproj"/>'

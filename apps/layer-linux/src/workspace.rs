@@ -1924,7 +1924,7 @@ impl Workspace {
         self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
     }
     pub(crate) fn picker_headroom(&self) -> f32 {
-        if !self.window.renderer().is_some_and(|r| matches!(r.type_().name(), "GskVulkanRenderer" | "GskGLRenderer")) { return 1.; }
+        if !self.window.renderer().is_some_and(|r| r.type_().name() == "GskVulkanRenderer") { return 1.; }
         self.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
     }
     pub(crate) fn display_description(&self) -> String {

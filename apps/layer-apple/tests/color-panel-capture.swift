@@ -1,9 +1,5 @@
 import SwiftUI
-#if canImport(AppKit)
 import AppKit
-#else
-import UIKit
-#endif
 
 @MainActor private final class ColorGeometry { var panel: [String: CGRect] = [:] }
 
@@ -51,7 +47,6 @@ enum ColorPanelCaptures {
                                     .environment(\.colorScheme, theme == "dark" ? .dark : .light)
                                     .font(.system(size: store.catalog["text_size_pt"].number * 4 / 3))
                                     .foregroundStyle(palette["text"]).tint(palette.accent).background(palette["panel"])
-                                #if canImport(AppKit)
                                 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: width),
                                     styleMask: [.borderless], backing: .buffered, defer: false)
                                 window.isReleasedWhenClosed = false
@@ -69,24 +64,6 @@ enum ColorPanelCaptures {
                                     window.appearance?.performAsCurrentDrawingAppearance { host.cacheDisplay(in: host.bounds, to: bitmap) }
                                     return (bitmap.representation(using: .png, properties: [:])!, CGFloat(bitmap.pixelsWide) / width)
                                 }
-                                #else
-                                let host = UIHostingController(rootView: content)
-                                host.safeAreaRegions = []; host.overrideUserInterfaceStyle = theme == "dark" ? .dark : .light
-                                let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: width))
-                                window.rootViewController = host; window.makeKeyAndVisible(); host.view.frame = window.bounds
-                                defer { window.isHidden = true; window.rootViewController = nil }
-                                func image() throws -> (Data, CGFloat) {
-                                    host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-                                    let format = UIGraphicsImageRendererFormat()
-                                    format.opaque = true; format.preferredRange = .standard; format.scale = window.screen.scale
-                                    var painted = false
-                                    let image = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image { _ in
-                                        painted = host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
-                                    }
-                                    guard painted, let png = image.pngData() else { throw HostFailure(message: "UIKit did not paint the panel") }
-                                    return (png, format.scale)
-                                }
-                                #endif
                                 // Layout publication can precede Canvas's backing pixels. Require
                                 // consecutive stable captures instead of accepting a partial frame.
                                 var previous = Data(), png = Data(), scale: CGFloat = 1, stable = 0
@@ -150,7 +127,6 @@ enum ColorPanelCaptures {
     }
 }
 
-#if canImport(AppKit)
 @main struct AppKitColorCaptures {
     @MainActor static func main() {
         _ = NSApplication.shared
@@ -165,22 +141,3 @@ enum ColorPanelCaptures {
         NSApp.run()
     }
 }
-#else
-@MainActor private final class ColorCaptureDelegate: NSObject, UIApplicationDelegate {
-    func application(_ application: UIApplication,
-        didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        Task { @MainActor in
-            do {
-                precondition(UIImage(named: "icon-color-circle") != nil)
-                let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ColorCaptures")
-                try await ColorPanelCaptures.capture(directory: directory)
-                print("PASS: UIKit compact Color panels"); exit(0)
-            } catch { print("FAIL: UIKit Color panels: \(error)"); exit(1) }
-        }
-        return true
-    }
-}
-@main struct UIKitColorCaptures {
-    static func main() { UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(ColorCaptureDelegate.self)) }
-}
-#endif

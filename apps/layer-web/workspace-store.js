@@ -1,11 +1,10 @@
 // IndexedDB transport only. The synchronous Wasm reducer owns validation,
 // fencing, counters, receipts, names, migration and retention policy.
 const ownerLock = "capy-workspace-owner:";
-export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB, locks = globalThis.navigator?.locks } = {}) {
+export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB } = {}) {
   let database, opening;
   async function liveOwners() {
-    if (!locks) return [null, 0];
-    const at = Date.now(), { held = [], pending = [] } = await locks.query();
+    const at = Date.now(), { held = [], pending = [] } = await navigator.locks.query();
     return [[...held, ...pending].flatMap(({ name }) => name?.startsWith(ownerLock) ? [name.slice(ownerLock.length)] : []), at];
   }
   const error = e => JSON.stringify({ kind: e?.name === "QuotaExceededError" ? "storage_full" :
@@ -77,7 +76,7 @@ export function createWorkspaceClient(url, { onSettled = () => {}, module, prelo
   if (module || preload) start();
   return {
     initialize(compiledModule) { module = compiledModule; worker?.postMessage({module}); },
-    holdOwner(id) { globalThis.navigator?.locks?.request(ownerLock + id, () => new Promise(() => {})).catch(() => {}); },
+    holdOwner(id) { navigator.locks.request(ownerLock + id, () => new Promise(() => {})).catch(() => {}); },
     execute(request) {
       return new Promise((resolve,reject) => {
         try {

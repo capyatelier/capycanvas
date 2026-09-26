@@ -35,12 +35,8 @@ export function strokeRecordingControl(app, button, message = console.error) {
         // Invoke the system picker directly in the click's activation turn.
         const handle = window.showSaveFilePicker ? await window.showSaveFilePicker({suggestedName:name,
           types:[{description:'Stroke recording',accept:{'application/octet-stream':['.capystrokes']}}]}) : null;
-        let bytes;
-        if (typeof CompressionStream === 'function') {
-          const raw = app.stroke_recording_data();
-          const gzip = new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'));
-          bytes = new Uint8Array(await new Blob(['CAPYPEN2', await new Response(gzip).blob()]).arrayBuffer());
-        } else bytes = app.stroke_recording_bytes();
+        const gzip = new Blob([app.stroke_recording_data()]).stream().pipeThrough(new CompressionStream('gzip'));
+        const bytes = new Uint8Array(await new Blob(['CAPYPEN2', await new Response(gzip).blob()]).arrayBuffer());
         if (handle) {
           writable = await handle.createWritable(); await writable.write(bytes); await writable.close(); writable = null;
           app.stroke_recording_saved();

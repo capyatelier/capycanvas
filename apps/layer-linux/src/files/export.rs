@@ -791,7 +791,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     ));
     let comparison =
         super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color());
-    comparison.set_headroom(super::preview::display_headroom(w));
+    comparison.set_headroom(w.picker_headroom());
     rendition_view.connect_active_name_notify(glib::clone!(#[weak] comparison, move |group| comparison.show_fallback(group.active_name().as_deref()==Some("sdr"))));
     let recommend=Rc::new(std::cell::Cell::new(false));
     range.connect_selected_notify(glib::clone!(#[strong] recommend, move |_| recommend.set(false)));
