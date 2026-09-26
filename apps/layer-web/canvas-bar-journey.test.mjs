@@ -58,7 +58,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
     await send({type:'preferences',action:{type:'edit',id:'transparency',value:3}});
     await evaluate(`window.barProbe={set:layerApp.app.set_glass,pen:layerApp.app.pen,input:layerApp.app.input,boxes:[],pens:0,pointers:0,shown:0};
-      layerApp.app.set_glass=(boxes,...rest)=>{barProbe.boxes=Array.from(boxes);return barProbe.set.call(layerApp.app,boxes,...rest);};
+      layerApp.app.set_glass=(boxes,...rest)=>{barProbe.boxes=Array.from(boxes);barProbe.glassSets=(barProbe.glassSets??0)+1;return barProbe.set.call(layerApp.app,boxes,...rest);};
       layerApp.app.pen=(...args)=>{barProbe.pens++;return barProbe.pen.apply(layerApp.app,args);};
       layerApp.app.input=event=>{if(event.type==='pointer')barProbe.pointers++;const r=barProbe.input.call(layerApp.app,event);if(event.type==='pointer')(barProbe.log??=[]).push([event.kind,event.phase,r.canvas_bar_hidden,r.handled,r.paint]);return r;};
       barProbe.observer=new MutationObserver(()=>{const b=document.querySelector('${bar}'),on=!b.hidden&&!b.classList.contains('suppressed');if(on&&!barProbe.on)barProbe.shown++;barProbe.on=on;});
@@ -168,6 +168,34 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       }
       assert.notEqual(await kind(),'transform',`${device}: completion ends the transform bar`);
     }
+    const stroke=async withBar=>{
+      if(withBar){await drag([at(-120,-80),at(120,-80),at(120,80),at(-120,-80)],'pen');await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);await pause(300);}
+      else {await invoke('deselect');await settle();await pause(300);}
+      await invoke('lasso');await wait('layerApp.app.brush_ready()');
+      const metrics=async()=>Object.fromEntries((await call('Performance.getMetrics')).metrics.filter(m=>['LayoutCount','RecalcStyleCount','LayoutDuration','RecalcStyleDuration'].includes(m.name)).map(m=>[m.name,m.value]));
+      const points=Array.from({length:61},(_,i)=>at(-200+400*i/60,-220+40*Math.sin(i/6)));
+      const sample=async()=>({...await metrics(),glass:await evaluate('barProbe.glassSets??0')});
+      const delta=(a,b)=>({layouts:b.LayoutCount-a.LayoutCount,styles:b.RecalcStyleCount-a.RecalcStyleCount,
+        layout_ms:+((b.LayoutDuration-a.LayoutDuration)*1000).toFixed(3),style_ms:+((b.RecalcStyleDuration-a.RecalcStyleDuration)*1000).toFixed(3),glass:b.glass-a.glass});
+      const start=await sample();
+      touchId++;await pointer('mousePressed',points[0],'pen');await settle();
+      const down=await sample();
+      for(const p of points.slice(1)){await pointer('mouseMoved',p,'pen');}
+      await settle();
+      const moved=await sample(),result={bar:withBar,hidden:!await evaluate(visible),samples:points.length-1,down:delta(start,down),moves:delta(down,moved)};
+      await pointer('mouseReleased',points.at(-1),'pen');await settle();
+      return result;
+    };
+    await call('Performance.enable');
+    const strokes=[await stroke(false),await stroke(true),await stroke(false),await stroke(true)];
+    await writeFile(`${directory}/stroke-metrics.json`,JSON.stringify(strokes,null,2));
+    const plain=strokes.filter(s=>!s.bar),most=key=>Math.max(...plain.map(s=>s.moves[key])),down=key=>Math.max(...plain.map(s=>s.down[key]));
+    for(const s of strokes.filter(s=>s.bar)) {
+      assert.ok(s.hidden,`The bar is hidden while the lasso stroke continues ${JSON.stringify(strokes)}`);
+      assert.ok(s.down.glass<=down('glass')+1&&s.down.layouts<=down('layouts')+1,`Hiding at pen-down republishes glass once and lays out at most once ${JSON.stringify(strokes)}`);
+      assert.ok(s.moves.glass<=most('glass')&&s.moves.layouts<=most('layouts'),`The hidden bar adds no glass or layout work to stroke samples ${JSON.stringify(strokes)}`);
+    }
+    console.log('Stroke metrics',JSON.stringify(strokes));
     await invoke('deselect');await settle();
     assert.equal(await evaluate(visible),false,'Deselect removes the bar');
     console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass and screenshots in ${directory}`);

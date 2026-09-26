@@ -175,6 +175,17 @@ Other focused `node apps/layer-web/test.mjs --headless` modes:
   --native-test=native_settings_typography` first; it compares every Settings
   page with the GTK allocations and font sizes in `artifacts/ui/settings-audit`.
 
+For the canvas action bar, run `node --test apps/layer-web/canvas-bar.test.mjs`
+for its placement, overflow and hiding rules, then
+`node apps/layer-web/test.mjs --headless --canvas-bar`. The journey uses mouse,
+touch and pen for the selection bar beside a new selection, Transform and the
+transform bar, taps that never reach the canvas, hiding during canvas drags,
+More with the transform intact, Apply and Cancel, the completion-only bar,
+Zen and the bar's glass region. It writes light and dark screenshots and stroke
+style/layout counts to `artifacts/canvas-bar/web`. `device.test.mjs --canvas-bar`
+runs the same journey on a tablet. `--image-placement` uses the bar's Original
+Size, Cancel and Apply.
+
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
 or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the

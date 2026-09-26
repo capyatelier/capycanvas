@@ -22,6 +22,7 @@ import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkLayerHolding} from "./layer-hold.test.mjs";
 import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
 import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
+import {checkCanvasBar} from "./canvas-bar-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -151,6 +152,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--image-placement")) {
     await checkDeviceImagePlacement({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--canvas-bar")) {
+    await checkCanvasBar({call,evaluate,settle,device:true});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-feedback")) {
     await checkTitleBarFeedback({call,evaluate,settle});

@@ -113,6 +113,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
     if (changed) glass?.queue();
   }
   function place() {
+    if (suppressed) { present(); return; }
     if (view && !sizes) measure();
     layout = view ? app.canvas_bar_layout({ context: view.context, ...sizes }) ?? null : null;
     present();
