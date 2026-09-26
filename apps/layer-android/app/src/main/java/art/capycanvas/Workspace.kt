@@ -158,6 +158,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         AlertDialog(onDismissRequest = host::clearActionError, text = { Text(message) },
                             confirmButton = { TextButton(host::clearActionError) { Text("OK") } })
                     }
+                    CommandSearch(host)
                     PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
                     if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
                         ToolPicker(host, snapshot.getJSONObject("picker"))

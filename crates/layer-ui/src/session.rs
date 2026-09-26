@@ -4696,6 +4696,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        if regions & regions::COMMAND_SEARCH != 0 {
+            self.command_search.revision += 1;
+        }
         self.update_shader_idle();
         self.update_toolbar_context();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {

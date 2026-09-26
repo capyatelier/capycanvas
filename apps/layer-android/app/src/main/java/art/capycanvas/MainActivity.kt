@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() { host.drawingTabs.closeWindow() }
         })
         enableEdgeToEdge()
-        enterFullscreen()
+        window.enterCanvasFullscreen()
         updateTheme(resources.configuration)
         setContent {
             ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
@@ -43,12 +43,6 @@ class MainActivity : ComponentActivity() {
             else->emptyList()
         }
         if(uris.isNotEmpty())host.documents.openUris(uris,intent.flags)
-    }
-    private fun enterFullscreen() {
-        WindowCompat.getInsetsController(window, window.decorView).apply {
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
-        }
     }
     private fun updateTheme(config: Configuration) {
         host.dispatch(obj("type" to "system_theme_changed", "theme" to
@@ -89,6 +83,9 @@ class MainActivity : ComponentActivity() {
         if (host.headerKeyHandler?.invoke(event) == true) return true
         if (host.drawingTabs.key(event)) return true
         if (host.palettes.key(event)) return true
+        if (event.action == KeyEvent.ACTION_DOWN && (event.isCtrlPressed || event.isMetaPressed))
+            host.dispatch(obj("type" to "command_search", "action" to obj("type" to "focus",
+                "focus" to host.commandFocus())))
         host.key(event)
         return super.dispatchKeyEvent(event)
     }
@@ -103,9 +100,17 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            enterFullscreen()
+            window.enterCanvasFullscreen()
             host.workspaceInput(obj("type" to "refresh_switcher"))
         } else if (!host.pickerPopupOpen) host.input(obj("type" to "blur"))
+    }
+}
+
+/** Apply the same immersive chrome policy to the editor and its native dialogs. */
+internal fun android.view.Window.enterCanvasFullscreen() {
+    WindowCompat.getInsetsController(this, decorView).apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        hide(WindowInsetsCompat.Type.systemBars())
     }
 }
 

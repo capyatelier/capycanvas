@@ -1418,6 +1418,40 @@ browser frame-readiness proxy, not physical display scanout. A repeated-opening
 regression exposed focus left inside a closed dialog; the host now restores
 meaningful focus with an explicit canvas fallback.
 
+### 7.4 Implementation checkpoint: Android and native transport
+
+Android now projects the shared command search in a native Compose dialog, using
+shared width/inset/gap constants, the editor palette and typography, and 48dp
+contact targets. Search has its own native transport revision and small
+publication, so typing retains workspace and panel models. Discrete keyboard
+changes bypass the continuous-input publication throttle. Parameter navigation
+and stale-query handling stay in Rust.
+
+The native dialog window remains stable as result counts change; only the
+visible card changes size. This removed per-query WindowManager resizing and
+reduced Huion debug-build warm query-to-draw p95 from roughly 68–84ms to
+**20.5ms** in the final 20-sample sequence after 20 warm-up queries. The measured endpoint
+is Android's UI draw callback, not physical display scanout. The card preserves
+its top margin and adapts to the soft keyboard using native IME insets.
+
+Regression coverage includes the lightweight open/query/close packet, full
+model recovery after command execution, delayed text events during parameter
+entry, keyboard opening and immediate commit, numeric validation, native focus,
+menu opening, both default chords, touch/stylus activation, outside-contact
+capture and portrait layout. Light/dark and keyboard-visible captures were
+reviewed on the Huion; Android build, lint and the full native command-search
+instrumentation passed. Device input
+is injected through Android's native input dispatcher on the attached Huion,
+not a claim of manual pen-tip testing. Reproducible commands and artifact paths
+are in [command search](../ui/command-search.md).
+
+The final GTK regression measured **8.3ms open-to-paint p95** and **20.8ms
+query-to-paint p95**. Web remained around **20ms p95** to two animation frames.
+These host-specific endpoints are responsiveness checks, not directly comparable
+scanout benchmarks. General held overrides, raw device protocols and compatibility
+presets remain stages C–F; the three command-bar hosts do not imply those later
+input features are implemented.
+
 ## 8. Research limitations and maintenance
 
 This checkpoint inspected shared code and all six host input paths; it did not

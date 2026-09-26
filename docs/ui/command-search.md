@@ -60,6 +60,20 @@ combobox/listbox accessibility, reduced motion and visual-viewport sizing.
 Outside-dismissal contacts must not reach the canvas. Closing restores the
 origin focus, falling back to the canvas if the original element cannot take focus.
 
+Android uses a Compose dialog with native text/IME, 48dp targets and the same
+palette, typography, spacing and immersive-window policy as the editor. The
+native window stays fixed while Compose sizes the visible card, avoiding a
+WindowManager resize when the result count changes. IME insets constrain the
+scrolling results while the entry and selected-result explanation stay visible.
+The entrance uses the native animation duration scale.
+
+Native transports distinguish search revisions from workspace revisions and
+publish a small `command_search` packet (including explicit null on close).
+Android observes it separately from the retained workspace. Keyboard actions
+publish immediately instead of waiting for the continuous-input throttle.
+`Back` resolves the current search/parameter phase in Rust; delayed query
+events cannot discard the parameter step.
+
 ## Coverage and subsequent input work
 
 | Surface | Route |
@@ -93,3 +107,18 @@ captures, numeric entry, repeated opening, disabled actions and outside-contact
 dismissal. Native artifacts are written to the test runner's temporary directory.
 The Web test additionally checks native keyboard focus, ARIA selection, touch
 activation at narrow width, retained workspace DOM and query-to-frame latency.
+
+For Android, build `:app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`
+with the SDK setup in [Android development](../development/android.md), install
+both APKs onto the selected device, then run:
+
+```sh
+adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w \
+  -e class art.capycanvas.AndroidCommandSearchTest \
+  art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The instrumentation uses isolated workspace/recovery/color storage, real native
+windows, injected keyboard/finger/stylus events, the device IME, menu activation,
+parameter validation, retained panel identity and query-to-draw measurements.
+Captures are saved under the app's external `validation/command-search` directory.

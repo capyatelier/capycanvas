@@ -153,6 +153,7 @@ struct Entry {
 
 #[derive(Default)]
 pub(super) struct CommandSearch {
+    pub(super) revision: u64,
     entries: Vec<Entry>,
     recent: Vec<String>,
     epoch: u64,
@@ -355,6 +356,9 @@ fn menu_entries(
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn command_search_revision(&self) -> u64 {
+        self.command_search.revision
+    }
     pub fn set_command_focus(&mut self, focus: CommandFocus) {
         if self.state.command_search.is_none() {
             self.command_search.focus = focus;
@@ -774,7 +778,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                     });
                 }
             }
-            A::Query { text } => self.search_commands(text.chars().take(256).collect()),
+            A::Query { text } => {
+                // Native text changes can arrive before a serial host paints
+                // the parameter step. Only Back can return to result search.
+                if self
+                    .state
+                    .command_search
+                    .as_ref()
+                    .unwrap()
+                    .parameter
+                    .is_none()
+                {
+                    self.search_commands(text.chars().take(256).collect());
+                }
+            }
             A::Move { delta } => {
                 let view = self.state.command_search.as_mut().unwrap();
                 if !view.results.is_empty() {
@@ -791,6 +808,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             A::Back => {
                 let view = self.state.command_search.as_mut().unwrap();
+                if view.parameter.is_none() {
+                    return self.command_search_action(A::Close);
+                }
                 view.parameter = None;
                 view.error = None;
             }

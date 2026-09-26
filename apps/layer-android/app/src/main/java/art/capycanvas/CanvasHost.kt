@@ -159,6 +159,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     var catalog by mutableStateOf(JSONObject())
         private set
+    internal var commandSearch by mutableStateOf<JSONObject?>(null)
+        private set
     var failure by mutableStateOf<String?>(null)
         private set
     private var actionErrorFromCanvasFailure = false
@@ -290,16 +292,24 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     internal fun reportActionError(message: String) { actionError = message; actionErrorFromCanvasFailure = false }
     fun clearActionError() { actionError = null; actionErrorFromCanvasFailure = false }
-    fun dispatch(action: JSONObject) = post {
-        val type=action.optString("type")
-        if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen")) return@post
-        val tracing = android.os.Trace.isEnabled()
-        if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
-        try { Native.dispatch(handle, action.toString()) }
-        finally { if (tracing) android.os.Trace.endSection() }
-        refreshChrome()
-        publish(true)
-        wake()
+    internal fun commandFocus() = if (editingText) "text" else if (palettes.focus != null) "palette" else "canvas"
+    fun dispatch(action: JSONObject) {
+        // Capture the editor owner before a menu action opens a native dialog.
+        val focus = if (action.optString("type") == "invoke" && action.optString("command") == "search_commands") commandFocus() else null
+        post {
+            val type=action.optString("type")
+            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen")) return@post
+            val tracing = android.os.Trace.isEnabled()
+            if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
+            try {
+                if (focus != null) Native.dispatch(handle, obj("type" to "command_search", "action" to obj("type" to "focus", "focus" to focus)).toString())
+                Native.dispatch(handle, action.toString())
+            }
+            finally { if (tracing) android.os.Trace.endSection() }
+            refreshChrome()
+            publish(true)
+            wake()
+        }
     }
     private data class WorkspacePresentation(val preview: JSONObject?, val reply: (Any?) -> Unit)
     private var workspacePresentation: WorkspacePresentation? = null // Native owner only.
@@ -387,7 +397,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if(documentInputBlocked && input.optString("type") in listOf("key_down", "scroll")) return@post
         val value = JSONObject(Native.input(handle, input.toString()))
         if (reply != null) main.post { reply(value) }
-        publish(false)
+        // Discrete key actions must publish immediately even when the previous
+        // focus event was inside the camera/pointer publication interval.
+        publish(input.optString("type") == "key" && (value.optJSONObject("change")?.optInt("regions", 0) ?: 0) != 0)
         wake()
     }
     // These are presentation facts, supplied by native widgets. Rust owns Zen
@@ -640,7 +652,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         fun contentPath(path: JSONArray): Boolean = when (path.optString(0)) {
             // Settings navigation is consumed by PreferencesOverlay. Applied
             // settings still invalidate panels normally (theme, size, etc.).
-            "state" -> path.optString(1) !in listOf("workspace", "revision", "settings_open", "preferences")
+            "state" -> path.optString(1) !in listOf("workspace", "revision", "settings_open", "preferences", "command_search")
             "panels", "color_panel", "palette_panel" -> true
             else -> false
         }
@@ -658,6 +670,16 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 measuredPublications[offset + 2] = System.nanoTime() - parsedEnd
                 measuredPublications[offset + 3] = serialized.length.toLong()
             }
+        }
+        if (!next.has("state") && next.has("command_search")) {
+            recordPublication()
+            main.post {
+                commandSearch = next.objectOrNull("command_search")
+                snapshot?.getJSONObject("state")?.apply {
+                    put("command_search", next.get("command_search")); put("revision", next.getLong("revision"))
+                }
+            }
+            return
         }
         val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
         if (geometry != null) lastWorkspaceUpdate = geometry
@@ -745,7 +767,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
         }
         val contentState = JSONObject().apply {
-            state.keys().forEach { key -> if (key !in listOf("workspace", "revision", "settings_open", "preferences")) put(key, state.get(key)) }
+            state.keys().forEach { key -> if (key !in listOf("workspace", "revision", "settings_open", "preferences", "command_search")) put(key, state.get(key)) }
         }
         val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"),
             "palette_panel" to next.objectOrNull("palette_panel"))
@@ -759,6 +781,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         recordPublication()
         main.post {
             colorPreview = next.objectOrNull("color_preview")
+            commandSearch = state.objectOrNull("command_search")
             if (publishContent) panelContent = content
             snapshot = next
             drawingTabs.refresh()

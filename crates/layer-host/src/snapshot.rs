@@ -84,6 +84,7 @@ impl NativeHost {
         self.last_model_snapshot = None;
         let key = SnapshotKey {
             revision: self.session.state().revision,
+            command_search_revision: self.session.command_search_revision(),
             logical: self.logical,
             chrome_hidden: self.chrome_hidden,
             hide_floating_panels: self.hide_floating_panels,
@@ -106,6 +107,32 @@ impl NativeHost {
                 return Ok(Some(snapshot));
             }
             return Ok(None);
+        }
+        // Search has independent state: retaining the workspace model must not
+        // mistake a query/open/close for an ordinary geometry-only publication.
+        if incremental
+            && self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
+            && self.last_camera_revision == Some(camera.revision)
+            && self.last_snapshot.as_ref().is_some_and(|previous| {
+                previous.command_search_revision != key.command_search_revision
+                    && SnapshotKey {
+                        revision: key.revision,
+                        command_search_revision: key.command_search_revision,
+                        ..previous.clone()
+                    } == key
+            })
+        {
+            #[derive(Serialize)]
+            struct Search<'a> {
+                command_search: &'a Option<layer_ui::CommandSearchView>,
+                revision: u64,
+            }
+            let snapshot = Search {
+                command_search: &self.session.state().command_search,
+                revision: key.revision,
+            }.serialize(serializer)?;
+            self.last_snapshot = Some(key);
+            return Ok(Some(snapshot));
         }
         let update = incremental.then(|| self.session.workspace_update());
         if let Some(update) = &update
@@ -330,6 +357,32 @@ impl NativeHost {
 mod tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction, WorkspaceState};
+
+    #[test]
+    fn command_search_publications_retain_workspace_and_include_close() {
+        use layer_ui::CommandSearchAction;
+        let mut host = host(Platform::Android);
+        host.dispatch(UiAction::Invoke { command: CommandId::Hand }).unwrap();
+        let initial = decoded(host.take_model_update_bytes().unwrap()).unwrap();
+        assert!(initial.get("state").is_some());
+        let model_revision = host.session.workspace_model_revision();
+        host.dispatch(UiAction::Invoke { command: CommandId::SearchCommands }).unwrap();
+        let opened = decoded(host.take_model_update_bytes().unwrap()).unwrap();
+        assert!(opened["command_search"]["results"].is_array(), "{opened}");
+        assert!(opened.get("state").is_none());
+        host.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Query { text: "pencil".into() } }).unwrap();
+        let queried = decoded(host.take_model_update_bytes().unwrap()).unwrap();
+        assert_eq!(queried["command_search"]["query"], "pencil");
+        assert!(queried.get("workspace_update").is_none());
+        host.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Close }).unwrap();
+        let closed = decoded(host.take_model_update_bytes().unwrap()).unwrap();
+        assert!(closed.get("command_search").unwrap().is_null());
+        assert_eq!(host.session.workspace_model_revision(), model_revision);
+        assert!(host.take_model_update_bytes().unwrap().is_none());
+        host.dispatch(UiAction::Invoke { command: CommandId::Eraser }).unwrap();
+        let changed = decoded(host.take_model_update_bytes().unwrap()).unwrap();
+        assert!(changed.get("state").is_some(), "Reestablish the full model baseline after a search packet");
+    }
 
     fn host(platform: Platform) -> NativeHost {
         let mut host = NativeHost::new(platform).unwrap();

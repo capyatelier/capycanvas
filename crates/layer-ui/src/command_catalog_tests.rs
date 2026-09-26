@@ -92,6 +92,13 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
         },
     );
     assert!(s.state.command_search.as_ref().unwrap().parameter.is_some());
+    search_action(
+        &mut s,
+        CommandSearchAction::Query {
+            text: "late native text".into(),
+        },
+    );
+    assert!(s.state.command_search.as_ref().unwrap().parameter.is_some());
     let before = s.state.brush.diameter;
     search_action(
         &mut s,
@@ -119,6 +126,8 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
         s.state.command_search.as_ref().unwrap().results[0].id,
         "tool_setting.size"
     );
+    search_action(&mut s, CommandSearchAction::Back);
+    assert!(s.state.command_search.is_none());
 }
 
 #[test]

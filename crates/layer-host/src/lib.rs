@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 #[derive(Clone, PartialEq)]
 struct SnapshotKey {
     revision: u64,
+    command_search_revision: u64,
     logical: [f32; 2],
     chrome_hidden: bool,
     hide_floating_panels: bool,
