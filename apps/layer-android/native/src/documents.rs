@@ -6,26 +6,18 @@ use jni::{
     objects::{JClass, JString},
     sys::{jboolean, jint, jlong},
 };
-use layer_core::{Project, ProjectLimits};
-use layer_host::Renderer;
-use layer_render::{CanvasRenderer, EffectValidationRequest};
+use layer_core::Project;
+use layer_host::{Renderer, open::OpenEnvironment};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
     io::{BufWriter, Write},
     os::fd::FromRawFd,
-    time::{Duration, Instant},
 };
 
 struct Environment {
-    admission: layer_ui::DocumentAdmission,
-    gpu: layer_host::GpuContext,
-    options: layer_host::RendererOptions,
-    viewport: [u32; 2],
-    brush: layer_core::BrushSnapshot,
-    new_options: layer_ui::NewDocumentOptions,
-    photo_policy: layer_ui::PhotoOpenPolicy,
+    open: OpenEnvironment,
     source_name: String,
     working_space: layer_core::color::RgbSpace,
     pending_photo: Option<layer_core::color::source::SourceImage>,
@@ -108,21 +100,9 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 {
                     return Err("The document changed; review those changes before opening".into());
                 }
-                let gpu = session
-                    .engine()
-                    .backend()
-                    .0
-                    .as_ref()
-                    .ok_or("Wait for the canvas to finish starting")?;
                 Payload::Open {
                     environment: Some(Environment {
-                        admission,
-                        gpu: layer_host::GpuContext::of(gpu),
-                        options,
-                        viewport: session.state().camera.viewport,
-                        brush: session.engine().configured_brush().clone(),
-                        new_options: session.state().settings.new_document.defaults,
-                        photo_policy: session.state().settings.photo_open,
+                        open: OpenEnvironment::capture(session, admission, options)?,
                         pending_photo: None,
                         working_space: session.engine().document().color.space,
                         source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(
@@ -181,22 +161,13 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         return Err("Not an open request".into());
     };
     let mut e = environment.take().ok_or("Project worker already ran")?;
-    let limits = ProjectLimits {
-        dimension: e
-            .gpu
-            .device
-            .limits()
-            .max_texture_dimension_2d
-            .min(ProjectLimits::default().dimension),
-        ..Default::default()
-    };
     let project = match input {
         Some(file) => {
-            let imported = layer_ui::read_import(file,
+            let imported = e.open.read(file,
                 if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
-                e.photo_policy, &e.source_name, limits, Default::default(), control.cancellation_flag())?;
+                &e.source_name, control.cancellation_flag())?;
             t.source = imported.source;
-            if let Some(source) = imported.interpretation_required(e.photo_policy) {
+            if let Some(source) = imported.interpretation_required(e.open.photo_policy) {
                 e.source_name = imported.project.document.layers[0].name.to_string();
                 e.pending_photo = Some(source.clone());
                 *environment = Some(e);
@@ -207,14 +178,14 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         }
         None => {
             if let Some(source) = e.pending_photo.take() {
-                if e.photo_policy.needs_interpretation(&source) {
+                if e.open.photo_policy.needs_interpretation(&source) {
                     return Err("Choose an image interpretation before opening".into());
                 }
-                e.photo_policy.photo_project(source, &e.source_name)?
+                e.open.photo_policy.photo_project(source, &e.source_name)?
             } else {
                 layer_ui::NewDocumentOptions {
                     extent: [width, height],
-                    ..e.new_options
+                    ..e.open.new_options
                 }
                 .project()?
             }
@@ -249,52 +220,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         };
         return Ok(());
     }
-    e.admission.admit(&project)?;
-    let mut gpu = e.gpu.rasterizer(project.document.color, &e.options, true)?;
-    let mut programs = Vec::new();
-    for effect in project
-        .document
-        .layers
-        .iter()
-        .filter_map(|l| l.effect.as_ref())
-    {
-        if !programs.contains(&effect.program) {
-            programs.push(effect.program.clone());
-        }
-    }
-    let mut validating = !programs.is_empty();
-    if validating {
-        gpu.request_effect_validation(EffectValidationRequest {
-            request_id: 1,
-            namespace: programs.clone(),
-            programs,
-        })
-        .map_err(error)?;
-    }
-    // Preparing startup starts the native compiler. Waiting for validation
-    // before this call leaves all embedded shader jobs permanently queued.
-    gpu.prepare_startup(&project.document, &e.brush, false)
-        .map_err(error)?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if control.is_cancelled() { return Err("Opening cancelled".into()); }
-        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        if validating && let Some(result) = gpu.take_effect_validation() {
-            result.result?;
-            validating = false;
-        }
-        let ready = gpu.poll_startup().map_err(error)?;
-        if !validating && ready.canvas_ready && ready.brush_ready {
-            break;
-        }
-        if Instant::now() > deadline {
-            return Err("Project canvas preparation timed out".into());
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    let mut next = UiSession::from_project(Renderer(Some(gpu.into())), project, None, e.viewport)?;
-    next.frame(0, 0)?;
-    *candidate = Some(Box::new(next));
+    *candidate = Some(e.open.prepare(project, || control.is_cancelled())?);
     Ok(())
 }
 
@@ -358,7 +284,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
         else {
             return Err("New drawing task is no longer configurable".into());
         };
-        environment.new_options = options;
+        environment.open.new_options = options;
         Ok(())
     })();
     fail(&mut env, result);
@@ -523,6 +449,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         if t.recovered { next.mark_recovered(); }
         next.set_document_replacement(false);
         next.inherit_window_state(&a.host.session)?;
+        next.inherit_initial_drawing_tools(&a.host.session)?;
         if !t.recovered && a.host.session.state().requests.iter().any(|r| r.id==t.request) {
             a.host.session.complete_document_request(t.request, Ok(true))?;
         }
@@ -701,22 +628,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
         }
         let payload = if opening != 0 {
             session.require_document_idle()?;
-
-            let gpu = session
-                .engine()
-                .backend()
-                .0
-                .as_ref()
-                .ok_or("Wait for the canvas")?;
             Payload::Open {
                 environment: Some(Environment {
-                    admission: a.documents.admission(&session.retained_document_tiles()),
-                    gpu: layer_host::GpuContext::of(gpu),
-                    options: a.host.renderer_options(Some(a.cache_directory.clone().into())),
-                    viewport: session.state().camera.viewport,
-                    brush: session.engine().configured_brush().clone(),
-                    new_options: session.state().settings.new_document.defaults,
-                    photo_policy: session.state().settings.photo_open,
+                    open: OpenEnvironment::capture(
+                        session,
+                        a.documents.admission(&session.retained_document_tiles()),
+                        a.host.renderer_options(Some(a.cache_directory.clone().into())),
+                    )?,
                     source_name: "Recovered drawing".into(),
                     working_space: session.engine().document().color.space,
                     pending_photo: None,

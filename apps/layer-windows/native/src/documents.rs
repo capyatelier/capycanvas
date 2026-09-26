@@ -2,9 +2,8 @@
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
 //!
 use crate::document_io::{atomic_write, check_cancelled, io_error, location};
-use layer_core::{Project, ProjectLimits};
-use layer_host::{NativeHost, Renderer};
-use layer_render::{CanvasRenderer, EffectValidationRequest};
+use layer_core::Project;
+use layer_host::{NativeHost, Renderer, open::OpenEnvironment};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use serde::Deserialize;
@@ -20,7 +19,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Deserialize)]
@@ -64,29 +63,14 @@ pub(crate) enum DocumentAction {
         path: String,
     },
 }
-pub(crate) struct Environment {
-    admission: layer_ui::DocumentAdmission,
-    gpu: layer_host::GpuContext,
-    viewport: [u32; 2],
-    photo_policy: layer_ui::PhotoOpenPolicy,
+pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<OpenEnvironment, String> {
+    OpenEnvironment::capture(
+        session,
+        layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles()),
+        Default::default(),
+    )
 }
-impl Environment {
-    pub(crate) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
-        let gpu = session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or("Wait for the canvas to finish starting")?;
-        Ok(Self {
-            admission: layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles()),
-            gpu: layer_host::GpuContext::of(gpu),
-            viewport: session.state().camera.viewport,
-            photo_policy: session.state().settings.photo_open,
-        })
-    }
-}
-struct Opening { environment: Environment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry> }
+struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry> }
 enum Source {
     Create(layer_ui::NewDocumentOptions),
     Recovery(PathBuf),
@@ -103,7 +87,7 @@ enum Job {
         path: PathBuf,
     },
     Prepare {
-        environment: Environment,
+        environment: OpenEnvironment,
         source: Source,
         cancelled: Arc<AtomicBool>,
     },
@@ -263,82 +247,29 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     }
 }
 fn prepare(
-    environment: Environment,
+    environment: OpenEnvironment,
     source: Source,
     cancel: &AtomicBool,
 ) -> Result<Completed, String> {
-    let limits = ProjectLimits {
-        dimension: environment
-            .gpu
-            .device
-            .limits()
-            .max_texture_dimension_2d
-            .min(ProjectLimits::default().dimension),
-        ..Default::default()
-    };
     let imported = match source {
         Source::Create(options) => layer_ui::ImportedDocument { project: options.project()?, source: layer_ui::ImportSource::Master },
-        Source::Recovery(path) => layer_ui::read_import(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
-            layer_ui::ImportIntent::Recovery, environment.photo_policy, "Recovered drawing", limits, Default::default(), cancel)?,
+        Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
+            layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
         Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel)?)?; *imported },
         Source::Open(path) => {
             let file = File::open(&path).map_err(|e| io_error("open", e))?;
-            layer_ui::read_import(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
-                environment.photo_policy, path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"),
-                limits, Default::default(), cancel)?
+            environment.read(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
+                path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"), cancel)?
         }
     };
     if imported.interpretation_required(environment.photo_policy).is_some() {
         return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles: crate::color_storage::list(cancel)? })));
     }
     let kind = imported.source;
-    let project = imported.project;
-    project.validate(limits)?;
-    environment.admission.admit(&project)?;
-    check_cancelled(cancel)?;
-    // Eager preparation is isolated from the independently presented live canvas.
-    let mut gpu = environment.gpu.rasterizer(project.document.color, &Default::default(), true)?;
-    let mut programs = Vec::new();
-    for effect in project
-        .document
-        .layers
-        .iter()
-        .filter_map(|layer| layer.effect.as_ref())
-    {
-        if !programs.contains(&effect.program) {
-            programs.push(effect.program.clone());
-        }
-    }
-    let mut validating = !programs.is_empty();
-    if validating {
-        gpu.request_effect_validation(EffectValidationRequest {
-            request_id: 1,
-            namespace: programs.clone(),
-            programs,
-        })
-        .map_err(|e| e.to_string())?;
-    }
-    gpu.prepare_startup(&project.document, &Default::default(), false).map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        check_cancelled(cancel)?;
-        gpu.device().poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
-        if validating && let Some(result) = gpu.take_effect_validation() {
-            result.result?;
-            validating = false;
-        }
-        let ready = gpu.poll_startup().map_err(|e| e.to_string())?;
-        if !validating && ready.canvas_ready && ready.brush_ready { break; }
-        if Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    let mut candidate =
-        UiSession::from_project(Renderer(Some(gpu.into())), project, None, environment.viewport)?;
-    candidate.frame(0, 0)?;
-    check_cancelled(cancel)?;
-    Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(Box::new(candidate)) } else { Completed::Prepared(Box::new(candidate)) })
+    let candidate = environment.prepare(imported.project, || cancel.load(Ordering::Acquire))?;
+    Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(candidate) } else { Completed::Prepared(candidate) })
 }
-pub(crate) fn prepare_recovery(environment: Environment, path: PathBuf, cancel: &AtomicBool) -> Result<Box<UiSession<Renderer>>, String> {
+pub(crate) fn prepare_recovery(environment: OpenEnvironment, path: PathBuf, cancel: &AtomicBool) -> Result<Box<UiSession<Renderer>>, String> {
     match prepare(environment, Source::Recovery(path), cancel)? {
         Completed::Prepared(candidate) => Ok(candidate),
         _ => Err("Recovery is not a native drawing".into()),
@@ -699,8 +630,8 @@ impl DocumentService {
                     if matches!(request, DocumentRequest::New) => {
                     Self::matches(host, epoch, revision)?;
                     options.validate()?;
-                    let mut environment = Environment::capture(&host.session)?;
-                    environment.admission = self.tabs.admission(&host.session.retained_document_tiles());
+                    let environment = OpenEnvironment::capture(&host.session,
+                        self.tabs.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     if defaults || !preset.trim().is_empty() {
                         host.dispatch(layer_ui::UiAction::NewDocumentPreferences { action: layer_ui::NewDocumentAction::Remember {
                             options, name: preset, defaults,
@@ -716,8 +647,8 @@ impl DocumentService {
                 } if matches!(request, DocumentRequest::Open) => {
                     Self::matches(host, epoch, revision)?;
                     let selected = location(&path)?;
-                    let mut environment = Environment::capture(&host.session)?;
-                    environment.admission = self.tabs.admission(&host.session.retained_document_tiles());
+                    let environment = OpenEnvironment::capture(&host.session,
+                        self.tabs.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     (
                         Job::Prepare {
                             environment,

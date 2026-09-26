@@ -153,6 +153,7 @@ impl DocumentService {
                 .admit(&tiles, &candidate.capture_project_recovery()?)?;
             candidate.initialize_document_location(active.location)?;
             candidate.inherit_window_state(&host.session)?;
+            candidate.inherit_initial_drawing_tools(&host.session)?;
             let recovery = if self.recovery.is_some() {
                 Some(self.new_recovery()?)
             } else {
@@ -213,6 +214,7 @@ impl DocumentService {
             )?;
             candidate.mark_recovered();
             candidate.inherit_window_state(&host.session)?;
+            candidate.inherit_initial_drawing_tools(&host.session)?;
             let outgoing_recovery = self.new_recovery()?;
             let tiles = host.session.park_document()?;
             Ok((outgoing_recovery, tiles))

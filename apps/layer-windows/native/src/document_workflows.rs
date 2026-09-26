@@ -770,7 +770,7 @@ mod tests {
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
             UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36]).unwrap();
-        let environment = crate::documents::Environment::capture(&host.session).unwrap();
+        let environment = crate::documents::recovery_environment(&host.session).unwrap();
         host.session =
             *crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap();
         host.session.set_platform(Platform::Windows);
@@ -1007,7 +1007,7 @@ mod tests {
         }
         let portable = directory.join("proof-portable.capy");
         host.session.capture_project_recovery().unwrap().write(std::fs::File::create(&portable).unwrap()).unwrap();
-        let environment = crate::documents::Environment::capture(&host.session).unwrap();
+        let environment = crate::documents::recovery_environment(&host.session).unwrap();
         let restored = crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap();
         assert_eq!(restored.engine().document().proof, Some(embedded.clone()));
         assert!(!restored.state().soft_proof && !restored.state().gamut_warning);

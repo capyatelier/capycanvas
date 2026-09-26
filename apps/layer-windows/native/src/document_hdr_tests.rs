@@ -427,7 +427,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_eq!(reopened.document.layers, saved.document.layers);
         assert_eq!(reopened.document.color, color);
         assert_eq!(reopened.document.sdr_rendition, recipe);
-        let environment = crate::documents::Environment::capture(&host.session).unwrap();
+        let environment = crate::documents::recovery_environment(&host.session).unwrap();
         let restored =
             crate::documents::prepare_recovery(environment, file, &Default::default()).unwrap();
         assert_eq!(restored.engine().document().layers, layers);

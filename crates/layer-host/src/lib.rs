@@ -5,6 +5,7 @@ pub mod gpu;
 mod header;
 mod snapshot;
 mod model_update;
+pub mod open;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;

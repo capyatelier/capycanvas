@@ -2,7 +2,7 @@
 //! close ordering. File locks keep concurrent windows from claiming one copy.
 use crate::{
     document_io::{atomic_write, check_cancelled, io_error},
-    documents::Environment,
+    documents::recovery_environment,
 };
 use layer_core::Project;
 use layer_host::Renderer;
@@ -128,7 +128,7 @@ enum Job {
     Work {
         work: RecoveryWork,
         project: Option<Box<Project>>,
-        environment: Option<Box<Environment>>,
+        environment: Option<Box<layer_host::open::OpenEnvironment>>,
     },
     Release(Vec<String>),
     Claim(BTreeSet<String>),
@@ -331,7 +331,7 @@ impl Service {
                             session.state().document_file.epoch,
                             session.engine().document().revision,
                         ));
-                        Some(Box::new(Environment::capture(session)?))
+                        Some(Box::new(recovery_environment(session)?))
                     } else {
                         None
                     };

@@ -1,9 +1,9 @@
 //! Transfer jobs bridge the serial editor owner and a background file worker.
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
-use layer_core::{Project, ProjectLimits};
-use layer_host::Renderer;
-use layer_render::{CanvasRenderer, EffectValidationRequest};
+use layer_core::Project;
+use layer_host::{Renderer, open::OpenEnvironment};
+use layer_render::CanvasRenderer;
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
@@ -35,15 +35,6 @@ pub use preferences::*;
 mod proof;
 pub use proof::*;
 
-struct Environment {
-    admission: layer_ui::DocumentAdmission,
-    gpu: layer_host::GpuContext,
-    options: layer_host::RendererOptions,
-    viewport: [u32; 2],
-    brush: layer_core::BrushSnapshot,
-    new_options: layer_ui::NewDocumentOptions,
-    photo_policy: layer_ui::PhotoOpenPolicy,
-}
 enum Payload {
     Color(Box<color::Task>),
     Source(Box<source::Task>),
@@ -55,7 +46,7 @@ enum Payload {
         project: Option<Project>,
     },
     Open {
-        environment: Option<Environment>,
+        environment: Option<OpenEnvironment>,
         candidate: Option<Box<UiSession<Renderer>>>,
         source: layer_ui::ImportSource,
         imported: Option<layer_ui::ImportedDocument>,
@@ -224,22 +215,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
             }
         } else if opening == 1 {
             session.require_document_idle()?;
-            let gpu = session
-                .engine()
-                .backend()
-                .0
-                .as_ref()
-                .ok_or("Wait for the canvas to finish starting")?;
             Payload::Open {
-                environment: Some(Environment {
-                    admission,
-                    gpu: layer_host::GpuContext::of(gpu),
-                    options,
-                    viewport: session.state().camera.viewport,
-                    brush: session.engine().configured_brush().clone(),
-                    new_options: session.state().settings.new_document.defaults,
-                    photo_policy: session.state().settings.photo_open,
-                }),
+                environment: Some(OpenEnvironment::capture(session, admission, options)?),
                 candidate: None,
                 source: layer_ui::ImportSource::Master,
                 imported: None,
@@ -473,10 +450,6 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
             return Err("Not an open task".into());
         };
         let context = environment.as_ref().ok_or("This open task has already run")?;
-        let limits = ProjectLimits {
-            dimension: context.gpu.device.limits().max_texture_dimension_2d.min(ProjectLimits::default().dimension),
-            ..Default::default()
-        };
         match input {
             Input::New(options) => *imported = Some(layer_ui::ImportedDocument {
                 project: options.unwrap_or(context.new_options).project()?,
@@ -484,66 +457,21 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
             }),
             Input::File(fd) => {
                 let file = host_file(fd);
-                *imported = Some(layer_ui::read_import(
+                *imported = Some(context.read(
                     layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
-                    layer_ui::ImportIntent::Open, context.photo_policy, name, limits,
-                    Default::default(), task.control.cancellation_flag())?)
+                    layer_ui::ImportIntent::Open, name, task.control.cancellation_flag())?)
             }
-            Input::Bytes(bytes) => *imported = Some(layer_ui::read_import(Cursor::new(bytes),
-                layer_ui::ImportIntent::Open, context.photo_policy, name, limits,
-                Default::default(), task.control.cancellation_flag())?),
+            Input::Bytes(bytes) => *imported = Some(context.read(Cursor::new(bytes),
+                layer_ui::ImportIntent::Open, name, task.control.cancellation_flag())?),
             Input::Assume(profile) => imported.as_mut().ok_or("No image interpretation is pending")?.interpret(profile)?,
         }
         task.check_cancelled()?;
         let ready = imported.as_ref().ok_or("Document preparation is incomplete")?;
         if ready.interpretation_required(context.photo_policy).is_some() { return Ok(()); }
-        ready.project.validate(limits)?;
-        context.admission.admit(&ready.project)?;
         *source = ready.source;
         let project = imported.take().unwrap().project;
         let environment = environment.take().unwrap();
-        let mut gpu = environment.gpu.rasterizer(project.document.color, &environment.options, true)?;
-        let mut programs = Vec::new();
-        for effect in project
-            .document
-            .layers
-            .iter()
-            .filter_map(|l| l.effect.as_ref())
-        {
-            if !programs.contains(&effect.program) {
-                programs.push(effect.program.clone());
-            }
-        }
-        let mut validating = !programs.is_empty();
-        if validating {
-            gpu.request_effect_validation(EffectValidationRequest {
-                request_id: 1,
-                namespace: programs.clone(),
-                programs,
-            })
-            .map_err(|e| e.to_string())?;
-        }
-        // Start deferred compilation before waiting for validation. The worker
-        // publishes only a ready native SDR canvas, including prepared opens.
-        gpu.prepare_startup(&project.document, &environment.brush, false).map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            task.check_cancelled()?;
-            gpu.device().poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
-            if validating && let Some(result) = gpu.take_effect_validation() {
-                result.result?;
-                validating = false;
-            }
-            let ready = gpu.poll_startup().map_err(|e| e.to_string())?;
-            if !validating && ready.canvas_ready && ready.brush_ready { break; }
-            if Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let mut prepared =
-            UiSession::from_project(Renderer(Some(gpu.into())), project, None, environment.viewport)?;
-        prepared.frame(0, 0)?;
-        task.check_cancelled()?;
-        *candidate = Some(Box::new(prepared));
+        *candidate = Some(environment.prepare(project, || task.check_cancelled().is_err())?);
         Ok(())
     })
 }
