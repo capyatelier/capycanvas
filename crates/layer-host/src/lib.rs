@@ -685,6 +685,10 @@ impl NativeHost {
                 context: layer_ui::CanvasBarContext,
                 shown: usize,
             },
+            CanvasBarChoiceMenu {
+                context: layer_ui::CanvasBarContext,
+                id: String,
+            },
             LayerMenu {
                 id: u64,
                 mask: bool,
@@ -830,6 +834,7 @@ impl NativeHost {
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
             Query::CanvasBarLayout { measure } => json!(self.session.canvas_bar_layout(&measure)),
             Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
+            Query::CanvasBarChoiceMenu { context, id } => json!(self.session.canvas_bar_choice_menu(context, &id)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);

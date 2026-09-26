@@ -40,6 +40,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "reveal_panel"
             | "canvas_bar_layout"
             | "canvas_bar_menu"
+            | "canvas_bar_choice_menu"
             | "stroke_recording",
         ) => Ok(value),
         _ => Err("Unsupported workspace query".into()),

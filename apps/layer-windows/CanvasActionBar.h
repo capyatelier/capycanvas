@@ -19,7 +19,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     Button more{nullptr};
     MenuFlyout menu{nullptr};
     WorkspaceShadow shadow;
-    std::vector<Primitives::ButtonBase> fields;
+    std::vector<FrameworkElement> fields;
     Microsoft::UI::Dispatching::DispatcherQueueTimer reappear{nullptr};
     J view,bounds;
     hstring schema,theme;
@@ -56,7 +56,41 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         data->dispatch(O({{L"type",S(L"canvas_bar_edit")},{L"context",context()},{L"action",action}}));
     }
     static J command(J const& item){return object(object(object(item,L"option"),L"Action"),L"state");}
-    Primitives::ButtonBase field(J const& item,bool finishing){
+    static J choice(J const& item){return object(object(item,L"option"),L"Choice");}
+    StackPanel labelled(hstring const& glyph,hstring const& text,bool menu=false){
+        StackPanel inner;inner.Orientation(Orientation::Horizontal);inner.Spacing(6);
+        if(!glyph.empty())inner.Children().Append(icon(glyph,data->theme()));
+        auto caption=label(data,text);caption.VerticalAlignment(VerticalAlignment::Center);caption.FontWeight(Windows::UI::Text::FontWeights::Normal());
+        inner.Children().Append(caption);
+        if(menu)inner.Children().Append(icon(L"chevron-down",data->theme(),12));
+        return inner;
+    }
+    template<typename T> void compact(T const& control,hstring const& id,hstring const& name){
+        control.MinHeight(40);control.Padding({12,0,12,0});control.AllowFocusOnInteraction(false);control.IsTabStop(false);
+        AutomationProperties::SetAutomationId(control,id);AutomationProperties::SetName(control,name);tooltip(control,name);
+    }
+    FrameworkElement segments(J const& spec){
+        auto id=str(spec,L"id");auto list=array(spec,L"items");auto weak=weak_from_this();
+        StackPanel group;group.Orientation(Orientation::Horizontal);
+        AutomationProperties::SetAutomationId(group,L"canvas-bar-choice-"+id);AutomationProperties::SetName(group,str(spec,L"label"));
+        for(uint32_t i=0;i<list.Size();++i){
+            auto entry=list.GetObjectAt(i);auto action=object(entry,L"action");
+            auto toggle=button<Primitives::ToggleButton>(data,L"",[weak,action]{if(auto self=weak.lock())self->send(action);});
+            toggle.Content(labelled(str(entry,L"icon"),str(entry,L"label")));
+            compact(toggle,L"canvas-bar-choice-"+id+L"-"+to_hstring(i),str(entry,L"label"));
+            double left=i==0?6:0,right=i+1==list.Size()?6:0;toggle.CornerRadius({left,right,right,left});
+            group.Children().Append(toggle);
+        }
+        return group;
+    }
+    FrameworkElement dropdown(J const& spec){
+        auto id=str(spec,L"id");auto weak=weak_from_this();
+        Button result=button(data,L"",[weak,id]{if(auto self=weak.lock())self->openChoice(id);});
+        compact(result,L"canvas-bar-choice-"+id,str(spec,L"label"));
+        return result;
+    }
+    FrameworkElement field(J const& item,bool finishing){
+        if(auto spec=choice(item);spec.Size())return flag(spec,L"segmented")?segments(spec):dropdown(spec);
         auto option=object(object(item,L"option"),L"Action");auto state=object(option,L"state");auto id=str(state,L"id");
         auto weak=weak_from_this();
         auto activate=[weak,id]{if(auto self=weak.lock())self->send(O({{L"type",S(L"invoke")},{L"command",S(id)}}));};
@@ -74,8 +108,18 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         tooltip(result,str(state,L"tooltip"));
         return result;
     }
-    void update(Primitives::ButtonBase const& button,J const& item){
-        auto state=command(item);
+    void update(FrameworkElement const& element,J const& item){
+        if(auto spec=choice(item);spec.Size()){
+            auto list=array(spec,L"items");
+            if(auto group=element.try_as<StackPanel>()){
+                for(uint32_t i=0;i<list.Size()&&i<group.Children().Size();++i)
+                    group.Children().GetAt(i).as<Primitives::ToggleButton>().IsChecked(flag(list.GetObjectAt(i),L"selected"));
+            }else if(auto picker=element.try_as<Button>()){
+                for(auto value:list)if(auto entry=value.GetObject();flag(entry,L"selected"))picker.Content(labelled(str(entry,L"icon"),str(entry,L"label"),true));
+            }
+            return;
+        }
+        auto button=element.as<Primitives::ButtonBase>();auto state=command(item);
         button.IsEnabled(flag(state,L"enabled"));
         if(auto toggle=button.try_as<Primitives::ToggleButton>())toggle.IsChecked(flag(state,L"selected"));
     }
@@ -83,6 +127,10 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         std::wstring key=std::wstring(object(next,L"context").Stringify())+L"|"+std::wstring(str(next,L"label"));
         for(auto list:{L"items",L"completion"})for(auto value:array(next,list)){
             auto item=value.GetObject();key+=L"|"+std::wstring(str(item,L"label"))+L":"+std::wstring(str(command(item),L"id"));
+            if(auto spec=choice(item);spec.Size()){
+                key+=L":"+std::wstring(str(spec,L"id"))+(flag(spec,L"segmented")?L":s":L":d");
+                for(auto entry:array(spec,L"items"))key+=L","+std::wstring(str(entry.GetObject(),L"label"));
+            }
         }
         return hstring(key);
     }
@@ -166,6 +214,22 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     void Defer(){if(view.Size()&&nearObject()&&!contact&&!dragging){suppress(true);suppress(false);}}
     void AppendGlass(A& regions,UIElement const& reference)const{
         appendGlass(regions,frame,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true);
+    }
+    void openChoice(hstring const& id){
+        if(!view.Size())return;
+        auto weak=weak_from_this();
+        QueryWorkspace(data->query,O({{L"type",S(L"canvas_bar_choice_menu")},{L"context",context()},{L"id",S(id)}}),[weak,id](J reply){
+            auto self=weak.lock();if(!self||!self->view.Size())return;
+            auto model=object(reply,L"result");if(!array(model,L"sections").Size())return;
+            FrameworkElement anchor{nullptr};
+            for(auto const& element:self->fields)if(AutomationProperties::GetAutomationId(element)==L"canvas-bar-choice-"+id)anchor=element;
+            if(!anchor)return;
+            if(self->menu)self->menu.Hide();
+            self->menu=MenuFlyout();TrackPopup(self->menu,self->data);
+            NativeMenuItems(self->menu.Items(),array(model,L"sections"),self->data,[data=self->data](J action){data->dispatch(action);});
+            Primitives::FlyoutShowOptions options;options.Placement(Primitives::FlyoutPlacementMode::TopEdgeAlignedLeft);
+            self->menu.ShowAt(anchor,options);
+        });
     }
     void openMenu(){
         if(!view.Size())return;

@@ -20,6 +20,13 @@ function Kind {(Model).state.canvas_bar.context.kind}
 function Paint {@((Model).state.layers|ForEach-Object {"$($_.id):$($_.paint_revision)"}) -join ','}
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Glass {[int](Model).windows_glass.regions}
+function Choice([string]$Id){@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.id -eq $Id})[0].option.Choice}
+function MenuOpen{
+ $condition=[System.Windows.Automation.AndCondition]::new(
+  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
+  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
+ $null -ne [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
  $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
@@ -93,6 +100,22 @@ try {
   Wait-Until {[Math]::Sign((Value 'transform_width')) -eq -[Math]::Sign($before)} "$device Flip H did not flip the transform" 5
  }
  if((Kind) -ne 'transform'){throw 'Flipping left the transform'}
+ $choices=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice}|ForEach-Object {$_.option.Choice})
+ $mode=@($choices|Where-Object segmented)[0]
+ if(!$mode){throw 'The transform bar has no segmented mode choice'}
+ Tap ("canvas-bar-choice-"+$mode.id+"-1") 'touch'
+ Wait-Until {@((Choice $mode.id).items)[1].selected} 'Touch did not select the second transform mode' 5
+ Tap ("canvas-bar-choice-"+$mode.id+"-0") 'pen'
+ Wait-Until {@((Choice $mode.id).items)[0].selected} 'Pen did not restore the first transform mode' 5
+ foreach($dropdown in @($choices|Where-Object {!$_.segmented})){
+  $control=Find ("canvas-bar-choice-"+$dropdown.id)
+  if(!$control -or $control.Current.IsOffscreen){continue}
+  Tap ("canvas-bar-choice-"+$dropdown.id) 'mouse'
+  Wait-Until {MenuOpen} "The $($dropdown.label) choice did not open its menu" 5
+  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+  Wait-Until {!(MenuOpen)} "Escape did not close the $($dropdown.label) menu" 5
+ }
+ $checks.transform_mode_choices='passed'
  if((Paint) -ne $paint){throw 'Transform bar taps painted on the canvas'}
  Capture 'transform-dark'
  $checks.transform_bar_and_flip='passed'
