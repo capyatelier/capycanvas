@@ -2837,3 +2837,22 @@ prediction row with retired saved choices, forwarded file launches, and
 recovery of two unfinished drawings. The multiwindow, settings-storage and
 layers fixtures are current again. The touch tab-pickup case and the layer
 pickup fixture remain open; the port inventory records what was ruled out.
+
+### Portable and MSIX refresh at e6bcb4d (2026-09-25)
+
+Both packages contain clean source e6bcb4d, including app-local DXC, forwarded
+file launches, multi-copy recovery and the `.capy` association. The portable
+ZIP contains 1,446 files and is 77,198,298 bytes; its SHA-256 is
+476f1bb816b0269b3b1665d39b000cf3a074483b3c14ac19ded8767c1ef56f70. The unsigned
+1.0.0.0 test-identity MSIX contains 1,452 archive files and is 77,404,973
+bytes; its SHA-256 is
+bb02e0d9eabc8e843689585ada6f0293d817bc173172860bff5c1bf2028b92d3. The payload
+grew mainly because `dxcompiler.dll` now ships beside the app.
+
+Repeated assembly produces identical archives. The extracted ZIP passes
+inventory, app-local runtime origins, launch from a path with spaces, packaged
+filters, drawing/Undo/Redo, pan/resize and clean exit. The MSIX passes archive
+inventory, MakeAppx extraction, the activation manifest with the file
+association, repeated logos, normalization, ZIP32, signed-package refusal,
+invalid inputs and lock retry. No signing, installation, update/uninstall or
+clean-machine test occurred.
