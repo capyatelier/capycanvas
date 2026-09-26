@@ -724,29 +724,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
-        self.require_renderer_color(self.editor.undo_color())?;
-        self.flush_pending_edits()?;
-        self.completed_stroke = None;
-        self.completed_before = None;
-        self.estimates.clear();
-        let image = self.editor.undo_changes_image();
-        let raster_only = self.backend.supports_raster_damage() && self.editor.undo_only_updates_rasters();
-        let changed = self.editor.undo()?;
-        self.transform_preview = None;
-        self.composite_all |= changed && image && !raster_only;
-        self.raster_dirty |= changed && raster_only;
-        Ok(changed)
+        self.navigate(false)
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
-        self.require_renderer_color(self.editor.redo_color())?;
+        self.navigate(true)
+    }
+
+    fn navigate(&mut self, redo: bool) -> Result<bool, DocumentError> {
+        self.require_renderer_color(self.history_color(redo))?;
         self.flush_pending_edits()?;
         self.completed_stroke = None;
         self.completed_before = None;
         self.estimates.clear();
-        let image = self.editor.redo_changes_image();
-        let raster_only = self.backend.supports_raster_damage() && self.editor.redo_only_updates_rasters();
-        let changed = self.editor.redo()?;
+        let next = self.editor.next_history_edit(redo);
+        let image = next.is_some_and(|edit| edit.changes_image());
+        let raster_only = self.backend.supports_raster_damage() && next.is_some_and(|edit| edit.only_raster_updates());
+        let changed = if redo { self.editor.redo()? } else { self.editor.undo()? };
         self.transform_preview = None;
         self.composite_all |= changed && image && !raster_only;
         self.raster_dirty |= changed && raster_only;

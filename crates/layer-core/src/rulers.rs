@@ -280,10 +280,10 @@ mod tests {
             },
         };
         editor.perform(Edit::SetRulers(vec![ruler])).unwrap();
-        assert!(!editor.undo_changes_image());
+        assert!(editor.next_history_edit(false).is_some_and(|e| !e.changes_image()));
         editor.undo().unwrap();
         assert!(editor.document().rulers.is_empty());
-        assert!(!editor.redo_changes_image());
+        assert!(editor.next_history_edit(true).is_some_and(|e| !e.changes_image()));
         editor.redo().unwrap();
         assert_eq!(editor.document().rulers, [ruler]);
         let before = editor.document().clone();

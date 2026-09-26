@@ -1685,7 +1685,7 @@ impl Edit {
         }
     }
 
-    fn only_raster_updates(&self) -> bool {
+    pub fn only_raster_updates(&self) -> bool {
         match self {
             Self::SetRaster { .. } => true,
             Self::Batch(edits) => !edits.is_empty() && edits.iter().all(Self::only_raster_updates),
@@ -1855,29 +1855,9 @@ impl Editor {
         !self.redo.is_empty()
     }
 
-    pub fn undo_color(&self) -> color::DocumentColor {
-        self.undo.last().map_or(self.document.color, |entry| entry.edit.resulting_color(self.document.color))
-    }
-
-    pub fn redo_color(&self) -> color::DocumentColor {
-        self.redo.last().map_or(self.document.color, |entry| entry.edit.resulting_color(self.document.color))
-    }
-
-    pub fn undo_changes_image(&self) -> bool {
-        self.undo
-            .last()
-            .is_some_and(|entry| entry.edit.changes_image())
-    }
-    pub fn redo_changes_image(&self) -> bool {
-        self.redo
-            .last()
-            .is_some_and(|entry| entry.edit.changes_image())
-    }
-    pub fn undo_only_updates_rasters(&self) -> bool {
-        self.undo.last().is_some_and(|entry| entry.edit.only_raster_updates())
-    }
-    pub fn redo_only_updates_rasters(&self) -> bool {
-        self.redo.last().is_some_and(|entry| entry.edit.only_raster_updates())
+    /// The edit the next undo, or redo, would apply.
+    pub fn next_history_edit(&self, redo: bool) -> Option<&Edit> {
+        (if redo { &self.redo } else { &self.undo }).last().map(|entry| &entry.edit)
     }
 
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
@@ -1988,23 +1968,25 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
-        let Some(entry) = self.undo.last() else {
-            return Ok(false);
-        };
-        let inverse = self.document.apply(entry.edit.clone())?;
-        let entry = self.undo.pop().unwrap();
-        self.redo.push(HistoryEntry::new(inverse, self.checkpoint));
-        self.checkpoint = entry.checkpoint;
-        Ok(true)
+        self.step(false)
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
-        let Some(entry) = self.redo.last() else {
+        self.step(true)
+    }
+
+    fn step(&mut self, redo: bool) -> Result<bool, DocumentError> {
+        let Some(edit) = self.next_history_edit(redo).cloned() else {
             return Ok(false);
         };
-        let inverse = self.document.apply(entry.edit.clone())?;
-        let entry = self.redo.pop().unwrap();
-        self.undo.push(HistoryEntry::new(inverse, self.checkpoint));
+        let inverse = self.document.apply(edit)?;
+        let (from, to) = if redo {
+            (&mut self.redo, &mut self.undo)
+        } else {
+            (&mut self.undo, &mut self.redo)
+        };
+        let entry = from.pop().unwrap();
+        to.push(HistoryEntry::new(inverse, self.checkpoint));
         self.checkpoint = entry.checkpoint;
         Ok(true)
     }

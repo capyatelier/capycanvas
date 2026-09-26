@@ -19,11 +19,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn history_color(&self, redo: bool) -> DocumentColor {
-        if redo {
-            self.editor.redo_color()
-        } else {
-            self.editor.undo_color()
-        }
+        let color = self.editor.document().color;
+        self.editor
+            .next_history_edit(redo)
+            .map_or(color, |edit| edit.resulting_color(color))
     }
 
     pub fn prepare_color_transition(
