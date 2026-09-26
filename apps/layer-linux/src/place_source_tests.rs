@@ -287,14 +287,10 @@ fn native_profiled_place_paste_and_source_history() {
     // A clipboard can offer a rich TIFF and a lower-depth PNG rendition.
     // The same retained import route must prefer the TIFF source.
     let mut preview = Vec::new();
-    layer_render::ReadbackImage {
-        request_id: 0,
-        width: 1,
-        height: 1,
-        stride: 4,
-        bytes: vec![0, 0, 0, 255],
-    }
-    .write_png(&mut preview)
+    layer_color::photo::write_png(
+        &mut preview,
+        &layer_core::color::source::rgba8_source([1, 1], |_, _| [0, 0, 0, 255]),
+    )
     .unwrap();
     let providers = [
         gtk::gdk::ContentProvider::for_bytes("image/png", &glib::Bytes::from_owned(preview)),

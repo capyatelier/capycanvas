@@ -12,7 +12,7 @@ layer-host = { path = "../../../crates/layer-host" }
 layer-core = { path = "../../../crates/layer-core" }
 layer-color = { path = "../../../crates/layer-color" }
 layer-engine = { path = "../../../crates/layer-engine" }
-layer-render = { path = "../../../crates/layer-render", features = ["png"] }
+layer-render = { path = "../../../crates/layer-render" }
 layer-render-wgpu = { path = "../../../crates/layer-render-wgpu" }
 layer-ui = { path = "../../../crates/layer-ui" }
 layer-workspace = { path = "../../../crates/layer-workspace", features = ["native"] }

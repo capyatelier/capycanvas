@@ -1387,7 +1387,6 @@ name = "layer-render"
 version = "0.1.0"
 dependencies = [
  "layer-core",
- "png 0.17.16",
 ]
 
 [[package]]

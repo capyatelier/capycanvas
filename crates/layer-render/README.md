@@ -31,7 +31,6 @@ surface that the host redraws every frame.
 | [lib.rs](src/lib.rs) | `CanvasRenderer`, frame data, brush records and image requests/results. |
 | [outline.rs](src/outline.rs) | Brush-tip outlines derived from source masks. |
 | [telemetry.rs](src/telemetry.rs) | Renderer timing and resource measurements. |
-| [png_export.rs](src/png_export.rs) | PNG encoding behind the optional `png` feature. |
 
 Contract changes can affect the engine, GPU renderer and native host wrappers.
 The [rendering guide](../../docs/internals/rendering.md) explains how the concrete
