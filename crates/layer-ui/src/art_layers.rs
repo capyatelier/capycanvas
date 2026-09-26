@@ -1859,6 +1859,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    /// Cancel the contact in progress. An open transform or placement session
+    /// survives; only its current handle drag is rolled back.
+    pub(super) fn cancel_layer_contact(&mut self) -> Result<bool, String> {
+        if self.operation.active() {
+            return self.cancel_transform_drag();
+        }
+        self.cancel_layer_gesture()
+    }
+
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
         if self.cancel_selection_contact() { return Ok(true); }
         let tonal=self.cancel_tonal();

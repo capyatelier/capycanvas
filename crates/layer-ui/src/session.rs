@@ -1186,7 +1186,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.change = self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true);
                 }
                 self.eyedropper.cancel();
-                if self.cancel_layer_gesture()? {
+                if self.cancel_layer_contact()? {
                     reply.cancel_paint = true;
                     reply.change = self.changed(regions::DOCUMENT, true);
                 }
@@ -7821,6 +7821,54 @@ mod tests {
                 assert_eq!(s.engine.document().layers, before);
             }
         }
+    }
+
+    #[test]
+    fn window_blur_and_pen_cancel_keep_the_transform_and_roll_back_only_the_drag() {
+        use layer_core::{Point, Selection};
+        let mut s = session();
+        let selection = Selection::polygon(vec![
+            Point { x: 100., y: 100. },
+            Point { x: 300., y: 100. },
+            Point { x: 300., y: 300. },
+            Point { x: 100., y: 300. },
+        ])
+        .unwrap();
+        s.fill_selection(selection.clone()).unwrap();
+        s.layer_edit(layer_core::Edit::SetSelection(Some(selection)))
+            .unwrap();
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::ScaleRotate);
+        s.dispatch(UiAction::SetToolSetting {
+            id: "transform_x".into(),
+            value: 30.,
+        })
+        .unwrap();
+        s.frame(2, 2).unwrap();
+        let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform;
+        let settled = preview(&mut s);
+        for interrupt in [None, Some(PenPhase::Cancel)] {
+            s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 230., y: 200. })
+                .unwrap();
+            s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 280., y: 240. })
+                .unwrap();
+            s.frame(3, 3).unwrap();
+            assert_ne!(preview(&mut s), settled);
+            match interrupt {
+                None => assert!(s.input(UiInput::Blur).unwrap().cancel_paint),
+                Some(phase) => s
+                    .transform_pen(event(&s, 3, phase, 1.), Point { x: 290., y: 250. })
+                    .unwrap(),
+            }
+            s.frame(4, 4).unwrap();
+            assert!(s.operation.active());
+            assert_eq!(preview(&mut s), settled);
+            assert!(s.layer_interaction.path.is_empty());
+        }
+        assert!(!s.input(UiInput::Blur).unwrap().cancel_paint);
+        assert!(s.operation.active());
+        invoke(&mut s, CommandId::ApplyTransform);
+        assert!(!s.operation.active());
     }
 
     #[test]

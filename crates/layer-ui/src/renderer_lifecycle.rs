@@ -156,6 +156,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn suspend_renderer(&mut self) -> Result<UiChange, String> {
         let interrupted_selection = self.painted_selections.busy();
         let retired_regions = self.input(UiInput::Blur)?.change.regions;
+        self.cancel_transform()?;
         self.engine.discard_unsubmitted_input();
         self.input_pending = false;
         self.cancel_picker();

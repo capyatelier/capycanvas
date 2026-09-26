@@ -499,11 +499,24 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.update_transform()?;
             }
             PenPhase::Cancel => {
-                self.cancel_transform()?;
+                self.cancel_transform_drag()?;
             }
             PenPhase::Hover => (),
         }
         Ok(())
+    }
+    /// Restore the pose from before the current handle drag, keeping the session.
+    pub(super) fn cancel_transform_drag(&mut self) -> Result<bool, String> {
+        let Some(t) = &mut self.operation.current else {
+            return Ok(false);
+        };
+        let Some(drag) = t.drag.take() else {
+            return Ok(false);
+        };
+        t.pose = drag.pose;
+        self.layer_interaction.path.clear();
+        self.update_transform()?;
+        Ok(true)
     }
     /// A contact on active photo handles/body directly manipulates placement.
     /// Touch outside them keeps the existing two-finger camera gesture route.

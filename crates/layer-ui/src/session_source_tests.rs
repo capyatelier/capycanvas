@@ -780,3 +780,21 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
         assert_eq!(s.engine.document(), &before);
     }
 }
+
+#[test]
+fn window_blur_keeps_an_image_placement_open() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("blur placement", 200, 150), [800, 600]).unwrap();
+    session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    assert!(session.operation.placing());
+    session.input(UiInput::Blur).unwrap();
+    assert!(session.operation.placing(), "losing window focus keeps the placement");
+    invoke(&mut session, CommandId::CancelTransform);
+    assert!(!session.operation.active());
+}
