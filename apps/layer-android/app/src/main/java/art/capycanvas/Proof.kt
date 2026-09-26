@@ -96,7 +96,7 @@ internal class ProofController(private val host: CanvasHost) {
         host.viewModelScope.launch {
             try {
                 val (model,view,key)=host.withNative { h ->
-                    val model=JSONObject(Native.proofForm(h));val view=JSONObject(Native.proofStatus(h))
+                    val model=JSONObject(Native.query(h,obj("type" to "proof_form").toString()));val view=JSONObject(Native.query(h,obj("type" to "proof_status").toString()))
                     Triple(model,view,model.getJSONArray("identity").toString())
                 }
                 val proof=model.objectOrNull("document_profile")?.toString()

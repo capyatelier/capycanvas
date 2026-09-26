@@ -22,7 +22,7 @@ import SwiftUI
     }
     private func flush() {
         scheduled = false
-        let payload = JSON(["boxes": boxes.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
+        let payload = JSON(["regions": boxes.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) + [1] },
             "connections": connections.keys.sorted().compactMap { connections[$0]?.raw }])
         let key = payload.stableKey
         guard key != sent else { return }

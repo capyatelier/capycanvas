@@ -169,9 +169,7 @@ impl WebApp {
     pub(super) fn hdr_output(&self) -> bool {
         self.session.state().hdr_display_available
             && self.session.engine().document().color.depth.is_float()
-            && self.session.proof_panel_mode() == layer_ui::ProofMode::Off
-            && !self.session.state().gamut_warning
-            && self.session.state().sdr_appearance_preview.is_none()
+            && self.session.hdr_presentation_allowed()
     }
 }
 

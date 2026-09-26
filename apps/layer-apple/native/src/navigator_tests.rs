@@ -100,7 +100,8 @@ fn slot() -> Value {
 }
 fn overview(app: &App) -> Vec<layer_render_wgpu::OverviewPlacement> {
     let app = unsafe { &*app.0 };
-    app.metal.overview_placements(&app.host)
+    let scale = app.host.session.state().camera.viewport[0] as f32 / app.host.logical[0];
+    app.metal.navigators.placements(&app.host, scale)
 }
 
 #[test]
@@ -152,42 +153,6 @@ fn live_navigator_uses_current_document_camera_and_display_scale_without_bitmaps
         let stats = app.request(2, json!({"type":"renderer_stats"})).unwrap();
         assert!(!stats["samples"].as_array().unwrap().is_empty());
         assert_eq!(placements(&app, json!([])), 0);
-        assert!(overview(&app).is_empty());
-    }
-}
-
-#[test]
-fn navigator_layout_is_bounded_atomic_ordered_and_does_not_keep_idle_frames_awake() {
-    for platform in [0, 1] {
-        let app = App::new(platform);
-        let upper = json!({"bounds":[30,40,264,200],"clip":[30,40,264,200],"order":9});
-        assert_eq!(placements(&app, json!([upper, slot()])), 0);
-        let before = overview(&app);
-        assert_eq!(before.len(), 2);
-        assert!(before[0].bounds[0] < before[1].bounds[0]);
-        unsafe { &mut *app.0 }.host.dirty = false;
-        assert_eq!(placements(&app, json!([slot(), upper])), 0);
-        assert!(
-            !unsafe { &*app.0 }.host.dirty,
-            "Identical sorted layout stays idle"
-        );
-        for invalid in [
-            json!([{"bounds":[0,0,0,0],"clip":[0,0,1,1],"order":0}]),
-            json!(vec![slot(); 33]),
-            json!([{"bounds":[null,0,1,1],"clip":[0,0,1,1],"order":0}]),
-        ] {
-            assert_eq!(placements(&app, invalid), -1);
-            assert_eq!(
-                overview(&app),
-                before,
-                "Rejected geometry keeps the last valid layout"
-            );
-        }
-        assert_eq!(placements(&app, json!([])), 0);
-        assert!(
-            unsafe { &*app.0 }.host.dirty,
-            "Hiding the last preview clears its surface pixels"
-        );
         assert!(overview(&app).is_empty());
     }
 }

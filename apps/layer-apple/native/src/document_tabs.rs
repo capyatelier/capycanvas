@@ -21,6 +21,7 @@ pub struct CapyDocumentTask(Mutex<Job>);
 impl CapyApple {
     pub(crate) fn document_retired(&mut self) {
         self.metal.document_changed();
+        self.host.proof = Default::default();
         self.dismissed_contacts.clear();
     }
     pub(crate) fn tabs_request(&mut self, value: Value) -> Result<Value, String> {

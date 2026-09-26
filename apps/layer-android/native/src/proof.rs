@@ -7,7 +7,7 @@ use jni::{
     sys::{jboolean, jbyteArray, jint, jlong, jstring},
 };
 use layer_render_wgpu::snapshot::CaptureControl;
-use layer_ui::proof_workflow::{ProofPreparation, proof_form};
+use layer_ui::proof_workflow::ProofPreparation;
 use std::sync::Arc;
 struct Task {
     job: ProofPreparation,
@@ -24,29 +24,6 @@ unsafe fn task<'a>(id: jlong) -> &'a mut Task {
     unsafe { &mut *(id as *mut Task) }
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_proofStatus(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-) -> jstring {
-    let a = unsafe { app(handle) };
-    string(
-        &mut env,
-        serde_json::to_string(&a.proof.observe(&a.host.session)).map_err(error),
-    )
-}
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_proofForm(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-) -> jstring {
-    string(
-        &mut env,
-        Ok(proof_form(&unsafe { app(handle) }.host.session).to_string()),
-    )
-}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofTask(
     mut env: JNIEnv,
@@ -136,7 +113,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofApply(
         let lut = t.lut.clone().ok_or("Proof preview is not prepared")?;
         let previous = a.host.session.state().revision;
         let change = t.job.apply(&mut a.host.session, preserved != 0)?;
-        a.proof.retain(&t.job, lut)?;
+        a.host.proof.retain(&t.job, lut)?;
         a.host.apply_change(previous, change);
         a.host.dirty = true;
         Ok(())
@@ -154,7 +131,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofFailed(
     let result = (|| {
         let message = read(&mut env, &message)?;
         let (a, t) = unsafe { (app(handle), task(id)) };
-        a.proof.fail(&a.host.session, &t.job, message);
+        a.host.proof.fail(&a.host.session, &t.job, message);
         Ok(())
     })();
     fail(&mut env, result);

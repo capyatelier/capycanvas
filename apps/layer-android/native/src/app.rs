@@ -2,7 +2,6 @@
 pub(crate) struct App {
     pub window: crate::document_tabs::Window,
     pub tone: layer_host::tone::ToneService,
-    pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
     pub workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
     pub blank_presented: bool,
@@ -13,7 +12,7 @@ pub(crate) struct App {
     pub surface: Option<crate::android::Surface>,
     pub display_hdr_available: bool,
     pub cache_directory: String,
-    pub overviews: Vec<crate::android::OverviewSlot>,
+    pub navigators: layer_host::scene::Navigators,
     pub glass: Vec<layer_render_wgpu::BackdropRegion>,
     pub instance: Option<wgpu::Instance>,
     pub gpu_generation: u64,
@@ -31,7 +30,6 @@ impl App {
         })?;
         Ok(Self {
             window: Default::default(),
-            proof: Default::default(),
             tone: Default::default(),
             host,
             workspaces: None,
@@ -46,7 +44,7 @@ impl App {
             gpu_generation: 0,
             gpu_watch: Default::default(),
             cache_directory: String::new(),
-            overviews: Vec::new(),
+            navigators: layer_host::scene::Navigators::new(layer_host::scene::SlotUnits::Physical),
             glass: Vec::new(),
         })
     }

@@ -158,7 +158,7 @@ fn apple_proof_workers_preserve_profiles_reject_cancellation_and_leave_artwork_e
         assert_eq!(status(&app)["error"], "Unavailable profile");
         {
             let owner = unsafe { &mut *app.0 };
-            assert!(owner.metal.proof.lut(&owner.host.session).is_none());
+            assert!(owner.host.proof.lut(&owner.host.session).is_none());
         }
         app.draw_until_idle();
         assert_eq!(app.pixels(), pixels);

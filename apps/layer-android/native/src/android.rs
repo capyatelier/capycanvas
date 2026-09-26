@@ -6,6 +6,7 @@ use jni::{
     objects::{JClass, JDoubleArray, JObject, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
+use layer_host::scene::SceneDisplay;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer, SdrSurfaceColor};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -113,7 +114,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "color_space": format!("{:?}", surface.config.color_space),
                 "present_mode": format!("{:?}", surface.config.present_mode),
                 "retained_target": surface.presenter.retains_target(),
-                "overview_count": a.overviews.len(),
+                "overview_count": a.navigators.count(),
                 "glass_regions": a.glass.len(),
                 "backdrop_frames": surface.presenter.backdrop_frames(),
                 "extent": [surface.config.width, surface.config.height],
@@ -166,13 +167,6 @@ struct GlassConnection {
     scale: f32,
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct OverviewSlot {
-    bounds: [f32; 4],
-    clip: [f32; 4],
-    order: i32,
-}
-
 impl App {
     fn sync_hdr_display(&mut self) {
         self.host.session.set_hdr_display_available(self.hdr_capable());
@@ -195,9 +189,7 @@ impl App {
     }
     pub(crate) fn hdr_output(&self) -> bool {
         self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
-            && self.host.session.proof_panel_mode()==layer_ui::ProofMode::Off
-            && !self.host.session.state().gamut_warning
-            && self.host.session.state().sdr_appearance_preview.is_none()
+            && self.host.session.hdr_presentation_allowed()
     }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
         let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
@@ -453,56 +445,11 @@ impl App {
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
         self.tick_tone();
         let view = self.host.session.state().camera.view();
-        let picker = self.host.session.color_picker_overlay();
         let zoom_milli_percent = (self.host.session.state().camera.zoom * 100_000.0).round() as i64;
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
-        let stroke = self.host.session.engine().has_active_stroke();
-        self.host
-            .session
-            .update_canvas_cursor(&mut self.cursor);
-        self.host
-            .session
-            .append_layer_overlay(&mut self.cursor.segments);
-        let state = self.host.session.state();
-        let document = self.host.session.engine().document();
-        let fg = state.palette.text.linear();
-        let bg = state.palette.panel.linear();
-        let overviews: Vec<_> = self
-            .overviews
-            .iter()
-            // Keep the first paper presentation ahead of optional overview
-            // pipeline creation, just like other staged startup work.
-            .filter(|_| self.blank_presented && self.host.startup.canvas_ready)
-            .filter_map(|slot| {
-                let [x, y, w, h] = slot.bounds;
-                let g = layer_ui::NavigatorGeometry::new(
-                    &state.camera,
-                    [document.width, document.height],
-                    [w / scale, h / scale],
-                )?;
-                Some(layer_render_wgpu::OverviewPlacement {
-                    bounds: [
-                        x + g.image.x * scale,
-                        y + g.image.y * scale,
-                        g.image.width * scale,
-                        g.image.height * scale,
-                    ],
-                    clip: Some(slot.clip),
-                    work_area: g.work_area.map(|[a, b]| [x + a * scale, y + b * scale]),
-                    outline_linear: [fg[0], fg[1], fg[2]],
-                    background_linear: [bg[0], bg[1], bg[2]],
-                    scale,
-                    opacity: 1.,
-                })
-            })
-            .collect();
-        let glass = self.host.session.state().palette.glass;
-        let ready = glass.transparency.enabled() && self.blank_presented && self.host.startup.canvas_ready;
         let tone = self.tone.current(&self.host);
-        let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
-        let proof = self.proof.lut(&self.host.session);
-        let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
+        let presented_tone = tone.is_some().then(|| self.tone.publications());
         let hdr_output=self.hdr_output();
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
@@ -516,14 +463,10 @@ impl App {
             surface.presenter=presenter;
             surface.color=color;
         }
-        surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
-        if hdr_output {
-            surface.presenter.set_compositor_hdr_view(gpu,rendition.expect("HDR document rendition")).map_err(error)?;
-        } else {
-            surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
-        }
-        let presented_tone = tone.is_some().then(|| self.tone.publications());
-        surface.presenter.set_gpu_local_tone_guide(gpu,tone).map_err(error)?;
+        let display = SceneDisplay { scale, headroom: 1., blank_presented: self.blank_presented, compositor_hdr: hdr_output };
+        self.host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators, &self.glass, tone, display)?;
+        surface.presenter.set_surface_rotation(surface.quarter_turns);
+        let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let trace_timings = unsafe { ndk_sys::ATrace_isEnabled() };
         if trace_timings || surface.trace_timings {
             for sample in surface.presenter.gpu_timings(gpu, trace_timings) {
@@ -558,18 +501,6 @@ impl App {
             }
         };
         self.frame_cost[1] = elapsed() - self.frame_cost[0];
-        surface
-            .presenter
-            .set_cursor(gpu.device(), &self.cursor.segments, scale);
-        surface.presenter.set_color_picker(gpu, picker);
-        surface.presenter.set_surface_rotation(surface.quarter_turns);
-        surface.presenter.set_overviews(gpu, &overviews);
-        surface.presenter.set_backdrop(
-            gpu,
-            if ready { &self.glass } else { &[] },
-            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
-            stroke,
-        );
         surface
             .presenter
             .present(
@@ -1014,19 +945,9 @@ pub extern "system" fn Java_art_capycanvas_Native_navigatorPlacements(
     value: JString,
 ) {
     let result = (|| {
-        let mut slots: Vec<OverviewSlot> =
-            serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
-        if slots.len() > 32
-            || slots
-                .iter()
-                .any(|s| !s.bounds.iter().chain(&s.clip).all(|v| v.is_finite()))
-        {
-            return Err("Invalid Navigator geometry".into());
-        }
-        slots.sort_by_key(|s| s.order);
+        let slots = serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
         let a = unsafe { app(handle) };
-        a.overviews = slots;
-        a.host.dirty = true;
+        a.host.dirty |= a.navigators.set(slots)?;
         Ok(())
     })();
     fail(&mut env, result);

@@ -92,8 +92,6 @@ internal object Native {
     @JvmStatic external fun proofTexture(edge: Int): IntArray
     @JvmStatic external fun proofControl(handle: Long, action: String)
     @JvmStatic external fun toneStatus(handle: Long): String
-    @JvmStatic external fun proofStatus(handle: Long): String
-    @JvmStatic external fun proofForm(handle: Long): String
     @JvmStatic external fun presentationTimings(handle: Long, enabled: Boolean): String
     @JvmStatic external fun completionTimings(handle: Long, enabled: Boolean): String
     @JvmStatic external fun proofTask(handle: Long, id: Int, recipe: String, control: Long): Long

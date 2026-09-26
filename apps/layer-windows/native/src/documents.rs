@@ -522,7 +522,7 @@ impl DocumentService {
                 }
             };
             if let Err(error) = result { self.workflow = Some(task); return Err(error); }
-            task.retain_proof(&mut self.proof.view)?;
+            task.retain_proof(&mut host.proof)?;
             self.workflow_control = None;
             self.worker.retire_workflow(task);
             host.invalidate_snapshot();
@@ -729,7 +729,7 @@ impl DocumentService {
                 // Its queued focus-loss event must precede the shared placement.
                 if task.stage == "commit" && !task.awaits_placement_ui() {
                     match task.commit(host) {
-                        Ok(()) => { task.retain_proof(&mut self.proof.view)?; self.workflow_control = None; self.worker.retire_workflow(task); host.invalidate_snapshot(); return Ok(()); }
+                        Ok(()) => { task.retain_proof(&mut host.proof)?; self.workflow_control = None; self.worker.retire_workflow(task); host.invalidate_snapshot(); return Ok(()); }
                         Err(error) => task.fail(error),
                     }
                 }

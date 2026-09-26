@@ -588,8 +588,10 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
     s.select_proof_mode(ProofMode::Print).unwrap();
     assert_eq!(s.proof_panel_mode(), ProofMode::Print);
     assert_eq!(s.proof_mode(), ProofMode::Off, "no profile means no rendered print proof");
+    assert!(!s.hdr_presentation_allowed(), "a pending Print page shows SDR");
     toggle(&mut s);
     assert_eq!(s.proof_panel_mode(), ProofMode::Off, "Off cancels first-profile setup too");
+    assert!(s.hdr_presentation_allowed());
     toggle(&mut s);
     assert_eq!(s.proof_panel_mode(), ProofMode::Print);
     assert_eq!(s.engine.checkpoint(), checkpoint);

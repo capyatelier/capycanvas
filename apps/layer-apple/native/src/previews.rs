@@ -24,7 +24,7 @@ pub unsafe extern "C" fn capy_apple_navigator_placements(
             return Err("Navigator geometry exceeds the layout transport limit".into());
         }
         let slots = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        if app.metal.set_overviews(slots)? {
+        if app.metal.navigators.set(slots)? {
             app.host.dirty = true;
         }
         Ok(0)
@@ -33,7 +33,7 @@ pub unsafe extern "C" fn capy_apple_navigator_placements(
 }
 
 /// # Safety
-/// Serial owner call; JSON is {boxes: [[x,y,w,h,tl,tr,br,bl]], connections: [DrawerConnection]}
+/// Serial owner call; JSON is {regions: [[x,y,w,h,tl,tr,br,bl,1]], connections: [DrawerConnection]}
 /// in logical editor points. Only a changed layout wakes the canvas.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_glass_regions(app: *mut CapyApple, json: *const c_char) -> i32 {
@@ -49,7 +49,7 @@ pub unsafe extern "C" fn capy_apple_glass_regions(app: *mut CapyApple, json: *co
             return Err("Glass geometry exceeds the layout transport limit".into());
         }
         let layout = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        if app.metal.set_glass(layout)? {
+        if app.metal.glass.set(layout)? {
             app.host.dirty = true;
         }
         Ok(0)

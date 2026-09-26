@@ -85,10 +85,10 @@ impl DocumentService {
             && self.deferred_action.is_none()
             && self.recovery.as_ref().is_none_or(|r| !r.restoring())
     }
-    fn document_retired(&mut self) -> Result<(), String> {
+    fn document_retired(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.tone.clear();
         self.proof.stop()?;
-        self.proof.view = Default::default();
+        host.proof = Default::default();
         Ok(())
     }
     fn activate(&mut self, host: &mut NativeHost, activation: Activation) {
@@ -110,7 +110,7 @@ impl DocumentService {
         else {
             return Ok(());
         };
-        self.document_retired()?;
+        self.document_retired(host)?;
         if let Some(closed) = closed {
             self.worker.retire(Box::new(closed.session));
         }
@@ -163,7 +163,7 @@ impl DocumentService {
         let mut candidate = Some(candidate);
         match self.adopt_candidate(host, active, &mut candidate) {
             Ok(retired) => {
-                self.document_retired()?;
+                self.document_retired(host)?;
                 self.worker.retire_renderer(Renderer(retired));
                 Ok(())
             }
@@ -214,7 +214,7 @@ impl DocumentService {
         })();
         let result = match checked {
             Ok((outgoing_recovery, tiles)) => {
-                self.document_retired()?;
+                self.document_retired(host)?;
                 self.worker
                     .retire_renderer(Renderer(self.window.retire_gpu(host)));
                 let outgoing = Parked {

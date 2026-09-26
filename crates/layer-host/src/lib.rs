@@ -5,6 +5,7 @@ mod header;
 mod snapshot;
 mod model_update;
 pub mod open;
+pub mod scene;
 pub mod tasks;
 pub mod tone;
 pub mod window;
@@ -56,6 +57,7 @@ pub struct NativeHost {
     pub error: Option<String>,
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
+    pub proof: layer_ui::proof_workflow::ProofView,
     deferred_contacts: std::collections::BTreeSet<u64>,
     last_pen: Option<PenEvent>,
     paint_start_sequence: u64,
@@ -112,6 +114,7 @@ impl NativeHost {
             pan_cursor: false,
             error: None,
             sequence: 0,
+            proof: Default::default(),
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
             startup: layer_render_wgpu::StartupProgress::COMPLETE,
             deferred_contacts: Default::default(),
@@ -638,6 +641,8 @@ impl NativeHost {
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
             ProofPanel { action: Option<layer_ui::proof_panel::ProofAction> },
+            ProofForm,
+            ProofStatus,
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
@@ -779,6 +784,8 @@ impl NativeHost {
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
+            Query::ProofForm => layer_ui::proof_workflow::proof_form(&self.session),
+            Query::ProofStatus => json!(self.proof.observe(&self.session)),
             Query::ProofPanel {action} => {
                 if let Some(action)=action {
                     let previous=self.session.state().revision;

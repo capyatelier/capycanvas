@@ -1,5 +1,8 @@
 use crate::device::D3d12Watch;
-use layer_host::NativeHost;
+use layer_host::{
+    NativeHost,
+    scene::{Glass, Navigators, SceneDisplay},
+};
 use layer_render::CanvasRenderer;
 use layer_render_wgpu::ViewportPresenter;
 use layer_ui::{CanvasCursor, PointerButton};
@@ -61,8 +64,8 @@ pub struct CapyHost {
     instance: wgpu::Instance,
     cursor: CanvasCursor,
     chrome_facts: layer_ui::ChromeFacts,
-    navigator: crate::navigator::Navigator,
-    glass: crate::glass::Glass,
+    navigators: Navigators,
+    glass: Glass,
     scale: f32,
     blank_presented: bool,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
@@ -141,7 +144,7 @@ impl CapyHost {
             instance,
             cursor: CanvasCursor::default(),
             chrome_facts: layer_ui::ChromeFacts::default(),
-            navigator: Default::default(),
+            navigators: Default::default(),
             glass: Default::default(),
             scale,
             blank_presented: false,
@@ -357,19 +360,12 @@ impl CapyHost {
         }
         self.gpu.check()?;
         self.native.dirty |= self.native.session.wants_continuous_frames();
-        self.native
-            .session
-            .update_canvas_cursor(&mut self.cursor);
-        self.native
-            .session
-            .append_layer_overlay(&mut self.cursor.segments);
-        let picker = self.native.session.color_picker_overlay();
         let view = self.native.session.state().camera.view();
         let surround = self.native.session.state().palette.surround_linear;
-        let proof = self.documents.as_mut().and_then(|s| s.proof.view.lut(&self.native.session));
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         let config = self.config.as_ref().ok_or("Missing surface configuration")?;
         let encoding = self.display.encoding(config.format);
+        let headroom = self.display.available_headroom(config.format);
         let key = (gpu.document_color(), encoding);
         if self.presenter_key != Some(key) {
             let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
@@ -381,22 +377,22 @@ impl CapyHost {
             .presenter
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
-        let state = self.native.session.state();
-        let headroom = if state.preview_sdr || state.soft_proof || state.gamut_warning || state.sdr_appearance_preview.is_some() { 1. }
-            else { self.display.available_headroom(config.format) };
-        presenter.set_hdr_view(gpu, gpu.document_color().depth.is_float().then(|| self.native.session.effective_sdr_rendition()), headroom).map_err(err)?;
-        presenter.set_gpu_local_tone_guide(gpu, self.documents.as_ref().and_then(|s| s.tone.current(&self.native))).map_err(err)?;
-        presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
-        presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
-        presenter.set_color_picker(gpu, picker);
-        let glass = self.native.session.state().palette.glass;
-        presenter.set_backdrop(
-            gpu,
-            if glass.transparency.enabled() { self.glass.regions(self.scale) } else { &[] },
-            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
-            self.native.session.engine().has_active_stroke(),
-        );
-        presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
+        let tone = self.documents.as_ref().and_then(|s| s.tone.current(&self.native));
+        let display = SceneDisplay {
+            scale: self.scale,
+            headroom,
+            blank_presented: self.blank_presented,
+            compositor_hdr: false,
+        };
+        self.native.compose_scene(
+            presenter,
+            &mut self.cursor,
+            &self.navigators,
+            self.glass.regions(self.scale),
+            tone,
+            display,
+        )?;
+        let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
@@ -1011,7 +1007,10 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
             }),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
             windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
-            windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),
+            windows_proof: host
+                .documents
+                .is_some()
+                .then(|| host.native.proof.observe(&host.native.session)),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
@@ -1276,7 +1275,9 @@ pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_glass(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        match host.glass.set(unsafe { read_json(json) }?) {
+        let layout = serde_json::from_str(unsafe { read_json(json) }?)
+            .map_err(|_| "Invalid glass geometry".to_string());
+        match layout.and_then(|layout| host.glass.set(layout)) {
             Ok(changed) => {
                 host.native.dirty |= changed;
                 Ok(0)
@@ -1296,7 +1297,9 @@ pub unsafe extern "C" fn capy_glass(host: *mut CapyHost, json: *const c_char) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_overviews(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        match host.navigator.set(unsafe { read_json(json) }?) {
+        let slots = serde_json::from_str(unsafe { read_json(json) }?)
+            .map_err(|_| "Invalid Navigator geometry".to_string());
+        match slots.and_then(|slots| host.navigators.set(slots)) {
             Ok(changed) => {
                 host.native.dirty |= changed;
                 Ok(0)

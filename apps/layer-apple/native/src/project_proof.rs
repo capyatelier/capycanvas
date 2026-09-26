@@ -136,7 +136,7 @@ pub unsafe extern "C" fn capy_apple_proof_apply(
         }
         let previous = app.host.session.state().revision;
         let change = proof.job.apply(&mut app.host.session, preserved)?;
-        app.metal.proof.retain(&proof.job, lut)?;
+        app.host.proof.retain(&proof.job, lut)?;
         app.host.apply_change(previous, change);
         app.host.dirty = true;
         Ok(())
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn capy_apple_proof_failed(
         let Payload::Proof(proof) = &state.payload else {
             return Err("Not a proof task".into());
         };
-        app.metal.proof.fail(
+        app.host.proof.fail(
             &app.host.session,
             &proof.job,
             unsafe { read_title(message) }?.into(),

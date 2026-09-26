@@ -19,7 +19,7 @@ pub(crate) type Window = DocumentWindow<UiSession<Renderer>>;
 impl App {
     pub(crate) fn document_retired(&mut self) {
         self.tone.clear();
-        self.proof = Default::default();
+        self.host.proof = Default::default();
         // Navigator placements belong to the window, not the retiring document.
         // The host publishes them again only when layout changes.
         self.cursor = Default::default();

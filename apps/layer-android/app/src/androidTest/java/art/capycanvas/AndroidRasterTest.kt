@@ -734,7 +734,7 @@ class AndroidRasterTest {
         val input=File(files,"hdr-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};refresh()}
         fun histogram():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
-        fun form()=native{JSONObject(Native.proofForm(it))}
+        fun form()=native{JSONObject(Native.query(it,obj("type" to "proof_form").toString()))}
         fun ready(){compose.waitUntil(120_000){native{JSONObject(Native.toneStatus(it)).getBoolean("ready")}};assertNull(host.failure)}
         open(input);refresh();ready()
         var original=histogram()
@@ -986,7 +986,7 @@ class AndroidRasterTest {
         open(file);tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
         fun edit(value:JSONObject){compose.runOnUiThread{host.customize(value)};compose.waitForIdle()}
         fun group()=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("proof")}
-        fun recipe()=native{JSONObject(Native.proofForm(it)).getJSONObject("rendition").toString()}
+        fun recipe()=native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).getJSONObject("rendition").toString()}
         action("sdr_rendition")
         compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
         val original=group().getInt("id");val appearance=recipe()
@@ -1040,17 +1040,17 @@ class AndroidRasterTest {
         }
         fun apply(){
             if(host.proof.error!=null)pick(selectedName)
-            compose.waitUntil(120_000){!host.proof.busy&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getString("name")}==selectedName&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getJSONObject("profile").has("Icc")}}
+            compose.waitUntil(120_000){!host.proof.busy&&native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).getJSONObject("recipe").getString("name")}==selectedName&&native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).getJSONObject("recipe").getJSONObject("profile").has("Icc")}}
             assertNull(host.proof.error);hide()
         }
-        fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
-        fun status()=native{JSONObject(Native.proofStatus(it))}
+        fun current()=native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).getJSONObject("recipe")}
+        fun status()=native{JSONObject(Native.query(it,obj("type" to "proof_status").toString()))}
         fun hist():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
         compose.onNodeWithText("Choose Profile…").assertExists();SystemClock.sleep(400);cancel()
-        assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
+        assertTrue(native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
         val wide=builtinRecipe(1)
         png("proof-original.png",wide);open(File(files,"proof-original.png"))

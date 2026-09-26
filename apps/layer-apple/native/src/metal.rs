@@ -1,5 +1,8 @@
 //! Native Metal presentation. Accessed only on the session's serial owner.
-use layer_host::NativeHost;
+use layer_host::{
+    NativeHost,
+    scene::{Glass, Navigators, SceneDisplay},
+};
 use layer_render::CanvasRenderer;
 use layer_render_wgpu::SdrSurfaceColor;
 use layer_render_wgpu::{
@@ -7,23 +10,6 @@ use layer_render_wgpu::{
 };
 use layer_ui::CanvasCursor;
 use std::{ffi::c_void, time::Instant};
-
-/// Native layout in logical editor coordinates. Pixel scale and camera state
-/// are resolved on the render owner, including after display/surface changes.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-pub(crate) struct OverviewSlot {
-    pub bounds: [f32; 4],
-    pub clip: [f32; 4],
-    pub order: i32,
-}
-
-/// Glass boxes are [x, y, w, h, tl, tr, br, bl] in logical editor points.
-#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GlassLayout {
-    pub boxes: Vec<[f32; 8]>,
-    pub connections: Vec<layer_ui::DrawerConnection>,
-}
 
 struct Surface {
     surface: wgpu::Surface<'static>,
@@ -34,7 +20,6 @@ struct Surface {
 
 #[derive(Default)]
 pub struct MetalHost {
-    pub(crate) proof: layer_ui::proof_workflow::ProofView,
     surface: Option<Surface>,
     pub(crate) local_tone: layer_host::tone::ToneService,
     headroom: f32,
@@ -43,8 +28,8 @@ pub struct MetalHost {
     blank_presented: bool,
     timing_enabled: bool,
     timing: Option<GpuFrameTimer>,
-    overviews: Vec<OverviewSlot>,
-    glass: GlassLayout,
+    pub(crate) navigators: Navigators,
+    pub(crate) glass: Glass,
     watch: layer_host::DeviceWatch,
     pub(crate) cache: Option<std::path::PathBuf>,
 }
@@ -55,7 +40,7 @@ fn error(e: impl std::fmt::Display) -> String {
 
 impl MetalHost {
     pub(crate) fn document_changed(&mut self) {
-        self.local_tone.clear(); self.proof=Default::default();
+        self.local_tone.clear();
         self.cursor=Default::default(); self.blank_presented=false; self.timing=None;
     }
     pub(crate) fn set_headroom(&mut self,host:&mut NativeHost,headroom:f32)->Result<(),String>{
@@ -74,15 +59,14 @@ impl MetalHost {
     pub(crate) fn display_status(&self, host: &NativeHost) -> serde_json::Value {
         let s = &host.session;
         let hdr = s.engine().document().color.depth.is_float();
-        let hdr_output = hdr && self.surface.is_some() && self.headroom > 1.
-            && !s.state().preview_sdr && !s.state().soft_proof && !s.state().gamut_warning;
+        let hdr_output = hdr && self.surface.is_some() && self.headroom > 1. && s.hdr_presentation_allowed();
         let retained = self.local_tone.current(host).is_some();
         let label = if hdr_output { "HDR" } else if self.local_tone.error.is_some() { "SDR preview unavailable" }
             else if !retained { "Preparing SDR…" } else if s.state().soft_proof { "Print proof" }
             else if self.headroom > 1. { "SDR preview" } else { "Showing SDR" };
         serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"label":label,"headroom":self.headroom.max(1.),
             "retained":retained,"error":self.local_tone.error,"reference_white":203,
-            "glass_regions":self.glass.boxes.len() + self.glass.connections.len(),
+            "glass_regions":self.glass.count(),
             "backdrop_frames":self.surface.as_ref().map_or([0; 2], |s| s.presenter.backdrop_frames())})
     }
     fn encoding(color:layer_core::color::DocumentColor)->SdrSurfaceColor {
@@ -145,88 +129,6 @@ impl MetalHost {
             (_, Err(error)) => format!("{message}\nGPU retirement failed: {error}"),
             _ => message,
         });
-    }
-
-    pub(crate) fn set_overviews(&mut self, mut slots: Vec<OverviewSlot>) -> Result<bool, String> {
-        if slots.len() > 32
-            || slots.iter().any(|s| {
-                !s.bounds.iter().chain(&s.clip).all(|v| v.is_finite())
-                    || s.bounds[2] <= 0.
-                    || s.bounds[3] <= 0.
-                    || s.clip[2] <= 0.
-                    || s.clip[3] <= 0.
-            })
-        {
-            return Err("Invalid Navigator geometry".into());
-        }
-        slots.sort_by_key(|s| s.order);
-        let changed = self.overviews != slots;
-        self.overviews = slots;
-        Ok(changed)
-    }
-
-    pub(crate) fn set_glass(&mut self, layout: GlassLayout) -> Result<bool, String> {
-        let finite = layout.boxes.iter().all(|b| b.iter().all(|v| v.is_finite()) && b[2] >= 0. && b[3] >= 0.)
-            && layout.connections.iter().all(|c| {
-                [c.bounds.x, c.bounds.y, c.bounds.width, c.bounds.height, c.length, c.depth]
-                    .iter().chain(&c.transform).chain(&c.radii).all(|v| v.is_finite())
-            });
-        if layout.boxes.len() > 256 || layout.connections.len() > 32 || !finite {
-            return Err("Invalid glass geometry".into());
-        }
-        let changed = self.glass != layout;
-        self.glass = layout;
-        Ok(changed)
-    }
-
-    pub(crate) fn glass_regions(&self, host: &NativeHost) -> Vec<layer_render_wgpu::BackdropRegion> {
-        use layer_render_wgpu::BackdropRegion;
-        let scale = host.session.state().camera.viewport[0] as f32 / host.logical[0];
-        self.glass.boxes.iter()
-            .map(|b| BackdropRegion::rounded([b[0], b[1], b[2], b[3]].map(|v| v * scale),
-                [b[4], b[5], b[6], b[7]].map(|v| v * scale), BackdropRegion::SQUIRCLE))
-            .chain(self.glass.connections.iter().flat_map(|c| c.glass()).map(|(bounds, radii)| BackdropRegion {
-                bounds: bounds.map(|v| v * scale),
-                radii: radii.map(|v| v * scale),
-                shape: BackdropRegion::SQUIRCLE,
-            }))
-            .collect()
-    }
-
-    pub(crate) fn overview_placements(
-        &self,
-        host: &NativeHost,
-    ) -> Vec<layer_render_wgpu::OverviewPlacement> {
-        let state = host.session.state();
-        let document = host.session.engine().document();
-        let scale = state.camera.viewport[0] as f32 / host.logical[0];
-        let fg = state.palette.text.linear();
-        let bg = state.palette.panel.linear();
-        self.overviews
-            .iter()
-            .filter_map(|slot| {
-                let [x, y, w, h] = slot.bounds;
-                let g = layer_ui::NavigatorGeometry::new(
-                    &state.camera,
-                    [document.width, document.height],
-                    [w, h],
-                )?;
-                Some(layer_render_wgpu::OverviewPlacement {
-                    bounds: [
-                        (x + g.image.x) * scale,
-                        (y + g.image.y) * scale,
-                        g.image.width * scale,
-                        g.image.height * scale,
-                    ],
-                    clip: Some(slot.clip.map(|v| v * scale)),
-                    work_area: g.work_area.map(|[a, b]| [(x + a) * scale, (y + b) * scale]),
-                    outline_linear: [fg[0], fg[1], fg[2]],
-                    background_linear: [bg[0], bg[1], bg[2]],
-                    scale,
-                    opacity: 1.,
-                })
-            })
-            .collect()
     }
 
     /// The platform retains its layer until detach has completed on this owner.
@@ -382,29 +284,8 @@ impl MetalHost {
         let clock = Instant::now();
         host.prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = host.session.state().camera.view();
-        let picker = host.session.color_picker_overlay();
         let surround = host.session.state().palette.surround_linear;
         let scale = view.width_px as f32 / host.logical[0];
-        host.session.update_canvas_cursor(&mut self.cursor);
-        host.session.append_layer_overlay(&mut self.cursor.segments);
-        // Keep optional overview preparation behind the first paper frame.
-        // Image and outline sample this frame's live composition and camera.
-        let overviews = if self.blank_presented && host.startup.canvas_ready {
-            self.overview_placements(host)
-        } else {
-            Vec::new()
-        };
-        let glass = host.session.state().palette.glass;
-        let stroke = host.session.engine().has_active_stroke();
-        let backdrop = if glass.transparency.enabled() && self.blank_presented && host.startup.canvas_ready {
-            self.glass_regions(host)
-        } else {
-            Vec::new()
-        };
-        let proof = self.proof.lut(&host.session);
-        let (proof_enabled, gamut) = (host.session.state().soft_proof, host.session.state().gamut_warning);
-        let rendition=host.session.engine().document().color.depth.is_float().then(||host.session.effective_sdr_rendition());
-        let headroom=if host.session.state().preview_sdr || proof_enabled || gamut {1.} else {self.headroom.max(1.)};
         let tone_guide = self.local_tone.current(host);
         let surface = self.surface.as_mut().unwrap();
         let gpu = host
@@ -421,8 +302,15 @@ impl MetalHost {
             surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, encoding).map_err(error)?;
             surface.working_color = gpu.document_color();
         }
-        surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
-        surface.presenter.set_gpu_local_tone_guide(gpu,tone_guide).map_err(error)?;
+        let display = SceneDisplay { scale, headroom: self.headroom, blank_presented: self.blank_presented, compositor_hdr: false };
+        host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators,
+            self.glass.regions(scale), tone_guide, display)?;
+        let gpu = host
+            .session
+            .renderer_mut()
+            .0
+            .as_ref()
+            .ok_or("Missing Metal renderer")?;
         if [view.width_px, view.height_px] != [surface.config.width, surface.config.height] {
             surface.config.width = view.width_px;
             surface.config.height = view.height_px;
@@ -450,14 +338,6 @@ impl MetalHost {
             }
         };
         costs[1] = clock.elapsed().as_nanos() as u64 - costs[0];
-        surface
-            .presenter
-            .set_cursor(gpu.device(), &self.cursor.segments, scale);
-        surface.presenter.set_color_picker(gpu, picker);
-        surface.presenter.set_overviews(gpu, &overviews);
-        surface.presenter.set_backdrop(gpu, &backdrop,
-            layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset }, stroke);
-        surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),

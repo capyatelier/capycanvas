@@ -1,7 +1,7 @@
 //! Native scheduling for the shared view cache. CPU work never borrows the editor.
 use layer_host::NativeHost;
 use layer_render_wgpu::snapshot::CaptureControl;
-use layer_ui::proof_workflow::{ProofPreparation, ProofView};
+use layer_ui::proof_workflow::ProofPreparation;
 use std::{
     sync::{Arc, mpsc},
     thread::JoinHandle,
@@ -14,7 +14,6 @@ struct Pending {
     result: mpsc::Receiver<Result<Arc<layer_color::ProofLut>, String>>,
 }
 pub(crate) struct Service {
-    pub view: ProofView,
     pending: Option<Pending>,
     wake: Arc<dyn Fn() + Send + Sync>,
     status: String,
@@ -22,14 +21,13 @@ pub(crate) struct Service {
 impl Service {
     pub fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         Self {
-            view: Default::default(),
             pending: None,
             wake,
             status: String::new(),
         }
     }
     pub fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        let status = self.view.observe(&host.session);
+        let status = host.proof.observe(&host.session);
         if let Some(pending) = &self.pending
             && (!status.needed
                 || pending.job.validate(&host.session).is_err()
@@ -50,15 +48,15 @@ impl Service {
             let _ = pending.thread.join();
             if !pending.control.is_cancelled() && pending.job.validate(&host.session).is_ok() {
                 match result {
-                    Ok(lut) => self.view.retain(&pending.job, lut)?,
-                    Err(error) => self.view.fail(&host.session, &pending.job, error),
+                    Ok(lut) => host.proof.retain(&pending.job, lut)?,
+                    Err(error) => host.proof.fail(&host.session, &pending.job, error),
                 }
                 host.dirty = true;
                 host.invalidate_snapshot();
             }
         }
         if self.pending.is_none()
-            && self.view.observe(&host.session).needed
+            && host.proof.observe(&host.session).needed
             && !host.session.state().document_file.close_ready
         {
             let job = ProofPreparation::begin(&host.session, None, None)?;
@@ -83,11 +81,11 @@ impl Service {
                         result,
                     })
                 }
-                Err(error) => self.view.fail(&host.session, &job, error.to_string()),
+                Err(error) => host.proof.fail(&host.session, &job, error.to_string()),
             }
         }
         let status =
-            serde_json::to_string(&self.view.observe(&host.session)).map_err(|e| e.to_string())?;
+            serde_json::to_string(&host.proof.observe(&host.session)).map_err(|e| e.to_string())?;
         if status != self.status {
             self.status = status;
             host.invalidate_snapshot();
@@ -143,14 +141,14 @@ mod tests {
         // rejected even when cancellation races the worker finishing.
         host.session.set_proof_recipe(Some(replacement)).unwrap();
         wait(&mut service, &mut host);
-        assert_eq!(service.view.observe(&host.session).text, "Proof: P3");
-        assert!(service.view.observe(&host.session).bytes > 0);
+        assert_eq!(host.proof.observe(&host.session).text, "Proof: P3");
+        assert!(host.proof.observe(&host.session).bytes > 0);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
         .unwrap();
         wait(&mut service, &mut host);
-        assert_eq!(service.view.observe(&host.session).text, "Proof: sRGB");
+        assert_eq!(host.proof.observe(&host.session).text, "Proof: sRGB");
         assert_eq!(host.session.engine().document().proof, Some(original));
         host.dispatch(UiAction::Invoke {
             command: CommandId::Redo,
@@ -163,6 +161,6 @@ mod tests {
         assert!(service.pending.is_none());
         assert_eq!(host.session.engine().checkpoint(), checkpoint);
         wait(&mut service, &mut host);
-        assert_eq!(service.view.observe(&host.session).text, "Proof: P3");
+        assert_eq!(host.proof.observe(&host.session).text, "Proof: P3");
     }
 }
