@@ -17,7 +17,6 @@ pub(super) struct SelectionClip {
     geometry: Option<Arc<layer_core::Selection>>,
     region: Option<PixelRect>,
     extent: Option<[u32; 2]>,
-    pub generations: u64,
     pub bytes: u64,
     pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer, u64)>,
     pixel_clock: u64,
@@ -99,7 +98,6 @@ impl SelectionClip {
             geometry: None,
             region: None,
             extent: None,
-            generations: 0,
             bytes: 0,
             pixels: BTreeMap::new(),
             pixels_bytes: 0,
@@ -386,7 +384,6 @@ impl SelectionClip {
             self.extent = Some(extent);
             self.geometry = Some(geometry.clone());
             self.region = region;
-            self.generations += 1;
             return Ok(());
         }
         let edge_count = edges.len() as u32 / 4;
@@ -438,7 +435,6 @@ impl SelectionClip {
         self.extent = Some(extent);
         self.geometry = Some(geometry.clone());
         self.region = region;
-        self.generations += 1;
         Ok(())
     }
 }

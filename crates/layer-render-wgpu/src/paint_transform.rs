@@ -49,18 +49,6 @@ impl PaintTransforms {
     pub fn source_captures(&self) -> u64 {
         self.0.iter().map(|t| t.source_captures).sum()
     }
-    #[cfg(test)]
-    pub fn spare_page_bytes(&self) -> u64 {
-        self.0.iter().map(|t| t.spares.storage_bytes()).sum()
-    }
-    #[cfg(test)]
-    pub fn atlas_bytes(&self) -> u64 {
-        self.0
-            .iter()
-            .flat_map(|t| t.atlases.iter().flatten())
-            .map(Atlas::storage_bytes)
-            .sum()
-    }
     pub fn apply(
         &mut self,
         r: &mut WgpuRasterizer,

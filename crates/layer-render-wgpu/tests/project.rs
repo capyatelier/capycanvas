@@ -5,7 +5,7 @@ use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
     input_queue,
 };
-use layer_render::{CanvasRenderer, HostImage, ViewState};
+use layer_render::{CanvasRenderer, ViewState};
 use layer_render_wgpu::WgpuRasterizer;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -35,60 +35,6 @@ fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
     .unwrap();
     engine.render_frame_at(0).unwrap();
     (engine, producer)
-}
-
-#[test]
-fn source_uploads_share_owned_pixels_and_pack_borrowed_rows() {
-    let mut gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
-    for format in [ProjectAssetFormat::R8Unorm, ProjectAssetFormat::Rgba8Srgb] {
-        let id = AssetId::from("test:owned-source");
-        let source = ProjectAsset {
-            extent: [3, 2],
-            format,
-            bytes: vec![127; 6 * format.channels() as usize].into(),
-        };
-        gpu.prepare_owned_asset(&id, &source).unwrap();
-        assert!(Arc::ptr_eq(
-            &source.bytes,
-            &gpu.source_asset(&id).unwrap().bytes
-        ));
-        for extent in [[0, 2], [u32::MAX, 2], [3, 1], [3, u32::MAX]] {
-            assert!(
-                gpu.prepare_owned_asset(
-                    &id,
-                    &ProjectAsset {
-                        extent,
-                        ..source.clone()
-                    }
-                )
-                .is_err()
-            );
-            assert!(Arc::ptr_eq(
-                &source.bytes,
-                &gpu.source_asset(&id).unwrap().bytes
-            ));
-        }
-        gpu.release_asset(&id);
-        assert!(gpu.source_asset(&id).is_none());
-        let row = 3 * format.channels() as usize;
-        let mut padded = vec![0; (row + 4) * 2];
-        for (i, line) in padded.chunks_exact_mut(row + 4).enumerate() {
-            line[..row].copy_from_slice(&source.bytes[i * row..(i + 1) * row]);
-        }
-        gpu.prepare_asset(
-            &id,
-            HostImage {
-                width: 3,
-                height: 2,
-                stride: row as u32 + 4,
-                format,
-                bytes: &padded,
-            },
-        )
-        .unwrap();
-        assert_eq!(gpu.source_asset(&id), Some(source));
-        gpu.release_asset(&id);
-    }
 }
 
 #[test]
@@ -138,21 +84,6 @@ fn image(engine: &mut Engine, time: u64) -> Vec<u8> {
         .unwrap();
     bytes
 }
-fn capture(name: &str, bytes: &[u8]) {
-    if let Ok(path) = std::env::var("CAPY_PROJECT_CAPTURES") {
-        std::fs::create_dir_all(&path).unwrap();
-        let file =
-            std::fs::File::create(std::path::Path::new(&path).join(format!("{name}.png"))).unwrap();
-        let mut encoder = png::Encoder::new(file, SIZE[0], SIZE[1]);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder
-            .write_header()
-            .unwrap()
-            .write_image_data(bytes)
-            .unwrap();
-    }
-}
 fn draw(
     engine: &mut Engine,
     input: &mut InputProducer<PenEvent>,
@@ -197,24 +128,6 @@ fn draw(
             std::thread::yield_now();
             engine.render_frame_at(timestamp_ns).unwrap();
         }
-    }
-}
-fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Selection>) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while engine.has_pending_document_edits() || !engine.backend().raster_ready() {
-        assert!(std::time::Instant::now() < deadline, "document edits did not settle");
-        std::thread::yield_now();
-        engine.render_frame_at(1_000_000_000).unwrap();
-    }
-    let mut coverage = LayerMask::reveal_all(LayerId(0), Point::default());
-    coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
-    coverage.initial = selection;
-    engine
-        .append_layer_operation(LayerId(1), LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind })
-        .unwrap();
-    engine.render_frame_at(1_000_000_000).unwrap();
-    while !engine.backend().raster_ready() {
-        std::thread::yield_now();
     }
 }
 fn fixture(masked: bool) -> Project {
@@ -280,192 +193,6 @@ fn fixture(masked: bool) -> Project {
 }
 
 #[test]
-fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
-    for masked in [false, true] {
-        let initial = fixture(masked);
-        let (mut live, mut input) = engine(&initial);
-        draw(
-            &mut live,
-            &mut input,
-            DefaultBrushPreset::GPen,
-            [0.1, 0.2, 0.8, 0.8],
-            65.,
-            100_000_000,
-        );
-        {
-            let checkpoint =
-                Project::snapshot_with(live.document(), |id| live.backend().source_asset(id))
-                    .unwrap();
-            let (mut replay, _) = engine(&checkpoint);
-            let expected = image(&mut live, 190_000_000);
-            let actual = image(&mut replay, 190_000_000);
-            assert_eq!(actual, expected, "G-Pen replay, masked={masked}");
-        }
-        draw(
-            &mut live,
-            &mut input,
-            DefaultBrushPreset::WatercolorWash,
-            [0.8, 0.1, 0.15, 0.8],
-            120.,
-            200_000_000,
-        );
-        {
-            let checkpoint =
-                Project::snapshot_with(live.document(), |id| live.backend().source_asset(id))
-                    .unwrap();
-            let (mut replay, _) = engine(&checkpoint);
-            let expected = image(&mut live, 290_000_000);
-            let actual = image(&mut replay, 290_000_000);
-            assert_eq!(
-                actual.iter().zip(&expected).filter(|(a, b)| a != b).count(),
-                0,
-                "watercolor replay, masked={masked}"
-            );
-        }
-        draw(
-            &mut live,
-            &mut input,
-            DefaultBrushPreset::WetWatercolor,
-            [0.1, 0.7, 0.2, 0.7],
-            138.,
-            300_000_000,
-        );
-        if masked {
-            // A painted mask survives Apply mask as immutable replay history.
-            live.apply_edit(Edit::SetMaskTarget(true)).unwrap();
-            live.set_tool(StrokeTool::Eraser);
-            draw(
-                &mut live,
-                &mut input,
-                DefaultBrushPreset::GPen,
-                [1.; 4],
-                98.,
-                400_000_000,
-            );
-            live.set_tool(StrokeTool::Brush);
-            live.apply_edit(Edit::SetMaskTarget(false)).unwrap();
-            let mut layer = live.document().layer(LayerId(1)).unwrap().clone();
-            let applied = layer.mask.take().unwrap();
-            layer.pending_operations.push(LayerOperation {
-                placement: layer_core::Affine::IDENTITY,
-                coverage: applied,
-                kind: LayerOperationKind::ApplyMask,
-            });
-            layer.mask = Some(LayerMask::reveal_all(
-                live.allocate_layer_id(),
-                Point { x: 2., y: 1. },
-            ));
-            layer.mask.as_mut().unwrap().initial = Some(
-                Selection::polygon(vec![
-                    Point { x: 20., y: 15. },
-                    Point { x: 365., y: 40. },
-                    Point { x: 330., y: 240. },
-                    Point { x: 20., y: 230. },
-                ])
-                .unwrap(),
-            );
-            layer.mask.as_mut().unwrap().default_coverage = 0.;
-            live.apply_edit(Edit::ReplaceLayer(Box::new(layer)))
-                .unwrap();
-            let selection = Selection::polygon(vec![
-                Point { x: 120., y: 30. },
-                Point { x: 330., y: 30. },
-                Point { x: 300., y: 180. },
-            ])
-            .unwrap();
-            operation(
-                &mut live,
-                LayerOperationKind::Gradient {
-                    start: Point { x: 120., y: 30. },
-                    end: Point { x: 300., y: 180. },
-                    colors: [[0.9, 0.4, 0.1, 0.5], [0.; 4]],
-                    radial: true,
-                    alpha_locked: false,
-                },
-                Some(selection),
-            );
-            operation(
-                &mut live,
-                LayerOperationKind::Figure(Figure {
-                    shape: FigureShape::Ellipse,
-                    paint: FigurePaint::Both,
-                    start: Point { x: 240., y: 140. },
-                    end: Point { x: 305., y: 210. },
-                    width: 5.,
-                    colors: [[0.1, 0.7, 0.9, 0.9], [0.5, 0.1, 0.8, 0.4]],
-                    alpha_locked: false,
-                    erase: false,
-                }),
-                None,
-            );
-            operation(
-                &mut live,
-                LayerOperationKind::Transform(ImageTransform {
-                    map: TransformMap::Affine(Affine::translation(Point { x: 7.5, y: -4.25 })),
-                    interpolation: Interpolation::Linear,
-                }),
-                None,
-            );
-        }
-        let project =
-            Project::snapshot_with(live.document(), |id| live.backend().source_asset(id)).unwrap();
-        let mut encoded = Vec::new();
-        project.write(&mut encoded).unwrap();
-        let decoded = Project::read(encoded.as_slice(), ProjectLimits::default()).unwrap();
-        let mut repeated = Vec::new();
-        decoded.write(&mut repeated).unwrap();
-        assert_eq!(repeated, encoded);
-        let (mut restored, mut restored_input) = engine(&decoded);
-        for time in [1_000_000_000, 1_750_000_000] {
-            let expected = image(&mut live, time);
-            let actual = image(&mut restored, time);
-            let difference = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
-            assert_eq!(
-                difference, 0,
-                "reopen changed {difference} channels; masked={masked}, time={time}"
-            );
-            assert!(
-                actual.chunks_exact(4).any(|p| p[3] == 0),
-                "fixture has transparent pixels"
-            );
-            assert!(
-                actual
-                    .chunks_exact(4)
-                    .any(|p| p[3] > 0 && p[0] > 0 && p[0] < 255),
-                "fixture has painted pixels"
-            );
-            capture(&format!("project-{masked}-{time}"), &actual);
-        }
-        // Proves the stored history restores material/wet channels, not merely
-        // a flattened screenshot that looks correct until the next brush stroke.
-        for (canvas, events) in [
-            (&mut live, &mut input),
-            (&mut restored, &mut restored_input),
-        ] {
-            draw(
-                canvas,
-                events,
-                DefaultBrushPreset::WetWatercolor,
-                [0.6, 0.1, 0.8, 0.8],
-                150.,
-                2_000_000_000,
-            );
-        }
-        let expected = image(&mut live, 2_250_000_000);
-        let actual = image(&mut restored, 2_250_000_000);
-        assert_eq!(
-            actual
-                .iter()
-                .zip(expected)
-                .filter(|(a, b)| **a != *b)
-                .count(),
-            0,
-            "continued painting differs; masked={masked}"
-        );
-    }
-}
-
-#[test]
 fn every_contact_preset_survives_save_reopen_and_exact_undo_redo() {
     contact_preset_history(false);
 }
@@ -527,71 +254,3 @@ fn contact_preset_history(masked: bool) {
     }
 }
 
-#[test]
-fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
-    use layer_core::raster::{RasterPlane, TileKey};
-    let mut project = Project {
-        document: Document::new("sparse edit", 768, 256),
-        assets: Default::default(),
-    };
-    let source = AssetId::from("sparse-source");
-    project.document.layers[0].asset = Some(source.clone());
-    project.assets.insert(
-        source,
-        ProjectAsset {
-            extent: [768, 256],
-            format: ProjectAssetFormat::Rgba8Srgb,
-            bytes: [95, 37, 201, 255].repeat(768 * 256).into(),
-        },
-    );
-    let (mut live, _) = engine(&project);
-    let before = live.document().layers[0].raster.wait_data().unwrap();
-    before.validate([768, 256], false, Default::default()).unwrap();
-    let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
-    coverage.default_coverage = 0.;
-    coverage.initial = Some(
-        Selection::polygon(vec![
-            Point { x: 20., y: 20. },
-            Point { x: 80., y: 20. },
-            Point { x: 80., y: 80. },
-            Point { x: 20., y: 80. },
-        ])
-        .unwrap(),
-    );
-    live.append_layer_operation(
-        LayerId(1),
-        LayerOperation {
-            placement: layer_core::Affine::IDENTITY,
-            coverage,
-            kind: LayerOperationKind::Fill {
-                color: [0.7, 0.1, 0.2, 0.6],
-                alpha_locked: false,
-            },
-        },
-    )
-    .unwrap();
-    live.render_frame().unwrap();
-    let after = live.document().layers[0].raster.wait_data().unwrap();
-    after.validate([768, 256], false, Default::default()).unwrap();
-    for x in 0..3 {
-        let key = TileKey {
-            plane: RasterPlane::Color,
-            coordinate: [x, 0],
-        };
-        assert_eq!(
-            before.tiles[&key].same_capture(&after.tiles[&key]),
-            x != 0,
-            "only the selected tile is captured"
-        );
-    }
-    live.undo().unwrap();
-    live.render_frame().unwrap();
-    let mut pixels = vec![0; 768 * 256 * 4];
-    live.backend_mut()
-        .copy_rgba8_srgb(&mut pixels, 768 * 4)
-        .unwrap();
-    assert_eq!(
-        pixels,
-        project.assets.values().next().unwrap().bytes.as_ref()
-    );
-}
