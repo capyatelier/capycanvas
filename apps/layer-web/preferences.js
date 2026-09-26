@@ -44,7 +44,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     const reset = button("", () => {
       dismissContext(); send({ type: "reset", id: row.id });
       const field = fields.get(row.id), next = modelRow(row.id);
-      if (next.kind.type === "text") field.input.value = next.kind.value;
       if (next.kind.type === "number") field.input.cancelEditing();
     });
     reset.dataset.reset = row.id; reset.setAttribute("role", "menuitem");
@@ -204,20 +203,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           label.htmlFor = id;
           let input, widget;
           switch (row.kind.type) {
-            case "text":
-              input = element("input", "preference-entry"); input.type = "text";
-              input.maxLength = row.kind.max_length; input.placeholder = row.kind.placeholder;
-              input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("autocapitalize", "off");
-              input.value = row.kind.value;
-              const commit = () => {
-                send({ type: "edit", id: row.id, value: input.value });
-                if (!view()?.error) input.value = modelRow(row.id).kind.value;
-              };
-              input.addEventListener("change", commit);
-              input.addEventListener("keydown", e => {
-                if (e.key === "Enter") { e.preventDefault(); commit(); }
-              });
-              widget = input; break;
             case "swatches": {
               const kind = row.kind, current = () => modelRow(row.id).kind;
               widget = element("div", `preference-swatches${kind.inline ? " inline" : ""}`);
@@ -303,7 +288,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
-          if (!["number", "text", "swatches"].includes(row.kind.type)) input.addEventListener("input", () => {
+          if (!["number", "swatches"].includes(row.kind.type)) input.addEventListener("input", () => {
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
           });
@@ -413,7 +398,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       }
       else if (row.kind.type === "swatches") paintSwatches(widget, input, row.kind);
       else if (row.kind.type === "switch" && input.checked !== row.kind.active) input.checked = row.kind.active;
-      else if (row.kind.type === "text" && document.activeElement !== input && input.value !== row.kind.value) input.value = row.kind.value;
     }
     for (const [ids, section] of groups) {
       const hidden = !ids.some((id) => visible.has(id));

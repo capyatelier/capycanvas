@@ -57,7 +57,7 @@ private final class State: @unchecked Sendable {
             let rows = preferenceRows(inventory)
             precondition(!rows.isEmpty, "Settings inventory must be published")
             var checked = 0
-            for row in rows where ["switch", "choice", "number", "text"].contains(row["kind"]["type"].string) {
+            for row in rows where ["switch", "choice", "number"].contains(row["kind"]["type"].string) {
                 let id = row["id"].string
                 let root = directory.appendingPathComponent("preferences-\(platform)/\(id)")
                 let persistence = EditorPersistence(root: root), state = State()
@@ -88,9 +88,6 @@ private final class State: @unchecked Sendable {
                 case "switch": value = !kind["active"].bool
                 case "choice": value = (Int(kind["selected"].uint) + 1) % kind["options"].array.count
                 case "number": value = kind["control"]["max"].number
-                case "text":
-                    precondition(kind["constraint"].string == "hex_color", "Unaccounted text constraint: \(id)")
-                    value = "#123456"
                 default: preconditionFailure("Unaccounted editable preference kind")
                 }
                 action("edit", value: value)

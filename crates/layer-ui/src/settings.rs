@@ -373,12 +373,6 @@ pub enum ChoicePresentation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceKind {
-    Text {
-        value: String,
-        constraint: TextConstraint,
-        max_length: u32,
-        placeholder: String,
-    },
     Choice {
         options: Vec<String>,
         selected: u32,
@@ -413,7 +407,6 @@ impl PreferenceKind {
     fn value(&self) -> Option<PreferenceValue> {
         Some(match self {
             Self::Number { value, .. } => PreferenceValue::Number(*value),
-            Self::Text { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Choice { selected, .. } => PreferenceValue::Choice(*selected),
             Self::Swatches { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Switch { active } => PreferenceValue::Bool(*active),
@@ -429,7 +422,6 @@ impl PreferenceKind {
                     .expect("valid setting default")
                     .text
             }
-            Self::Text { value, .. } => value.clone(),
             Self::Choice {
                 options, selected, ..
             } => options[*selected as usize].clone(),
@@ -478,18 +470,6 @@ pub struct PreferenceReset {
     pub enabled: bool,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TextConstraint {
-    HexColor,
-}
-impl TextConstraint {
-    fn validate(self, text: &str) -> Result<(), String> {
-        match self {
-            Self::HexColor => HexColor::try_from(text.to_owned()).map(|_| ()),
-        }
-    }
-}
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceRow {
     pub id: PreferenceId,
@@ -767,14 +747,10 @@ impl Settings {
                 reset.hint = reset.value.clone();
                 reset.enabled = row.enabled && self.gestures.contains_key(trigger.id);
             }
-            match (&mut row.kind, default_value) {
-                (PreferenceKind::Number { control, .. }, PreferenceValue::Number(value)) => {
-                    control.default_value = Some(value as f64);
-                }
-                (PreferenceKind::Text { placeholder, .. }, PreferenceValue::Text(value)) => {
-                    *placeholder = value;
-                }
-                _ => {}
+            if let (PreferenceKind::Number { control, .. }, PreferenceValue::Number(value)) =
+                (&mut row.kind, default_value)
+            {
+                control.default_value = Some(value as f64);
             }
         }
         pages
@@ -1152,14 +1128,11 @@ impl Settings {
             {
                 self.default_value(id, platform)?
             }
-            (
-                PreferenceKind::Text {
-                    constraint: TextConstraint::HexColor,
-                    ..
-                }
-                | PreferenceKind::Swatches { .. },
-                PreferenceValue::Text(text),
-            ) if text.trim().is_empty() => self.default_value(id, platform)?,
+            (PreferenceKind::Swatches { .. }, PreferenceValue::Text(text))
+                if text.trim().is_empty() =>
+            {
+                self.default_value(id, platform)?
+            }
             (_, value) => value,
         };
         use PreferenceId::*;
@@ -1170,9 +1143,6 @@ impl Settings {
             (PreferenceKind::Choice { options, .. }, _)
                 if value.choice().is_some_and(|v| (v as usize) < options.len()) => {}
             (PreferenceKind::Switch { .. }, PreferenceValue::Bool(_)) => {}
-            (PreferenceKind::Text { constraint, .. }, PreferenceValue::Text(text)) => {
-                constraint.validate(text)?;
-            }
             (PreferenceKind::Swatches { .. }, PreferenceValue::Text(text)) => {
                 if !text.trim().is_empty() {
                     HexColor::try_from(text.trim().to_owned())?;

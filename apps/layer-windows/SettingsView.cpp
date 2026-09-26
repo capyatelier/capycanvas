@@ -240,24 +240,6 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 if(!data->updating&&index>=0)edit(data,id,N(index));
             });widget=control;
             bindings.emplace_back([data=data,id,control]{control.SelectedIndex(int32_t(num(object(rowFor(data,id),L"kind"),L"selected")));});
-        }else if(type==L"text"){
-            TextBox control;control.Width(140);control.MaxLength(int32_t(num(kind,L"max_length",64)));
-            control.PlaceholderText(str(kind,L"placeholder"));
-            struct Draft{hstring text;bool changed=false;};
-            auto draft=std::make_shared<Draft>();
-            control.TextChanging([data=data,draft](auto&& sender,auto&&){
-                if(!data->updating){draft->text=sender.template as<TextBox>().Text();draft->changed=true;}
-            });
-            auto commit=[data=data,id,draft,weak=make_weak(control)]{
-                if(weak.get()&&draft->changed){draft->changed=false;edit(data,id,S(draft->text));}
-            };
-            commits.push_back(commit);
-            control.LostFocus([commit](auto&&,auto&&){commit();});
-            control.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
-            widget=control;
-            bindings.emplace_back([data=data,id,control,draft]{
-                if(!draft->changed&&control.FocusState()==FocusState::Unfocused)control.Text(str(object(rowFor(data,id),L"kind"),L"value"));
-            });
         }else if(type==L"swatches"){
             bool inlineRow=flag(kind,L"inline");double side=inlineRow?28:32;
             Panel circles{nullptr};

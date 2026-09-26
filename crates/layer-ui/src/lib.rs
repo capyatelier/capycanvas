@@ -131,7 +131,7 @@ pub use settings::{
     PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
-    SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
+    SettingsPage, ShortcutEditor, Swatch, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
     BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,

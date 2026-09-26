@@ -16,7 +16,6 @@ static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 enum Field {
-    Text(adw::ActionRow, gtk::Entry, gtk::EventControllerFocus),
     Choice(adw::ComboRow),
     ImageChoice(gtk::ListBoxRow, crate::image_selector::ImageSelector),
     Circles(adw::ActionRow, crate::transparency_choice::TransparencyChoice),
@@ -29,7 +28,6 @@ enum Field {
 impl Field {
     fn widget(&self) -> &gtk::Widget {
         match self {
-            Self::Text(w, _, _) => w.upcast_ref(),
             Self::Choice(w) => w.upcast_ref(),
             Self::ImageChoice(w, _) => w.upcast_ref(),
             Self::Circles(w, _) => w.upcast_ref(),
@@ -44,11 +42,6 @@ impl Field {
         self.widget().set_sensitive(row.enabled);
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
-            (Self::Text(_, entry, focus), PreferenceKind::Text { value, .. }) => {
-                if !focus.contains_focus() && entry.text().as_str() != value {
-                    entry.set_text(value);
-                }
-            }
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
             (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, .. }) => {
                 w.set_selected(*selected)
@@ -144,27 +137,6 @@ fn preference(w: &Workspace, id: PreferenceId) -> Option<PreferenceRow> {
         .flat_map(|p| p.groups)
         .flat_map(|g| g.rows)
         .find(|r| r.id == id)
-}
-
-fn commit_text(w: &Rc<Workspace>, id: PreferenceId, entry: &gtk::Entry) {
-    send(
-        w,
-        PreferenceAction::Edit {
-            id,
-            value: PreferenceValue::Text(entry.text().into()),
-        },
-    );
-    if w.gpu
-        .borrow()
-        .as_ref()
-        .is_some_and(|g| g.session.state().preferences.error.is_none())
-        && let Some(PreferenceRow {
-            kind: PreferenceKind::Text { value, .. },
-            ..
-        }) = preference(w, id)
-    {
-        entry.set_text(&value);
-    }
 }
 
 fn commit_swatch(w: &Rc<Workspace>, id: PreferenceId, selector: &crate::swatch_selector::SwatchSelector) {
@@ -362,14 +334,6 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
                 number.cancel_edit();
             }
             send(&w, PreferenceAction::Reset { id });
-            if let Some(Field::Text(_, entry, _)) = w.preferences.fields.borrow().get(&id)
-                && let Some(PreferenceRow {
-                    kind: PreferenceKind::Text { value, .. },
-                    ..
-                }) = preference(&w, id)
-            {
-                entry.set_text(&value);
-            }
         }
     ));
     actions.add_action(&action);
@@ -914,45 +878,6 @@ impl Preferences {
                                 )
                             ));
                             Field::Choice(control)
-                        }
-                        PreferenceKind::Text {
-                            max_length,
-                            placeholder,
-                            ..
-                        } => {
-                            let native_row = text_row(&row.title, &row.description);
-                            let entry = gtk::Entry::builder()
-                                .width_chars(9)
-                                .max_width_chars(9)
-                                .max_length(*max_length as i32)
-                                .placeholder_text(placeholder)
-                                .valign(gtk::Align::Center)
-                                .build();
-                            entry.add_css_class("preference-entry");
-                            entry.set_widget_name(&format!("setting-text-{}", id.key()));
-                            entry.connect_activate(glib::clone!(
-                                #[weak]
-                                w,
-                                move |entry| commit_text(&w, id, entry)
-                            ));
-                            let focus = gtk::EventControllerFocus::new();
-                            focus.connect_leave(glib::clone!(
-                                #[weak]
-                                w,
-                                #[weak]
-                                entry,
-                                move |_| send(
-                                    &w,
-                                    PreferenceAction::Edit {
-                                        id,
-                                        value: PreferenceValue::Text(entry.text().into())
-                                    }
-                                )
-                            ));
-                            entry.add_controller(focus.clone());
-                            native_row.add_suffix(&entry);
-                            native_row.set_activatable_widget(Some(&entry));
-                            Field::Text(native_row, entry, focus)
                         }
                         PreferenceKind::Number { control, .. }
                             if control.kind == NumericKind::Number =>

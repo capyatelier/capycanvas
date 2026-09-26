@@ -313,8 +313,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 // Leave native selection/clipboard gestures alone inside an
                 // active editor. Its row label still exposes the setting menu.
-                if ((row.getJSONObject("kind").getString("type") == "text" || host.editingText)
-                    && down.position.x > size.width / 2) return@awaitEachGesture
+                if (host.editingText && down.position.x > size.width / 2) return@awaitEachGesture
                 if (currentEvent.buttons.isSecondaryPressed) { down.consume(); show(); return@awaitEachGesture }
                 if (down.type != PointerType.Touch && down.type != PointerType.Stylus && down.type != PointerType.Eraser) return@awaitEachGesture
                 val released = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
@@ -402,13 +401,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 }
             }
             when (type) {
-                "text" -> CoreTextField(kind.getString("value"), {},
-                    Modifier.widthIn(max = controlWidth).width(132.dp).testTag("setting-text-" + row.getString("id")),
-                    height = 48.dp, enabled = enabled, maxLength = kind.getInt("max_length"),
-                    placeholder = { Text(kind.getString("placeholder")) },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii, autoCorrectEnabled = false),
-                    onCommit = { host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it)) })
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "swatches" -> SwatchSelector(host, row, kind, enabled)
                 "choice" -> if (kind.getJSONObject("presentation").getString("type") == "circles") {
