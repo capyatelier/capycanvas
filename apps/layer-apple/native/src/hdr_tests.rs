@@ -89,17 +89,17 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         let initial = proof(&app, json!({"type":"reveal"}))["recipe"].clone();
         proof(
             &app,
-            json!({"type":"edit","phase":"down","control":"exposure","value":0.}),
+            json!({"type":"number","phase":"down","key":"exposure","value":0.}),
         );
         for i in 1..=20 {
             proof(
                 &app,
-                json!({"type":"edit","phase":"move","control":"exposure","value":i as f32/20.}),
+                json!({"type":"number","phase":"move","key":"exposure","value":i as f32/20.}),
             );
         }
         proof(
             &app,
-            json!({"type":"edit","phase":"up","control":"exposure","value":1.}),
+            json!({"type":"number","phase":"up","key":"exposure","value":1.}),
         );
         assert_eq!(
             raster_samples(
@@ -121,15 +121,15 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         );
         proof(
             &app,
-            json!({"type":"edit","phase":"down","control":"exposure","value":0.}),
+            json!({"type":"number","phase":"down","key":"exposure","value":0.}),
         );
         proof(
             &app,
-            json!({"type":"edit","phase":"move","control":"exposure","value":-1.}),
+            json!({"type":"number","phase":"move","key":"exposure","value":-1.}),
         );
         proof(
             &app,
-            json!({"type":"edit","phase":"cancel","control":"exposure","value":-1.}),
+            json!({"type":"number","phase":"cancel","key":"exposure","value":-1.}),
         );
         app.invoke("redo");
         assert_eq!(
@@ -151,19 +151,19 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         let start = Instant::now();
         proof(
             &app,
-            json!({"type":"edit","phase":"down","control":"exposure","value":1.}),
+            json!({"type":"number","phase":"down","key":"exposure","value":1.}),
         );
         for i in 0..60 {
             proof(
                 &app,
-                json!({"type":"edit","phase":"move","control":"exposure","value":i as f32/60.}),
+                json!({"type":"number","phase":"move","key":"exposure","value":i as f32/60.}),
             );
             let a = unsafe { &mut *app.0 };
             a.metal.poll_color(&mut a.host).unwrap();
         }
         proof(
             &app,
-            json!({"type":"edit","phase":"up","control":"exposure","value":1.}),
+            json!({"type":"number","phase":"up","key":"exposure","value":1.}),
         );
         assert_eq!(unsafe { &*app.0 }.metal.local_tone.completed, count);
         assert!(std::sync::Arc::ptr_eq(

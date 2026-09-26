@@ -1,6 +1,7 @@
 //! Shared presentation and interaction policy for native and browser color controls.
 //! Hosts own pointer capture, widget drawing, display observations and profile I/O.
-use crate::{ContactPhase, Platform, ProofMode, UiChange, UiSession};
+use crate::{Platform, UiSession};
+use layer_core::color::{RgbSpace, hdr::SdrRendition};
 use layer_render::CanvasRenderer;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -20,208 +21,6 @@ pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {
             .chain(crate::proof_panel::sdr_number_controls().iter().map(|a|json!({"key":a.key,"label":a.label,"numeric":a.numeric,"value":if a.key=="exposure" {recipe.exposure} else {recipe.highlight_color}}))).collect::<Vec<_>>(), "icons":crate::proof_panel::SDR_READOUT_ICONS,
         "print":document.proof.as_ref().map(|p|json!({"name":p.name})), "gamut_warning":session.state().gamut_warning,
         "intents":crate::proof_panel::PROOF_INTENTS, "simulations":crate::proof_panel::ProofSimulation::CHOICES})
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProofAction {
-    Mode {
-        mode: ProofMode,
-    },
-    Reveal,
-    Edit {
-        phase: ContactPhase,
-        control: String,
-        value: f64,
-    },
-    Nudge {
-        phase: ContactPhase,
-        part: u32,
-        delta: [f64; 2],
-    },
-    Point {
-        phase: ContactPhase,
-        part: u32,
-        point: [f32; 2],
-        size: f32,
-    },
-    Reset {
-        #[serde(default)]
-        part: Option<u32>,
-    },
-}
-pub fn proof_action<R: CanvasRenderer>(
-    session: &mut UiSession<R>,
-    action: ProofAction,
-) -> Result<UiChange, String> {
-    let mut recipe = session.effective_sdr_rendition();
-    let phase = match action {
-        ProofAction::Reveal => {
-            use crate::{CustomizationAction, DrawerAnchor, Panel, UiAction};
-            let mut change = session.dispatch(UiAction::Customize {
-                action: CustomizationAction::SetPanelVisible {
-                    panel: Panel::Proof,
-                    visible: true,
-                },
-            })?;
-            let state = session.state();
-            let layout = &state.workspace.layout;
-            let next=layout.panel_group(Panel::Proof).and_then(|group| {
-                if let Some(column)=layout.collapsed_column_for_group(group) {
-                    let settings=layout.column_stack(column);
-                    let open=if settings.drawers {state.customization.column_drawers.iter().any(|d|matches!(d.anchor,DrawerAnchor::Column {group:g,origin:Panel::Proof,..} if g==group))}
-                        else {settings.open_column==Some(column) && layout.active_panel(Panel::Proof)==Some(Panel::Proof)};
-                    (!open).then_some(UiAction::Customize {action:CustomizationAction::ToggleColumnDrawer {group,panel:Panel::Proof}})
-                } else {(layout.active_panel(Panel::Proof)!=Some(Panel::Proof)).then_some(UiAction::SelectPanelTab {group,panel:Panel::Proof})}
-            });
-            if let Some(next) = next {
-                let c = session.dispatch(next)?;
-                change.regions |= c.regions;
-                change.revision = c.revision;
-                change.canvas_wake |= c.canvas_wake;
-            }
-            return Ok(change);
-        }
-        ProofAction::Mode { mode } => return session.select_proof_mode(mode),
-        ProofAction::Reset { part } => {
-            match part {
-                Some(1) => {
-                    recipe.balance = 0.;
-                    recipe.contrast = 1.;
-                }
-                Some(2) => recipe.exposure = 0.,
-                Some(3) => recipe.highlight_color = 0.3,
-                _ => {
-                    recipe = layer_core::color::hdr::SdrRendition {
-                        headroom: recipe.headroom,
-                        ..Default::default()
-                    }
-                }
-            }
-            return session.set_sdr_rendition(recipe);
-        }
-        ProofAction::Edit {
-            phase,
-            control,
-            value,
-        } => {
-            if !value.is_finite() {
-                return Err("Enter a finite value".into());
-            }
-            match control.as_str() {
-                "contrast" => {
-                    recipe =
-                        crate::proof_panel::sdr_from_pad(recipe, [f64::from(recipe.balance), value])
-                }
-                "balance" => {
-                    recipe = crate::proof_panel::sdr_from_pad(
-                        recipe,
-                        [value, f64::from(recipe.contrast.log2())],
-                    )
-                }
-                "exposure" => recipe.exposure = value as f32,
-                "highlight_color" => recipe.highlight_color = value as f32,
-                _ => return Err("Unknown proof control".into()),
-            }
-            phase
-        }
-        ProofAction::Point {
-            phase,
-            part,
-            point,
-            size,
-        } => {
-            if !point.iter().all(|v| v.is_finite()) {
-                return Err("Invalid proof position".into());
-            }
-            let g = crate::parameter_pad::ParameterDialGeometry::new(size)
-                .ok_or("Invalid proof size")?;
-            match part {
-                1 => {
-                    let p = g.field.disc_components(point);
-                    recipe = crate::proof_panel::sdr_from_pad(
-                        recipe,
-                        crate::proof_panel::sdr_tone_pad().values(p.map(f64::from)),
-                    );
-                }
-                2 | 3 => {
-                    let t = g.arcs[(part - 2) as usize].fraction(point);
-                    if part == 2 {
-                        recipe.exposure = t * 4. - 2.;
-                    } else {
-                        recipe.highlight_color = t;
-                    }
-                }
-                _ => return Err("Unknown proof target".into()),
-            }
-            phase
-        }
-        ProofAction::Nudge { phase, part, delta } => {
-            if !delta.iter().all(|v| v.is_finite()) {
-                return Err("Invalid proof increment".into());
-            }
-            match part {
-                1 => {
-                    let pad = crate::proof_panel::sdr_pad_values(recipe);
-                    recipe = crate::proof_panel::sdr_from_pad(
-                        recipe,
-                        std::array::from_fn(|i| (pad[i] + delta[i] * 0.01).clamp(-1., 1.)),
-                    );
-                }
-                2 => {
-                    recipe.exposure =
-                        (recipe.exposure + (delta[0] + delta[1]) as f32 * 0.04).clamp(-2., 2.)
-                }
-                3 => {
-                    recipe.highlight_color =
-                        (recipe.highlight_color + (delta[0] + delta[1]) as f32 * 0.01).clamp(0., 1.)
-                }
-                _ => return Err("Unknown proof target".into()),
-            }
-            phase
-        }
-    };
-    session.edit_sdr_rendition(phase, recipe)
-}
-
-/// Immutable geometry is reusable at a given allocation, independent of artwork.
-pub fn dial_geometry(size: f32) -> Result<Value, String> {
-    let g = crate::parameter_pad::ParameterDialGeometry::new(size).ok_or("Invalid proof size")?;
-    let arcs=g.arcs.map(|a|json!({"center":a.center,"radius":a.radius,"width":a.width,
-        "marker_radius":a.marker_radius,"points":(0..=80).map(|i|a.point(i as f32/80.)).collect::<Vec<_>>()}));
-    let readouts = g
-        .readouts(size)
-        .map(|r| json!({"icon":r.icon,"text":r.text,"curve":r.curve}));
-    Ok(
-        json!({"field":g.field,"arcs":arcs,"readouts":readouts,"text_size":crate::parameter_pad::ParameterDialGeometry::text_size(size),"reset":g.reset}),
-    )
-}
-
-pub fn dial_hit(size: f32, point: [f32; 2]) -> u32 {
-    let Some(g) = crate::parameter_pad::ParameterDialGeometry::new(size) else {
-        return 0;
-    };
-    if (point[0] - g.field.center[0]).hypot(point[1] - g.field.center[1]) <= g.field.disc_radius() {
-        return 1;
-    }
-    g.arcs
-        .iter()
-        .position(|a| a.contains(point))
-        .map_or(0, |i| i as u32 + 2)
-}
-
-pub fn dial_markers(
-    size: f32,
-    recipe: layer_core::color::hdr::SdrRendition,
-) -> Result<Value, String> {
-    let g = crate::parameter_pad::ParameterDialGeometry::new(size).ok_or("Invalid proof size")?;
-    let p =
-        crate::proof_panel::sdr_tone_pad().fractions(crate::proof_panel::sdr_pad_values(recipe));
-    Ok(json!([
-        g.field.disc_marker(p.map(|v| v as f32)),
-        g.arcs[0].point((recipe.exposure + 2.) / 4.),
-        g.arcs[1].point(recipe.highlight_color)
-    ]))
 }
 
 /// Hosts plot the shared bins and axis; nonpositive HDR values have no stop coordinate.
@@ -248,37 +47,37 @@ pub fn histogram_axis(h: &layer_core::color::histogram::Histogram) -> Value {
 
 pub fn picker_preview(
     color: layer_core::color::RgbColor,
-    space: layer_core::color::RgbSpace,
-    recipe: layer_core::color::hdr::SdrRendition,
+    space: RgbSpace,
+    recipe: SdrRendition,
     headroom: f32,
 ) -> Result<[f32; 4], String> {
-    use layer_core::color::{RgbSpace, hdr, rgb};
     recipe.validate().map_err(str::to_string)?;
     if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) {
         return Err("Invalid headroom".into());
     }
     let p = color.linear_in(space)?;
-    let rgb = if headroom > 1. {
-        let mapped = hdr::map_display_premultiplied([p[0], p[1], p[2], 1.], headroom);
-        rgb::apply(
-            space.linear_transform(RgbSpace::Srgb),
-            [mapped[0], mapped[1], mapped[2]].map(f64::from),
-        )
-        .map(|v| v as f32)
-    } else {
-        recipe
-            .mapper(space, RgbSpace::Srgb)
-            .map_rgb([p[0], p[1], p[2]])
-    };
+    let rgb = display_mapper(recipe, space, headroom)([p[0], p[1], p[2], 1.]);
     Ok([rgb[0], rgb[1], rgb[2], p[3]])
+}
+fn display_mapper(recipe: SdrRendition, space: RgbSpace, headroom: f32) -> impl Fn([f32; 4]) -> [f32; 3] {
+    let mapper = recipe.mapper(space, RgbSpace::Srgb);
+    let matrix = space.linear_transform(RgbSpace::Srgb);
+    move |p| {
+        if headroom > 1. {
+            let m = layer_core::color::hdr::map_display_premultiplied(p, headroom);
+            layer_core::color::rgb::apply(matrix, [m[0], m[1], m[2]].map(f64::from)).map(|v| v as f32)
+        } else {
+            mapper.map_rgb([p[0], p[1], p[2]])
+        }
+    }
 }
 #[derive(Deserialize)]
 pub struct PickerField {
-    pub space: layer_core::color::RgbSpace,
+    pub space: RgbSpace,
     pub hue: f32,
     pub shape: crate::ColorShape,
     pub stops: f32,
-    pub recipe: layer_core::color::hdr::SdrRendition,
+    pub recipe: SdrRendition,
     pub headroom: f32,
 }
 impl PickerField {
@@ -317,24 +116,13 @@ impl PickerField {
         {
             return Err("Invalid HDR field viewing conditions".into());
         }
-        let mapper = self
-            .recipe
-            .mapper(self.space, layer_core::color::RgbSpace::Srgb);
-        let matrix = self
-            .space
-            .linear_transform(layer_core::color::RgbSpace::Srgb);
+        let map = display_mapper(self.recipe, self.space, self.headroom);
         let gain = f64::from(self.stops).exp2();
         for p in pixels {
             for c in &mut p[..3] {
                 *c = (f64::from(*c) * gain).clamp(-(f32::MAX as f64),f32::MAX as f64) as f32;
             }
-            let rgb = if self.headroom > 1. {
-                let m = layer_core::color::hdr::map_display_premultiplied(*p, self.headroom);
-                layer_core::color::rgb::apply(matrix, [m[0], m[1], m[2]].map(f64::from))
-                    .map(|v| v as f32)
-            } else {
-                mapper.map_rgb([p[0], p[1], p[2]])
-            };
+            let rgb = map(*p);
             *p = [rgb[0], rgb[1], rgb[2], p[3]];
         }
         Ok(())

@@ -52,31 +52,32 @@ struct ProofDial: View {
     @ObservedObject var controller: ProofController
     @ObservedObject private var glass = ProofGlass.shared
     @State private var numeric = false
+    @State private var origin = CGPoint.zero
     private var model: JSON { store.snapshot["proof_panel"] }
     var body: some View {
         GeometryReader { bounds in
             let glassImage = glass.image
             let size = max(128, min(bounds.size.width, bounds.size.height))
-            let g = ColorUI.resolve(["type": "proof_geometry", "size": size])
-            let markers = ColorUI.resolve(["type": "proof_markers", "size": size, "recipe": model["recipe"].raw])
+            let g = ColorUI.resolve(["type": "proof_dial", "size": size, "recipe": model["recipe"].raw])
+            let markers = [g["marker"], g["arcs"][0]["point"], g["arcs"][1]["point"]]
             ZStack(alignment: .topLeading) {
                 Canvas { graphics, _ in
-                    let field = g["field"], radius = field["disc_radius"].number
-                    let center = point(field["center"])
+                    let radius = g["radius"].number
+                    let center = point(g["center"])
                     let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
                     var clipped = graphics; clipped.clip(to: Path(ellipseIn: rect))
                     if let image = glassImage { clipped.draw(Image(decorative: image, scale: 1), in: rect) }
                     else { clipped.fill(Path(rect), with: .color(.gray)) }
                     for i in 0..<2 {
-                        let arc = g["arcs"][i], points = arc["points"].array
+                        let arc = g["arcs"][i], points = arc["path"].array
                         let colors: [Color] = i == 0 ? [Color(white: 0.04), Color(white: 0.55), .white]
                             : [Color(white: 0.95), Color(red: 0.15, green: 0.55, blue: 0.85)]
                         graphics.stroke(path(points), with: .linearGradient(Gradient(colors: colors),
                             startPoint: point(points.first ?? JSON()), endPoint: point(points.last ?? JSON())),
-                            style: StrokeStyle(lineWidth: arc["width"].number, lineCap: .round))
+                            style: StrokeStyle(lineWidth: arc["geometry"]["width"].number, lineCap: .round))
                     }
-                    let markerRadius = g["arcs"][0]["marker_radius"].number
-                    for marker in markers.array {
+                    let markerRadius = g["arcs"][0]["geometry"]["marker_radius"].number
+                    for marker in markers {
                         let p = point(marker), circle = Path(ellipseIn: CGRect(x: p.x - markerRadius, y: p.y - markerRadius, width: markerRadius * 2, height: markerRadius * 2))
                         graphics.stroke(circle, with: .color(.black.opacity(0.65)), lineWidth: 4)
                         graphics.stroke(circle, with: .color(.white), lineWidth: 2)
@@ -99,17 +100,19 @@ struct ProofDial: View {
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
                 ParameterInput(hdr: false, identity: String(store.state["document_file"]["epoch"].uint), nudge: { phase, part, delta in
-                    controller.action(["type": "nudge", "phase": phase, "part": part, "delta": delta])
+                    controller.action(["type": "control", "phase": phase, "part": Int(part) - 1,
+                        "edit": ["type": "step", "axis": delta[0] != 0 ? 0 : 1, "steps": delta[0] + delta[1]]])
                 }) { phase, part, point, size in
-                    if phase == "reset" { controller.action(["type": "reset", "part": part]); return }
-                    controller.action(["type": "point", "phase": phase, "part": part, "point": [point.x, point.y], "size": size])
+                    if phase == "reset" { controller.action(["type": "control", "part": Int(part) - 1, "edit": ["type": "reset"]]); return }
+                    if phase == "down" { origin = point }
+                    controller.action(["type": "dial", "phase": phase, "size": size, "origin": [origin.x, origin.y], "point": [point.x, point.y]])
                 }.accessibilityHidden(true)
-                Button { controller.action(["type": "reset"]) } label: { Image(systemName: "arrow.clockwise") }
+                Button { resetAll() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).frame(width: g["reset"][2].number, height: g["reset"][3].number)
                     .offset(x: g["reset"][0].number, y: g["reset"][1].number)
                     .accessibilityLabel("Reset SDR appearance").accessibilityIdentifier("proof-reset")
             }.frame(width: size, height: size)
-                .contextMenu { Button("Edit SDR Appearance…") { numeric = true }; Button("Reset") { controller.action(["type": "reset"]) } }
+                .contextMenu { Button("Edit SDR Appearance…") { numeric = true }; Button("Reset") { resetAll() } }
                 .accessibilityElement(children: .contain)
                 .accessibilityChildren {
                     ForEach(Array(["balance", "contrast", "exposure", "highlight_color"].enumerated()), id: \.offset) { i, key in
@@ -117,7 +120,7 @@ struct ProofDial: View {
                             .accessibilityValue(model["readouts"][[1, 0, 2, 3][i]].string)
                             .accessibilityAdjustableAction { direction in adjust(key, direction == .increment ? 1 : -1) }
                     }
-                    Button("Reset SDR appearance") { controller.action(["type": "reset"]) }
+                    Button("Reset SDR appearance") { resetAll() }
                         .accessibilityIdentifier("proof-reset")
                 }
                 .accessibilityIdentifier("proof-dial")
@@ -125,11 +128,11 @@ struct ProofDial: View {
             .sheet(isPresented: $numeric) { ProofNumbers(store: store, controller: controller).modifier(EditorPopupPresentation()) }
     }
     private func adjust(_ key: String, _ direction: Double) {
-        let current = key == "contrast" ? model["pad"][1].number : model["recipe"][key].number
-        let value = current + direction * (key == "exposure" ? 0.04 : 0.01)
-        controller.action(["type": "edit", "control": key, "value": value, "phase": "down"])
-        controller.action(["type": "edit", "control": key, "value": value, "phase": "up"])
+        let part = ["balance": 0, "contrast": 0, "exposure": 1, "highlight_color": 2][key] ?? 0
+        controller.action(["type": "control", "part": part,
+            "edit": ["type": "step", "axis": key == "contrast" ? 1 : 0, "steps": direction]])
     }
+    private func resetAll() { controller.action(["type": "control", "part": 3, "edit": ["type": "reset"]]) }
     private func point(_ p: JSON) -> CGPoint { CGPoint(x: p[0].number, y: p[1].number) }
     private func path(_ points: [JSON]) -> Path {
         var p = Path(); for (i, v) in points.enumerated() { if i == 0 { p.move(to: point(v)) } else { p.addLine(to: point(v)) } }; return p
@@ -158,10 +161,9 @@ private struct ProofNumbers: View {
             ForEach(store.snapshot["proof_panel"]["numbers"].array, id: \.stableKey) { spec in
                 let key = spec["key"].string
                 NumberControl(store: store, label: spec["label"].string, value: spec["value"].number, control: spec["numeric"], gestureChange: { phase, value, completion in
-                    controller.action(["type": "edit", "phase": phase, "control": key, "value": value]); completion(nil)
+                    controller.action(["type": "number", "phase": phase, "key": key, "value": value]); completion(nil)
                 }) { value, completion in
-                    controller.action(["type": "edit", "phase": "down", "control": key, "value": value])
-                    controller.action(["type": "edit", "phase": "up", "control": key, "value": value]); completion(nil)
+                    controller.action(["type": "number", "key": key, "value": value]); completion(nil)
                 }
             }
             Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
@@ -178,7 +180,7 @@ private struct PrintProofControls: View {
     private var profiles: [JSON] { controller.form["profiles"].array }
     private func change(_ value: JSON) {
         let profile = JSON(["name": value["name"].raw, "profile": value["profile"].raw, "channels": "Rgb"])
-        let normalized = ColorUI.resolve(["type": "print_recipe", "settings": ["profile": profile.raw,
+        let normalized = ColorUI.resolve(["type": "print_proof", "settings": ["profile": profile.raw,
             "intent": value["conversion"]["intent"].raw, "bpc": value["conversion"]["black_point_compensation"].bool,
             "simulation": value["simulate_paper"].bool ? "paper_and_ink" : value["simulate_black_ink"].bool ? "black_ink" : "colors"]])
         guard normalized["error"].isNull else { controller.error = normalized["error"].string; return }

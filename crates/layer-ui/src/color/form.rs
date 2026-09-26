@@ -5,11 +5,8 @@ use super::*;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorUiRequest {
-    ProofGeometry { size: f32 },
-    PrintRecipe { settings: crate::proof_panel::PrintProofSettings },
     IntensityArc { size:f32, stops:f32, #[serde(default)] depth:Option<layer_core::color::SampleDepth>, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
-    ProofMarkers { size: f32, recipe: layer_core::color::hdr::SdrRendition },
     PickerLayout { size: f32, #[serde(default)] hdr: bool },
     HdrPreview { color: RgbColor, document_space: RgbSpace, recipe: layer_core::color::hdr::SdrRendition, headroom: f32 },
     Layout { size: f32, #[serde(default)] hdr: bool },
@@ -38,7 +35,6 @@ pub enum ColorUiRequest {
 }
 pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
     let value = match request {
-        ColorUiRequest::PrintRecipe {settings} => return Ok(serde_json::json!(settings.recipe()?)),
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
             if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
@@ -56,8 +52,6 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             }).collect::<Result<Vec<_>,String>>()?;
             return Ok(serde_json::json!({"minimum":minimum,"maximum":maximum,"colors":samples,"marker":a.point((stops-minimum)/(maximum-minimum)),"zero":a.point(-minimum/(maximum-minimum))}));
         },
-        ColorUiRequest::ProofGeometry {size} => return crate::color_management::dial_geometry(size),
-        ColorUiRequest::ProofMarkers {size,recipe} => return crate::color_management::dial_markers(size,recipe),
         ColorUiRequest::PickerLayout {size,hdr} => {
             let layout=if hdr {ColorPanelLayout::with_hdr(size)} else {ColorPanelLayout::new(size)}.ok_or("Invalid picker size")?;
             let arc=HdrIntensityArc::new(size).ok_or("Invalid picker size")?;

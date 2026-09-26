@@ -56,7 +56,7 @@ import SwiftUI
         }
         guard let input = contact(host) else { throw HostFailure(message: "Native proof capture missing") }
         let size = input.bounds.width
-        let geometry = ColorUI.resolve(["type": "proof_geometry", "size": size])
+        let geometry = ColorUI.resolve(["type": "proof_dial", "size": size, "recipe": store.snapshot["proof_panel"]["recipe"].raw])
         // The first mount starts before the async illustration arrives. Verify
         // that this same Canvas replaces its placeholder without being remounted.
         host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
@@ -88,14 +88,14 @@ import SwiftUI
         try event(.leftMouseUp, at: center, marker: input, number: 6)
         try await invoke("redo")
         try require(store.snapshot["proof_panel"]["recipe"].stableKey != baseline, "Cancelled gesture preserves redo")
-        _ = await query(["type": "proof_panel", "action": ["type": "reset"]])
-        let top = geometry["arcs"][0]["points"][40]
+        _ = await query(["type": "proof_panel", "action": ["type": "control", "part": 3, "edit": ["type": "reset"]]])
+        let top = geometry["arcs"][0]["path"][32]
         try event(.leftMouseDown, at: CGPoint(x: top[0].number, y: top[1].number), marker: input, number: 7)
         try event(.leftMouseDragged, at: center, marker: input, number: 8)
         try event(.leftMouseUp, at: center, marker: input, number: 9)
         try await drain()
         try require(store.snapshot["proof_panel"]["recipe"]["balance"].number == 0 && store.snapshot["proof_panel"]["recipe"]["contrast"].number == 1, "Arc capture cannot jump to center control")
-        _ = await query(["type": "proof_panel", "action": ["type": "reset"]])
+        _ = await query(["type": "proof_panel", "action": ["type": "control", "part": 3, "edit": ["type": "reset"]]])
         try key("\u{f703}", code: 124, window: window)
         try await wait("Keyboard brightness") { store.snapshot["proof_panel"]["recipe"]["exposure"].number > 0 }
         try await invoke("undo")

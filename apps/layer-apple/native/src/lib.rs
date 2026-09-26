@@ -200,7 +200,7 @@ pub extern "C" fn capy_apple_color_layout(size: f32) -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_apple_parameter_hit(x:f32,y:f32,size:f32,hdr:bool)->u32 {
     if hdr { u32::from(layer_ui::HdrIntensityArc::new(size).is_some_and(|a|a.contains([x,y]))) }
-    else {layer_ui::color_management::dial_hit(size,[x,y])}
+    else {layer_ui::proof_panel::sdr_dial_hit(size,[x,y]).filter(|h| *h < 3).map_or(0, |h| u32::from(h) + 1)}
 }
 /// # Safety
 /// Caller supplies exactly edge²*4 writable bytes. This is a disposable UI texture.

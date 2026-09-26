@@ -8,12 +8,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProofAction {
     Reveal,
-    Number { key: String, value: f64 },
-    Control { part: u8, edit: SdrControlEdit },
+    Number { key: String, value: f64, phase: Option<crate::ContactPhase> },
+    Control { part: u8, edit: SdrControlEdit, phase: Option<crate::ContactPhase> },
     Dial { phase: crate::ContactPhase, size: f32, origin: [f32; 2], point: [f32; 2] },
     Mode { mode: crate::ProofMode },
     Rendition { phase: crate::ContactPhase, recipe: layer_core::color::hdr::SdrRendition },
-    Pad { phase: crate::ContactPhase, values: [f64;2] },
 }
 
 /// Value policy shared with GTK; the host owns key repeat, capture and history phases.
@@ -51,7 +50,7 @@ pub fn sdr_control(mut recipe: layer_core::color::hdr::SdrRendition, part: u8, e
 pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
     match action {
         ProofAction::Reveal => reveal(session),
-        ProofAction::Number { key, value } => {
+        ProofAction::Number { key, value, phase } => {
             let mut recipe = session.effective_sdr_rendition();
             if !value.is_finite() { return Err("Invalid Proof value".into()); }
             match key.as_str() {
@@ -65,11 +64,11 @@ pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>,
                 }
                 _ => return Err("Unknown Proof value".into()),
             }
-            commit_control(session, recipe)
+            commit_control(session, recipe, phase)
         }
-        ProofAction::Control { part, edit } => {
+        ProofAction::Control { part, edit, phase } => {
             let recipe = sdr_control(session.effective_sdr_rendition(), part, edit)?;
-            commit_control(session, recipe)
+            commit_control(session, recipe, phase)
         }
         ProofAction::Dial { phase, size, origin, point } => {
             if !origin.into_iter().chain(point).all(f32::is_finite) {
@@ -84,15 +83,14 @@ pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>,
         }
         ProofAction::Mode { mode } => session.select_proof_mode(mode),
         ProofAction::Rendition { phase, recipe } => session.edit_sdr_rendition(phase, recipe),
-        ProofAction::Pad { phase, values } => {
-            let recipe=sdr_from_pad(session.effective_sdr_rendition(),values);
-            session.edit_sdr_rendition(phase,recipe)
-        }
     }
 }
 
-fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, recipe: layer_core::color::hdr::SdrRendition) -> Result<crate::UiChange, String> {
+fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, recipe: layer_core::color::hdr::SdrRendition, phase: Option<crate::ContactPhase>) -> Result<crate::UiChange, String> {
     recipe.validate().map_err(str::to_string)?;
+    if let Some(phase) = phase {
+        return session.edit_sdr_rendition(phase, recipe);
+    }
     session.edit_sdr_rendition(crate::ContactPhase::Down, recipe)?;
     session.edit_sdr_rendition(crate::ContactPhase::Up, recipe)
 }
@@ -249,20 +247,23 @@ pub const SDR_READOUT_ICONS: [&str; 4] = [
     "layer-hue_saturation-symbolic",
 ];
 
-/// GTK's dial geometry and square/disc mapping, transported to Web/Compose.
-/// Part 0 is the field, 1/2 the arcs and 3 reset. A captured part stays fixed
-/// while its pointer moves outside the original hit area.
+/// Part 0 is the field, 1/2 the arcs and 3 reset.
+pub fn sdr_dial_hit(size: f32, p: [f32; 2]) -> Option<u8> {
+    let g=crate::parameter_pad::ParameterDialGeometry::new(size)?;
+    let [x,y,w,h]=g.reset;
+    if p[0]>=x&&p[0]<=x+w&&p[1]>=y&&p[1]<=y+h {Some(3)}
+    else if let Some(i)=g.arcs.iter().position(|a|a.contains(p)){Some(i as u8+1)}
+    else if (p[0]-g.field.center[0]).hypot(p[1]-g.field.center[1])<=g.field.disc_radius(){Some(0)}else{None}
+}
+
+/// GTK's dial geometry and square/disc mapping, shared by every host. A
+/// captured part stays fixed while its pointer moves outside the original hit area.
 pub fn sdr_dial(size: f32, mut recipe: layer_core::color::hdr::SdrRendition,
     point: Option<[f32;2]>, part: Option<u8>) -> Result<serde_json::Value,String> {
     use crate::parameter_pad::ParameterDialGeometry;
     let g=ParameterDialGeometry::new(size).ok_or("Invalid Proof dial size")?;
     let pad=sdr_tone_pad();
-    let hit=point.and_then(|p| {
-        let [x,y,w,h]=g.reset;
-        if p[0]>=x&&p[0]<=x+w&&p[1]>=y&&p[1]<=y+h {Some(3)}
-        else if let Some(i)=g.arcs.iter().position(|a|a.contains(p)){Some(i as u8+1)}
-        else if (p[0]-g.field.center[0]).hypot(p[1]-g.field.center[1])<=g.field.disc_radius(){Some(0)}else{None}
-    });
+    let hit=point.and_then(|p| sdr_dial_hit(size, p));
     if let (Some(p),Some(part))=(point,part.or(hit)) {
         match part {
             0=>recipe=sdr_from_pad(recipe,pad.values(g.field.disc_components(p).map(f64::from))),
@@ -575,6 +576,8 @@ mod tests {
             assert_eq!(v["pad_values"],serde_json::json!([1.,1.]));
             let v=sdr_dial(size,recipe,Some(g.field.center),Some(3)).unwrap();
             assert_eq!(v["recipe"],serde_json::to_value(recipe).unwrap());
+            let [x,y,w,h]=g.reset;
+            assert_eq!(sdr_dial_hit(size,[x+w*0.5,y+h*0.5]),Some(3));
         }
     }
     #[test]

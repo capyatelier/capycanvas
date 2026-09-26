@@ -688,8 +688,8 @@ fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history()
     let original=s.engine.document().sdr_rendition;
     let checkpoint=s.engine.checkpoint();
     // No full-recipe snapshots: queued fields resolve against the current recipe.
-    apply(&mut s,ProofAction::Number{key:"exposure".into(),value:-0.4}).unwrap();
-    apply(&mut s,ProofAction::Number{key:"highlight_color".into(),value:0.73}).unwrap();
+    apply(&mut s,ProofAction::Number{key:"exposure".into(),value:-0.4,phase:None}).unwrap();
+    apply(&mut s,ProofAction::Number{key:"highlight_color".into(),value:0.73,phase:None}).unwrap();
     let numbers=s.engine.document().sdr_rendition;
     assert!((numbers.exposure+0.4).abs()<1e-6 && (numbers.highlight_color-0.73).abs()<1e-6);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
@@ -743,4 +743,22 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     s.dispatch(UiAction::Layer { action: LayerAction::Select { id: legacy_id.0, mask: false } }).unwrap();
     assert_eq!(s.state.layer_properties.layer, Some(legacy_id.0));
     assert_eq!(s.state.layer_properties.curve_white, Some(1. / 16.));
+}
+
+#[test]
+fn phased_proof_controls_commit_once() {
+    use crate::proof_panel::{apply, ProofAction, SdrControlEdit};
+    let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
+    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32]).unwrap();
+    let checkpoint=s.engine.checkpoint();
+    for (phase,steps) in [(ContactPhase::Down,1.),(ContactPhase::Move,1.),(ContactPhase::Up,0.)] {
+        apply(&mut s,ProofAction::Control{part:1,edit:SdrControlEdit::Step{axis:0,steps},phase:Some(phase)}).unwrap();
+    }
+    assert!((s.engine.document().sdr_rendition.exposure-0.08).abs()<1e-6);
+    s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    apply(&mut s,ProofAction::Number{key:"exposure".into(),value:1.,phase:Some(ContactPhase::Down)}).unwrap();
+    apply(&mut s,ProofAction::Number{key:"exposure".into(),value:1.,phase:Some(ContactPhase::Cancel)}).unwrap();
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    assert_eq!(s.engine.document().sdr_rendition.exposure,0.);
 }

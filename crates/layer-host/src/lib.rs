@@ -638,7 +638,7 @@ impl NativeHost {
             ToolbarStamp { context: layer_ui::ToolbarContext },
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
-            ProofPanel { action: Option<layer_ui::color_management::ProofAction> },
+            ProofPanel { action: Option<layer_ui::proof_panel::ProofAction> },
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
@@ -783,7 +783,7 @@ impl NativeHost {
             Query::ProofPanel {action} => {
                 if let Some(action)=action {
                     let previous=self.session.state().revision;
-                    let change=layer_ui::color_management::proof_action(&mut self.session,action)?;
+                    let change=layer_ui::proof_panel::apply(&mut self.session,action)?;
                     self.apply_change(previous,change);
                 }
                 layer_ui::color_management::proof_view(&self.session)
