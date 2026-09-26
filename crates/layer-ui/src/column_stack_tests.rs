@@ -455,7 +455,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
     ] {
         let mut s = session();
         s.set_platform(Platform::Gtk);
-        stack_edit(
+        customize(
             &mut s,
             CustomizationAction::SetColumnCollapsed {
                 group: 5,
@@ -485,14 +485,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
                 (ContactPhase::Move, target),
                 (end, target),
             ] {
-                s.dispatch(UiAction::DragWorkspace {
-                    item,
-                    phase,
-                    position,
-                    viewport: STACK_VIEW,
-                    tabs: Vec::new(),
-                })
-                .unwrap();
+                drag(&mut s, item, phase, position, STACK_VIEW);
                 if phase == ContactPhase::Move {
                     assert!(matches!(
                         s.workspace_update().drag.unwrap().drop_hint.unwrap().target,
@@ -611,16 +604,13 @@ fn check_paint_default_stack(platform: Platform) {
     );
 }
 
-fn stack_edit(s: &mut UiSession<Recorder>, action: CustomizationAction) {
-    s.dispatch(UiAction::Customize { action }).unwrap();
-}
 fn stack_fixture() -> (UiSession<Recorder>, u32, u32) {
     let mut s = session();
     s.set_platform(Platform::Gtk);
     let mut columns = Vec::new();
     for panel in [Panel::Brushes, Panel::Layers] {
         let group = s.state.workspace.layout.panel_group(panel).unwrap();
-        stack_edit(
+        customize(
             &mut s,
             CustomizationAction::SetColumnCollapsed {
                 group,
@@ -639,7 +629,7 @@ fn stack_fixture() -> (UiSession<Recorder>, u32, u32) {
 }
 fn click_column(s: &mut UiSession<Recorder>, panel: Panel) {
     let group = s.state.workspace.layout.panel_group(panel).unwrap();
-    stack_edit(s, CustomizationAction::ToggleColumnDrawer { group, panel });
+    customize(s, CustomizationAction::ToggleColumnDrawer { group, panel });
 }
 fn stack_move(s: &mut UiSession<Recorder>, source: u32, target: u32, before: bool) {
     s.dispatch(UiAction::MoveColumn {
@@ -791,14 +781,7 @@ fn stack_reorder_and_gesture_cancellation_have_one_history_step() {
             (ContactPhase::Move, at(target)),
             (end, at(target)),
         ] {
-            s.dispatch(UiAction::DragWorkspace {
-                item: DockItem::Column { column: right },
-                phase,
-                position,
-                viewport: STACK_VIEW,
-                tabs: Vec::new(),
-            })
-            .unwrap();
+            drag(&mut s, DockItem::Column { column: right }, phase, position, STACK_VIEW);
         }
         if end == ContactPhase::Cancel {
             assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
@@ -821,7 +804,7 @@ fn stack_reorder_and_gesture_cancellation_have_one_history_step() {
 fn opening_a_member_uses_all_ordinary_groups_and_switches_within_the_stack() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: left,
@@ -883,14 +866,14 @@ fn opening_a_member_uses_all_ordinary_groups_and_switches_within_the_stack() {
 fn stack_preferences_and_members_persist_but_open_state_does_not() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: right,
             drawers: false,
         },
     );
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnAutoHide {
             column: right,
@@ -912,14 +895,14 @@ fn stack_preferences_and_members_persist_but_open_state_does_not() {
 fn auto_hide_consumes_canvas_contact_and_preserves_popup_and_nested_drawer_contacts() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: left,
             drawers: false,
         },
     );
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnAutoHide {
             column: left,
@@ -991,7 +974,7 @@ fn individual_panels_open_one_ordinary_drawer_per_stack_on_every_host() {
         let (mut s, left, right) = stack_fixture();
         s.set_platform(platform);
         stack_move(&mut s, right, left, false);
-        stack_edit(
+        customize(
             &mut s,
             CustomizationAction::SetColumnDrawers {
                 column: left,
@@ -1015,7 +998,7 @@ fn individual_panels_open_one_ordinary_drawer_per_stack_on_every_host() {
 #[test]
 fn ordinary_dividers_resize_open_columns_without_rebuilding_or_expanding_the_stack() {
     let (mut s, left, _) = stack_fixture();
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: left,
@@ -1077,7 +1060,7 @@ fn ordinary_dividers_resize_open_columns_without_rebuilding_or_expanding_the_sta
 #[test]
 fn adding_and_removing_groups_updates_member_identity_without_losing_panels() {
     let (mut s, left, right) = stack_fixture();
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: right,
@@ -1086,7 +1069,7 @@ fn adding_and_removing_groups_updates_member_identity_without_losing_panels() {
     );
     stack_move(&mut s, left, right, true);
     let group = s.state.workspace.layout.panel_group(Panel::Layers).unwrap();
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetPanelVisible {
             panel: Panel::Color,
@@ -1120,7 +1103,7 @@ fn adding_and_removing_groups_updates_member_identity_without_losing_panels() {
             .iter()
             .any(|g| g.active == Panel::Color)
     );
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetPanelVisible {
             panel: Panel::Color,
@@ -1145,7 +1128,7 @@ fn member_can_unstack_beside_its_own_stack_and_use_the_existing_expand_action() 
         stack_move(&mut s, right, left, false);
         let stack = s.state.workspace.layout.column_stack(left).column;
         if expand {
-            stack_edit(
+            customize(
                 &mut s,
                 CustomizationAction::SetColumnCollapsed {
                     group: right,
@@ -1183,7 +1166,7 @@ fn cancelled_or_blurred_column_resize_restores_width_splits_and_open_member() {
     for blur in [false, true] {
         let (mut s, left, right) = stack_fixture();
         stack_move(&mut s, right, left, false);
-        stack_edit(
+        customize(
             &mut s,
             CustomizationAction::SetColumnDrawers {
                 column: left,
@@ -1262,7 +1245,7 @@ fn stack_validation_rejects_missing_overlapping_and_incomplete_members() {
 fn resetting_open_member_width_preserves_stack_membership_and_open_state() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    stack_edit(
+    customize(
         &mut s,
         CustomizationAction::SetColumnDrawers {
             column: left,
@@ -1308,7 +1291,7 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
     for merge in [false, true] {
         let (mut s, left, right) = stack_fixture();
         s.state.workspace.layout.column_stack_mut(right).drawers = true;
-        stack_edit(
+        customize(
             &mut s,
             CustomizationAction::SetColumnDrawers {
                 column: left,
@@ -1320,7 +1303,7 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
         if merge {
             stack_move(&mut s, right, left, false);
         } else {
-            stack_edit(
+            customize(
                 &mut s,
                 CustomizationAction::ApplyColumnStack { column: left },
             );

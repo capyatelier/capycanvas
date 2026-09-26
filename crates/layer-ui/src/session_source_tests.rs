@@ -284,17 +284,9 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
     check(&session);
     assert!(session.command(CommandId::ScaleRotate).enabled);
     let revision = session.engine.document().revision;
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::ScaleRotate,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::ScaleRotate);
     assert!(session.operation.active());
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::CancelTransform,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::CancelTransform);
     assert_eq!(session.engine.document().revision, revision);
     check(&session);
     session
@@ -311,17 +303,9 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
             .source
             .is_none()
     );
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Undo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Undo);
     check(&session);
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Redo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Redo);
     assert!(
         session
             .engine
@@ -331,23 +315,11 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
             .source
             .is_none()
     );
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Undo,
-        })
-        .unwrap();
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Undo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Undo);
+    invoke(&mut session, CommandId::Undo);
     assert!(session.engine.document().layer(id).is_none());
     assert_eq!(session.engine.document().active_layer, before.active_layer);
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Redo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Redo);
     check(&session);
     let project = session.capture_project_recovery().unwrap();
     let mut archive = Vec::new();
@@ -450,11 +422,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
             .unwrap_err()
             .contains("source changed")
     );
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Undo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Undo);
     assert!(Arc::ptr_eq(
         session
             .engine
@@ -542,19 +510,11 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
             .unwrap(),
         bytes
     );
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Undo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Undo);
     assert!(session.engine.document().layer(next_id).is_none());
     assert_eq!(session.engine.document().layer(id).unwrap(), &layer);
     assert_eq!(session.engine.document().active_layer, id);
-    session
-        .dispatch(UiAction::Invoke {
-            command: CommandId::Redo,
-        })
-        .unwrap();
+    invoke(&mut session, CommandId::Redo);
     assert_eq!(session.engine.document().layer(id).unwrap(), &layer);
     assert_eq!(
         session

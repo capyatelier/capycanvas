@@ -249,13 +249,12 @@ impl<R: CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::{AssetId, ProjectAsset};
-    use layer_render::{BackendError, FramePacket, HostImage};
-    use std::collections::BTreeMap;
+    use crate::session::test_support::*;
+    use layer_core::ProjectAsset;
 
     #[test]
     fn header_layout_remains_publishable_after_final_document_retirement() {
-        let mut session = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut session = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
         session.set_platform(Platform::Android);
         session.frame(0, 0).unwrap();
         session.dispatch(UiAction::Invoke { command: CommandId::CloseDocument }).unwrap();
@@ -272,8 +271,8 @@ mod tests {
 
     #[test]
     fn stroke_recording_follows_the_window_when_switching_drawings() {
-        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
         active.stroke_recording().start("test").unwrap();
         let event = layer_engine::PenEvent {
             device_id: 1,
@@ -315,8 +314,8 @@ mod tests {
 
     #[test]
     fn drawing_activation_keeps_native_dialog_request_ids_monotonic() {
-        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
         active.set_platform(Platform::Windows);
         let mut last = 0;
         for _ in 0..3 {
@@ -331,8 +330,8 @@ mod tests {
 
     #[test]
     fn parked_editor_inherits_window_viewport_without_losing_its_history() {
-        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
         let layers = parked.engine().document().layers.len();
         parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
         let revision = parked.engine().document().revision;
@@ -345,63 +344,10 @@ mod tests {
         assert_eq!(parked.engine().document().layers.len(), layers);
     }
 
-    #[derive(Default)]
-    struct Backend {
-        assets: BTreeMap<AssetId, ProjectAsset>,
-        reject_assets: bool,
-        samples: usize,
-        validation: Option<layer_render::EffectValidationRequest>,
-        validation_result: Option<layer_render::EffectValidationResult>,
-    }
-    impl CanvasRenderer for Backend {
-        type Error = BackendError;
-        fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> {
-            unreachable!("the session retains owned asset bytes")
-        }
-        fn prepare_owned_asset(
-            &mut self,
-            id: &AssetId,
-            asset: &ProjectAsset,
-        ) -> Result<(), Self::Error> {
-            if self.reject_assets {
-                return Err(BackendError("asset preparation failed"));
-            }
-            self.assets.insert(id.clone(), asset.clone());
-            Ok(())
-        }
-        fn release_asset(&mut self, _: &AssetId) {}
-        fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn request_color_sample(
-            &mut self,
-            _: layer_render::ColorSampleRequest,
-        ) -> Result<bool, Self::Error> {
-            self.samples += 1;
-            Ok(true)
-        }
-        fn request_effect_validation(
-            &mut self,
-            request: layer_render::EffectValidationRequest,
-        ) -> Result<bool, Self::Error> {
-            self.validation = Some(request);
-            Ok(true)
-        }
-        fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
-            self.validation_result.take()
-        }
-    }
-    fn invoke(s: &mut UiSession<Backend>, command: CommandId) {
-        s.dispatch(UiAction::Invoke { command }).unwrap();
-    }
-
     #[test]
     fn replacement_retains_source_assets_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
-            Backend::default(),
+            Recorder::default(),
             Document::new("recovery", 128, 128),
             [256, 256],
         )
@@ -427,7 +373,7 @@ mod tests {
         assert!(!s.command(CommandId::Redo).enabled);
         invoke(&mut s, CommandId::SaveDocument);
         let request = s.files.pending.as_ref().unwrap().0;
-        let (previous, change) = s.replace_renderer(Backend::default()).unwrap();
+        let (previous, change) = s.replace_renderer(Recorder::default()).unwrap();
         assert!(change.canvas_wake);
         assert!(!s.rendering_suspended());
         assert_eq!(s.engine.document(), &document);
@@ -449,7 +395,7 @@ mod tests {
     #[test]
     fn replacement_clears_gpu_waits_and_resumes_filter_validation() {
         let mut s = UiSession::new(
-            Backend::default(),
+            Recorder::default(),
             Document::new("requests", 128, 128),
             [128, 128],
         )
@@ -476,7 +422,7 @@ mod tests {
         assert!(s.state.filter_load.pending);
         let original_validation = s.engine.backend().validation.as_ref().unwrap().clone();
         assert_eq!(original_validation.programs.len(), 1);
-        s.replace_renderer(Backend::default()).unwrap();
+        s.replace_renderer(Recorder::default()).unwrap();
         assert!(s.state.filter_load.pending);
         let resumed = s.engine.backend().validation.as_ref().unwrap();
         assert!(std::sync::Arc::ptr_eq(
@@ -511,13 +457,13 @@ mod tests {
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
         s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
-        assert_eq!(s.engine.backend().samples, 1);
+        assert_eq!(s.engine.backend().sample_requests.len(), 1);
     }
 
     #[test]
     fn suspension_cancels_transform_and_filter_candidate_without_changing_sources() {
         let mut s = UiSession::new(
-            Backend::default(),
+            Recorder::default(),
             Document::new("retire", 128, 128),
             [128, 128],
         )
@@ -575,7 +521,7 @@ mod tests {
     #[test]
     fn failed_asset_upload_leaves_current_document_and_gpu_queries_intact() {
         let mut s = UiSession::new(
-            Backend::default(),
+            Recorder::default(),
             Document::new("failed", 128, 128),
             [128, 128],
         )
@@ -595,7 +541,7 @@ mod tests {
         let document = s.engine.document().clone();
         let checkpoint = s.engine.checkpoint();
         assert!(
-            s.replace_renderer(Backend {
+            s.replace_renderer(Recorder {
                 reject_assets: true,
                 ..Default::default()
             })
@@ -605,6 +551,6 @@ mod tests {
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert!(s.eyedropper.busy());
         assert!(!s.engine.backend().reject_assets);
-        assert_eq!(s.engine.backend().samples, 1);
+        assert_eq!(s.engine.backend().sample_requests.len(), 1);
     }
 }

@@ -245,54 +245,10 @@ impl<R: CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::{AssetId, Document};
-    use layer_render::{BackendError, FilterPreviewRequest, FramePacket, HostImage, ReadbackImage};
+    use crate::session::test_support::Recorder;
+    use layer_core::Document;
+    use layer_render::{BackendError, ReadbackImage};
 
-    #[derive(Default)]
-    struct Backend {
-        request: Option<FilterPreviewRequest>,
-        ready: Option<Result<FilterPreviewImage, BackendError>>,
-        requests: usize,
-        takes: usize,
-        cancels: usize,
-        reject: bool,
-    }
-    impl CanvasRenderer for Backend {
-        type Error = BackendError;
-        fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn release_asset(&mut self, _: &AssetId) {}
-        fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn request_filter_previews(
-            &mut self,
-            request: FilterPreviewRequest,
-        ) -> Result<bool, Self::Error> {
-            if self.reject {
-                return Err(BackendError("preview unavailable"));
-            }
-            assert!(self.request.is_none(), "only one request may be in flight");
-            self.requests += 1;
-            self.request = Some(request);
-            Ok(true)
-        }
-        fn take_filter_previews(&mut self) -> Option<Result<FilterPreviewImage, Self::Error>> {
-            self.takes += 1;
-            let ready = self.ready.take()?;
-            self.request = None;
-            Some(ready)
-        }
-        fn cancel_filter_previews(&mut self) {
-            self.cancels += 1;
-            self.request = None;
-            self.ready = None;
-        }
-    }
     struct View {
         key: Option<String>,
         rows: Vec<Arc<str>>,
@@ -310,7 +266,7 @@ mod tests {
     impl View {
         fn poll(
             &mut self,
-            s: &mut UiSession<Backend>,
+            s: &mut UiSession<Recorder>,
             ms: u64,
             ids: &[&str],
         ) -> FilterPreviewUpdate {
@@ -336,9 +292,9 @@ mod tests {
             update
         }
     }
-    fn session() -> UiSession<Backend> {
+    fn session() -> UiSession<Recorder> {
         let mut session = UiSession::new(
-            Backend::default(),
+            Recorder::default(),
             Document::new("preview", 512, 512),
             [512, 512],
         )
@@ -347,12 +303,12 @@ mod tests {
         assert!(session.filter_previews_idle());
         session
     }
-    fn finish(s: &mut UiSession<Backend>) {
+    fn finish(s: &mut UiSession<Recorder>) {
         let r = s.renderer_mut();
-        let request = r.request.as_ref().unwrap();
+        let request = r.filter_preview.as_ref().unwrap();
         let [width, height] = request.size;
         let height = height * request.filters.len() as u32;
-        r.ready = Some(Ok(FilterPreviewImage {
+        r.filter_preview_ready = Some(Ok(FilterPreviewImage {
             image: ReadbackImage {
                 request_id: request.request_id,
                 width,
@@ -376,11 +332,11 @@ mod tests {
                 .status
                 .pending
         );
-        assert_eq!(s.renderer_mut().requests, 0);
+        assert_eq!(s.renderer_mut().filter_preview_requests, 0);
         assert!(v.poll(&mut s, 200, &["curves", "levels"]).status.pending);
         let pending = v.poll(&mut s, 208, &["curves", "levels"]);
         assert_eq!(pending.status.wait_ms, 0);
-        assert_eq!(s.renderer_mut().takes, 1);
+        assert_eq!(s.renderer_mut().filter_preview_takes, 1);
         finish(&mut s);
         assert!(v.poll(&mut s, 216, &["curves", "levels"]).image.is_some());
         v.poll(&mut s, 500, &[]);
@@ -397,7 +353,7 @@ mod tests {
         v.size = [200, 40];
         assert!(v.poll(&mut s, 1000, &["curves"]).status.retained.is_empty());
         v.poll(&mut s, 1200, &["curves"]);
-        assert_eq!(s.renderer_mut().request.as_ref().unwrap().size, [200, 40]);
+        assert_eq!(s.renderer_mut().filter_preview.as_ref().unwrap().size, [200, 40]);
     }
     #[test]
     fn drawing_cancels_without_taking_or_advancing_the_old_request() {
@@ -411,15 +367,15 @@ mod tests {
         assert!(!paused.status.pending);
         assert_eq!(paused.status.wait_ms, 50);
         assert!(paused.image.is_none());
-        assert_eq!(s.renderer_mut().takes, 0);
-        assert_eq!(s.renderer_mut().cancels, 1);
+        assert_eq!(s.renderer_mut().filter_preview_takes, 0);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 1);
         v.poll(&mut s, 500, &["curves"]);
-        assert_eq!(s.renderer_mut().requests, 1);
+        assert_eq!(s.renderer_mut().filter_preview_requests, 1);
         s.input_pending = false;
         v.poll(&mut s, 600, &["curves"]);
-        assert_eq!(s.renderer_mut().requests, 1);
+        assert_eq!(s.renderer_mut().filter_preview_requests, 1);
         v.poll(&mut s, 700, &["curves"]);
-        assert_eq!(s.renderer_mut().requests, 2);
+        assert_eq!(s.renderer_mut().filter_preview_requests, 2);
     }
     #[test]
     fn hiding_and_replacement_retire_pending_work_even_at_equal_revisions() {
@@ -429,17 +385,17 @@ mod tests {
         v.poll(&mut s, 200, &["curves"]);
         let original = v.key.clone();
         v.poll(&mut s, 208, &[]);
-        assert_eq!(s.renderer_mut().cancels, 1);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 1);
         v.poll(&mut s, 408, &["curves"]);
         finish(&mut s);
         s.state.document_file.epoch += 1;
         let replaced = v.poll(&mut s, 416, &["curves"]);
         assert!(replaced.image.is_none());
         assert_ne!(v.key, original);
-        assert_eq!(s.renderer_mut().cancels, 2);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 2);
         v.poll(&mut s, 616, &["curves"]);
         let before_gpu = v.key.clone();
-        s.replace_renderer(Backend::default()).unwrap();
+        s.replace_renderer(Recorder::default()).unwrap();
         s.frame(700_000_000, 700_000_000).unwrap();
         assert!(v.poll(&mut s, 700, &["curves"]).image.is_none());
         assert_ne!(v.key, before_gpu);
@@ -455,12 +411,12 @@ mod tests {
         let changed = v.poll(&mut s, 208, &["levels"]);
         assert!(changed.image.is_none());
         assert!(!changed.status.pending);
-        assert_eq!(s.renderer_mut().cancels, 1);
-        assert_eq!(s.renderer_mut().takes, 0);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 1);
+        assert_eq!(s.renderer_mut().filter_preview_takes, 0);
         v.poll(&mut s, 408, &["levels"]);
         finish(&mut s);
         s.renderer_mut()
-            .ready
+            .filter_preview_ready
             .as_mut()
             .unwrap()
             .as_mut()
@@ -479,12 +435,12 @@ mod tests {
     fn optional_failures_back_off_and_missing_host_images_can_be_retried() {
         let mut s = session();
         let mut v = View::default();
-        s.renderer_mut().reject = true;
+        s.renderer_mut().reject_filter_previews = true;
         v.poll(&mut s, 0, &["curves"]);
         let failure = v.poll(&mut s, 200, &["curves"]);
         assert!(failure.status.error.is_some());
         assert_eq!(failure.status.wait_ms, 1000);
-        s.renderer_mut().reject = false;
+        s.renderer_mut().reject_filter_previews = false;
         assert!(!v.poll(&mut s, 1199, &["curves"]).status.pending);
         assert!(v.poll(&mut s, 1200, &["curves"]).status.pending);
         finish(&mut s);
@@ -492,7 +448,7 @@ mod tests {
         v.rows.clear(); // Native conversion failed or its retained image was lost.
         assert!(!v.poll(&mut s, 1400, &["curves"]).status.pending);
         assert!(v.poll(&mut s, 2400, &["curves"]).status.pending);
-        s.renderer_mut().ready = Some(Err(BackendError("readback failed")));
+        s.renderer_mut().filter_preview_ready = Some(Err(BackendError("readback failed")));
         assert!(v.poll(&mut s, 2408, &["curves"]).status.error.is_some());
         assert!(!v.poll(&mut s, 2500, &["curves"]).status.pending);
         assert!(v.poll(&mut s, 3408, &["curves"]).status.pending);
@@ -512,11 +468,11 @@ mod tests {
         assert_eq!(ids.len(), 10);
         v.poll(&mut s, 0, &ids);
         v.poll(&mut s, 200, &ids);
-        assert_eq!(s.renderer_mut().request.as_ref().unwrap().filters.len(), 8);
+        assert_eq!(s.renderer_mut().filter_preview.as_ref().unwrap().filters.len(), 8);
         finish(&mut s);
         let first = v.poll(&mut s, 208, &ids);
         assert_eq!(first.image.unwrap().filters.len(), 8);
-        assert_eq!(s.renderer_mut().request.as_ref().unwrap().filters.len(), 2);
+        assert_eq!(s.renderer_mut().filter_preview.as_ref().unwrap().filters.len(), 2);
         // Fill the cache with previously visited offscreen rows before delivery.
         for i in 0..56 {
             let id: Arc<str> = format!("offscreen-{i}").into();

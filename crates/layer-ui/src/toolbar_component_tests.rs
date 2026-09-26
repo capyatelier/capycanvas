@@ -74,10 +74,7 @@ fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
         })
         .is_err()
     );
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::Eraser,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::Eraser);
     assert!(
         s.dispatch(UiAction::ToolbarEdit {
             context,
@@ -146,10 +143,7 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
             }));
         }
     }
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::Brush,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::Brush);
     let selection = layer_core::Selection::polygon(vec![
         Point { x: 100., y: 100. },
         Point { x: 300., y: 100. },
@@ -159,10 +153,7 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
     .unwrap();
     s.fill_selection(selection).unwrap();
     s.frame(1, 1).unwrap();
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::ScaleRotate,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::ScaleRotate);
     assert!(s.state().toolbar_context().operation);
     assert!(
         matches!(s.state().tool_options()[0], ToolOption::Action { ref state, .. } if state.id == CommandId::ApplyTransform)
@@ -355,13 +346,7 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
         ToolbarControl::BrushOpacitySlider,
         ToolbarControl::TOOL_OPTIONS,
     ];
-    s.dispatch(UiAction::Customize {
-        action: CustomizationAction::InsertTools {
-            panel: Panel::Commands,
-            before: None,
-        },
-    })
-    .unwrap();
+    customize(&mut s, CustomizationAction::InsertTools { panel: Panel::Commands, before: None });
     for control in controls {
         assert!(
             s.tool_picker()
@@ -370,18 +355,9 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
                 .iter()
                 .any(|c| c.control == control)
         );
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::PickerSelect {
-                control,
-                selected: true,
-            },
-        })
-        .unwrap();
+        customize(&mut s, CustomizationAction::PickerSelect { control, selected: true });
     }
-    s.dispatch(UiAction::Customize {
-        action: CustomizationAction::ConfirmTools,
-    })
-    .unwrap();
+    customize(&mut s, CustomizationAction::ConfirmTools);
     let added = s.state().workspace.layout.clone();
     let options = added
         .panel(Panel::Commands)
@@ -391,27 +367,12 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
         .find(|t| t.control == ToolbarControl::TOOL_OPTIONS)
         .unwrap()
         .id;
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(s.state().workspace.layout, before);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::RedoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::RedoWorkspace);
     assert_eq!(s.state().workspace.layout, added);
-    s.dispatch(UiAction::Customize {
-        action: CustomizationAction::RemoveTool {
-            panel: Panel::Commands,
-            tile: options,
-        },
-    })
-    .unwrap();
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    })
-    .unwrap();
+    customize(&mut s, CustomizationAction::RemoveTool { panel: Panel::Commands, tile: options });
+    invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(s.state().workspace.layout, added);
     s.dispatch(UiAction::ActivateTile {
         panel: Panel::Commands,
@@ -428,10 +389,7 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
 fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders() {
     let mut s = session();
     s.set_platform(Platform::Gtk);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::Eyedropper,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::Eyedropper);
     s.dispatch(UiAction::SetColorSampleSize { width: 101 })
         .unwrap();
     let options = s.state().tool_options();
@@ -474,10 +432,7 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
         .is_err()
     );
     key(&mut s, "Escape", true, false, false);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::AutoSelect,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::AutoSelect);
     let options = s.state().tool_options();
     assert!(options.iter().any(|o| matches!(
         o,
@@ -486,10 +441,7 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
             ..
         }
     )));
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::Brush,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::Brush);
     assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_some());
 }
 
@@ -568,14 +520,11 @@ fn options_preferences_round_trip_and_undo_without_losing_controls() {
         text: false,
         sliders: false,
     };
-    s.dispatch(UiAction::Customize {
-        action: CustomizationAction::SetToolOptionsStyle {
-            panel: Panel::Commands,
-            tile,
-            style,
-        },
-    })
-    .unwrap();
+    customize(&mut s, CustomizationAction::SetToolOptionsStyle {
+        panel: Panel::Commands,
+        tile,
+        style,
+    });
     let after = s.state().workspace.layout.clone();
     assert_eq!(
         after
@@ -595,15 +544,9 @@ fn options_preferences_round_trip_and_undo_without_losing_controls() {
         serde_json::from_str::<ToolbarControl>(r#"{"kind":"tool_options"}"#).unwrap(),
         ToolbarControl::TOOL_OPTIONS
     );
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(s.state().workspace.layout, before);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::RedoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::RedoWorkspace);
     assert_eq!(s.state().workspace.layout, after);
     s.dispatch(UiAction::ActivateTile {
         panel: Panel::Commands,
@@ -705,15 +648,9 @@ fn compact_edge_moves_preserve_toolbar_identity_and_one_step_history() {
     .unwrap();
     let moved = s.state().workspace.layout.clone();
     assert_eq!(moved.panel(panel).unwrap().tiles(), tiles);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(s.state().workspace.layout, layout);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::RedoWorkspace,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::RedoWorkspace);
     assert_eq!(s.state().workspace.layout, moved);
 }
 
@@ -864,10 +801,7 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
 fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
     let mut s = session();
     s.set_platform(Platform::Gtk);
-    s.dispatch(UiAction::Invoke {
-        command: CommandId::AutoSelect,
-    })
-    .unwrap();
+    invoke(&mut s, CommandId::AutoSelect);
     let options = s.state().tool_options();
     let mode = options
         .iter()
