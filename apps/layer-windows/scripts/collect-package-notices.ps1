@@ -64,7 +64,7 @@ foreach($line in $tree){
                 Copy-Notice (Join-Path $repo "apps/layer-windows/packaging/notices/$key-MIT.txt") "Cargo/$key/LICENSE-MIT"
             }
             {$_ -in @('profiling-1.0.18','profiling-procmacros-1.0.18')} {Copy-Notice (Join-Path $repo 'apps/layer-windows/packaging/notices/profiling-1.0.18-MIT.txt') "Cargo/$key/LICENSE-MIT"}
-            {$_ -in @('spirv-0.4.0+sdk-1.4.341.0','gl_generator-0.14.0','khronos_api-3.1.0')} {
+            'spirv-0.4.0+sdk-1.4.341.0' {
                 Copy-Notice (Join-Path $repo 'LICENSE-APACHE') "Cargo/$key/LICENSE-APACHE"
             }
             default {throw "No reviewed license text for $key ($license)"}
@@ -74,19 +74,6 @@ foreach($line in $tree){
     # Keep published attribution metadata, including authors and repositories.
     $manifest=if(Test-Path -LiteralPath (Join-Path $source 'Cargo.toml.orig')){'Cargo.toml.orig'}else{'Cargo.toml'}
     Copy-Notice (Join-Path $source $manifest) "Cargo/$key/$manifest"
-    if($name -eq 'gl_generator'){
-        $header=([IO.File]::ReadAllLines((Join-Path $source 'lib.rs'))|Select-Object -First 13) -join ([string][char]10)
-        [IO.File]::WriteAllText((Join-Path $Destination "Cargo/$key/SOURCE-NOTICE.txt"),$header,$utf8)
-    }
-    if($name -eq 'khronos_api'){
-        Copy-Notice (Join-Path $repo 'apps/layer-windows/packaging/notices/khronos_api-3.1.0-ANGLE.txt') "Cargo/$key/ANGLE-LICENSE"
-        $headers=@(Get-ChildItem -LiteralPath $source -Filter '*.xml' -File -Recurse|Sort-Object FullName|ForEach-Object {
-            $xml=[IO.File]::ReadAllText($_.FullName)
-            $start=$xml.IndexOf('<comment>');$end=$xml.IndexOf('</comment>')
-            if($start -ge 0 -and $end -gt $start){$xml.Substring($start+9,$end-$start-9)}
-        })|Sort-Object -Unique
-        [IO.File]::WriteAllText((Join-Path $Destination "Cargo/$key/REGISTRY-NOTICES.txt"),($headers -join ([string][char]10+[char]10)),$utf8)
-    }
     if($name -eq 'libsqlite3-sys'){
         $sqlite=[IO.File]::ReadAllText((Join-Path $source 'sqlite3/sqlite3.h'))
         $end=$sqlite.IndexOf('*/')
