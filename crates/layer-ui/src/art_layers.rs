@@ -1830,7 +1830,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             PenPhase::Hover => {}
         }
-        self.layer_interaction.changed = true;
+        if !matches!(event.phase, PenPhase::Move | PenPhase::Hover) {
+            self.layer_interaction.changed = true;
+        }
         Ok(())
     }
 

@@ -427,6 +427,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.selection_tools.hover = Some(p);
                 } else if self.selection_tools.contact && self.layer_interaction.path.len() == 2 {
                     self.layer_interaction.path[1] = p;
+                    return Ok(());
                 }
             }
             PenPhase::Up if self.selection_tools.contact => {

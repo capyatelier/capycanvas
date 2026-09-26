@@ -250,6 +250,29 @@ mod selection_tools_checks {
         );
     }
     #[test]
+    fn path_drag_samples_do_not_republish_the_document() {
+        for command in [CommandId::Lasso, CommandId::RectangleSelect] {
+            let mut s = session(Platform::Gtk);
+            invoke(&mut s, command);
+            s.frame(1, 1).unwrap();
+            s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+            s.frame(2, 2).unwrap();
+            for sequence in 2..6 {
+                let mut sample = event(&s, sequence, PenPhase::Move, 1.);
+                sample.surface_position.y += sequence as f32 * 20.;
+                s.pen(sample).unwrap();
+                let change = s.frame(sequence * 10, sequence * 10).unwrap();
+                assert_eq!(change.regions & regions::DOCUMENT, 0, "{command:?} sample {sequence}");
+            }
+            let mut up = event(&s, 6, PenPhase::Up, 1.);
+            up.surface_position.y += 120.;
+            s.pen(up).unwrap();
+            let change = s.frame(100, 100).unwrap();
+            assert_ne!(change.regions & regions::DOCUMENT, 0, "{command:?} publishes its selection");
+            assert!(s.engine.document().selection.is_some(), "{command:?}");
+        }
+    }
+    #[test]
     fn sampling_sources_require_a_selection_tool() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             let mut s = session(platform);
