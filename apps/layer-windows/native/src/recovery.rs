@@ -12,11 +12,11 @@ use layer_ui::{
 };
 use serde::Deserialize;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     fs::{self, File, OpenOptions},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(1);
+static KEPT_FOR_LATER: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 fn valid(key: &str) -> bool {
     !key.is_empty() && key.len() <= 96 && key.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
@@ -34,7 +35,7 @@ struct Storage {
     origin: Option<(String, File)>,
 }
 impl Storage {
-    fn open(directory: PathBuf) -> Result<(Self, Option<String>), String> {
+    fn open(directory: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&directory).map_err(|e| io_error("prepare recovery storage", e))?;
         let key = format!(
             "{:x}-{:x}-{:x}",
@@ -54,8 +55,21 @@ impl Storage {
         lease
             .try_lock()
             .map_err(|_| "Could not claim private recovery storage")?;
+        Ok(Self {
+            directory,
+            key,
+            _lease: lease,
+            origin: None,
+        })
+    }
+    fn claim(&mut self, kept: &BTreeSet<String>) -> Result<Option<String>, String> {
+        if self.origin.is_some() {
+            return Ok(None);
+        }
         let mut candidates = Vec::new();
-        for entry in fs::read_dir(&directory).map_err(|e| io_error("list recovery copies", e))? {
+        for entry in
+            fs::read_dir(&self.directory).map_err(|e| io_error("list recovery copies", e))?
+        {
             let entry = entry.map_err(|e| io_error("list recovery copies", e))?;
             let path = entry.path();
             if path.extension().and_then(|v| v.to_str()) != Some("capy") {
@@ -64,7 +78,7 @@ impl Storage {
             let Some(id) = path
                 .file_stem()
                 .and_then(|v| v.to_str())
-                .filter(|v| valid(v))
+                .filter(|v| valid(v) && *v != self.key && !kept.contains(*v))
             else {
                 continue;
             };
@@ -76,32 +90,22 @@ impl Storage {
             }
         }
         candidates.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-        let mut origin = None;
         for (_, id) in candidates {
             let Ok(lease) = OpenOptions::new()
                 .create(true)
                 .truncate(false)
                 .read(true)
                 .write(true)
-                .open(directory.join(format!("{id}.lock")))
+                .open(self.directory.join(format!("{id}.lock")))
             else {
                 continue;
             };
             if lease.try_lock().is_ok() {
-                origin = Some((id, lease));
-                break;
+                self.origin = Some((id.clone(), lease));
+                return Ok(Some(id));
             }
         }
-        let offer = origin.as_ref().map(|(id, _)| id.clone());
-        Ok((
-            Self {
-                directory,
-                key,
-                _lease: lease,
-                origin,
-            },
-            offer,
-        ))
+        Ok(None)
     }
     fn path(&self, key: &str) -> Result<PathBuf, String> {
         if !valid(key)
@@ -127,12 +131,14 @@ enum Job {
         environment: Option<Box<Environment>>,
     },
     Release(Vec<String>),
+    Claim(BTreeSet<String>),
     RetiredSession(Box<UiSession<Renderer>>),
     RetiredRenderer(Box<Renderer>),
     Stop,
 }
 enum Finished {
-    Storage(Result<Option<String>, String>),
+    Storage(Result<(), String>),
+    Claimed(Result<Option<String>, String>),
     Work(u64, Result<Option<Box<UiSession<Renderer>>>, String>),
 }
 #[derive(Deserialize)]
@@ -165,6 +171,8 @@ pub(crate) struct Service {
     next_observation: Instant,
     restore_identity: Option<(u64, u64)>,
     deferred: VecDeque<Job>,
+    seeking: bool,
+    claiming: bool,
 }
 impl Service {
     pub fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
@@ -177,24 +185,27 @@ impl Service {
             .name("capy-recovery".into())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
-                let (mut storage, offer) = match Storage::open(directory.clone()) {
-                    Ok((s, o)) => (Some(s), Ok(o)),
+                let (mut storage, opened) = match Storage::open(directory.clone()) {
+                    Ok(s) => (Some(s), Ok(())),
                     Err(e) => (None, Err(e)),
                 };
-                let _ = reply.send(Finished::Storage(offer));
+                let _ = reply.send(Finished::Storage(opened));
                 wake();
                 while let Ok(job) = jobs.recv() {
                     match job {
                         Job::Initialize => {
-                            let result = Storage::open(directory.clone());
-                            let offer = match result {
-                                Ok((next, offer)) => {
-                                    storage = Some(next);
-                                    Ok(offer)
-                                }
-                                Err(error) => Err(error),
-                            };
-                            let _ = reply.send(Finished::Storage(offer));
+                            let opened = Storage::open(directory.clone()).map(|next| {
+                                storage = Some(next);
+                            });
+                            let _ = reply.send(Finished::Storage(opened));
+                            wake();
+                        }
+                        Job::Claim(kept) => {
+                            let claimed = storage
+                                .as_mut()
+                                .ok_or_else(|| "Recovery storage is unavailable".to_string())
+                                .and_then(|storage| storage.claim(&kept));
+                            let _ = reply.send(Finished::Claimed(claimed));
                             wake();
                         }
                         Job::Stop => break,
@@ -276,6 +287,8 @@ impl Service {
             next_observation: Instant::now(),
             restore_identity: None,
             deferred: VecDeque::new(),
+            seeking: true,
+            claiming: false,
         })
     }
     fn queue(&mut self, job: Job) {
@@ -298,7 +311,9 @@ impl Service {
     }
     fn event(&mut self, session: &mut UiSession<Renderer>, event: RecoveryEvent) -> Result<(), String> {
         let published = self.status();
+        let offered = self.update.offer.is_some();
         self.update = self.state.event(event)?;
+        self.seeking |= offered && self.update.offer.is_none();
         loop {
             if !self.update.release.is_empty() {
                 let release = std::mem::take(&mut self.update.release);
@@ -348,7 +363,11 @@ impl Service {
         self.changed |= self.status() != published;
         drained
     }
-    pub fn poll(&mut self, session: &mut UiSession<Renderer>) -> Result<bool, String> {
+    pub fn poll(
+        &mut self,
+        session: &mut UiSession<Renderer>,
+        active: bool,
+    ) -> Result<bool, String> {
         while let Some(completed) = self
             .completed
             .take()
@@ -365,18 +384,38 @@ impl Service {
             }
             match completed {
                 Finished::Storage(result) => match result {
-                    Ok(offer) => {
+                    Ok(()) => {
                         self.ready = true;
                         self.event(session, RecoveryEvent::Ownership { owned: true })?;
-                        if let Some(key) = offer {
-                            self.event(session, RecoveryEvent::Offer { key, owned: true })?;
-                        }
                     }
                     Err(error) => {
                         self.error = Some(error);
                         self.changed = true;
                     }
                 },
+                Finished::Claimed(result) => {
+                    self.claiming = false;
+                    match result {
+                        Ok(Some(key)) => {
+                            self.event(
+                                session,
+                                RecoveryEvent::Offer {
+                                    key: key.clone(),
+                                    owned: true,
+                                },
+                            )?;
+                            if self.update.offer.as_deref() != Some(key.as_str()) {
+                                self.queue(Job::Release(vec![key]));
+                            }
+                        }
+                        Ok(None) => self.seeking = false,
+                        Err(error) => {
+                            self.seeking = false;
+                            self.error = Some(error);
+                            self.changed = true;
+                        }
+                    }
+                }
                 Finished::Work(token, result) => {
                     if let Ok(Some(candidate)) = result {
                         self.restored = Some(Restored { token, identity: self.restore_identity.ok_or("Recovery identity missing")?, candidate });
@@ -426,6 +465,24 @@ impl Service {
                 )?;
             }
         }
+        if active
+            && self.seeking
+            && !self.claiming
+            && self.ready
+            && !self.closing
+            && self.error.is_none()
+            && self.update.offer.is_none()
+            && !self.update.busy
+            && self.restored.is_none()
+            && self.completed.is_none()
+        {
+            self.claiming = true;
+            let kept = KEPT_FOR_LATER
+                .lock()
+                .map_err(|_| "Recovery state is unavailable")?
+                .clone();
+            self.queue(Job::Claim(kept));
+        }
         self.drain()?;
         Ok(std::mem::take(&mut self.changed))
     }
@@ -435,7 +492,15 @@ impl Service {
         }
         match action {
             Action::Restore => self.event(session, RecoveryEvent::Restore),
-            Action::Later => self.event(session, RecoveryEvent::Dismiss { discard: false }),
+            Action::Later => {
+                if let Some(key) = &self.update.offer {
+                    KEPT_FOR_LATER
+                        .lock()
+                        .map_err(|_| "Recovery state is unavailable")?
+                        .insert(key.clone());
+                }
+                self.event(session, RecoveryEvent::Dismiss { discard: false })
+            }
             Action::Discard => self.event(session, RecoveryEvent::Dismiss { discard: true }),
             Action::Retry if !self.ready => {
                 self.queue(Job::Initialize);
@@ -527,19 +592,36 @@ mod tests {
             fs::remove_dir_all(&self.0).unwrap();
         }
     }
+    fn open(dir: &Directory) -> (Storage, Option<String>) {
+        let mut storage = Storage::open(dir.0.clone()).unwrap();
+        let offer = storage.claim(&BTreeSet::new()).unwrap();
+        (storage, offer)
+    }
+    fn checkpoint(dir: &Directory, age: u64) -> String {
+        let storage = Storage::open(dir.0.clone()).unwrap();
+        let path = storage.path(&storage.key).unwrap();
+        fs::write(&path, b"durable checkpoint").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(age))
+            .unwrap();
+        storage.key.clone()
+    }
     #[test]
     fn live_windows_cannot_claim_each_others_checkpoint() {
         let dir = Directory::new();
-        let (first, offer) = Storage::open(dir.0.clone()).unwrap();
+        let (first, offer) = open(&dir);
         assert!(offer.is_none());
         fs::write(first.path(&first.key).unwrap(), b"durable checkpoint").unwrap();
-        let (second, offer) = Storage::open(dir.0.clone()).unwrap();
+        let (second, offer) = open(&dir);
         assert!(offer.is_none());
         let key = first.key.clone();
         drop(first);
-        let (third, offer) = Storage::open(dir.0.clone()).unwrap();
+        let (third, offer) = open(&dir);
         assert_eq!(offer.as_deref(), Some(key.as_str()));
-        let (fourth, offer) = Storage::open(dir.0.clone()).unwrap();
+        let (fourth, offer) = open(&dir);
         assert!(offer.is_none());
         assert!(third.path("../drawing").is_err());
         assert!(third.path(&second.key).is_err());
@@ -548,9 +630,32 @@ mod tests {
         drop(second);
     }
     #[test]
+    fn each_released_copy_leads_to_the_next_newest_unless_kept_for_later() {
+        let dir = Directory::new();
+        let oldest = checkpoint(&dir, 30);
+        let newest = checkpoint(&dir, 10);
+        let middle = checkpoint(&dir, 20);
+        let mut storage = Storage::open(dir.0.clone()).unwrap();
+        let mut kept = BTreeSet::new();
+        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(newest.as_str()));
+        assert!(storage.claim(&kept).unwrap().is_none());
+        storage.origin = None;
+        kept.insert(newest.clone());
+        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(middle.as_str()));
+        let (other, offer) = open(&dir);
+        assert_eq!(offer.as_deref(), Some(newest.as_str()));
+        storage.remove(&middle).unwrap();
+        storage.origin = None;
+        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(oldest.as_str()));
+        storage.remove(&oldest).unwrap();
+        storage.origin = None;
+        assert!(storage.claim(&kept).unwrap().is_none());
+        drop(other);
+    }
+    #[test]
     fn failed_atomic_checkpoint_preserves_the_durable_copy() {
         let dir = Directory::new();
-        let (storage, _) = Storage::open(dir.0.clone()).unwrap();
+        let storage = Storage::open(dir.0.clone()).unwrap();
         let path = storage.path(&storage.key).unwrap();
         fs::write(&path, b"previous").unwrap();
         let cancel = AtomicBool::new(false);

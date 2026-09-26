@@ -447,7 +447,9 @@ shared codecs, independently of installed Windows codecs.
 
 Private artwork recovery uses shared recovery ordering, worker-side atomic writes,
 and Windows file locks. A previous unfinished drawing can be restored, left for
-later or explicitly discarded. Its origin survives until a replacement checkpoint
+later or explicitly discarded. Several unfinished drawings are offered in turn,
+newest first, in the active drawing; copies left for later are not offered again
+until the next launch. A restored copy survives until its replacement checkpoint
 is durable. Clean close drains accepted recovery retirement before window teardown.
 
 Preferences and document prompts share one native dialog slot. File, clipboard,

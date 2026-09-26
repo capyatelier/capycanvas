@@ -381,7 +381,7 @@ impl DocumentService {
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
         if let Some(recovery) = &mut self.recovery
-            && recovery.poll(&mut host.session)?
+            && recovery.poll(&mut host.session, true)?
         {
             host.invalidate_snapshot();
         }
@@ -390,7 +390,7 @@ impl DocumentService {
         }
         for (_, p) in self.tabs.parked_mut() {
             if let Some(r) = &mut p.owner.recovery {
-                r.poll(&mut p.owner.session)?;
+                r.poll(&mut p.owner.session, false)?;
             }
         }
         if self.close_next && self.idle() && host.session.can_park_document() {

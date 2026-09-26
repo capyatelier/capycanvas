@@ -71,8 +71,31 @@ try {
     Invoke-Control 'Discard recovery copy'
     Wait-Until {!(Model).windows_recovery.offer -and @(Get-ChildItem $copies -Filter '*.capy').Count -eq 0} 'Explicit discard did not retire the recovery copy'
     Close-Review
+    function Copies {@(Get-ChildItem $copies -Filter '*.capy' -ErrorAction SilentlyContinue).Count}
+    Start-Review 'first-copy'
+    Invoke-Control 'Test pen'
+    Wait-Until {(Model).state.document_file.modified -and (Copies) -eq 1} 'No first unfinished copy'
+    Crash-Review
+    Start-Review 'second-copy'
+    Wait-Until {(Model).windows_recovery.offer} 'The first unfinished copy was not offered'
+    Invoke-Control 'Later'
+    Wait-Until {!(Model).windows_recovery.offer} 'Later did not release the first unfinished copy'
+    Invoke-Control 'Test pen'
+    Wait-Until {(Model).state.document_file.modified -and (Copies) -eq 2} 'No second unfinished copy'
+    Crash-Review
+    Start-Review 'copies'
+    Wait-Until {(Model).windows_recovery.offer} 'Restart did not offer the newest unfinished copy'
+    $newest=(Model).windows_recovery.offer
+    Invoke-Control 'Later'
+    Wait-Until {$offer=(Model).windows_recovery.offer;$offer -and $offer -ne $newest} 'Later did not offer the next unfinished copy'
+    Invoke-Control 'Discard recovery copy'
+    Wait-Until {!(Model).windows_recovery.offer -and (Copies) -eq 1} 'Discarding the next copy did not keep only the copy saved for later'
+    Start-Sleep -Seconds 2
+    if((Model).windows_recovery.offer){throw 'A copy kept for later was offered again in the same session'}
+    Close-Review
+    if((Copies) -ne 1 -or !(Test-Path -LiteralPath (Join-Path $copies "$newest.capy"))){throw 'Later did not preserve the newest unfinished copy'}
     foreach($log in Get-ChildItem $run -Filter '*.stderr.log'){if($log.Length){throw "Native error in $($log.Name)"}}
-    [pscustomobject]@{checkpoint_crash_restore='passed';durable_origin_retirement='passed';later_survives_clean_close='passed';explicit_discard='passed';scope='isolated native Windows UI and controlled stroke replay'}|ConvertTo-Json
+    [pscustomobject]@{checkpoint_crash_restore='passed';durable_origin_retirement='passed';later_survives_clean_close='passed';explicit_discard='passed';multiple_copies_in_turn='passed';scope='isolated native Windows UI and controlled stroke replay'}|ConvertTo-Json
 } finally {
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id}}
     foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
