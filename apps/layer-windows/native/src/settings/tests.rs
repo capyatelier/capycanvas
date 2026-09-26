@@ -68,6 +68,28 @@ fn settings_round_trip_uses_shared_validation_and_migration() {
 }
 
 #[test]
+fn retired_prediction_choices_load_as_optimized_without_recovery() {
+    for retired in ["previous", "trajectory"] {
+        let directory = Directory::new();
+        let path = directory.path.join("settings.json");
+        let saved = format!(
+            r#"{{"prediction_algorithm":"{retired}","prediction_ms":23,"platform_prediction":true}}"#
+        );
+        fs::write(&path, &saved).unwrap();
+        let mut file = directory.file();
+        let settings = file.load().unwrap().unwrap();
+        assert_eq!(
+            settings.prediction_algorithm,
+            layer_engine::PredictionAlgorithm::Optimized
+        );
+        assert_eq!(settings.prediction_ms, 23.0);
+        assert!(!file.preserve_existing);
+        assert_eq!(fs::read(&path).unwrap(), saved.as_bytes());
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
+    }
+}
+
+#[test]
 fn invalid_file_is_preserved_when_valid_preferences_are_saved() {
     for invalid in [
         br#"{"version":999,"custom_data":"retain this"}"#.as_slice(),

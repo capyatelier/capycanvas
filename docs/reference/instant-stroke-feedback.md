@@ -186,7 +186,9 @@ trade a small amount of instantaneous accuracy for smoother corrections.
 The native-prediction switch appears directly below **Enable stroke prediction** on
 every host. Android reports framework `MotionPredictor` availability for the
 connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted
-touches. Linux, Windows and macOS currently show a disabled switch. Capability
+touches; Windows creates a WinUI `PointerPredictor` for the canvas input source and
+falls back to Smooth Motion when it is unavailable or fails. Linux and macOS
+currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
 prediction is selected, **Prediction amount**, **Prediction algorithm**, and their
 reset actions are disabled. Native timing comes from its sample timestamps and presentation time.
@@ -231,7 +233,7 @@ absent, no placeholder records are synthesized by the adapter.
 | Platform | Real history | Preferred prediction | Graceful path |
 | --- | --- | --- | --- |
 | Linux Wayland | every tablet-v2 motion/frame group | none in tablet-v2 | shared confidence-limited predictor |
-| Windows | reverse `GetPointerPenInfoHistory` to chronological order | shared predictor for the custom canvas | current point only at a corner/low confidence |
+| Windows | reverse `GetPointerPenInfoHistory` to chronological order | WinUI `PointerPredictor.GetPredictedPoints()` on canvas moves | shared Smooth Motion predictor when the predictor is unavailable, fails or is disabled |
 | macOS | AppKit tablet/mouse events with pressure, tilt, and rotation | none documented for tablet points | shared predictor |
 | iPadOS | `coalescedTouches(for:)` using precise locations | `predictedTouches(for:)` | shared predictor if UIKit returns none |
 | Android | `MotionEvent` history and nanosecond timestamps | framework `MotionPredictor.predict()` on pen moves (API 34+) | shared predictor when unavailable/disabled or no samples arrive |
@@ -275,6 +277,7 @@ brush passes the 8.33 ms gate, and every tip-gap p95/p99 is 0 px.
 - [Apple predicted touches](https://developer.apple.com/documentation/uikit/uievent/predictedtouches%28for%3A%29)
 - [Apple coalesced Pencil touches](https://developer.apple.com/documentation/uikit/getting-high-fidelity-input-with-coalesced-touches)
 - [Windows pen history](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getpointerpeninfohistory)
+- [WinUI pointer prediction](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.input.pointerpredictor)
 - [Android MotionEvent history](https://developer.android.com/reference/android/view/MotionEvent.html)
 - [Android MotionPredictor](https://developer.android.com/reference/android/view/MotionPredictor)
 - [Wayland tablet-v2](https://wayland.app/protocols/wayland-protocols/480)

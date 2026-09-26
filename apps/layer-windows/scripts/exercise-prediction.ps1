@@ -12,7 +12,17 @@ function Model {
  try {$value=Get-Content -LiteralPath (Join-Path $run 'ui-state.json') -Raw|ConvertFrom-Json;if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$value.model}}catch{}
 }
 function Row([string]$Title){@((Model).preferences.pages.groups.rows|Where-Object title -eq $Title)[0]}
-function Switch([string]$Title){$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Title))|Where-Object {$_.Current.ClassName -eq 'ToggleSwitch'}|Select-Object -First 1}
+function Control([string]$Title,[string]$Class){$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Title))|Where-Object {$_.Current.ClassName -eq $Class}|Select-Object -First 1}
+function Switch([string]$Title){Control $Title 'ToggleSwitch'}
+function Algorithms {
+ $combo=Control 'Prediction algorithm' 'ComboBox'
+ $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ Wait-Until {$combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'ComboBoxItem'))} 'Prediction algorithm list did not open'
+ $items=@($combo.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'ComboBoxItem')))
+ $items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+ $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+ @($items|ForEach-Object {$_.Current.Name})
+}
 function Open-Preferences {
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
  Invoke-Id 'settings'
@@ -56,8 +66,15 @@ try {
  $native=Row 'Use Windows stroke prediction'
  if(!$native.enabled -or !$native.kind.active){throw 'Native Windows predictor is not enabled by default'}
  if((Row 'Prediction amount').enabled){throw 'Manual prediction time should be disabled while Windows predicts'}
+ $algorithm=Row 'Prediction algorithm'
+ if($algorithm.enabled -or (Control 'Prediction algorithm' 'ComboBox').Current.IsEnabled){throw 'Prediction algorithm should be disabled while Windows predicts'}
+ if(@($algorithm.kind.options).Count -ne 1 -or $algorithm.kind.options[0] -ne 'Smooth Motion (Optimized)' -or $algorithm.kind.selected -ne 0){throw "Unexpected prediction algorithms: $($algorithm.kind.options -join ', ')"}
  (Switch 'Use Windows stroke prediction').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {!(Row 'Use Windows stroke prediction').kind.active -and (Row 'Prediction amount').enabled} 'Native prediction switch did not select the engine fallback'
+ Wait-Until {(Row 'Prediction algorithm').enabled -and (Control 'Prediction algorithm' 'ComboBox').Current.IsEnabled} 'Prediction algorithm did not enable for the engine fallback'
+ $algorithms=@(Algorithms)
+ if($algorithms.Count -ne 1 -or $algorithms[0] -ne 'Smooth Motion (Optimized)'){throw "Prediction algorithm list shows: $($algorithms -join ', ')"}
+ Wait-Until {(Row 'Prediction algorithm').kind.selected -eq 0} 'Smooth Motion was not selected'
  Close-Preferences
  Draw 'pen'
  Open-Preferences
@@ -74,8 +91,10 @@ try {
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
  $prediction=Get-ChildItem (Join-Path $run ('prediction-'+$review.Id+'-*.json'))|Get-Content -Raw|ConvertFrom-Json
  if(!$prediction -or $prediction.platform_prediction_frames -le 0 -or $prediction.engine_prediction_frames -le 0){throw 'The runtime did not render both native predictions and the engine fallback'}
+ $saved=Get-Content -LiteralPath (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json') -Raw|ConvertFrom-Json
+ if($saved.prediction_algorithm -ne 'optimized' -or !$saved.platform_prediction){throw "Saved prediction settings: $($saved.prediction_algorithm), native $($saved.platform_prediction)"}
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
- [pscustomobject]@{settings_toggle=$true;survives_mouse_touch_pen=$true;prediction=$prediction;evidence=$run}|ConvertTo-Json -Depth 5|Tee-Object -FilePath (Join-Path $run 'results.json')
+ [pscustomobject]@{settings_toggle=$true;algorithm='optimized';survives_mouse_touch_pen=$true;prediction=$prediction;evidence=$run}|ConvertTo-Json -Depth 5|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
  [CapyRowPointer]::Dispose()
  foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
