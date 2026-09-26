@@ -537,12 +537,13 @@ void CanvasWindow::PickerHold(Microsoft::UI::Input::PointerEventArgs const& e, u
     bool touch=point.PointerDeviceType()==PointerDeviceType::Touch;
     if(phase==1){
         bool first=contacts.empty();contacts.insert(id);
+        if(first)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing&&self->workspace)self->workspace->CanvasContact(true);});
         if(touch&&first){CancelPickerHold();holdContact=id;pickerHold.ProcessDownEvent(point);}
         else CancelPickerHold();
     }else if(phase==2){
         if(holdContact==id)pickerHold.ProcessMoveEvents(e.GetIntermediatePoints());
     }else if(phase==3||phase==4){
-        contacts.erase(id);
+        if(contacts.erase(id)&&contacts.empty())dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing&&self->workspace)self->workspace->CanvasContact(false);});
         if(holdContact==id){
             if(phase==3)pickerHold.ProcessUpEvent(point);
             CancelPickerHold();

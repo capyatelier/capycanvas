@@ -19,7 +19,7 @@ pub enum Platform {
 }
 impl Platform {
     pub fn canvas_bar(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows)
     }
     pub const ALL: [Self; 6] = [Self::Gtk, Self::Web, Self::Windows, Self::Mac, Self::Ios, Self::Android];
     pub fn apple(self) -> bool {

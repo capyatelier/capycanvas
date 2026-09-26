@@ -678,6 +678,13 @@ impl NativeHost {
                 action: UiAction,
             },
             SelectionMenu {kind:layer_ui::SelectionMenu},
+            CanvasBarLayout {
+                measure: layer_ui::CanvasBarMeasure,
+            },
+            CanvasBarMenu {
+                context: layer_ui::CanvasBarContext,
+                shown: usize,
+            },
             LayerMenu {
                 id: u64,
                 mask: bool,
@@ -821,6 +828,8 @@ impl NativeHost {
             }
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
+            Query::CanvasBarLayout { measure } => json!(self.session.canvas_bar_layout(&measure)),
+            Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
@@ -1548,6 +1557,33 @@ mod tests {
         assert_eq!(app.take_value().unwrap()["error"], "surface lost");
         app.resize(1600, 2560, 2.0).unwrap();
         assert!(app.take_value().unwrap().get("layout").is_some());
+    }
+
+    #[test]
+    fn canvas_bar_queries_place_the_bar_and_reject_stale_contexts() {
+        let mut app = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        app.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Windows)),
+        })
+        .unwrap();
+        app.resize(1600, 1000, 1.0).unwrap();
+        app.dispatch(UiAction::Invoke { command: layer_ui::CommandId::SelectAll }).unwrap();
+        app.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Move }).unwrap();
+        let bar = app.session.state().canvas_bar.clone().expect("selection bar");
+        let measure = |context: layer_ui::CanvasBarContext| {
+            json!({"type": "canvas_bar_layout", "measure": {
+                "context": context, "items": vec![90.; bar.items.len()], "completion": [],
+                "more": 40., "height": 52., "gap": 4., "padding": 6.
+            }})
+        };
+        let layout = app.query(measure(bar.context)).unwrap();
+        assert!(layout["bounds"]["width"].as_f64().unwrap() > 0., "{layout}");
+        assert!(layout["items"].as_u64().unwrap() > 0);
+        let stale = layer_ui::CanvasBarContext { generation: bar.context.generation + 1, ..bar.context };
+        assert!(app.query(measure(stale)).unwrap().is_null());
+        let menu = app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap();
+        assert!(menu.to_string().contains("show_canvas_action_bar"), "{menu}");
+        assert!(app.query(json!({"type": "canvas_bar_menu", "context": stale, "shown": 0})).unwrap().is_null());
     }
 
     #[test]

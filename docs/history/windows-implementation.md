@@ -2963,3 +2963,25 @@ and accepts the equivalent slot above the next sibling. Touch tab pickup of the
 single-panel Layers group remains open: after the group becomes floating, the
 injected contact reaches neither XAML, the canvas input source nor the UI
 thread's pointer messages, so no handoff can finish the drag.
+
+### Canvas action bar on Windows (2026-09-26)
+
+Windows now shows the shared canvas action bar (step F4 of the
+[canvas action bar plan](../development/canvas-action-bar-transforms.md)) in
+place of its image-placement bar. It covers placements, transforms (Uniform,
+Flip, Rotate 90°, Reset, Cancel, Apply), polygon construction (Remove Point,
+Cancel, Finish) and selections (Deselect, Invert, Transform, Mask, Fill, Quick
+Mask, Save). Placement, overflow and edit validation come from shared Rust
+through two new native host queries, `canvas_bar_layout` and `canvas_bar_menu`,
+and the reappear delay is published in the UI catalog.
+
+The bar is a glass panel above floating panels and below drawers. Zen no
+longer drops every glass region, so floating panels and the bar keep their
+blur there. The canvas input thread reports contacts to the bar, which hides
+beside the object during strokes, handle drags and camera gestures.
+
+`exercise-canvas-bar.ps1` covers placement below a selection with its glass
+region, mouse, touch and pen taps that never paint, the transform bar with
+Flip, hiding during a pen contact, More, Apply as one undo step, Zen, the
+polygon bar at the bottom edge and light and dark captures. The canvas touch
+fixture now waits for its seed stroke to settle before comparing pixels.

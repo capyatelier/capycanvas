@@ -903,6 +903,26 @@ Profiles and captures stay local. New Window and runtime filter transport are im
 Full visual/gesture parity, lifecycle/device/DPI validation, distribution and
 final physical-input/presentation acceptance remain open.
 
+## Canvas action bar
+
+`CanvasActionBar.h` projects the shared canvas action bar (see the
+[plan](../../docs/development/canvas-action-bar-transforms.md)) as a glass
+squircle in the workspace canvas, above floating panels (ZIndex 180) and below
+drawers. It replaces the former image-placement bar. The view measures its
+buttons and asks `canvas_bar_layout` where to go and how many items fit; More
+opens `canvas_bar_menu` as a native menu. Every edit is a `canvas_bar_edit`
+tied to the bar's context, so stale taps are rejected in Rust. Buttons never
+take keyboard focus, and taps on the bar are chrome contacts that never paint.
+
+The canvas input thread reports when the first canvas contact starts and the
+last ends. A bar beside the object hides for the contact, for camera changes
+and for workspace drags, and returns after the shared reappear delay. The bar
+stays visible in Zen and registers its glass region with the other panels.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-canvas-bar.ps1 -Executable <native-exe>
+~~~
+
 ## Runtime filter packages
 
 The shared catalog is embedded; startup does not reload an installed copy.

@@ -272,6 +272,7 @@ pub struct BrushCategory {
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
     pub command_search_style: CommandSearchStyle,
+    pub canvas_bar_reappear_ms: u32,
     pub app_name: &'static str,
     pub text_size_pt: u8,
     pub zen_icon_size: u32,
@@ -291,6 +292,7 @@ pub struct UiCatalog {
 pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
         command_search_style: COMMAND_SEARCH_STYLE,
+        canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
         zen_icon_size: ZEN_ICON_SIZE,
         app_name: APP_NAME,
         text_size_pt: UI_TEXT_PT,
