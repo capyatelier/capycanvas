@@ -5,17 +5,11 @@ use layer_host::{
     NativeHost, Renderer,
     tasks::{ColorTask, Preview, SourceTask},
 };
-use layer_render_wgpu::{
-    WgpuRasterizer,
-    snapshot::{CaptureControl, SnapshotGpu},
-};
+use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use layer_ui::{DocumentRequest, HostRequestKind, UiSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{
-    io::Write,
-    time::{Duration, Instant},
-};
+use std::io::Write;
 
 #[path = "document_export.rs"]
 mod export;
@@ -708,7 +702,9 @@ impl Task {
 mod tests {
     use super::*;
     use layer_core::color::{ColorProfile, SampleDepth};
+    use layer_render_wgpu::WgpuRasterizer;
     use layer_ui::{CommandId, Platform, UiAction};
+    use std::time::{Duration, Instant};
     fn begin(host: &mut NativeHost, command: CommandId) -> Box<Task> {
         host.dispatch(UiAction::Invoke { command }).unwrap();
         let id = host
