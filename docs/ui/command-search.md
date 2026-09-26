@@ -54,8 +54,11 @@ delegate to dispatch for forms and operations whose outcome determines history.
 Search builds an index when opened and performs no I/O or thumbnail work while
 typing. `COMMAND_SEARCH` changes leave workspace model/content revisions alone.
 GTK updates only the popup for these changes; opening and closing use native
-popover behavior and motion preferences. Outside-dismissal contacts must not
-reach the canvas.
+popover behavior and motion preferences. Web uses a search-only Wasm publication
+and retains workspace DOM controls. Its native modal dialog supports IME,
+combobox/listbox accessibility, reduced motion and visual-viewport sizing.
+Outside-dismissal contacts must not reach the canvas. Closing restores the
+origin focus, falling back to the canvas if the original element cannot take focus.
 
 ## Coverage and subsequent input work
 
@@ -81,8 +84,12 @@ other editors' held-modifier behavior by itself.
 ```sh
 cargo test --locked -p layer-ui -p layer-host
 bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_input --native-storage
+bash apps/layer-web/build.sh
+LAYER_TEST_ARTIFACTS=/tmp/command-search bash tools/performance/workspace-motion.sh web --command-bar
 ```
 
 The GTK test uses an isolated compositor, real key delivery, light/dark popup
 captures, numeric entry, repeated opening, disabled actions and outside-contact
 dismissal. Native artifacts are written to the test runner's temporary directory.
+The Web test additionally checks native keyboard focus, ARIA selection, touch
+activation at narrow width, retained workspace DOM and query-to-frame latency.

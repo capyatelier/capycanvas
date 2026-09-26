@@ -1075,3 +1075,24 @@ body[data-theme="light"] #header { text-shadow:none; }
 .interval-thumb.upper { transform: translateX(1px); }
 .interval-input:focus-visible + .interval-thumb { outline: 1px solid var(--text); outline-offset: 3px; }
 .toolbar-range { display: flex; align-items: center; }
+/* Command search uses the same native-popup palette and shared search rhythm. */
+#command-bar { width: min(var(--command-width), calc(100vw - 32px)); height: auto; max-width: none; max-height: calc(100dvh - 48px); margin: 0 auto; inset: min(12vh, 72px) 0 auto; padding: var(--command-inset); box-sizing: border-box; border-radius: 12px; background: var(--popover); color: var(--text); box-shadow: 0 8px 24px #0004, 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; }
+#command-bar[open] { display: flex; flex-direction: column; gap: var(--command-gap); }
+#command-bar::backdrop { background: transparent; backdrop-filter: none; }
+.command-search-header { display: flex; align-items: center; gap: var(--command-gap); flex: none; }
+.command-search-field { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: 1px solid color-mix(in srgb, var(--text) 18%, transparent); border-radius: 7px; padding: 6px 8px; background: var(--input); }
+.command-search-field:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -1px; }
+.command-search-field .icon { width: 16px; height: 16px; opacity: .65; flex: none; }
+#command-search { min-width: 0; width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); outline: none; box-shadow: none; }
+#command-bar .command-search-close { padding: 0; width: 32px; min-height: 32px; font-size: 22px; font-weight: 400; flex: none; }
+.command-results { overflow: auto; min-height: 0; overscroll-behavior: contain; }
+#command-bar .command-result { display: flex; align-items: center; gap: var(--command-inset); width: 100%; min-height: var(--command-row-height); padding: var(--command-gap) var(--command-inset); text-align: start; font-weight: 400; border-radius: 8px; background: transparent; }
+#command-bar .command-result[data-selected="true"] { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.command-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.command-result[aria-disabled="true"] .command-name { opacity: .5; }
+.command-shortcut, .command-detail, .command-unit { opacity: .65; }
+.command-shortcut { font-size: .85em; white-space: nowrap; }
+.command-detail { min-height: 20px; padding: 0 var(--command-inset); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: .85em; flex: none; }
+.command-empty { text-align: center; padding: var(--command-inset); opacity: .65; }
+#command-bar [hidden] { display: none; }
+@media (max-width: 600px) { #command-bar { top: 16px; max-height: calc(100dvh - 32px); } #command-bar .command-result { min-height: 48px; } #command-bar .command-search-close { width: 48px; min-height: 48px; } .command-search-field { min-height: 48px; box-sizing: border-box; } }

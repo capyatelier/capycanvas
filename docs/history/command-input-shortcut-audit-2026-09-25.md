@@ -1400,6 +1400,24 @@ history focus, text-history protection and one-step artwork undo.
 Web and Android presentation follow this checkpoint. General held overrides,
 controller adapters and compatibility presets remain stages C–F above.
 
+### 7.3 Implementation checkpoint: Web
+
+The Web host now projects the same catalog and search state through a native
+HTML dialog. Ctrl/Cmd+K opens it; native text/IME, focus restoration, keyboard
+selection, numeric entry and touch activation share the GTK execution path.
+Search-only publications retain the editor DOM. Shared width/inset/gap/row
+constants and the existing popup palette define the surface; narrow screens
+use 48px targets and visual-viewport sizing. The 120ms entrance respects reduced
+motion.
+
+Native Wayland Chromium/WebGPU validation passed repeated keyboard invocation,
+immediate typing/Enter, numeric parameters, light/dark captures, selected-row
+accessibility, touch activation and outside dismissal without a document edit.
+Twenty warm queries measured **20.2ms p95 to two animation frames**. This is a
+browser frame-readiness proxy, not physical display scanout. A repeated-opening
+regression exposed focus left inside a closed dialog; the host now restores
+meaningful focus with an explicit canvas fallback.
+
 ## 8. Research limitations and maintenance
 
 This checkpoint inspected shared code and all six host input paths; it did not

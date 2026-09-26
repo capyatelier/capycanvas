@@ -792,6 +792,10 @@ impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
     }
+    /// Search-only publications avoid serializing unchanged editor controls.
+    pub fn command_search(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().command_search)
+    }
     /// Incremental UI transport. Each field retains its original Serde type
     /// (including u64 BigInts); unchanged catalogs never cross the Wasm/JS
     /// boundary again. `state()` remains an independent full snapshot.

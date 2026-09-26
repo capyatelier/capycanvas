@@ -4,6 +4,7 @@ import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
+import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createEditorPanels } from "./editor-panels.js";
@@ -50,6 +51,7 @@ let app,
   dragItem = null,
   statusTimer;
 let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header;
+let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -246,6 +248,11 @@ function dispatch(action) {
   }
 }
 function applyChange(change) {
+  if (change.regions & 512) {
+    state.command_search = app.command_search();
+    commandBar?.refresh(state.command_search);
+    if (change.regions === 512) { if (change.canvas_wake) wake(); return; }
+  }
   if(change.regions & 256) editor?.refreshColorPreview();
   if(change.regions===256){if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 128)) workspaceManager?.observe();
@@ -793,6 +800,7 @@ function contentPanel(id, splitPicker=false) {
   panel.refreshPanel();return panel;
 }
 function update(regions) {
+  commandBar?.refresh(state.command_search);
   // Canvas-based controls read these colors while refreshing their pixels.
   if (regions & 16) applyTheme(state.theme, state.palette);
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) customization.refresh();
@@ -1520,7 +1528,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
-  if (e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-capture, #shortcut-editor)")) return;
+  if (pressed && e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-capture, #shortcut-editor)")) return;
   updateZen();
   const reply = input({
     type: "key",
@@ -1637,6 +1645,7 @@ try {
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = `${catalog.app_name} — drawing workspace`;
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences_cached() });
+  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, canvas});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
