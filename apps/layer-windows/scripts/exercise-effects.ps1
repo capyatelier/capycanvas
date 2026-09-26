@@ -181,7 +181,15 @@ function Check-CurveGestures {
             [CapyRowPointer]::Key(0x1B)
             Wait-Until {(Curve-Json) -eq $original} "$device canceled insertion kept its handle"
             [CapyRowPointer]::Up();Check-Redo "$device canceled insertion"
-            Write-Host "$device curve: one-step history, unchanged click, Escape, source hide and insertion rollback passed"
+            $at=Curve-At .3 .9;$to=Curve-At .36 .6
+            [CapyRowPointer]::Down($device,$at[0],$at[1])
+            Wait-Until {(Property 'curve_0').value.value.Count -eq 4} "$device insertion did not preview"
+            for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($at[0]+($to[0]-$at[0])*$i/8),[int]($at[1]+($to[1]-$at[1])*$i/8));Start-Sleep -Milliseconds 30}
+            Wait-Until {$p=(Property 'curve_0').value.value[1];[Math]::Abs($p[0]-.36) -lt .015 -and [Math]::Abs($p[1]-.6) -lt .015} "$device inserted point did not follow the same contact"
+            [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
+            if((Property 'curve_0').value.value.Count -ne 4){throw "$device insert and drag did not keep the point"}
+            Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device insert and drag was not one Undo"
+            Write-Host "$device curve: one-step history, unchanged click, Escape, source hide, insertion rollback and insert-drag passed"
         }
         if(!(Find 'property-curve_0-reset')){throw 'Modified curve hides its reset icon'}
         foreach($device in @('mouse','pen','touch')){

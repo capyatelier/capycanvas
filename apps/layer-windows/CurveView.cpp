@@ -18,6 +18,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     std::optional<std::pair<int,uint64_t>> lastTap;
     Point press{},start{};
     int selected=0,pressed=-1;
+    bool removable=false,detached=false;
     hstring drawn;
     A points()const{return array(object(property->model(),L"value"),L"value");}
     A point()const{auto p=points();return p.Size()?p.GetArrayAt(std::clamp(selected,0,int(p.Size())-1)):values({0,0});}
@@ -31,9 +32,13 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     Point dragged(Point p)const{
         auto at=position(p);return {start.X+(at.X-press.X),start.Y+(at.Y-press.Y)};
     }
+    static bool offGraph(Point p){
+        constexpr float margin=.1f;
+        return p.X<-margin||p.X>1+margin||p.Y<-margin||p.Y>1+margin;
+    }
     void cancel(){
         if(!pointer)return;
-        pointer.reset();change(selected,{},false,L"cancel");graph.ReleasePointerCaptures();
+        pointer.reset();detached=false;change(selected,{},false,L"cancel");graph.ReleasePointerCaptures();
     }
     ~CurveEditor(){cancel();}
     void erase(){auto p=points();if(selected>0&&selected+1<int(p.Size())){int old=selected--;change(old,{},true);}}
@@ -47,8 +52,10 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         focus.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetName(focus,str(property->model(),L"label")+L" curve");
         AutomationProperties::SetAutomationId(focus,property->id()+L"-curve");
+        hstring hint=L"Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.";
+        AutomationProperties::SetHelpText(focus,hint);CapyUi::tooltip(focus,hint);
         reset=button(data,L"Reset curve",[weak]{if(auto self=weak.lock()){self->selected=0;self->lastTap.reset();self->cancel();self->property->reset();self->refresh();}});
-        reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"undo",data->theme()));
+        reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"reset",data->theme()));
         reset.HorizontalAlignment(HorizontalAlignment::Right);reset.VerticalAlignment(VerticalAlignment::Bottom);reset.Visibility(Visibility::Collapsed);
         CapyUi::tooltip(reset,AutomationProperties::GetName(reset));
         AutomationProperties::SetAutomationId(reset,property->id()+L"-reset");
@@ -70,7 +77,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             if(index<0&&points.Size()>=32)return;
             if(!self->graph.CapturePointer(e.Pointer()))return;
             self->pointer=raw.PointerId();self->focus.Focus(FocusState::Programmatic);
-            self->selected=index;self->pressed=index;
+            self->selected=index;self->pressed=index;self->removable=index<0||(index>0&&index+1<int(points.Size()));
             if(index<0){self->selected=0;for(auto p:points)if(p.GetArray().GetNumberAt(0)<at.X)self->selected++;}
             self->press=at;self->start=at;
             // Preserve the grab offset, including a click with no movement.
@@ -78,15 +85,19 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             self->change(index,self->start,false,L"down");e.Handled(true);
         }});
         graph.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            self->change(self->selected,self->dragged(e.GetCurrentPoint(self->graph).Position()),false,L"move");e.Handled(true);
+            auto at=self->dragged(e.GetCurrentPoint(self->graph).Position());
+            self->detached=self->removable&&offGraph(at);
+            self->change(self->selected,at,false,L"move");e.Handled(true);
         }});
         graph.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
             auto raw=e.GetCurrentPoint(self->graph);auto at=self->position(raw.Position());
             bool tapped=self->pressed>=0&&std::hypot((at.X-self->press.X)*self->graph.ActualWidth(),(at.Y-self->press.Y)*self->graph.ActualHeight())<4;
             bool twice=tapped&&self->lastTap&&self->lastTap->first==self->pressed&&raw.Timestamp()-self->lastTap->second<uint64_t(GetDoubleClickTime())*1000;
             self->lastTap.reset();if(tapped&&!twice)self->lastTap=std::pair{self->pressed,raw.Timestamp()};
-            int index=self->selected;if(twice&&index>0&&index+1<int(self->points().Size()))self->selected=index-1;
-            self->change(index,self->dragged(raw.Position()),twice,L"up");
+            auto released=self->dragged(raw.Position());
+            int index=self->selected;
+            if((twice&&index>0&&index+1<int(self->points().Size()))||(self->removable&&offGraph(released)))self->selected=index-1;
+            self->detached=false;self->change(index,released,twice,L"up");
             self->pointer.reset();self->graph.ReleasePointerCaptures();e.Handled(true);
         }});
         graph.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
@@ -121,7 +132,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto view=property->view();
         auto peak=view.GetNamedValue(L"curve_max",JsonValue::CreateNullValue()),white=view.GetNamedValue(L"curve_white",JsonValue::CreateNullValue());
         bool hdr=peak.ValueType()==JsonValueType::Number&&white.ValueType()==JsonValueType::Number&&peak.GetNumber()>0;
-        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(selected)},
+        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(detached?-1:selected)},
             {L"peak",peak},{L"white",white},{L"modified",B(modified)},{L"theme",S(data->theme())}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){
@@ -147,7 +158,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         }else{caption(L"Output",true);caption(L"Input",false);}
         std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(at.GetNumberAt(0)*side),float((1-at.GetNumberAt(1))*side)});}
         line.Points().ReplaceAll(path);
-        for(uint32_t i=0;i<p.Size();i++){auto at=p.GetArrayAt(i);double radius=int(i)==selected?5:3.5;
+        for(uint32_t i=0;i<p.Size();i++){auto at=p.GetArrayAt(i);double radius=!detached&&int(i)==selected?5:3.5;
             Shapes::Ellipse dot;dot.Width(radius*2);dot.Height(radius*2);dot.Fill(data->brush(L"text"));
             Canvas::SetLeft(dot,at.GetNumberAt(0)*side-radius);Canvas::SetTop(dot,(1-at.GetNumberAt(1))*side-radius);dots.Children().Append(dot);
         }
