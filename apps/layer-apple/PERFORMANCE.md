@@ -764,7 +764,8 @@ pipeline on the backdrop, eliminating the second intermediate. Translated,
 masked, clipped and partial-opacity composition retains the required operations.
 No brush algorithm, cache limit, source samples or native scheduling changes.
 
-The existing `layered-strokes` example now accepts optional `gpu` timing and an
+The `layered-strokes` example (removed; see git history `9b830b42`) accepted
+optional `gpu` timing and an
 RGBA capture path. A 512-frame replay has identical per-frame damage, uploads
 and paint-page counts, with an exact match across the 4096-square RGBA capture.
 For the 360 active frames after the first stroke, median encoded GPU span falls
@@ -2346,15 +2347,8 @@ change's removal of the theme-toggle item from the shared View menu. Every other
 field and numeric value is preserved; the theme-toggle command remains in the
 catalog. The original reference and the explicit difference report stay local.
 
-```sh
-mkdir -p artifacts
-cargo run --release -p layer-host --example snapshot-transport \
-  > artifacts/snapshot-value.json
-cargo run --release -p layer-host --example snapshot-transport -- --stream \
-  > artifacts/snapshot-stream.json
-cargo run --release -p layer-host --example snapshot-transport -- --benchmark \
-  > artifacts/snapshot-benchmark.json
-```
+The `snapshot-transport` example that produced these payloads was removed; see
+git history `9b830b42`.
 
 On the development Mac, four alternating rounds of 200 full snapshots per mode
 give these CPU transport measurements. Both rows run on Mac hardware with the

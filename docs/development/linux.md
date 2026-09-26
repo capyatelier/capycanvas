@@ -299,10 +299,9 @@ rebuild recipe and checksums travel in `share/doc/capycanvas-gtk`. Rebuild from 
 relocated package with the command in that manifest. The build uses system GTK
 dependencies, so this remains a native bundle for compatible distributions.
 
-Staging replaces only a directory bearing the generated `.capy-package` marker,
-clearing obsolete codec payloads left by older releases. The output includes the
-executable, desktop launcher, `.capy` MIME definition, icon, runtime filters,
-GTK runtime and notices. Validation rejects native photo-codec libraries/helpers.
+Staging replaces only a directory bearing the generated `.capy-package` marker.
+The output includes the executable, desktop launcher, `.capy` MIME definition,
+icon, runtime filters, GTK runtime and notices.
 JPEG/AVIF gain maps, HEIC and ordinary raster imports use the same compiled Rust
 paths as `cargo run`; moving the package needs no codec search path or environment
 variable. Accepted HEIC variant limits are recorded in the

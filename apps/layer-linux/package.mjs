@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } 
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { preparePackageOutput, verifyPortablePhotoPackage } from "./package-files.mjs";
+import { preparePackageOutput } from "./package-files.mjs";
 import { dependencyNotices } from "../../tools/build/dependency-notices.mjs";
 import { stageGtkRuntime } from "./gtk-runtime.mjs";
 
@@ -55,6 +55,5 @@ chmodSync(join(output, "bin/capycanvas"), 0o755);
 execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas-bin")]);
 writeFileSync(join(output, "share/doc/capycanvas-gtk/manifest.json"), JSON.stringify(gtkRuntime, null, 2) + "\n");
 execFileSync("desktop-file-validate", [join(output, "share/applications/art.capycanvas.CapyCanvas.desktop")]);
-verifyPortablePhotoPackage(output);
 writeFileSync(marker, "Generated Capy Canvas native package\n");
 console.log(`Native package: ${output}\nRun: ${join(output, "bin/capycanvas")}`);
