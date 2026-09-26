@@ -26,7 +26,7 @@ usually takes 20–40 minutes; pass `--gui` or run `screenshot <file.png>` to wa
 and untracked files, to `C:\capycanvas`, and runs
 [`test-without-gpu.ps1`](../../apps/layer-windows/scripts/test-without-gpu.ps1):
 the Debug build (`--release` for Release), the native input tests, and the
-shared and Windows Rust unit tests. Build outputs persist
+shared and Windows Rust unit tests, except the layer-host tests that need a GPU. Build outputs persist
 between syncs. Run other commands from the synced tree, for example strict Clippy:
 
 ```sh
