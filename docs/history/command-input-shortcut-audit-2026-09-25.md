@@ -290,6 +290,76 @@ intersection of contexts and trigger lifecycles, not just identical strings.
 Same `B` in a brush field and in text entry is not necessarily a conflict.
 Display shadowing, reserved keys and conflicting gestures before saving.
 
+#### 2.3.1 Tool classification and binding inheritance
+
+The planned shortcut scopes use behavior categories, tool/submode exceptions,
+and capabilities. Individual brush presets inherit their owning tool's bindings;
+they do not require individual shortcut profiles. A binding to *select* a named
+brush remains a supported, separate use case.
+
+The existing [`ToolFamily`](../../crates/layer-ui/src/tools.rs) values Ink, Paint,
+and Blend define P/B/J cycling. The 13 `ToolGroup` values organize media such as
+Pencil, Watercolor and Oil. Preserve both purposes. Introduce explicit semantic
+shortcut classification rather than deriving input behavior from a displayed
+category name, icon, brush asset name or rendering-engine implementation.
+
+| Planned behavior category | Included tools | Typical contextual operations |
+| --- | --- | --- |
+| Drawing and painting | Pen, pencil, marker, pastel, paint, watercolor, oil, airbrush, decoration | Size/opacity, temporary sampler or eraser, straight-line constraint |
+| Erasing | Eraser tools | Size/opacity, temporary return to drawing |
+| Blending | Blend and smudge | Size, strength, pickup/mixing |
+| Warping | Liquify modes | Size, strength, reverse effect |
+| Selection | Rectangle, ellipse, lasso, polygon, wand, color, brush, tonal | Add/subtract/intersect, geometry constraints, complete/cancel |
+| Fill and gradient | Bucket, lasso fill, linear/radial gradient | Tolerance/source, direction and angle constraints |
+| Shapes and rulers | Figures and drawing rulers | Proportions/angle, center placement, construction points |
+| Move and transform | Move, scale, rotate and related operations | Nudge, constraints, snapping, apply/cancel |
+| Color sampling | Visible-artwork and layer eyedroppers | Sampling source and destination slot |
+| Navigation | Hand and temporary pan/zoom/rotate modes | Navigation constraints and view reset |
+
+The operations above describe the intended scopes, including future actions;
+they are not claims that all these operations are implemented today. Future
+domains such as editable vector paths or text can add categories when those
+tools exist.
+
+Within the eligible canvas scope, inherit defaults in this order:
+**canvas → behavior category → tool/submode → active operation**. This is the
+specificity order within the focus/ownership rules in section 2.3. An active
+gesture retains its release/cancel owner. Explicit user changes are applied to
+the selected scope; the editor must explain any more-specific override rather
+than silently assuming a parent edit replaces every child rule.
+
+Use exceptions only where behavior differs: polygon selection has remove-last-
+vertex; rectangle/ellipse selection has geometry constraints; selection brush
+has size and painted-selection semantics. Pencil inherits Painting, with an
+optional exact-tool override if a preset needs a distinct behavior. A new pencil
+brush asset inherits this automatically without adding a resolver rule.
+
+Capabilities describe the currently available operations/parameters independently
+of category: adjustable size, opacity, flow, hardness, mixing, sampling, geometry
+constraints, and so on. Selection brush can support size while remaining in
+Selection. A painting preset whose tip lacks a hardness control does not acquire
+one through category inheritance. Reuse applicability and numeric bounds from
+[`tool_settings.rs`](../../crates/layer-ui/src/tool_settings.rs), selection/tool
+schemas and shared validation. Define capabilities semantically; never infer
+them solely from whether a toolbar control happens to be visible.
+
+A contextual binding combines trigger, activation kind, category/tool predicate,
+required capability, operation phase and semantic action/arguments. For example,
+a future size-step binding can require `adjustable_size` and resolve to the active
+tool's parameter, while an Alt hold can mean temporary sampling in Painting,
+subtract-before-contact in Selection, or center placement during a marquee.
+Track the effective tool, underlying tool for temporary restoration, editing
+target (artwork/mask/selection), and gesture phase separately. Quick Mask is an
+editing target, not another complete brush category. Before-contact and during-
+drag modifiers must remain distinct; holding a modifier is not a toggle.
+
+The shortcut editor will expose scopes such as “All painting tools,” “All
+selection tools,” and “Polygon selection,” show inherited versus overridden
+bindings, and show unsupported capabilities. Search uses the same applicability
+facts to explain availability. Category/capability metadata is established in
+stage A; contextual matching, inheritance resolution and held behavior ship in
+stage C. Presets and hardware mappings consume that same model.
+
 ### 2.4 Held modes and continuous transactions
 
 Use `Begin(token) → Update(token, value/delta) → End(token)` or `Cancel(token)`.
@@ -1030,7 +1100,7 @@ substitute a destructive or semantically different command.
 
 | Stage | Concrete changes | Completion evidence |
 | --- | --- | --- |
-| A. Catalog, moderate shared work | Explicit stable IDs/descriptors; wrap all current callable CommandIds plus user-facing nested actions; availability reasons; typed targets/parameters | Every menu/toolbar/context action is classified as cataloged, native-owned or deliberately private; no retired/internal actions offered |
+| A. Catalog, moderate shared work | Explicit stable IDs/descriptors; adapt callable CommandIds and user-facing nested actions; shared availability reasons, typed targets/parameters and tool category/capability metadata; reuse in existing projections | Coverage ledger has no unexplained omissions; descriptor invocation matches current state/history/requests; ID compatibility and live availability verified; see section 7.1 |
 | B. Command bar, moderate shared and six-host work | Shared query/result/selection model; native search surfaces; visible opener; configurable trigger; focus/accessibility; parameter entry | Same command dispatched from search/menu/key/button yields same state and history; disabled reason and stale-document tests; keyboard and touch usability on all hosts |
 | C. Resolver and held actions, substantial shared work | Context matching, rich physical/logical events, token lifecycle, momentary overrides, relative adjustments, settings migration | Modifier truth tables and overlap conflicts pass; all begin/update/end/cancel paths verified; existing settings and family cycling retained |
 | D. Gesture/pen support, substantial native integration | Touch tap/hold arbitration; opt-in pen-button bindings; Pencil interactions; native timing/slop/capture | Real devices do not split strokes, scroll unexpectedly or leave stuck modes; complete cancellation/reconnect matrix |
@@ -1040,6 +1110,99 @@ substitute a destructive or semantically different command.
 Stages A/B can ship without waiting for raw Bluetooth support. Stage C should
 precede promises of faithful held-modifier presets. No calendar estimate is
 justified until supported controller protocols and host UX scope are chosen.
+
+### 7.1 Stage A: shared catalog scope, gaps and exit criteria
+
+The result of this stage is a shared way to enumerate, describe, evaluate and
+invoke every supported user action. The command bar can then consume that API
+without knowing Rust enum variants or duplicating tool/layer rules. Existing
+menus, shortcut definitions and toolbar models should consume the same semantic
+metadata while retaining their surface-specific ordering and presentation.
+
+The current gap is fragmented description, not a missing action dispatcher:
+
+| Existing foundation | Gap to close in stage A |
+| --- | --- |
+| `CommandId` labels, icons, platform checks and live `CommandState` | Partial action coverage; retired entries; no uniform disabled reason or typed parameter/target description |
+| Live `ContextMenuItem` trees with action, enabled/selected state and binding hints | Concrete surface projections, sometimes containing captured object IDs; no durable identity for every semantic operation or complete flat inventory |
+| Shortcut definitions for commands, tools, brushes, sizes and custom actions | IDs/metadata generated separately; command keys depend on Rust debug names; arbitrary serialized actions include more than a public command interface should expose |
+| Tool groups and parameter schemas | No common behavior-category/capability view for action applicability; tool-selection cycling and medium grouping have different purposes |
+| Shared dispatch, validation, history and host requests | Catalog invocation needs typed adapters and current-target validation; reuse these execution paths rather than implementing actions again |
+
+Implementation work:
+
+1. **Audit and classify the public surface.** Start with the 125 CommandIds
+   (115 non-retired at this checkpoint), all eight application menus, context
+   menus, toolbar/customization controls, tool settings and existing shortcut
+   definitions. Record each user operation as cataloged or native-owned with
+   a specific reason and route. Classify internal measurement, restoration,
+   completion and raw-input messages explicitly as private. Examine runtime
+   variants such as mask targets and effect/resource menus; a static enum count
+   alone is not coverage.
+2. **Define explicit identities and descriptors.** Use stable semantic IDs
+   independent of enum debug formatting and labels. Retain existing public IDs
+   where suitable and provide explicit compatibility aliases otherwise.
+   Descriptors contain label/category/search aliases, parameter and target
+   schemas, execution kind, repeat/history policy and exposure flags. A semantic
+   operation plus typed arguments identifies a choice: selecting a brush or
+   adding an effect can enumerate live resources without creating a new enum
+   variant per asset. Resource IDs must survive display-name changes.
+3. **Provide live action state and tool context.** Separate static descriptors
+   from enabled/disabled-with-reason, checked/value state and resolved shortcut
+   hints. Publish the ten behavior categories and current capabilities from
+   shared schemas. Keep action-menu grouping, tool behavior category, editing
+   target and operation phase distinct. Centralize availability predicates so
+   menu enablement and catalog reasons cannot drift; execution still validates.
+4. **Adapt existing operations and targets.** Reuse `UiAction` dispatch for
+   supported commands, nested layer/color/selection/workspace operations,
+   effect insertion and parameter setters. Add small active-target adapters
+   where existing actions require object IDs. Bindings store semantic targets,
+   not whichever layer was selected while configuring them. An invocation
+   carries its originating document/context; reject a retired target or changed
+   document instead of silently applying to a different one. Preserve explicit
+   context-menu targets when an operation was requested for a particular row.
+5. **Connect the existing projections.** Make menu/shortcut/toolbar metadata
+   resolve through descriptors, retaining menu grouping, native editing and
+   focus-specific history ownership. Expose the catalog and live state through
+   the existing host/FFI publication mechanisms. Keep current persisted v1
+   bindings, alternatives and custom actions compatible; do not silently rewrite
+   or discard them because the public catalog is narrower than `UiAction`.
+   Native-owned operations need documented scope and routing, not a claim that
+   every host can execute them through the shared dispatcher today.
+6. **Validate the contract before building search UI.** Add behavioral parity,
+   availability, target, ID/compatibility and schema tests using existing session
+   fixtures; check host serialization/projections. Establish revision-based
+   metadata/state invalidation so consumers do not reconstruct every menu or
+   request effect thumbnails to enumerate actions.
+
+Concrete descriptor examples (proposed IDs): `layer.duplicate_selected` adapts
+`LayerAction::DuplicateSelected`; `effect.insert` takes a stable effect ID;
+`tool.parameter.set` takes a supported parameter ID and typed value, resolving
+its bounds and applicability from the active tool. These describe existing
+operations. Future relative-size, temporary-tool or controller actions must
+not appear as executable until their implementations and lifecycles exist.
+
+Stage A is complete when all of these checks pass:
+
+| Success criterion | Required evidence |
+| --- | --- |
+| Coverage is accounted for | Every existing user-action source has a descriptor/provider or a named native-ownership exception; all 125 CommandIds are classified; the 10 retired IDs and private messages are absent from public results |
+| Semantic identity is consistent | The same operation reached from menu, toolbar and shortcut resolves to the same ID/arguments and state; aliases and resource renames do not create duplicate identities |
+| Invocation preserves behavior | Representative simple commands, nested layer actions, parameter changes, effect insertion and asynchronous host requests match current results, errors and history boundaries; focused palette/tab history and text ownership remain correct |
+| Availability is truthful | Locked/missing targets, active edits, mask context and unsupported host capabilities give meaningful reasons; invoking stale or disabled entries cannot bypass current validation |
+| Parameters and targets are valid | Wrong parameter type/range, unsupported capability and stale explicit target are rejected; an active-target action resolves in the intended document at invocation |
+| Classification works across tools | Every current tool/submode has a category; representative brush presets inherit classification; selection-brush size and absent hardness demonstrate capability checks without per-brush keymaps |
+| Existing preferences survive | Saved v1 bindings, alternatives, custom definitions and current P/B/J cycling retain behavior; renamed-ID aliases round-trip without resetting user choices |
+| Hosts can consume the model efficiently | Shared catalog/state serialization and affected host checks pass; repeated enumeration does no rendering, file/device I/O or filter-preview work; tool/document/resource changes invalidate only relevant cached state |
+
+Stage A does not implement the search overlay (B), contextual/held-key resolver
+and relative-adjustment behavior (C), device protocols (D/E), or compatibility
+presets (F). It defines enough metadata to support them and exposes existing
+supported operations. The stage's reviewable deliverables are the shared
+registry/state/invocation interface, adopted projections, compatibility/coverage
+records, and passing contract tests.
+
+### 7.2 Acceptance across later stages
 
 Required behavioral tests when implementing (not added by this documentation
 change):
