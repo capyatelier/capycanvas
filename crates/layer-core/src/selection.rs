@@ -333,13 +333,29 @@ impl Selection {
             inverted: self.inverted,
         })
     }
-    /// The selection carried by a pixel transform's geometry.
+    /// The selection carried by a pixel transform's geometry. Contours map
+    /// exactly under perspective; pixel coverage must be resampled by the
+    /// renderer instead.
     pub fn mapped(&self, map: &crate::TransformMap) -> Result<Self, DocumentError> {
-        match map {
-            crate::TransformMap::Affine(affine) => self.transformed(*affine),
-            _ => Err(DocumentError::InvalidLayerOperation("Unsupported transform")),
-        }
+        let projective = match map {
+            crate::TransformMap::Affine(affine) => return self.transformed(*affine),
+            crate::TransformMap::Projective(projective) => *projective,
+            crate::TransformMap::Mesh(_) => {
+                return Err(DocumentError::InvalidLayerOperation("Unsupported transform"));
+            }
+        };
+        let SelectionShape::Contours(paths) = &self.shape else {
+            return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));
+        };
+        let map = crate::Projective::from_affine(self.affine).then(projective);
+        Ok(Self {
+            shape: SelectionShape::Contours(map.map_polygons(paths).into()),
+            affine: crate::Affine::IDENTITY,
+            inverted: self.inverted,
+        })
     }
+    /// The error when pixel coverage cannot follow a map without the renderer.
+    pub const RESAMPLE_PIXELS: &'static str = "Pixel selections are resampled by the renderer";
 }
 
 #[cfg(test)]
@@ -566,6 +582,50 @@ mod selection_tests {
         }
         assert!(original.transformed(crate::Affine([0.; 6])).is_err());
         assert_eq!(original.affine, crate::Affine::IDENTITY);
+    }
+    #[test]
+    fn perspective_maps_contour_vertices_and_refuses_pixel_coverage() {
+        use crate::{Projective, TransformMap};
+        let source = Rect { min: Point::default(), max: Point { x: 100., y: 100. } };
+        let quad = [Point { x: 40., y: 0. }, Point { x: 60., y: 0. }, Point { x: 100., y: 100. }, Point { x: 0., y: 100. }];
+        let projective = Projective::rect_to_quad(source, quad).unwrap();
+        let map = TransformMap::Projective(projective);
+        let placement = crate::Affine::translation(Point { x: 5., y: -3. });
+        let ring = vec![Point { x: 10., y: 10. }, Point { x: 90., y: 12. }, Point { x: 50., y: 80. }];
+        let mut selection = Selection::polygon(ring.clone()).unwrap().transformed(placement).unwrap();
+        selection.inverted = true;
+        let mapped = selection.mapped(&map).unwrap();
+        assert!(mapped.inverted && mapped.affine == crate::Affine::IDENTITY);
+        let [mapped_ring] = mapped.contours() else { panic!("one ring") };
+        for (a, b) in mapped_ring.iter().zip(&ring) {
+            let expected = projective.map(placement.map(*b)).unwrap();
+            assert!((a.x - expected.x).abs() < 1e-3 && (a.y - expected.y).abs() < 1e-3);
+        }
+        let tall = Selection::polygon(vec![
+            Point { x: 0., y: 0. },
+            Point { x: 100., y: 0. },
+            Point { x: 100., y: 1000. },
+            Point { x: 0., y: 1000. },
+        ])
+        .unwrap();
+        let tall = tall.mapped(&map).unwrap();
+        let [clipped] = tall.contours() else { panic!("one ring") };
+        assert!(clipped.len() == 4 && clipped.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        assert!(clipped.iter().all(|p| p.y >= -1.), "the part with no image is clipped away");
+        let beyond = Selection::polygon(vec![
+            Point { x: 0., y: 200. },
+            Point { x: 10., y: 200. },
+            Point { x: 5., y: 300. },
+        ])
+        .unwrap();
+        assert!(beyond.mapped(&map).unwrap().contours().is_empty());
+        let affine = crate::Affine::around(Point::default(), [2., 1.], 0.3, Point { x: 1., y: 2. });
+        assert_eq!(selection.mapped(&TransformMap::Affine(affine)), selection.transformed(affine));
+        let pixels = Selection::pixels(Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap()));
+        assert_eq!(
+            pixels.mapped(&map),
+            Err(DocumentError::InvalidLayerOperation(Selection::RESAMPLE_PIXELS))
+        );
     }
     #[test]
     fn packed_coverage_validation_checks_all_nibbles_and_dimensions() {

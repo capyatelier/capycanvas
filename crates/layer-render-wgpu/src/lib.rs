@@ -3392,7 +3392,7 @@ impl CanvasRenderer for WgpuRasterizer {
         &mut self,
         preview: Option<&layer_render::TransformPreview>,
     ) -> Result<(), Self::Error> {
-        if preview.is_some_and(|p| p.transform.validate().is_err()) {
+        if preview.is_some_and(|p| p.transform.validate().is_err() || p.transform.as_affine().is_none()) {
             return Err(GpuRasterError::InvalidTransform(
                 "Invalid preview transform",
             ));

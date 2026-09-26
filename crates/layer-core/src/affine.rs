@@ -1,5 +1,5 @@
 //! Document-space affine geometry shared by input, handles and GPU operations.
-use crate::{DocumentError, MeshMap, Point, Rect};
+use crate::{DocumentError, MeshMap, Point, Projective, Rect};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -9,11 +9,6 @@ pub enum Interpolation {
     #[default]
     Linear,
 }
-
-/// Forward homography from source to destination layer-local pixels, row-major:
-/// `[x', y', w'] = M [x, y, 1]`, mapping to `(x'/w', y'/w')`.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Projective(pub [f32; 9]);
 
 /// Source-to-destination geometry of one layer-local pixel transform.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -25,6 +20,16 @@ pub enum TransformMap {
 impl Default for TransformMap {
     fn default() -> Self {
         Self::Affine(Affine::IDENTITY)
+    }
+}
+impl TransformMap {
+    /// The destination of a source point, if it has one.
+    pub fn map(&self, p: Point) -> Option<Point> {
+        match self {
+            Self::Affine(affine) => Some(affine.map(p)),
+            Self::Projective(projective) => projective.map(p),
+            Self::Mesh(_) => None,
+        }
     }
 }
 
@@ -48,14 +53,30 @@ impl ImageTransform {
         }
     }
     pub fn is_identity(&self) -> bool {
-        self.map == TransformMap::Affine(Affine::IDENTITY)
-    }
-    /// Finite and invertible geometry that the renderer can resample.
-    pub fn validate(&self) -> Result<(), DocumentError> {
         match &self.map {
-            TransformMap::Affine(affine) if affine.inverse().is_some() => Ok(()),
-            TransformMap::Affine(_) => Err(DocumentError::InvalidLayerOperation("Invalid transform")),
-            _ => Err(DocumentError::InvalidLayerOperation("Unsupported transform")),
+            TransformMap::Affine(affine) => *affine == Affine::IDENTITY,
+            TransformMap::Projective(projective) => {
+                projective.as_affine() == Some(Affine::IDENTITY)
+            }
+            TransformMap::Mesh(_) => false,
+        }
+    }
+    /// Finite and invertible geometry that the renderer can resample. A
+    /// perspective map resamples only the source it covers.
+    pub fn validate(&self) -> Result<(), DocumentError> {
+        let valid = match &self.map {
+            TransformMap::Affine(affine) => affine.inverse().is_some(),
+            TransformMap::Projective(projective) => projective.inverse().is_some(),
+            TransformMap::Mesh(_) => {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Unsupported transform",
+                ));
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(DocumentError::InvalidLayerOperation("Invalid transform"))
         }
     }
     /// The same motion expressed in another layer-local space, where `to` maps
@@ -64,16 +85,28 @@ impl ImageTransform {
         let from = to.inverse()?;
         let map = match &self.map {
             TransformMap::Affine(affine) => TransformMap::Affine(from.then(*affine).then(to)),
-            _ => return None,
+            TransformMap::Projective(projective) => {
+                TransformMap::Projective(projective.conjugate(to)?)
+            }
+            TransformMap::Mesh(_) => return None,
         };
-        Some(Self { map, interpolation: self.interpolation })
+        Some(Self {
+            map,
+            interpolation: self.interpolation,
+        })
     }
-    /// Bounds of the mapped source, without interpolation support.
+    /// Bounds of the mapped source, without interpolation support. Unbounded
+    /// when part of the source has no image.
     pub fn forward_bounds(&self, source: Rect) -> Rect {
+        if source.is_empty() {
+            return Rect::EMPTY;
+        }
         match &self.map {
             TransformMap::Affine(affine) => affine.bounds(source),
-            _ if source.is_empty() => Rect::EMPTY,
-            _ => Rect::UNBOUNDED,
+            TransformMap::Projective(projective) => {
+                projective.bounds(source).unwrap_or(Rect::UNBOUNDED)
+            }
+            TransformMap::Mesh(_) => Rect::UNBOUNDED,
         }
     }
     /// Conservative cut + placement footprint. Expand in source space before
@@ -247,19 +280,84 @@ mod tests {
     }
     #[test]
     fn image_transforms_validate_and_conjugate_their_geometry() {
-        let affine = Affine::around(Point { x: 20., y: 10. }, [1.5, -0.5], 0.4, Point { x: 3., y: -7. });
+        let affine = Affine::around(
+            Point { x: 20., y: 10. },
+            [1.5, -0.5],
+            0.4,
+            Point { x: 3., y: -7. },
+        );
         let transform = ImageTransform::affine(affine);
         assert_eq!(transform.as_affine(), Some(affine));
         assert!(transform.validate().is_ok() && !transform.is_identity());
         assert!(ImageTransform::default().is_identity());
         assert!(ImageTransform::affine(Affine([0.; 6])).validate().is_err());
-        let to = Affine::translation(Point { x: 40., y: -12. }).then(Affine([0., 2., -2., 0., 0., 0.]));
+        let to =
+            Affine::translation(Point { x: 40., y: -12. }).then(Affine([0., 2., -2., 0., 0., 0.]));
         let moved = transform.conjugate(to).unwrap();
         assert_eq!(moved.interpolation, transform.interpolation);
         for p in [Point::default(), Point { x: 31., y: -4. }] {
-            near(moved.as_affine().unwrap().map(to.map(p)), to.map(affine.map(p)));
+            near(
+                moved.as_affine().unwrap().map(to.map(p)),
+                to.map(affine.map(p)),
+            );
         }
         assert!(transform.conjugate(Affine([0.; 6])).is_none());
+    }
+    #[test]
+    fn perspective_transforms_bound_their_padded_source() {
+        let source = Rect {
+            min: Point { x: 10., y: 10. },
+            max: Point { x: 110., y: 60. },
+        };
+        let quad = [
+            Point { x: 40., y: 0. },
+            Point { x: 90., y: 20. },
+            Point { x: 130., y: 90. },
+            Point { x: 0., y: 70. },
+        ];
+        let projective = Projective::rect_to_quad(source, quad).unwrap();
+        let mut transform = ImageTransform {
+            map: TransformMap::Projective(projective),
+            interpolation: Interpolation::Nearest,
+        };
+        assert!(transform.validate().is_ok() && !transform.is_identity());
+        let [cut, moved] = transform.affected_regions(source);
+        assert_eq!(cut, source);
+        near(moved.min, Point { x: 0., y: 0. });
+        near(moved.max, Point { x: 130., y: 90. });
+        transform.interpolation = Interpolation::Linear;
+        let padded = transform.affected_regions(source)[1];
+        assert!(padded.min.x < moved.min.x && padded.max.y > moved.max.y);
+        let far = Rect {
+            min: source.min,
+            max: Point { x: 110., y: 1e5 },
+        };
+        assert_eq!(transform.forward_bounds(far), Rect::UNBOUNDED);
+        let to = Affine::around(Point::default(), [2., -1.], 0.3, Point { x: 5., y: 9. });
+        let conjugate = transform.conjugate(to).unwrap();
+        let TransformMap::Projective(moved_map) = conjugate.map else {
+            panic!("projective")
+        };
+        let p = Point { x: 50., y: 30. };
+        let [a, b] = [
+            moved_map.map(to.map(p)).unwrap(),
+            to.map(projective.map(p).unwrap()),
+        ];
+        assert!((a.x - b.x).abs() < 1e-2 && (a.y - b.y).abs() < 1e-2);
+        let identity = ImageTransform {
+            map: TransformMap::Projective(Projective::IDENTITY),
+            ..Default::default()
+        };
+        assert!(identity.is_identity());
+        let singular = TransformMap::Projective(Projective([1., 0., 0., 1., 0., 0., 0., 0., 0.]));
+        assert!(
+            ImageTransform {
+                map: singular,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn affine_composition_pivots_bounds_and_inverse_agree() {

@@ -445,7 +445,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .is_none_or(|l| l.id == p.layer && l.kind != layer_core::LayerKind::Paint)
                 || p.transform.validate().is_err()
                 || p.selection.as_ref().is_some_and(|s| {
-                    s.affine.inverse().is_none() || s.mapped(&p.transform.map).is_err()
+                    s.affine.inverse().is_none()
+                        || p.transform.as_affine().is_some_and(|a| s.transformed(a).is_err())
                 })
             {
                 return Err(DocumentError::InvalidLayerOperation(
@@ -480,6 +481,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if preview.transform.is_identity() {
             self.transform_preview = None;
             return Ok(false);
+        }
+        if self.selection_display.is_none()
+            && let Some(Err(error)) = preview.selection.as_ref().map(|s| s.mapped(&preview.transform.map))
+        {
+            return Err(error);
         }
         let selection = self.display_selection().map(|s| s.into_owned());
         let companion = preview.companion(&self.document().layers);
@@ -2832,11 +2838,11 @@ mod tests {
                     })
                 }),
                 transform: ImageTransform::affine(Affine::around(
-                        Point { x: 30., y: 30. },
-                        [1.2, 0.7],
-                        0.2,
-                        Point { x: 5., y: 8. },
-                    )),
+                    Point { x: 30., y: 30. },
+                    [1.2, 0.7],
+                    0.2,
+                    Point { x: 5., y: 8. },
+                )),
             };
             let companion = preview.companion(&doc.layers).unwrap();
             let mut engine = CanvasEngine::new(
@@ -2910,11 +2916,11 @@ mod tests {
             layer,
             selection: Some(selection.translated(Point { x: -12., y: -7. })),
             transform: ImageTransform::affine(Affine::around(
-                    Point { x: 28., y: 33. },
-                    [1.5, 0.7],
-                    0.5,
-                    Point { x: 3., y: -2. },
-                )),
+                Point { x: 28., y: 33. },
+                [1.5, 0.7],
+                0.5,
+                Point { x: 3., y: -2. },
+            )),
         };
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         let placed = engine.display_selection().unwrap().into_owned();
@@ -2966,6 +2972,69 @@ mod tests {
             !engine.commit_transform().unwrap(),
             "identity must not add history"
         );
+    }
+
+    #[test]
+    fn perspective_transform_carries_contours_and_waits_for_pixel_coverage() {
+        use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, TransformMap};
+        let (_, consumer) = input_queue(32);
+        let mut doc = Document::new("perspective transform", 128, 128);
+        let layer = doc.active_layer;
+        let selection = Selection::polygon(vec![
+            Point { x: 20., y: 20. },
+            Point { x: 60., y: 20. },
+            Point { x: 20., y: 60. },
+        ])
+        .unwrap();
+        doc.selection = Some(selection.clone());
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            doc,
+            consumer,
+            view(128, 128),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        let source = layer_core::Rect {
+            min: Point { x: 20., y: 20. },
+            max: Point { x: 60., y: 60. },
+        };
+        let quad = [
+            Point { x: 30., y: 10. },
+            Point { x: 50., y: 10. },
+            Point { x: 80., y: 70. },
+            Point { x: 0., y: 70. },
+        ];
+        let map = TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap());
+        let preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer,
+            selection: Some(selection.clone()),
+            transform: ImageTransform { map: map.clone(), ..Default::default() },
+        };
+        engine.set_transform_preview(Some(preview.clone())).unwrap();
+        let expected = selection.mapped(&map).unwrap();
+        assert_eq!(engine.display_selection().as_deref(), Some(&expected));
+        assert!(engine.commit_transform().unwrap());
+        assert_eq!(engine.document().selection.as_ref(), Some(&expected));
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        let pixels = Selection::pixels(std::sync::Arc::new(
+            SelectionPixels::new([128, 128], [0, 0, 8, 8], vec![0; 16 * 128]).unwrap(),
+        ));
+        engine
+            .set_transform_preview(Some(layer_render::TransformPreview {
+                selection: Some(pixels),
+                ..preview
+            }))
+            .unwrap();
+        assert!(engine.display_selection().is_none(), "no outline until coverage is resampled");
+        assert_eq!(
+            engine.commit_transform(),
+            Err(DocumentError::InvalidLayerOperation(Selection::RESAMPLE_PIXELS))
+        );
+        assert!(engine.transform_preview().is_some());
+        assert!(engine.can_redo(), "the refused commit leaves history untouched");
     }
 
     #[test]

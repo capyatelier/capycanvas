@@ -1109,14 +1109,14 @@ fn measure_transform_latency(live: bool) {
                     layer: layer.id,
                     selection: selected.clone(),
                     transform: ImageTransform::affine(Affine::around(
-                            Point { x: 1024., y: 768. },
-                            [1. + t.sin() * 0.02; 2],
-                            t.cos() * 0.01,
-                            Point {
-                                x: t.sin() * 5.,
-                                y: t.cos() * 3.,
-                            },
-                        )),
+                        Point { x: 1024., y: 768. },
+                        [1. + t.sin() * 0.02; 2],
+                        t.cos() * 0.01,
+                        Point {
+                            x: t.sin() * 5.,
+                            y: t.cos() * 3.,
+                        },
+                    )),
                 }))
                 .unwrap();
             }
