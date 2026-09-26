@@ -2815,3 +2815,25 @@ switcher, Navigator, expansion, drawers, tab drag, HDR and the Photo header
 back to passing. New fixtures cover tooltips and stroke recording. The touch
 tab-pickup case still fails identically on the 980d4aa6 baseline: the
 workspace loses capture while the torn-off tab is reparented.
+
+### Windows follow-up through 32f53ce (2026-09-25)
+
+Files and recovery:
+- A launch with files hands them to the running instance for the same
+  preferences profile, which opens them in order in its frontmost window.
+  Launches without files and other profiles keep their own process.
+- Several unfinished drawings are offered in turn in the active drawing;
+  copies left for later are not offered again until the next launch.
+
+Interface:
+- The custom base and accent color entry stays open until its value
+  changes, as on Web, instead of disappearing on the next model refresh.
+- Curves drop the highlight of a point dragged off the graph, show the
+  shared gesture hint and use the shared reset icon.
+- Zen no longer reads the retired floating-panel flag.
+
+Fixtures now cover barrel presses on the canvas, the single Smooth Motion
+prediction row with retired saved choices, forwarded file launches, and
+recovery of two unfinished drawings. The multiwindow, settings-storage and
+layers fixtures are current again. The touch tab-pickup case and the layer
+pickup fixture remain open; the port inventory records what was ruled out.
