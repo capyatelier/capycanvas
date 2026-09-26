@@ -39,10 +39,13 @@ public:
     HWND Handle()const;
     void Open();
     void OpenFiles(std::vector<std::wstring> paths);
+    void Present();
+    bool Closing()const{return closing||closed;}
     ~CanvasWindow();
 private:
     CanvasLatencyTrace latencyTrace{GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0};
     std::vector<std::wstring> launchFiles;
+    void SendLaunchFiles(winrt::Windows::Data::Json::JsonObject const& model);
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
     uint64_t const windowId;

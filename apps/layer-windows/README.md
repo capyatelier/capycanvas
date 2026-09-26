@@ -445,6 +445,14 @@ placement controls. Canvas drops use the captured screen position; layer-list
 drops use the shared destination hint. File filters for placement come from the
 shared codecs, independently of installed Windows codecs.
 
+Files named on the command line, including the MSIX `.capy` association, open as
+drawings once the canvas is ready. A later launch with files for the same
+preferences profile resolves their full paths, hands them to the running
+instance and exits; that instance opens them, in order, in its frontmost window,
+or in a new window when none is visible. A launch without files still starts its
+own process. `exercise-file-activation.ps1 -Executable <path>` checks ordering,
+relative paths and profile isolation.
+
 Private artwork recovery uses shared recovery ordering, worker-side atomic writes,
 and Windows file locks. A previous unfinished drawing can be restored, left for
 later or explicitly discarded. Several unfinished drawings are offered in turn,

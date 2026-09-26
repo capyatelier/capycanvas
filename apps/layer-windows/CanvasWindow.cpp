@@ -1218,7 +1218,21 @@ void CanvasWindow::Fullscreen() {
         AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
     Resize();
 }
-void CanvasWindow::OpenFiles(std::vector<std::wstring> paths) {launchFiles=std::move(paths);}
+void CanvasWindow::OpenFiles(std::vector<std::wstring> paths) {
+    launchFiles.insert(launchFiles.end(),std::make_move_iterator(paths.begin()),std::make_move_iterator(paths.end()));
+    if(lastModel.Size())SendLaunchFiles(lastModel);
+}
+void CanvasWindow::Present() {
+    if(Closing())return;
+    if(IsIconic(Handle()))ShowWindow(Handle(),SW_RESTORE);
+    window.Activate();
+}
+void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model) {
+    using namespace CapyUi;
+    if(launchFiles.empty()||!flag(model,L"canvas_ready"))return;
+    A paths;for(auto const& path:launchFiles)paths.Append(S(hstring(path)));launchFiles.clear();
+    Send(to_string(O({{L"operation",S(L"open_paths")},{L"paths",paths}}).Stringify()),CanvasCommandKind::Document);
+}
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"refresh_switcher"})",CanvasCommandKind::Workspace);
 }
@@ -1238,10 +1252,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     status.TextAlignment(suspended?TextAlignment::Center:TextAlignment::Left);
     status.TextWrapping(suspended?TextWrapping::Wrap:TextWrapping::NoWrap);
     status.Margin(suspended?Thickness{24,24,24,24}:Thickness{0,0,0,40});
-    if(!launchFiles.empty()&&flag(model,L"canvas_ready")){
-        A paths;for(auto const& path:launchFiles)paths.Append(S(hstring(path)));launchFiles.clear();
-        Send(to_string(O({{L"operation",S(L"open_paths")},{L"paths",paths}}).Stringify()),CanvasCommandKind::Document);
-    }
+    SendLaunchFiles(model);
     auto storage=object(model,L"windows_workspace");
     if(flag(storage,L"ready")){
         auto next=uint64_t(num(storage,L"switcher_revision"));
