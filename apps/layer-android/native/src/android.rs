@@ -282,24 +282,12 @@ impl App {
                 .gpu_generation
                 .checked_add(1)
                 .ok_or("GPU generation exhausted")?;
-            self.gpu_failure = Default::default();
-            let lost = self.gpu_failure.clone();
-            device.set_device_lost_callback(move |reason, message| {
-                lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
-            });
-            let errors = self.gpu_failure.clone();
-            device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
-                errors.get_or_init(|| error.to_string());
-            }));
-            let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
-                adapter,
-                device,
-                queue,
-                std::path::Path::new(cache_directory),
+            self.gpu_watch = layer_host::DeviceWatch::observe(&device);
+            let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
                 self.host.session.engine().document().color,
-            )
-            .map_err(error)?;
-            renderer.enable_demand_shaders();
+                &self.host.renderer_options(Some(cache_directory.into())),
+                false,
+            )?;
             let previous = self.host.session.state().revision;
             let (_, change) = self
                 .host
@@ -387,7 +375,7 @@ impl App {
             // Device loss callbacks may be pending when a queued thumbnail asks
             // for resources. Deliver them before either preview or frame work.
             if let Err(error) = gpu.device().poll(wgpu::PollType::Poll) {
-                self.gpu_failure.get_or_init(|| error.to_string());
+                self.gpu_watch.report_error(error.to_string());
             }
         }
         if let Err(error) = self.check_gpu() {
@@ -401,9 +389,7 @@ impl App {
         }
     }
     fn check_gpu(&self) -> Result<(), String> {
-        self.gpu_failure
-            .get()
-            .map_or(Ok(()), |error| Err(error.clone()))
+        self.gpu_watch.failure().map_or(Ok(()), Err)
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
         // A lost device may already have been retired by observe_gpu_failure.
@@ -1313,27 +1299,6 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
             std::ptr::null_mut()
         }
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_strokeRecording(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    action: jint,
-) -> jstring {
-    let mut recorder = unsafe { app(handle) }.host.session.stroke_recording();
-    let result = (|| {
-        match action {
-            1 => recorder.start("android").map_err(error)?,
-            2 => recorder.stop(layer_engine::recording::StopReason::Manual),
-            3 => recorder.saved(),
-            0 => (),
-            _ => return Err("Unknown recording action".to_owned()),
-        }
-        serde_json::to_string(&recorder.status()).map_err(error)
-    })();
-    string(&mut env, result)
 }
 
 #[unsafe(no_mangle)]

@@ -1,15 +1,16 @@
 //! Real removal at native file completion and shared validation publication boundaries.
 use super::*;
 use crate::{
-    device::DeviceState,
+    device::D3d12Watch,
     gpu_recovery_tests::{remove_device, renderer},
 };
+use layer_host::DeviceWatch;
 use layer_ui::{CommandId, EffectAction, Platform, UiAction, UiSession};
 
 struct Fixture {
     native: NativeHost,
     service: FilterService,
-    device: Arc<DeviceState>,
+    device: DeviceWatch,
     directory: Directory,
 }
 impl Fixture {

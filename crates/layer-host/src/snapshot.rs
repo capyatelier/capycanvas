@@ -204,21 +204,16 @@ impl NativeHost {
             .expect("Native snapshot contains JSON-compatible fields")
     }
 
-    fn maps_sdr(&self) -> bool {
-        matches!(self.session.state().platform, layer_ui::Platform::Android | layer_ui::Platform::Windows)
-    }
     fn color_view(&self, colors: &layer_ui::ColorState) -> layer_ui::ColorPanelView {
-        if self.maps_sdr() {
-            colors.view_mapped(self.session.effective_sdr_rendition())
-        } else {
-            colors.view_in(self.ui_color_space)
+        match self.ui_color {
+            crate::UiColor::Mapped => colors.view_mapped(self.session.effective_sdr_rendition()),
+            crate::UiColor::Tagged(space) => colors.view_in(space),
         }
     }
     fn swatch_preview(&self, colors: &layer_ui::ColorState, color: layer_core::color::RgbColor) -> [f32; 4] {
-        if self.maps_sdr() {
-            colors.mapped_swatch(color, self.session.effective_sdr_rendition())
-        } else {
-            colors.preview_in(color, self.ui_color_space)
+        match self.ui_color {
+            crate::UiColor::Mapped => colors.mapped_swatch(color, self.session.effective_sdr_rendition()),
+            crate::UiColor::Tagged(space) => colors.preview_in(color, space),
         }
     }
     fn color_preview(&self) -> layer_ui::PickerPreview<'_> {
@@ -389,7 +384,9 @@ mod tests {
     fn picker_previews_use_the_color_panel_projection() {
         for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             let mut host = host(platform);
-            host.ui_color_space = layer_core::color::RgbSpace::DisplayP3;
+            if matches!(platform, Platform::Mac | Platform::Ios) {
+                host.ui_color = crate::UiColor::Tagged(layer_core::color::RgbSpace::DisplayP3);
+            }
             let snapshot = host.take_snapshot().unwrap();
             assert_eq!(snapshot.get("color_preview").is_some(), platform.color_picker(), "{platform:?}");
             if platform.color_picker() {

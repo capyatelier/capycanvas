@@ -200,7 +200,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
             .session
             .validate_image_placement(&b.context.placement)?;
         if a.gpu_generation != b.context.generation
-            || a.gpu_failure.get().is_some()
+            || a.gpu_watch.failure().is_some()
             || a.host.session.engine().backend().0.is_none()
         {
             return Err("The canvas changed while importing; try again".into());

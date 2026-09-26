@@ -9,34 +9,19 @@ use jni::{
     objects::{JClass, JString},
     sys::{jlong, jstring},
 };
-use layer_host::Renderer;
+use layer_host::{GpuContext, Renderer, RendererOptions};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentSessions, UiSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(crate) type Sessions = DocumentSessions<UiSession<Renderer>>;
-#[derive(Clone)]
-pub(crate) struct DocumentGpu {
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-impl DocumentGpu {
-    pub fn from_renderer(gpu: &WgpuRasterizer) -> Self {
-        Self {
-            adapter: gpu.adapter().clone(),
-            device: gpu.device().clone(),
-            queue: gpu.queue().clone(),
-        }
-    }
-}
 struct Activation {
     selected: u64,
     generation: u64,
-    context: Option<DocumentGpu>,
+    context: Option<GpuContext>,
     color: layer_core::color::DocumentColor,
-    cache: String,
+    options: RendererOptions,
     retired: Option<Box<WgpuRasterizer>>,
     renderer: Option<Box<WgpuRasterizer>>,
 }
@@ -73,7 +58,7 @@ impl App {
         self.cursor = Default::default();
         let renderer = self.host.session.renderer_mut().0.take();
         if let Some(gpu) = &renderer {
-            self.document_gpu = Some(DocumentGpu::from_renderer(gpu));
+            self.document_gpu = Some(GpuContext::of(gpu));
         }
         renderer
     }
@@ -257,7 +242,9 @@ pub extern "system" fn Java_art_capycanvas_Native_documentSwitch(
                 a.document_gpu.clone()
             },
             color: a.host.session.engine().document().color,
-            cache: a.cache_directory.clone(),
+            options: a
+                .host
+                .renderer_options(Some(a.cache_directory.clone().into())),
             retired,
             renderer: None,
         })) as jlong)
@@ -286,17 +273,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeWork(
             .context
             .as_ref()
             .ok_or("The window GPU is unavailable; restart the canvas")?;
-        let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
-            context.adapter.clone(),
-            context.device.clone(),
-            context.queue.clone(),
-            std::path::Path::new(&job.cache),
-            job.color,
-        )
-        .map_err(error)?;
-        gpu.enable_demand_shaders();
-        gpu.finish_startup_cache();
-        job.renderer = Some(gpu.into());
+        job.renderer = Some(context.rasterizer(job.color, &job.options, true)?.into());
         Ok(())
     })();
     fail(&mut env, result)

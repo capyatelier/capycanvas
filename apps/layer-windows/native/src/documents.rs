@@ -66,9 +66,7 @@ pub(crate) enum DocumentAction {
 }
 pub(crate) struct Environment {
     admission: layer_ui::DocumentAdmission,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: layer_host::GpuContext,
     viewport: [u32; 2],
     photo_policy: layer_ui::PhotoOpenPolicy,
 }
@@ -82,9 +80,7 @@ impl Environment {
             .ok_or("Wait for the canvas to finish starting")?;
         Ok(Self {
             admission: layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles()),
-            adapter: gpu.adapter().clone(),
-            device: gpu.device().clone(),
-            queue: gpu.queue().clone(),
+            gpu: layer_host::GpuContext::of(gpu),
             viewport: session.state().camera.viewport,
             photo_policy: session.state().settings.photo_open,
         })
@@ -98,7 +94,7 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
-    Activate { gpu: tabs::Gpu, color: layer_core::color::DocumentColor },
+    Activate { gpu: layer_host::GpuContext, options: layer_host::RendererOptions, color: layer_core::color::DocumentColor },
     Spill { tiles: layer_core::raster_storage::RetainedTiles, directory: PathBuf },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
@@ -250,7 +246,7 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
-        Job::Activate { gpu, color } => gpu.activate(color).map(|g| Completed::Activated(Box::new(g))),
+        Job::Activate { gpu, options, color } => gpu.rasterizer(color, &options, true).map(|g| Completed::Activated(Box::new(g))),
         Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
@@ -273,6 +269,7 @@ fn prepare(
 ) -> Result<Completed, String> {
     let limits = ProjectLimits {
         dimension: environment
+            .gpu
             .device
             .limits()
             .max_texture_dimension_2d
@@ -300,11 +297,7 @@ fn prepare(
     environment.admission.admit(&project)?;
     check_cancelled(cancel)?;
     // Eager preparation is isolated from the independently presented live canvas.
-    let mut gpu = WgpuRasterizer::from_wgpu_native_staged(environment.adapter,
-        environment.device, environment.queue, project.document.color).map_err(|e| e.to_string())?;
-    gpu.enable_demand_shaders();
-    gpu.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(|e| e.to_string())?;
-    gpu.finish_startup_cache();
+    let mut gpu = environment.gpu.rasterizer(project.document.color, &Default::default(), true)?;
     let mut programs = Vec::new();
     for effect in project
         .document
@@ -362,7 +355,7 @@ pub(crate) struct DocumentService {
     tabs: layer_ui::DocumentSessions<tabs::Parked>,
     pub recovery: Option<crate::recovery::Service>,
     wake: Arc<dyn Fn() + Send + Sync>,
-    tab_gpu: Option<tabs::Gpu>,
+    tab_gpu: Option<layer_host::GpuContext>,
     activating: Option<(u64, u64)>,
     spilling: bool,
     deferred_action: Option<DocumentAction>,

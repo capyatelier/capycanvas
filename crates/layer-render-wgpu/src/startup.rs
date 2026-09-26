@@ -218,8 +218,7 @@ impl Startup {
     }
 }
 impl WgpuRasterizer {
-    /// Opt in before submitting paper. Apple retains its legacy warmup until
-    /// its host supports continuing first-use readiness as well.
+    /// Opt in before submitting paper.
     pub fn enable_demand_shaders(&mut self) {
         self.device.demand_shaders = true;
         if let Some(startup) = &mut self.startup {

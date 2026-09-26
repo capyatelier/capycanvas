@@ -1,7 +1,7 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
     pub documents: crate::document_tabs::Sessions,
-    pub document_gpu: Option<crate::document_tabs::DocumentGpu>,
+    pub document_gpu: Option<layer_host::GpuContext>,
     pub tone: crate::hdr::ToneState,
     pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
@@ -18,7 +18,7 @@ pub(crate) struct App {
     pub glass: Vec<layer_render_wgpu::BackdropRegion>,
     pub instance: Option<wgpu::Instance>,
     pub gpu_generation: u64,
-    pub gpu_failure: std::sync::Arc<std::sync::OnceLock<String>>,
+    pub gpu_watch: layer_host::DeviceWatch,
 }
 impl App {
     pub fn new() -> Result<Self, String> {
@@ -46,7 +46,7 @@ impl App {
             display_hdr_available: false,
             instance: None,
             gpu_generation: 0,
-            gpu_failure: Default::default(),
+            gpu_watch: Default::default(),
             cache_directory: String::new(),
             overviews: Vec::new(),
             glass: Vec::new(),

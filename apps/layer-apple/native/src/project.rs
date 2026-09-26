@@ -37,9 +37,8 @@ pub use proof::*;
 
 struct Environment {
     admission: layer_ui::DocumentAdmission,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: layer_host::GpuContext,
+    options: layer_host::RendererOptions,
     viewport: [u32; 2],
     brush: layer_core::BrushSnapshot,
     new_options: layer_ui::NewDocumentOptions,
@@ -158,6 +157,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
     app.perform(|app| {
         if opening != 3 && !placement.is_null() { return Err("Only image placement accepts a drop target".into()); }
         let admission = app.documents.admission(&app.host.session.retained_document_tiles());
+        let options = app.host.renderer_options(app.metal.cache.clone());
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
@@ -233,9 +233,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Open {
                 environment: Some(Environment {
                     admission,
-                    adapter: gpu.adapter().clone(),
-                    device: gpu.device().clone(),
-                    queue: gpu.queue().clone(),
+                    gpu: layer_host::GpuContext::of(gpu),
+                    options,
                     viewport: session.state().camera.viewport,
                     brush: session.engine().configured_brush().clone(),
                     new_options: session.state().settings.new_document.defaults,
@@ -503,7 +502,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         };
         let context = environment.as_ref().ok_or("This open task has already run")?;
         let limits = ProjectLimits {
-            dimension: context.device.limits().max_texture_dimension_2d.min(ProjectLimits::default().dimension),
+            dimension: context.gpu.device.limits().max_texture_dimension_2d.min(ProjectLimits::default().dimension),
             ..Default::default()
         };
         match input {
@@ -528,11 +527,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         *source = ready.source;
         let project = imported.take().unwrap().project;
         let environment = environment.take().unwrap();
-        let mut gpu = WgpuRasterizer::from_wgpu_native_staged(
-            environment.adapter, environment.device, environment.queue, project.document.color,
-        ).map_err(|e| e.to_string())?;
-        gpu.configure_ui_previews(crate::DISPLAY_SPACE).map_err(|e| e.to_string())?;
-        gpu.finish_startup_cache();
+        let mut gpu = environment.gpu.rasterizer(project.document.color, &environment.options, true)?;
         let mut programs = Vec::new();
         for effect in project
             .document

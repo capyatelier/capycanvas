@@ -16,8 +16,8 @@ internal class StrokeRecording(private val host: CanvasHost) {
     var busy by mutableStateOf(false)
     var saveRequested by mutableStateOf(false)
 
-    suspend fun update(action: Int = 0) {
-        val next = host.withNative { JSONObject(Native.strokeRecording(it, action)) }
+    suspend fun update(action: String? = null) {
+        val next = host.withNative { JSONObject(Native.query(it, obj("type" to "stroke_recording", "action" to action).toString())) }
         if (status?.optBoolean("recording") == true && next.optBoolean("ready")) saveRequested = true
         status = next
     }
@@ -27,9 +27,9 @@ internal class StrokeRecording(private val host: CanvasHost) {
         host.viewModelScope.launch {
             try {
                 when {
-                    status?.optBoolean("recording") == true -> update(2)
+                    status?.optBoolean("recording") == true -> update("stop")
                     status?.optBoolean("ready") == true -> saveRequested = true
-                    else -> update(1)
+                    else -> update("start")
                 }
             } catch (e: Exception) { host.reportActionError(e.message ?: "Could not record strokes") }
             finally { busy = false }
@@ -54,7 +54,7 @@ internal class StrokeRecording(private val host: CanvasHost) {
                         GZIPOutputStream(output).use { it.write(raw) }
                     }
                 }
-                recording.update(3)
+                recording.update("saved")
             } catch (e: Exception) { host.reportActionError(e.message ?: "Could not save stroke recording") }
             finally { recording.busy = false }
         }

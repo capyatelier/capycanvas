@@ -1,7 +1,8 @@
 //! Actual process-owned device removal at document worker/adoption boundaries.
 use super::gpu_tests::{image, invoke, request};
 use super::*;
-use crate::device::DeviceState;
+use crate::device::D3d12Watch;
+use layer_host::DeviceWatch;
 use crate::gpu_recovery_tests::{remove_device, renderer};
 use layer_ui::{CommandId, Platform};
 use std::sync::{atomic::AtomicU64, mpsc};
@@ -11,7 +12,7 @@ struct Fixture {
     host: NativeHost,
     service: DocumentService,
     done: mpsc::Receiver<()>,
-    device: Arc<DeviceState>,
+    device: DeviceWatch,
     directory: PathBuf,
 }
 impl Fixture {

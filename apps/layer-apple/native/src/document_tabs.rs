@@ -1,32 +1,18 @@
 //! One window's drawing collection. Swift owns native contacts and serial/worker
 //! scheduling; Rust owns membership, parking, admission and activation validity.
 use super::*;
-use layer_host::Renderer;
+use layer_host::{GpuContext, Renderer, RendererOptions};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentSessions, UiSession};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 
 pub(crate) type Sessions = DocumentSessions<Box<UiSession<Renderer>>>;
-#[derive(Clone)]
-pub(crate) struct Context {
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-impl Context {
-    fn from(gpu: &WgpuRasterizer) -> Self {
-        Self {
-            adapter: gpu.adapter().clone(),
-            device: gpu.device().clone(),
-            queue: gpu.queue().clone(),
-        }
-    }
-}
 struct Activation {
     selected: u64,
     epoch: u64,
-    context: Option<Context>,
+    context: Option<GpuContext>,
+    options: RendererOptions,
     color: layer_core::color::DocumentColor,
     retired: Option<Box<WgpuRasterizer>>,
     renderer: Option<Box<WgpuRasterizer>>,
@@ -54,7 +40,7 @@ impl CapyApple {
         self.dismissed_contacts.clear();
         let renderer = self.host.session.renderer_mut().0.take();
         if let Some(gpu) = &renderer {
-            self.document_gpu = Some(Context::from(gpu.as_ref()));
+            self.document_gpu = Some(GpuContext::of(gpu));
         }
         renderer
     }
@@ -236,6 +222,7 @@ impl CapyApple {
             selected: self.documents.selected(),
             epoch: self.host.session.state().document_file.epoch,
             context: self.document_gpu.clone(),
+            options: self.host.renderer_options(self.metal.cache.clone()),
             color: self.host.session.engine().document().color,
             retired,
             renderer: None,
@@ -362,15 +349,7 @@ pub unsafe extern "C" fn capy_document_prepare(
             .context
             .as_ref()
             .ok_or("The window GPU is unavailable; restart the canvas")?;
-        let mut gpu = WgpuRasterizer::from_wgpu_native_staged(
-            context.adapter.clone(),
-            context.device.clone(),
-            context.queue.clone(),
-            job.color,
-        )
-        .map_err(|e| e.to_string())?;
-        gpu.finish_startup_cache();
-        job.renderer = Some(gpu.into());
+        job.renderer = Some(context.rasterizer(job.color, &job.options, true)?.into());
         Ok(())
     }))
     .unwrap_or_else(|_| Err("Drawing activation failed".into()));

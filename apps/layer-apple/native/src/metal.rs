@@ -6,7 +6,7 @@ use layer_render_wgpu::{
     GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
 };
 use layer_ui::CanvasCursor;
-use std::{ffi::c_void, sync::{Arc, OnceLock}, time::Instant};
+use std::{ffi::c_void, time::Instant};
 
 /// Native layout in logical editor coordinates. Pixel scale and camera state
 /// are resolved on the render owner, including after display/surface changes.
@@ -45,7 +45,8 @@ pub struct MetalHost {
     timing: Option<GpuFrameTimer>,
     overviews: Vec<OverviewSlot>,
     glass: GlassLayout,
-    failure: Arc<OnceLock<String>>,
+    watch: layer_host::DeviceWatch,
+    pub(crate) cache: Option<std::path::PathBuf>,
 }
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -90,22 +91,13 @@ impl MetalHost {
 
     /// Each device records failures separately; a retired callback cannot stop
     /// its replacement. All session changes still happen on the serial owner.
-    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, mut renderer: Box<WgpuRasterizer>) -> Result<(), String> {
-        renderer.configure_ui_previews(crate::DISPLAY_SPACE).map_err(error)?;
-        let failure = Arc::new(OnceLock::new());
-        let lost = failure.clone();
-        renderer.device().set_device_lost_callback(move |reason, message| {
-            lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
-        });
-        let errors = failure.clone();
-        renderer.device().on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
-            errors.get_or_init(|| error.to_string());
-        }));
+    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, renderer: Box<WgpuRasterizer>) -> Result<(), String> {
+        let watch = layer_host::DeviceWatch::observe(renderer.device());
         let previous = host.session.state().revision;
         let (retired, change) = host.session.replace_renderer(layer_host::Renderer(Some(renderer)))?;
         host.apply_change(previous, change);
         self.local_tone.clear();
-        self.failure = failure;
+        self.watch = watch;
         self.timing = None;
         self.blank_presented = false;
         self.cursor = Default::default();
@@ -121,10 +113,10 @@ impl MetalHost {
         if poll && let Some(gpu) = &host.session.engine().backend().0
             && let Err(error) = gpu.device().poll(wgpu::PollType::Poll)
         {
-            self.failure.get_or_init(|| error.to_string());
+            self.watch.report_error(error.to_string());
         }
         if host.session.engine().backend().0.is_some()
-            && let Some(message) = self.failure.get().cloned()
+            && let Some(message) = self.watch.failure()
         {
             self.stop(host, message);
         }
@@ -246,6 +238,7 @@ impl MetalHost {
         cache: &std::path::Path,
     ) -> Result<(), String> {
         self.detach();
+        self.cache = Some(cache.to_path_buf());
         // Keep the device when replacing a layer: document textures remain live.
         let instance = self.instance.get_or_insert_with(|| {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -277,11 +270,9 @@ impl MetalHost {
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            self.install_renderer(host,
-                WgpuRasterizer::from_wgpu_native_staged_cached(adapter, device, queue, cache,
-                    host.session.engine().document().color)
-                    .map_err(error)?.into(),
-            )?;
+            let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
+                host.session.engine().document().color, &host.renderer_options(self.cache.clone()), false)?;
+            self.install_renderer(host, renderer.into())?;
         }
         let [width, height] = host.session.state().camera.viewport;
         let gpu = host.session.renderer_mut().0.as_ref().unwrap();

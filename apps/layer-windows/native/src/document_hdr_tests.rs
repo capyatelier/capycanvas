@@ -1,7 +1,8 @@
 // Included in document_workflows::tests to use the same native transaction fixture.
+use crate::device::D3d12Watch;
 fn hdr_renderer(
     color: layer_core::color::DocumentColor,
-) -> (Renderer, std::sync::Arc<crate::device::DeviceState>) {
+) -> (Renderer, layer_host::DeviceWatch) {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::DX12;
     descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
@@ -34,7 +35,7 @@ fn hdr_renderer(
             ..Default::default()
         }))
         .unwrap();
-        let state = crate::device::DeviceState::observe(&device);
+        let state = layer_host::DeviceWatch::observe(&device);
         let mut gpu =
             WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color).unwrap();
         gpu.finish_startup_cache();

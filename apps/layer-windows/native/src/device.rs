@@ -1,9 +1,5 @@
-//! GPU callbacks only record state. Returning normally lets wgpu release failed
-//! resource handles; panicking during creation can strand a removed D3D12 device.
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+//! D3D12 device-removal probe over the shared device watch.
+use layer_host::DeviceWatch;
 
 pub(crate) fn removed(device: &wgpu::Device) -> bool {
     unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.is_some_and(|native| {
@@ -11,47 +7,20 @@ pub(crate) fn removed(device: &wgpu::Device) -> bool {
     })
 }
 
-#[derive(Default)]
-pub(crate) struct DeviceState {
-    lost: AtomicBool,
-    error: Mutex<Option<String>>,
+pub(crate) trait D3d12Watch {
+    fn is_lost(&self, device: Option<&wgpu::Device>) -> bool;
+    fn check(&self) -> Result<(), String>;
 }
-impl DeviceState {
-    pub fn observe(device: &wgpu::Device) -> Arc<Self> {
-        let state = Arc::new(Self::default());
-        let lost = state.clone();
-        device.set_device_lost_callback(move |reason, _| {
-            if reason == wgpu::DeviceLostReason::Unknown {
-                lost.lost.store(true, Ordering::Release);
-            }
-        });
-        let errors = state.clone();
-        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
-            // Do not capture the device: its error handler would own itself.
-            let mut slot = errors.error.lock().unwrap_or_else(|e| e.into_inner());
-            slot.get_or_insert_with(|| error.to_string());
-        }));
-        state
-    }
-
-    pub fn is_lost(&self, device: Option<&wgpu::Device>) -> bool {
-        if self.lost.load(Ordering::Acquire) {
-            return true;
-        }
+impl D3d12Watch for DeviceWatch {
+    fn is_lost(&self, device: Option<&wgpu::Device>) -> bool {
         // Driver loss can precede the callback, including in idle sibling windows.
-        let removed = device.is_some_and(removed);
-        if removed {
-            self.lost.store(true, Ordering::Release);
+        if self.lost().is_none() && device.is_some_and(removed) {
+            self.report_lost("The D3D12 device was removed");
         }
-        removed
+        self.lost().is_some()
     }
-
-    pub fn check(&self) -> Result<(), String> {
-        self.error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map_or(Ok(()), |error| Err(error.clone()))
+    fn check(&self) -> Result<(), String> {
+        self.error().map_or(Ok(()), |error| Err(error.to_owned()))
     }
 }
 
@@ -81,7 +50,7 @@ mod tests {
             ..Default::default()
         }))
         .unwrap();
-        let state = DeviceState::observe(&device);
+        let state = DeviceWatch::observe(&device);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("validation cleanup test"),
             source: wgpu::ShaderSource::Wgsl(
@@ -144,7 +113,7 @@ mod tests {
             if replacement.get_info().device_type != wgpu::DeviceType::Cpu {
                 let (device, _queue) =
                     pollster::block_on(replacement.request_device(&Default::default())).unwrap();
-                let clean = DeviceState::observe(&device);
+                let clean = DeviceWatch::observe(&device);
                 assert!(!clean.is_lost(Some(&device)));
                 assert!(clean.check().is_ok());
                 break;

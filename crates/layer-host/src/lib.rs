@@ -1,6 +1,7 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
 mod renderer;
+pub mod gpu;
 mod header;
 mod snapshot;
 mod model_update;
@@ -8,6 +9,7 @@ use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;
 use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSession};
+pub use gpu::{DeviceWatch, GpuContext, RendererOptions, UiColor};
 pub use renderer::Renderer;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -41,7 +43,7 @@ pub struct NativeHost {
     /// Number of drawings owned by the window, for shared header geometry.
     pub document_count: usize,
     /// Configure before publishing UI; hosts tag these preview values to match.
-    pub ui_color_space: layer_core::color::RgbSpace,
+    pub ui_color: UiColor,
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
@@ -99,7 +101,7 @@ impl NativeHost {
         session.set_platform(platform);
         Ok(Self {
             session,
-            ui_color_space: layer_core::color::RgbSpace::Srgb,
+            ui_color: UiColor::Mapped,
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,
@@ -135,6 +137,12 @@ impl NativeHost {
     /// a pending persistence observation. Call only from the exclusive owner.
     pub fn take_service_changes(&mut self) -> u32 {
         std::mem::take(&mut self.service_changes)
+    }
+    pub fn renderer_options(&self, cache: Option<std::path::PathBuf>) -> RendererOptions {
+        RendererOptions {
+            cache,
+            ui_color: self.ui_color,
+        }
     }
     /// Republish host-owned service state without changing the shared document.
     pub fn invalidate_snapshot(&mut self) {
@@ -831,18 +839,12 @@ impl NativeHost {
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::StrokeRecording { action } => {
-                let platform = match self.session.state().platform {
-                    layer_ui::Platform::Mac => "mac",
-                    layer_ui::Platform::Ios => "ios",
-                    layer_ui::Platform::Windows => "windows",
-                    layer_ui::Platform::Android => "android",
-                    layer_ui::Platform::Web => "web",
-                    layer_ui::Platform::Gtk => "gtk",
-                    layer_ui::Platform::Generic => "generic",
-                };
+                let platform = json!(self.session.state().platform);
                 let mut recorder = self.session.stroke_recording();
                 match action {
-                    Some(StrokeRecordingAction::Start) => recorder.start(platform)?,
+                    Some(StrokeRecordingAction::Start) => {
+                        recorder.start(platform.as_str().unwrap_or_default())?
+                    }
                     Some(StrokeRecordingAction::Stop) => {
                         recorder.stop(layer_engine::recording::StopReason::Manual)
                     }

@@ -20,12 +20,10 @@ use std::{
 
 struct Environment {
     admission: layer_ui::DocumentAdmission,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: layer_host::GpuContext,
+    options: layer_host::RendererOptions,
     viewport: [u32; 2],
     brush: layer_core::BrushSnapshot,
-    cache: String,
     new_options: layer_ui::NewDocumentOptions,
     photo_policy: layer_ui::PhotoOpenPolicy,
     source_name: String,
@@ -81,6 +79,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
     let result = (|| {
         let a = unsafe { app(handle) };
         let admission = a.documents.admission(&a.host.session.retained_document_tiles());
+        let options = a.host.renderer_options(Some(a.cache_directory.clone().into()));
         let session = &mut a.host.session;
         let request = session
             .state()
@@ -118,12 +117,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 Payload::Open {
                     environment: Some(Environment {
                         admission,
-                        adapter: gpu.adapter().clone(),
-                        device: gpu.device().clone(),
-                        queue: gpu.queue().clone(),
+                        gpu: layer_host::GpuContext::of(gpu),
+                        options,
                         viewport: session.state().camera.viewport,
                         brush: session.engine().configured_brush().clone(),
-                        cache: a.cache_directory.clone(),
                         new_options: session.state().settings.new_document.defaults,
                         photo_policy: session.state().settings.photo_open,
                         pending_photo: None,
@@ -186,6 +183,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     let mut e = environment.take().ok_or("Project worker already ran")?;
     let limits = ProjectLimits {
         dimension: e
+            .gpu
             .device
             .limits()
             .max_texture_dimension_2d
@@ -252,16 +250,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         return Ok(());
     }
     e.admission.admit(&project)?;
-    let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
-        e.adapter,
-        e.device,
-        e.queue,
-        std::path::Path::new(&e.cache),
-        project.document.color,
-    )
-    .map_err(error)?;
-    gpu.enable_demand_shaders();
-    gpu.finish_startup_cache();
+    let mut gpu = e.gpu.rasterizer(project.document.color, &e.options, true)?;
     let mut programs = Vec::new();
     for effect in project
         .document
@@ -722,12 +711,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             Payload::Open {
                 environment: Some(Environment {
                     admission: a.documents.admission(&session.retained_document_tiles()),
-                    adapter: gpu.adapter().clone(),
-                    device: gpu.device().clone(),
-                    queue: gpu.queue().clone(),
+                    gpu: layer_host::GpuContext::of(gpu),
+                    options: a.host.renderer_options(Some(a.cache_directory.clone().into())),
                     viewport: session.state().camera.viewport,
                     brush: session.engine().configured_brush().clone(),
-                    cache: a.cache_directory.clone(),
                     new_options: session.state().settings.new_document.defaults,
                     photo_policy: session.state().settings.photo_open,
                     source_name: "Recovered drawing".into(),

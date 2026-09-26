@@ -28,7 +28,6 @@ internal object Native {
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
     @JvmStatic external fun modelUpdate(handle: Long): String?
-    @JvmStatic external fun strokeRecording(handle: Long, action: Int): String
     @JvmStatic external fun strokeRecordingData(handle: Long): ByteArray
     @JvmStatic external fun query(handle: Long, query: String): String
     /** Stateless shared color forms/previews; safe without a session handle. */

@@ -26,7 +26,7 @@ pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
     documents: document_tabs::Sessions,
-    document_gpu: Option<document_tabs::Context>,
+    document_gpu: Option<layer_host::GpuContext>,
     error: Option<CString>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
@@ -70,7 +70,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             _ => return None,
         };
         let mut host = NativeHost::new(platform).ok()?;
-        host.ui_color_space = DISPLAY_SPACE;
+        host.ui_color = layer_host::UiColor::Tagged(DISPLAY_SPACE);
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
         })

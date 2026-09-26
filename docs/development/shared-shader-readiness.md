@@ -1,9 +1,9 @@
 # Shared shader readiness
 
-Android, GTK, Web and Windows now use the same demand-driven dependency tracking
-and input admission policy in `layer-render-wgpu`. This extends the
-[Web refresh work](web-refresh-responsiveness.md). Apple retains legacy warmup
-until its host opts in and completes device validation.
+Android, Apple, GTK, Web and Windows now use the same demand-driven dependency
+tracking and input admission policy in `layer-render-wgpu`. This extends the
+[Web refresh work](web-refresh-responsiveness.md). Apple and Windows still need
+the device validation below before the legacy warmup path is removed.
 
 ## What changes
 
@@ -44,7 +44,7 @@ does not add persistence for later first-use variants.
 Net code growth supports lifetime dependency identity, the common admission
 policy, host input bridges and regression coverage. Superseded catalog loading
 and the separate browser quiet-time policy are removed. Legacy eager warming
-remains solely for hosts that have not opted in.
+remains in the renderer until that device validation completes.
 
 ## Measurements, 2026-09-25
 
@@ -124,7 +124,8 @@ Use an unminified benchmark plus its matching test APK for white-box Android tes
 
 ## Windows integration
 
-Windows enables demand shaders on its live, file-open and resumed-tab renderers;
+Windows builds its live, file-open and resumed-tab renderers with the shared
+`layer_host::GpuContext::rasterizer` factory, which enables demand shaders;
 color candidates inherit the live device setting. Window pointer, chrome, key and
 action traffic already reaches the shared `UiSession` on the render owner, which
 forwards `shader_input()`, so no separate observer is needed. Startup no longer
@@ -133,14 +134,10 @@ an explicit override, and identical library refreshes are no-ops.
 
 ## Apple integration
 
-Call `enable_demand_shaders()` on every staged renderer, including private
-open/resume/color candidates, before preparing it. Keep polling actual
-requirements after initial completion; document adoption needs canvas/brush
-readiness, not unused-catalog completion. Forward native window activity through
-`shader_input()` (or the opaque thread-safe `ShaderActivity` handle). Retain the
-shared `CanvasRenderer` admission/wakeup delegation. Browser hosts additionally
-schedule the remaining `shader_wait_ms()` delay. Remove duplicate startup
-catalog loading and extend the identical-library no-op once those hosts opt in.
-Validate first-use effects/tools, failed compilation/restart, held contacts,
-rapid edits, document restoration and cache reuse on the target devices before
-removing their legacy warmup path.
+Apple builds its live, file-open and resumed-tab renderers with the same shared
+factory; color candidates inherit the live device setting. Native window input
+reaches the shared `UiSession`, which forwards `shader_input()`. Removing Apple's
+duplicate startup catalog loading and extending the identical-library no-op
+remain open. Validate first-use effects/tools, failed compilation/restart, held
+contacts, rapid edits, document restoration and cache reuse on Apple and Windows
+devices before removing the legacy warmup path.

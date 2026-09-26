@@ -7,34 +7,6 @@ pub(super) struct Parked {
     pub session: UiSession<Renderer>,
     pub recovery: Option<crate::recovery::Service>,
 }
-#[derive(Clone)]
-pub(super) struct Gpu {
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-impl Gpu {
-    fn capture(gpu: &WgpuRasterizer) -> Self {
-        Self {
-            adapter: gpu.adapter().clone(),
-            device: gpu.device().clone(),
-            queue: gpu.queue().clone(),
-        }
-    }
-    pub(super) fn activate(
-        self,
-        color: layer_core::color::DocumentColor,
-    ) -> Result<WgpuRasterizer, String> {
-        let mut gpu =
-            WgpuRasterizer::from_wgpu_native_staged(self.adapter, self.device, self.queue, color)
-                .map_err(|e| e.to_string())?;
-        gpu.enable_demand_shaders();
-        gpu.configure_ui_previews(layer_core::color::RgbSpace::Srgb)
-            .map_err(|e| e.to_string())?;
-        gpu.finish_startup_cache();
-        Ok(gpu)
-    }
-}
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
@@ -110,7 +82,7 @@ impl DocumentService {
         self.proof.stop()?;
         self.proof.view = Default::default();
         if let Some(gpu) = host.session.renderer_mut().0.take() {
-            self.tab_gpu = Some(Gpu::capture(&gpu));
+            self.tab_gpu = Some(layer_host::GpuContext::of(&gpu));
             self.worker.retire_renderer(Renderer(Some(gpu)));
         }
         Ok(())
@@ -129,6 +101,7 @@ impl DocumentService {
         ));
         self.worker.submit(Job::Activate {
             gpu,
+            options: host.renderer_options(None),
             color: host.session.engine().document().color,
         });
         Ok(())

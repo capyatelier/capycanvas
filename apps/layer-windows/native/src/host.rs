@@ -1,6 +1,7 @@
+use crate::device::D3d12Watch;
 use layer_host::NativeHost;
 use layer_render::CanvasRenderer;
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::ViewportPresenter;
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
     cell::RefCell,
@@ -44,7 +45,7 @@ pub struct CapyHost {
     // An acquired image drops before its surface; the panel is detached on the
     // UI thread before destruction. The surface retains its native COM reference.
     poisoned: bool,
-    gpu: std::sync::Arc<crate::device::DeviceState>,
+    gpu: layer_host::DeviceWatch,
     gpu_generation: u64,
     document_epoch: u64,
     window: usize,
@@ -282,7 +283,7 @@ impl CapyHost {
             ..Default::default()
         }))
         .map_err(err)?;
-        let gpu_state = crate::device::DeviceState::observe(&device);
+        let gpu_state = layer_host::DeviceWatch::observe(&device);
         let [width, height] = self.native.session.state().camera.viewport;
         let mut config = self
             .surface
@@ -316,10 +317,8 @@ impl CapyHost {
             config.color_space = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
             config.view_formats.clear();
         }
-        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue,
-            self.native.session.engine().document().color).map_err(err)?;
-        renderer.enable_demand_shaders();
-        renderer.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(err)?;
+        let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
+            self.native.session.engine().document().color, &self.native.renderer_options(None), false)?;
         let encoding = self.display.encoding(config.format);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
         self.presenter_key = Some((renderer.document_color(), encoding));
