@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 
 const bar = '.canvas-action-bar';
 const visible = `(()=>{const b=document.querySelector('${bar}');return !!b&&!b.hidden&&!b.classList.contains('suppressed')})()`;
@@ -43,6 +45,13 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     const x=Math.max(left,Math.min((shape.x+shape.right)/2-box.width/2,right-box.width));
     return Math.abs(box.x-x)<2;
   };
+  const atEdge=async box=>{
+    const c=await camera(),status=await evaluate('layerApp.app.layout(innerWidth,innerHeight).status');
+    const floor=Math.min(c.r.y+(c.a[1]+c.a[3])*c.r.height/c.v[1],status.height>0?status.y:Infinity);
+    return Math.abs(box.bottom-(floor-12))<2;
+  };
+  const narrow=async()=>{const c=await camera();return c.a[2]*c.r.width/c.v[0]<600;};
+  const beside=async(box,shape)=>await narrow()?atEdge(box):box.y>=shape.bottom&&await centred(box,shape);
   const glassBoxes=()=>evaluate('(()=>{const c=layerApp.canvas.getBoundingClientRect(),b=barProbe.boxes;return Array.from({length:b.length/9},(_,i)=>[b[i*9]+c.x,b[i*9+1]+c.y,b[i*9+2],b[i*9+3]])})()');
   const barBox=async()=>{const r=await rect(bar);return[r.x,r.y,r.width,r.height];};
   const hasBox=(boxes,box)=>boxes.some(b=>b.every((v,i)=>Math.abs(v-box[i])<1));
@@ -76,8 +85,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       await wait(`layerApp.state().layer_tools.has_selection && layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
       await settle();
       const shape=await anchor(),box=await rect(bar);
-      assert.ok(box.y>=shape.bottom,`${device}: the selection bar sits below the selection ${JSON.stringify({shape,box})}`);
-      assert.ok(await centred(box,shape),`${device}: the bar is centred on the selection within the work area`);
+      assert.ok(await beside(box,shape),`${device}: the selection bar sits below the selection, centred within the work area ${JSON.stringify({shape,box})}`);
       const boxes=await glassBoxes();
       assert.equal(boxes.length,glassBefore+1,`${device}: the glass region count rises by one while the bar is shown`);
       assert.ok(hasBox(boxes,await barBox()),`${device}: the bar registers its glass region`);
@@ -102,7 +110,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         assert.ok(await evaluate(`!!document.querySelector('${bar} [data-command="${id}"]')`),`${device}: the transform bar offers ${id}`);
       assert.ok(await evaluate(`document.querySelector('${bar} [data-command="apply_transform"]').classList.contains('suggested-action')`),'Apply uses the accent style');
       const transformBox=await anchor(),transformBar=await rect(bar);
-      assert.ok(transformBar.y>=transformBox.bottom,`${device}: the transform bar sits below the transform box`);
+      assert.ok(await beside(transformBar,transformBox),`${device}: the transform bar sits below the transform box`);
       const shown=await evaluate('barProbe.shown');
       const during=await drag([at(0,0),at(20,10),at(40,20),at(60,30)],device,async()=>{
         await settle();
@@ -114,7 +122,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       assert.equal(await evaluate('barProbe.shown'),shown+1,`${device}: the bar returns once after the drag`);
       const moved=await anchor(),movedBar=await rect(bar);
       assert.ok(moved.x>transformBox.x+20,`${device}: the drag moved the transform or panned the canvas`);
-      assert.ok(movedBar.y>=moved.bottom&&await centred(movedBar,moved),`${device}: the bar follows the transform box ${JSON.stringify({moved,movedBar,camera:await camera()})}`);
+      assert.ok(await beside(movedBar,moved),`${device}: the bar follows the transform box ${JSON.stringify({moved,movedBar,camera:await camera()})}`);
       await press('transform_aspect',device);
       assert.equal(await evaluate(`document.querySelector('${bar} [data-command="transform_aspect"]').getAttribute('aria-pressed')`),String((await state()).commands.find(c=>c.id==='transform_aspect').selected));
       await tap(await middle(`${bar} .canvas-action-bar-more`),device);
@@ -137,9 +145,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         await settle();
         assert.equal(await evaluate(`document.querySelectorAll('${bar} .canvas-action-bar-item').length`),0,'Only completion items remain while the bar is off');
         for(const id of ['cancel_transform','apply_transform'])assert.ok(await evaluate(`!!document.querySelector('${bar} [data-command="${id}"]')`));
-        const edge=await rect(bar),area=await camera(),status=await evaluate('layerApp.app.layout(innerWidth,innerHeight).status');
-        const floor=Math.min(area.r.y+(area.a[1]+area.a[3])*area.r.height/area.v[1],status.height>0?status.y:Infinity);
-        assert.ok(Math.abs(edge.bottom-(floor-12))<2,`The completion-only bar sits at the bottom edge ${JSON.stringify({edge,floor,status})}`);
+        assert.ok(await atEdge(await rect(bar)),'The completion-only bar sits at the bottom edge');
         assert.equal((await state()).canvas_bar.placement,'bottom_edge');
         await screenshot('completion-only');
         await invoke('show_canvas_action_bar');
@@ -167,6 +173,56 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         assert.ok((await state()).commands.find(c=>c.id==='undo').enabled);
       }
       assert.notEqual(await kind(),'transform',`${device}: completion ends the transform bar`);
+    }
+    if(device&&process.env.CAPY_ANDROID_SERIAL) {
+      const shell=(...args)=>promisify(execFile)(process.env.ADB??'adb',['-s',process.env.CAPY_ANDROID_SERIAL,'shell',...args]);
+      const screen=await evaluate('({ratio:devicePixelRatio,width:screen.width,height:screen.height})');
+      const probe=[Math.round(screen.width*screen.ratio/2),Math.round(screen.height*screen.ratio/2)];
+      await evaluate(`(()=>{const o=document.createElement('div');o.id='stylus-calibration';o.style.cssText='position:fixed;inset:0;z-index:2147483647';
+        o.addEventListener('pointerdown',e=>{window.stylusCalibration={x:e.clientX,y:e.clientY};e.preventDefault();e.stopPropagation();});document.body.append(o);})()`);
+      await shell('input','stylus','tap',...probe.map(String));
+      await wait('window.stylusCalibration');
+      const calibration=await evaluate('stylusCalibration');
+      await evaluate(`document.querySelector('#stylus-calibration').remove();delete window.stylusCalibration`);
+      const offset=[probe[0]-calibration.x*screen.ratio,probe[1]-calibration.y*screen.ratio];
+      const physical=p=>[Math.round(offset[0]+p.x*screen.ratio),Math.round(offset[1]+p.y*screen.ratio)].map(String);
+      const source={pen:'stylus',touch:'touchscreen',mouse:'mouse'};
+      await evaluate(`window.osInput=[];document.addEventListener('pointerdown',e=>osInput.push({type:e.pointerType,bar:!!e.target.closest('${bar}'),canvas:e.target===layerApp.canvas}),true)`);
+      const osTap=async(selector,kind)=>{
+        await wait(`!!document.querySelector('${selector}')&&${visible}`);
+        await shell('input',source[kind],'tap',...physical(await middle(selector)));await settle();await pause(150);
+      };
+      for(const kind of ['pen','touch','mouse']) {
+        if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
+        await invoke('lasso');await settle();
+        await drag([at(-140,-100),at(140,-100),at(140,90),at(-140,90),at(-140,-100)],'pen');
+        await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
+        const pointers=await evaluate('barProbe.pointers');
+        await evaluate('osInput.length=0');
+        await osTap(`${bar} [data-command="scale_rotate"]`,kind);
+        await wait(`layerApp.state().layer_tools.tool==='transform' && ${visible}`);
+        const events=await evaluate('osInput');
+        assert.ok(events.length&&events.every(e=>e.type===kind&&e.bar),`OS ${kind} taps reach the bar as ${kind}: ${JSON.stringify(events)}`);
+        assert.equal(await evaluate('barProbe.pointers'),pointers,`OS ${kind} taps on the bar never reach the canvas`);
+        if(kind==='pen') {
+          const shown=await evaluate('barProbe.shown'),path=[at(0,0),at(25,10),at(50,20),at(70,30)].map(physical);
+          await wait('layerApp.app.brush_ready()');
+          await shell('input','stylus','motionevent','DOWN',...path[0]);
+          for(const p of path.slice(1))await shell('input','stylus','motionevent','MOVE',...p);
+          await settle();
+          assert.equal(await evaluate(visible),false,'A real stylus drag on the canvas hides the bar');
+          await shell('input','stylus','motionevent','UP',...path.at(-1));
+          await wait(visible);await pause(300);
+          assert.equal(await evaluate('barProbe.shown'),shown+1,'The bar returns once after a real stylus drag');
+          await osTap(`${bar} .canvas-action-bar-more`,kind);
+          await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
+          await osTap(`${bar} .canvas-action-bar-more`,kind);
+          await wait(`!document.querySelector('.panel-context-menu:popover-open')`);
+          assert.equal(await evaluate('layerApp.state().layer_tools.tool'),'transform','A real stylus More tap toggles its menu and keeps the transform');
+        }
+        await osTap(`${bar} [data-command="${kind==='touch'?'cancel_transform':'apply_transform'}"]`,kind);
+        await wait(`layerApp.state().layer_tools.tool!=='transform'`);
+      }
     }
     const stroke=async withBar=>{
       if(withBar){await drag([at(-120,-80),at(120,-80),at(120,80),at(-120,-80)],'pen');await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);await pause(300);}
