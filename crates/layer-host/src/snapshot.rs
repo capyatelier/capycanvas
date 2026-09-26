@@ -301,6 +301,10 @@ impl NativeHost {
         map.serialize_entry("panel_measurements", &state.workspace.layout.measurements)?;
         map.serialize_entry("titlebar_insets", &state.workspace.layout.titlebar_insets)?;
         map.serialize_entry(
+            "header_presentation_height",
+            &state.workspace.layout.header_presentation.height,
+        )?;
+        map.serialize_entry(
             "workspace_bottom_inset",
             &state.workspace.layout.bottom_inset,
         )?;

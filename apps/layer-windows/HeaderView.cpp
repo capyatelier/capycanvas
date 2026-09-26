@@ -629,7 +629,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switchWidth=std::clamp(switchWidth,tile,480.);
         for(auto const& item:overflow)item.Content(icon(L"menu",theme,iconSize));
         for(auto item:{menuOverflow,workspaceOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
-        applyItems();reflow();requests();
+        if(num(snapshot,L"header_presentation_height",-1)!=totalHeight)lastMeasurement=L"";
+        applyItems();reflow();requests();publish();
     }
     double corner()const{return tile*.5*CornerFit;}
     void glass(A& regions,DependencyObject const& node,UIElement const& reference)const{
