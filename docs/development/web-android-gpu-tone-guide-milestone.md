@@ -149,10 +149,8 @@ ANDROID_HOME=/home/babymastodon/Android/Sdk \
 Install both APKs on the Huion, supply an independently encoded PQ PNG as
 `-e hdrFile /data/local/tmp/capy-gpu-tone-pq.png`, and select
 `AndroidRasterTest#gpuToneRetainsPreviewAndRejectsLatePublication` or
-`AndroidRasterTest#hdrEditingProofDeliveryAndRecovery`. For the 4K workload,
-select `#hdrLargeDocumentMeasurements` with `-e hdrWorkloads sparse4k`.
-The retention and performance tests explicitly select SDR proof, including on
-HDR-capable displays.
+`AndroidRasterTest#hdrEditingProofDeliveryAndRecovery`. The retention test
+explicitly selects SDR proof, including on HDR-capable displays.
 
 Build Web with `bash apps/layer-web/build.sh`. Serve `apps/layer-web`, reverse
 that local port to the Huion with ADB, and forward its Chrome DevTools socket.

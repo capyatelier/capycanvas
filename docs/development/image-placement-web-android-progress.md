@@ -237,12 +237,10 @@ JPEGs to that app's private files directory, then run:
 adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w \
   -e class art.capycanvas.AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests \
   -e imagePlacementPhotos placement-61mp.jpg,placement-24mp.jpg \
-  -e imagePlacementMotion true \
   art.capycanvas.imageplacement.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The native report is in the test app's external files directory as
-`image-placement-motion.json`. Run `imagePlacementSystemPickerAndExternalDrag`
+Run `imagePlacementSystemPickerAndExternalDrag`
 and `retainedPlacePasteAndDocumentDetails` by substituting the method name.
 The tablet Chrome runner accepts `--image-placement`, `LAYER_PHOTO_URLS` (two
 original JPEG URLs), `LAYER_TEST_ARTIFACTS`, and optional `CAPY_ANDROID_SERIAL`/`ADB`
@@ -363,11 +361,7 @@ resolved by serial execution.
 
 Session reports: `/tmp/capy-android-drawing-baseline.json`,
 `/tmp/capy-full-photo-baseline.json`, `/tmp/capy-full-photo-pool.json`, and
-`/tmp/capy-pool-reset-device.json`. Use
-`tools/performance/android-frame-report.py REPORT.json` for per-run callback,
-input queue and presentation timing. Rolling renderer histories can contain
-earlier operations; the report treats the run's host timeline as authoritative
-and filters compositor timestamps to its input interval. Android instrumentation
+`/tmp/capy-pool-reset-device.json`. Android instrumentation
 now includes shared renderer CPU phases and process mapping counts, and accepts
 `-e motionDurationMs 15000` (5–30 seconds) for longer sustained checks.
 

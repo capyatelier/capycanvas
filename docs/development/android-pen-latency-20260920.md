@@ -270,14 +270,17 @@ adb -s 5ll21u1002931 push /tmp/capy-pen/dex/classes.dex \
   /data/local/tmp/capy-pen-motion.dex
 ```
 
-Start Perfetto with `tools/performance/android-pen.pbtxt` and simpleperf together,
-then run the injector after two seconds:
+Write a 40-second Perfetto configuration `pen.pbtxt` with the data sources that
+`android-brush-benchmark.py --trace` generates (`ftrace/print`, `gfx`, scheduler
+switch/wake events, `atrace_apps: "art.capycanvas"`, process stats and the
+SurfaceFlinger frame timeline). Start Perfetto and simpleperf together, then run
+the injector after two seconds:
 
 ```sh
 # Terminal 1:
 adb -s 5ll21u1002931 shell perfetto --txt -c - \
   -o /data/misc/perfetto-traces/capy-latency.perfetto-trace \
-  < tools/performance/android-pen.pbtxt
+  < pen.pbtxt
 # Terminal 2, started together with terminal 1:
 adb -s 5ll21u1002931 shell simpleperf record --app art.capycanvas \
   -e cpu-clock -f 199 --call-graph dwarf,16384 --duration 38 \
@@ -304,4 +307,4 @@ or an obstructed test into a responsiveness pass.
 Compact tracked measurements: [action reports](measurements/android-pen-latency-20260920.json).
 Local raw evidence, matching APKs/libraries, CPU reports, full traces and screenshots:
 `artifacts/wacom-latency-20260920/`. The earlier FIFO mitigation and its limitations
-remain documented in [the presentation investigation](android-presentation-progress.md).
+remain documented in [the presentation investigation](../history/android-presentation-progress.md).

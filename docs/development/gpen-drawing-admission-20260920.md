@@ -60,8 +60,8 @@ The final app also completed the existing 12-second zoom/rotation replay.
 Keep the captured `wacom-rapid-lift.csv` fixture and engine/GPU regressions:
 they check batching, prediction, cancellation, raw-pressure preservation,
 preview/final agreement, smooth fall, swept edges and one-step history.
-`AndroidPenReplay` replays captured pressure; `AndroidPenMotion` and
-`android-pen-report.py` reproduce the action-tagged performance checks.
+`AndroidPenMotion` and `android-pen-report.py` reproduce the action-tagged
+performance checks.
 
 Raw APKs, traces, profiles, screenshots and harnesses remain under
 `artifacts/wacom-zoom-flash-20260920/` and `artifacts/wacom-gpen-taper-20260920/`.

@@ -316,34 +316,25 @@ pen-up event-to-present includes that delay. Keep these boundaries distinct.
 
 ### Web and Android tablet photo navigation
 
-Use an isolated Android package, preserving normal application data:
+Use an isolated release benchmark package, preserving normal application data.
+`BrushBenchmarkInstrumentation -e mode pinch` sends real two-finger OS touch
+input over the 9504×6336 Sony JPEG:
 
 ```sh
-ANDROID_HOME="$HOME/Android/Sdk" CARGO_NET_OFFLINE=true \
-  apps/layer-android/gradlew -p apps/layer-android --offline \
-  :app:assembleDebug :app:assembleDebugAndroidTest \
-  -PcapyAbi=arm64-v8a -PcapyApplicationId=art.capycanvas.colorm2 \
-  -PcapyAppLabel='Capy Canvas Color M2'
-adb install -r apps/layer-android/app/build/outputs/apk/debug/app-debug.apk
-adb install -r apps/layer-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell run-as art.capycanvas.colorm2 tee files/photo-benchmark.jpg \
-  < "$HOME/Downloads/sony_a7r_v_29.jpg" > /dev/null
-adb shell am instrument -w -e photoBenchmark true \
-  -e class art.capycanvas.AndroidPhotoNavigationBenchmarkTest#fullSizePhotoNavigation \
-  art.capycanvas.colorm2.test/androidx.test.runner.AndroidJUnitRunner
-adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-0.json
-adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-1.json
-adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-2.json
-adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-info.json
+ANDROID_HOME="$HOME/Android/Sdk" apps/layer-android/gradlew -p apps/layer-android \
+  :app:assembleBenchmark -PcapyAbi=arm64-v8a -PcapyOptimize \
+  -PcapyApplicationId=art.capycanvas.pinchprobe
+adb install -r apps/layer-android/app/build/outputs/apk/benchmark/app-benchmark.apk
+adb push "$HOME/Downloads/sony_a7r_v_29.jpg" /data/local/tmp/capy-brush-photo.jpg
+adb shell am instrument -w \
+  -e brushBenchmark true -e mode pinch -e label pinch -e durationMs 30000 \
+  art.capycanvas.pinchprobe/art.capycanvas.BrushBenchmarkInstrumentation
 ```
 
-The fixture requires the 9504×6336 Sony JPEG. It sends two-finger records through
-ordinary owner scheduling at 361 Choreographer ticks per run, three runs, with
-fit→20×→fit zoom, rotation and pan. It preserves isolated workspace/recovery
-settings and records the actual physical viewport. Report import/cold run and
-warm runs separately. A test finishing successfully does not by itself pass the
-120 Hz gate: inspect delivered-frame counts, callback cadence and each CPU field.
-Do not count expected-presentation timestamps as measured presentation feedback.
+Reports stay in the package's external `files/brush-benchmark`. A test finishing
+successfully does not by itself pass the 120 Hz gate: inspect delivered-frame
+counts, callback cadence and each CPU field. Do not count expected-presentation
+timestamps as measured presentation feedback.
 
 For Chrome, forward its debug socket, open the photo in a dedicated test tab and
 select that tab's explicit ID from the endpoint's `/json/list` response:

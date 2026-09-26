@@ -105,10 +105,7 @@ adb -s 5ll21u1002931 shell am instrument -w -r \
   art.capycanvas.proof.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-`AndroidPhotoNavigationBenchmarkTest` accepts `-e photoBenchmark true` and the
-optional `-e proofProfile …`. Add `-e proofTiming true` for bounded, nonblocking
-presentation-pass GPU samples (up to 256 per run, not display latency).
-Its documented photo fixture goes in the isolated
-app's `files/photo-benchmark.jpg`; generated reports go to its external files
-folder. Sample `dumpsys meminfo` and `/proc/meminfo` in a separate run, keeping raw
+Android photo navigation uses the release pinch benchmark in
+[GPU raster benchmarks](gpu-raster-benchmarks.md#web-and-android-tablet-photo-navigation).
+Sample `dumpsys meminfo` and `/proc/meminfo` in a separate run, keeping raw
 first/warm runs and whole-browser attribution limits visible.

@@ -225,3 +225,15 @@ The focused physical-device regressions are in `AndroidRasterTest`:
 install both matching APKs and target `art.capycanvas.filtertest.test` for
 instrumentation. Reports are in its external-files directory. Production app
 storage must not be cleared to prepare these tests.
+
+## Brush workload benchmark
+
+`BrushBenchmarkInstrumentation` draws with OS-injected stylus input on the
+9504×6336 photo in release code. Build `:app:assembleBenchmark -PcapyAbi=arm64-v8a
+-PcapyOptimize -PcapyApplicationId=art.capycanvas.brushbench`, install it, and push
+the photo to `/data/local/tmp/capy-brush-photo.jpg`. Then
+`python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" --presets 1 --size 1000`
+passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
+`stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
+Perfetto and simpleperf captures. `python3 tools/performance/android-brush-report.py OUT`
+summarizes completed canvas updates per second.

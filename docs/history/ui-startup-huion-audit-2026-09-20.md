@@ -102,8 +102,7 @@ blaming decorative effects as the main startup bottleneck.
 `DEBUGGABLE`. The existing `benchmark` build type is non-debug, inherits release,
 and retains UI publication counters. It is not a fully minified production build.
 
-The opt-in
-[`AndroidUiStartupAuditTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidUiStartupAuditTest.kt)
+The opt-in `AndroidUiStartupAuditTest`
 measures first workspace draw, window frame metrics, native model publications,
 and the first draw after a Settings-open request. It uses the actual frame clock,
 not Compose test-clock advancement. Three unprofiled runs of each build produced:

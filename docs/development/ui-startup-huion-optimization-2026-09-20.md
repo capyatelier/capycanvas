@@ -1,7 +1,7 @@
 # Huion UI startup optimization — 2026-09-20
 
 The bottlenecks were repeated work and broad invalidation, rather than the number
-of visible controls or decorative CSS. See the [original device audit](ui-startup-huion-audit-2026-09-20.md)
+of visible controls or decorative CSS. See the [original device audit](../history/ui-startup-huion-audit-2026-09-20.md)
 for baseline measurements and controlled icon/CSS experiments.
 
 The optimization was developed in a clean worktree based on `origin/main`

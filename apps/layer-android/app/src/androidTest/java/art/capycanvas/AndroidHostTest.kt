@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.SystemClock
-import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -872,67 +871,6 @@ class AndroidHostTest {
         }
     }
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
-    /** Opt-in platform sweep; normal correctness tests don't run a benchmark. */
-    @Test fun measureFilterLibrary() {
-        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("capyFilterBenchmark") == "true")
-        fun stats(): JSONObject {
-            val done=CountDownLatch(1);var result:JSONObject?=null
-            host.query(obj("type" to "renderer_stats")) {result=it as JSONObject;done.countDown()}
-            assertTrue(done.await(10,TimeUnit.SECONDS));return result!!
-        }
-        fun frames(view:JSONObject)=view.array("rows").objects().first {it.getString("label")=="Frames"}.getString("value").toLong()
-        fun effect(a:JSONObject)=action(obj("type" to "effect","action" to a))
-        customize(obj("type" to "set_panel_visible","panel" to "stats","visible" to true))
-        action(obj("type" to "set_brush_size","value" to 24))
-        penStroke(40)
-        val choices=state().array("adjustments").objects().map {it.getString("id")}
-        val expensive=listOf("motion_blur","gaussian_blur","domain_warp","painterly","denoise")
-        val prepared=listOf("pencil","soft_focus","bloom","gaussian_blur","unsharp_mask")
-        val cases=listOf("Baseline" to emptyList<String>())+choices.map {it to listOf(it)}+
-            listOf("Five expensive" to expensive,"Prepared edits" to listOf("unsharp_mask"),"Five prepared edits" to prepared)
-        val report=JSONArray()
-        for((name,filters) in cases) {
-            val ids=mutableListOf<Long>()
-            for(id in filters) {
-                effect(obj("op" to "insert","effect" to id))
-                val view=state().getJSONObject("layer_properties");val layer=view.getLong("layer");ids.add(layer)
-                val controls=view.array("controls").objects()
-                if(controls.any {it.getString("key")=="animate"}) effect(obj("op" to "set","layer" to layer,"key" to "animate","value" to obj("kind" to "toggle","value" to false)))
-                if(id=="curves") effect(obj("op" to "curve_point","layer" to layer,"key" to "curve_0","index" to null,"point" to JSONArray(listOf(.45,.65)),"remove" to false))
-                else controls.firstOrNull {it.getJSONObject("kind").getString("kind")=="number" && it.getJSONObject("value").number("value")==0f && it.getString("key")!="time"}?.let {c ->
-                    effect(obj("op" to "set","layer" to layer,"key" to c.getString("key"),"value" to obj("kind" to "number","value" to c.getJSONObject("kind").getJSONObject("numeric").number("max")*.25)))
-                }
-            }
-            val modes=if(name.endsWith("edits")) listOf("relevant","unrelated") else if(name=="Five expensive") listOf("local","full","animation") else listOf("local")
-            for(mode in modes) {
-                if(mode=="animation") effect(obj("op" to "set","layer" to ids[2],"key" to "animate","value" to obj("kind" to "toggle","value" to true)))
-                action(obj("type" to "select_layer","id" to 1))
-                val before=frames(stats());var count=0;var after=before
-                while(after-before<180 && count<1200) {
-                    if(mode=="local") canvasEvent(if(count==0) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE,
-                        listOf(androidx.compose.ui.geometry.Offset(.5f+kotlin.math.sin(count*.1f)*.04f,.5f+kotlin.math.cos(count*.15f)*.03f)),MotionEvent.TOOL_TYPE_STYLUS)
-                    if(mode=="full") host.dispatch(obj("type" to "set_layer_opacity","id" to 1,"opacity" to .7+(count%20)*.01))
-                    if(mode=="relevant"||mode=="unrelated") host.dispatch(obj("type" to "effect","action" to obj("op" to "set","layer" to ids.last(),
-                        "key" to if(mode=="relevant") "sigma" else "amount","value" to obj("kind" to "number","value" to if(mode=="relevant") 2+(count%20)*.5 else 50+(count%20)*5))))
-                    SystemClock.sleep(9);count++
-                    if(count%30==0)after=frames(stats())
-                }
-                if(mode=="local")canvasEvent(MotionEvent.ACTION_UP,listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)),MotionEvent.TOOL_TYPE_STYLUS)
-                assertTrue("$name $mode produced at least 180 updates",after-before>=180)
-                val result=obj("filter" to name,"mode" to mode,"stats" to stats(),"frames" to after-before)
-                report.put(result);android.util.Log.i("CapyFilterBenchmark",result.toString())
-            }
-            for(id in ids.reversed()) {action(obj("type" to "select_layer","id" to id));action(obj("type" to "layer","action" to obj("op" to "delete_selected")))}
-            action(obj("type" to "select_layer","id" to 1))
-        }
-        val resolver=compose.activity.contentResolver
-        val uri=resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME,"filter-android.json");put(MediaStore.Downloads.MIME_TYPE,"application/json")
-            put(MediaStore.Downloads.RELATIVE_PATH,"Download/CapyCanvasValidation/$runId");put(MediaStore.Downloads.IS_PENDING,1)
-        })!!
-        resolver.openOutputStream(uri)!!.bufferedWriter().use {it.write(report.toString(2))}
-        resolver.update(uri,ContentValues().apply {put(MediaStore.Downloads.IS_PENDING,0)},null,null)
-    }
     private fun groups() = host.snapshot!!.getJSONObject("layout").array("groups").objects()
     private fun group(panel: String) = groups().first { panel in it.array("panels").values() }
     private fun viewport(): JSONArray {
@@ -1013,15 +951,13 @@ class AndroidHostTest {
     private fun waitEnabled(tag: String) = compose.waitUntil(10_000) {
         compose.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()?.config?.contains(SemanticsProperties.Disabled) == false
     }
-    private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
-        .bufferedReader().use { it.readText() }
     private fun waitState(test: (JSONObject) -> Boolean) = compose.waitUntil(10_000) { test(state()) }
     private fun findCanvas(view: View): CanvasSurfaceView? = when (view) {
         is CanvasSurfaceView -> view
         is ViewGroup -> (0 until view.childCount).firstNotNullOfOrNull { findCanvas(view.getChildAt(it)) }
         else -> null
     }
-    private fun penStroke(steps: Int = 60, synchronous: Boolean = true) {
+    private fun penStroke(steps: Int = 60) {
         lateinit var canvas: CanvasSurfaceView
         val location = IntArray(2)
         instrumentation.runOnMainSync {
@@ -1041,7 +977,7 @@ class AndroidHostTest {
             val action = when (i) { 0 -> MotionEvent.ACTION_DOWN; steps -> MotionEvent.ACTION_UP; else -> MotionEvent.ACTION_MOVE }
             val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, arrayOf(props), arrayOf(coords),
                 0, 0, 1f, 1f, 1, 0, InputDevice.SOURCE_STYLUS, 0)
-            assertTrue("Stylus event accepted", instrumentation.uiAutomation.injectInputEvent(event, synchronous))
+            assertTrue("Stylus event accepted", instrumentation.uiAutomation.injectInputEvent(event, true))
             event.recycle()
             if (i != steps) SystemClock.sleep(8)
         }
@@ -1797,86 +1733,6 @@ class AndroidHostTest {
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
         assertTrue("Redo restores deposited pixels", darkPixels(capture("03-redo")) >= dark * 9 / 10)
     }
-    @Test fun measureHighRateStylusIngressAndRenderScheduling() {
-        val options = InstrumentationRegistry.getArguments()
-        val brush = options.getString("capyBrush", "G-Pen")!!
-        val diameter = options.getString("capyBrushSize", "18")!!.toFloat()
-        val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }
-            .first { it.getString("label") == brush }.getInt("id")
-        // Warm pipelines and provide existing pigment for destination-aware tools.
-        penStroke(60)
-        compose.runOnIdle {
-            host.dispatch(obj("type" to "select_brush", "id" to preset))
-            host.dispatch(obj("type" to "set_brush_size", "value" to diameter))
-        }
-        waitState { it.getJSONObject("brush").getInt("preset") == preset && it.getJSONObject("brush").number("diameter") == diameter }
-        penStroke(60)
-        val cleared = CountDownLatch(1)
-        host.measurements(true) { cleared.countDown() }
-        assertTrue(cleared.await(10, TimeUnit.SECONDS))
-        shell("dumpsys SurfaceFlinger --latency-clear")
-        penStroke(600, synchronous = false)
-        waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
-        val collected = CountDownLatch(1)
-        var report: JSONObject? = null
-        host.measurements { report = it; collected.countDown() }
-        assertTrue(collected.await(10, TimeUnit.SECONDS))
-        val data = report!!
-        data.put("brush", brush).put("diameter", diameter)
-        val layers = shell("dumpsys SurfaceFlinger --list").lineSequence().filter {
-            it.contains("SurfaceView[art.capycanvas/art.capycanvas.MainActivity](BLAST)")
-        }.map { it.substringAfter("RequestedLayerState{").substringBefore(" parentId=").removeSuffix("}") }.toList()
-        // UiAutomation tokenizes arguments directly, not through a shell; these
-        // app-owned names contain no whitespace and must not include quotes.
-        val samples = layers.associateWith { shell("dumpsys SurfaceFlinger --latency $it") }
-        data.put("surface_layers", JSONObject(samples))
-        val compositor = samples.values.maxByOrNull { it.length } ?: ""
-        data.put("surface_flinger", compositor)
-        assertTrue("Input stream reached the native host", data.array("inputs").length() > 100)
-        assertTrue("Renderer produced continuous frames", data.array("frames").length() > 100)
-        assertTrue("Input arrays are reused, not allocated for every event",
-            data.getLong("pointer_allocations") < data.array("inputs").length() / 2)
-        assertTrue("Unchanged drawing state does not build and serialize UI snapshots",
-            data.getLong("snapshots_published") < data.getLong("snapshot_attempts") / 2)
-        val rows = data.array("frames").values().map { it as org.json.JSONArray }
-        val input = data.array("inputs").values().map { it as org.json.JSONArray }
-        fun summary(values: List<Double>): JSONObject {
-            val sorted = values.sorted()
-            fun p(q: Double) = sorted[((sorted.size - 1) * q).toInt()]
-            return obj("count" to sorted.size, "p50_ms" to p(0.5), "p95_ms" to p(0.95), "p99_ms" to p(0.99), "max_ms" to sorted.last())
-        }
-        val summary = obj("cpu_render_present" to summary(rows.map { it.getDouble(2) / 1e6 }),
-            "cpu_callback" to summary(rows.map { it.getDouble(10) / 1e6 }),
-            "publish_schedule" to summary(rows.map { it.getDouble(9) / 1e6 }),
-            "cpu_paint" to summary(rows.map { it.getDouble(4) / 1e6 }),
-            "surface_acquire" to summary(rows.map { it.getDouble(5) / 1e6 }),
-            "cpu_viewport" to summary(rows.map { it.getDouble(6) / 1e6 }),
-            "queue_present" to summary(rows.map { it.getDouble(7) / 1e6 }),
-            "cpu_poll" to summary(rows.map { it.getDouble(8) / 1e6 }),
-            "frame_interval" to summary(rows.zipWithNext { a, b -> (b.getDouble(0) - a.getDouble(0)) / 1e6 }),
-            "input_delivery" to summary(input.map { (it.getDouble(1) - it.getDouble(0)) / 1e6 }),
-            "input_queue" to summary(input.map { (it.getDouble(2) - it.getDouble(1)) / 1e6 }),
-            "cpu_input" to summary(input.map { it.getDouble(3) / 1e6 }))
-        val presented = compositor.lineSequence().drop(1).mapNotNull { line ->
-            line.trim().split(Regex("\\s+")).getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 && it < Long.MAX_VALUE }
-        }.toList().distinct().sorted()
-        if (presented.size > 2) {
-            summary.put("composited_interval", summary(presented.zipWithNext { a, b -> (b - a) / 1e6 }))
-            summary.put("composited_fps", (presented.size - 1) * 1e9 / (presented.last() - presented.first()))
-        }
-        android.util.Log.i("CapyBenchmark", summary.toString())
-        val resolver = compose.activity.contentResolver
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, "latency.json")
-            put(MediaStore.Downloads.MIME_TYPE, "application/json")
-            put(MediaStore.Downloads.RELATIVE_PATH, "Download/CapyCanvasValidation/$runId")
-            put(MediaStore.Downloads.IS_PENDING, 1)
-        })!!
-        data.put("summary", summary)
-        resolver.openOutputStream(uri)!!.bufferedWriter().use { it.write(data.toString()) }
-        resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
-        capture("11-high-rate-stylus")
-    }
     @Test fun zenModesIconsAndContextMenuUseSharedSettings() {
         val saved = JSONObject(state().getJSONObject("settings").toString())
         fun edit(id: String, value: Any) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
@@ -2616,6 +2472,8 @@ class AndroidHostTest {
         assertEquals("No full UI snapshots during navigation", 0L, data.getLong("snapshots_published"))
         assertTrue("Readout stays live throughout navigation", data.getLong("camera_updates_published") > 30)
         assertTrue("Navigation produces canvas frames", data.array("frames").length() > 30)
+        assertTrue("Input arrays are reused, not allocated for every event",
+            data.getLong("pointer_allocations") < data.array("inputs").length() / 2)
         // Keep device-dependent timing as measurements, not flaky fps assertions.
         val frames = data.array("frames").values().map { it as JSONArray }
         val intervals = frames.zipWithNext { a, b -> (b.getDouble(0) - a.getDouble(0)) / 1e6 }.sorted()

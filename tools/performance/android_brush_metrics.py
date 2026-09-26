@@ -11,11 +11,6 @@ def completion_window(report):
               "snapshot_submitted_per_s": snapshot_submitted / seconds,
               "snapshot_completed_per_s": snapshot_completed / seconds,
               "snapshot_pending": after["submitted_frames"] - after["completed_frames"]}
-    if "completions" not in report:
-        return dict(result, accounting="snapshot-boundaries",
-                    submitted=snapshot_submitted, completed=snapshot_completed,
-                    submitted_per_s=snapshot_submitted / seconds,
-                    completed_per_s=snapshot_completed / seconds)
     last_raster = int(next(row["value"] for row in report["renderer_before"]["rows"]
                            if row["label"] == "Frames"))
     submitted = completed = empty = pending = 0

@@ -21,15 +21,6 @@ class CompletionWindowTests(unittest.TestCase):
         self.assertEqual(result["snapshot_pending"], 1)
         self.assertEqual(result["accounting"], "input-window-nonempty")
 
-    def test_old_reports_explicitly_retain_snapshot_accounting(self):
-        result = completion_window({
-            "motion": {"begin_ns": 0, "end_ns": 1_000_000_000},
-            "display_before": {"submitted_frames": 1, "completed_frames": 1},
-            "display_after_input": {"submitted_frames": 93, "completed_frames": 91},
-        })
-        self.assertEqual(result["completed_per_s"], 90)
-        self.assertEqual(result["accounting"], "snapshot-boundaries")
-
 
 if __name__ == "__main__":
     unittest.main()

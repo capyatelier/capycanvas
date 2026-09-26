@@ -159,19 +159,16 @@ from GPU memory bandwidth; current evidence does not identify that split.
 
 ## Reproduction and artifacts
 
-Build the isolated app and instrumentation APK using
-`-PcapyApplicationId=art.capycanvas.penperf -PcapyAbi=arm64-v8a`, copy the JPEG to
-its private `files/photo-benchmark.jpg`, and run:
+Build and install the isolated release package described in
+[the brush workload benchmark](android.md#brush-workload-benchmark), then run
+the wide G-Pen workload:
 
 ```sh
-adb -s 5ll21u1002931 shell am instrument -w \
-  -e class art.capycanvas.AndroidRasterTest#largePhotoWideBrushAttribution \
-  -e wideBrush true -e wideBrushSize 2048 -e wideBrushTurns 1 \
-  -e wideBrushPredictionMs 16 -e wideBrushRuns 2 -e motionDurationMs 15000 \
-  art.capycanvas.penperf.test/androidx.test.runner.AndroidJUnitRunner
+python3 tools/performance/android-brush-benchmark.py artifacts/wacom-wide-pen \
+  --serial 5ll21u1002931 --presets 1 --size 2048 --duration 15000 --repeats 2
 ```
 
-Do not run over an artist's active document. The opt-in test opens and paints
+Do not run over an artist's active document. The benchmark opens and paints
 its own photo. Instrumentation does not add a frame pump during strokes.
 The host change is debug telemetry for actual render-thread CPU time. The
 measurements above were taken before the renderer refactor described below.
