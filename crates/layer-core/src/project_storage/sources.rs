@@ -154,10 +154,7 @@ impl SourceIndex {
                 .layer(binding.target)
                 .ok_or("Missing source target")?;
             if layer.asset.is_some()
-                || !matches!(
-                    layer.kind,
-                    LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion
-                )
+                || layer.kind != LayerKind::Paint
                 || binding.image >= self.images.len()
                 || !targets.insert(binding.target)
             {

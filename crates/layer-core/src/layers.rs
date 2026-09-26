@@ -724,7 +724,7 @@ impl Document {
         self.layers[i + 1..]
             .iter()
             .find(|l| l.is_artwork() && l.properties.parent == layer.properties.parent && !l.properties.clipped)
-            .filter(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
+            .filter(|l| l.kind == LayerKind::Paint)
             .map(|l| l.id)
     }
     /// Insert ordinary adjustments above this sibling stack, never between its
@@ -1040,7 +1040,7 @@ impl Document {
             mask.validate()?;
         }
         if layer.asset.is_some() && layer.source.is_some()
-            || (!matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion)
+            || (layer.kind != LayerKind::Paint
                 && (layer.asset.is_some() || layer.source.is_some()))
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer source"));
@@ -1085,7 +1085,7 @@ impl Document {
             || !layer.properties.offset.y.is_finite()
             || layer.properties.placement.inverse().is_none()
             || (layer.properties.placement != Affine::IDENTITY
-                && !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion | LayerKind::Selection))
+                && !matches!(layer.kind, LayerKind::Paint | LayerKind::Selection))
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer value"));
         }

@@ -173,11 +173,6 @@ impl Project {
         let mut source_tiles = 0usize;
         let mut seen_sources = BTreeSet::new();
         for layer in &self.document.layers {
-            if matches!(layer.kind, LayerKind::ImportedImage | LayerKind::AiSuggestion)
-                && layer.asset.is_none() && layer.source.is_none()
-            {
-                return Err("A layer source image is missing".into());
-            }
             if let Some(source) = &layer.source {
                 source.validate()?;
                 if source.extent.iter().any(|v| *v > limits.dimension) {
@@ -384,12 +379,7 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     }
     rulers::validate_rulers(&doc.rulers).map_err(|e| e.to_string())?;
     for id in &doc.reference_layers {
-        if doc.layer(*id).is_none_or(|l| {
-            !matches!(
-                l.kind,
-                LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
-            )
-        }) {
+        if doc.layer(*id).is_none_or(|l| !matches!(l.kind, LayerKind::Paint | LayerKind::Group)) {
             return Err("Invalid reference layer".into());
         }
     }

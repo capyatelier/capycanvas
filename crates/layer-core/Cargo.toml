@@ -2,7 +2,7 @@
 name = "layer-core"
 version = "0.1.0"
 edition = "2024"
-description = "Portable document and AI request model for Layer Copilot"
+description = "Portable document model, edits and project format for Capy Canvas"
 license.workspace = true
 
 [lib]

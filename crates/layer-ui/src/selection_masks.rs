@@ -521,7 +521,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Vec::new();
         };
         let mut items = Vec::new();
-        if matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+        if layer.kind == LayerKind::Paint {
             items.push(ContextMenuItem::submenu(
                 "From Layer Opacity",
                 vec![self.coverage_menu_items(id.0, false)],
@@ -990,7 +990,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let target = if mask {
                     layer.mask.as_ref().ok_or("This layer has no mask")?.id
                 } else {
-                    if !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+                    if layer.kind != LayerKind::Paint {
                         return Err("Choose a drawable layer with content alpha".into());
                     }
                     layer.id

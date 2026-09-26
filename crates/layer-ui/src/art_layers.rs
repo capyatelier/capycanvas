@@ -371,9 +371,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .find(|next| {
                     next.properties.parent == l.properties.parent && !next.properties.clipped
                 })
-                .is_none_or(|base| {
-                    !matches!(base.kind, LayerKind::Paint | LayerKind::ImportedImage)
-                })
+                .is_none_or(|base| base.kind != LayerKind::Paint)
             {
                 return Err("Keep clipped layers above a paint layer in the same group".into());
             }
@@ -536,10 +534,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .copied()
             .filter(|id| {
                 self.engine.document().layer(*id).is_some_and(|l| {
-                    matches!(
-                        l.kind,
-                        LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
-                    )
+                    matches!(l.kind, LayerKind::Paint | LayerKind::Group)
                 })
             })
             .collect()
@@ -933,7 +928,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.return_to_artwork()?;
                 let doc = self.engine.document();
                 let active = doc.layer(doc.active_layer);
-                if clipped && !active.is_some_and(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage)) {
+                if clipped && !active.is_some_and(|l| l.kind == LayerKind::Paint) {
                     return Err("Choose a paint layer to clip to".into());
                 }
                 let parent = active.and_then(|l| if l.kind == LayerKind::Group { Some(l.id) } else { l.properties.parent });
@@ -1255,9 +1250,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .collect();
                             let i = siblings.iter().position(|l| l.id == layer.id).unwrap();
                             let base = siblings[i + 1..].iter().find(|l| !l.properties.clipped);
-                            if base.is_none_or(|l| {
-                                !matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage)
-                            }) {
+                            if base.is_none_or(|l| l.kind != LayerKind::Paint) {
                                 return Err("There is no paint layer below to clip to".into());
                             }
                         }
@@ -1413,12 +1406,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::New { clipped, .. } => {
                     !parent.is_some_and(|p| doc.is_locked(p))
                         && (!clipped
-                            || matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
+                            || l.kind == LayerKind::Paint)
                 }
-                A::Reference { .. } => matches!(
-                    l.kind,
-                    LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
-                ),
+                A::Reference { .. } => matches!(l.kind, LayerKind::Paint | LayerKind::Group),
                 A::ReferenceSelection => !self.reference_selection().is_empty(),
                 A::Lock { .. } => controls.edit_lock,
                 A::AlphaLock { .. } | A::Clear { .. } => controls.alpha_lock,
@@ -1596,7 +1586,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 item("Fill Selection", A::FillSelection),
                 item("Invert Selection", A::InvertSelection), item("Deselect Pixels", A::Deselect),
             ]];
-            if matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+            if l.kind == LayerKind::Paint {
                 selection.insert(0,self.coverage_menu_items(id,false));
             }
             let visibility = vec![vec![

@@ -76,7 +76,6 @@ fn fixture(color: DocumentColor) -> Project {
     document.layers[0].mask = Some(mask);
     document.layers[0].opacity = 0.75;
     let mut base = Layer::paint(document.allocate_layer_id(), "Rasterized full image");
-    base.kind = LayerKind::ImportedImage;
     base.source = Some(rasterized.clone());
     document.layers.insert(1, base);
     let mut original = rasterized.as_ref().clone();
@@ -87,7 +86,6 @@ fn fixture(color: DocumentColor) -> Project {
             .into(),
     );
     let mut source = Layer::paint(document.allocate_layer_id(), "Independent original");
-    source.kind = LayerKind::ImportedImage;
     source.source = Some(Arc::new(original));
     document.layers.insert(2, source);
     // Live color definitions are independent of document assignment/conversion.

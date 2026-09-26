@@ -176,8 +176,6 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerKind {
     Paint,
-    ImportedImage,
-    AiSuggestion,
     Background,
     Group,
     Effect,
@@ -202,8 +200,6 @@ pub struct Layer {
     #[serde(skip)]
     pub source: Option<Arc<color::source::SourceImage>>,
     pub asset: Option<AssetId>,
-    /// Document revision used to generate an AI suggestion.
-    pub source_revision: Option<Revision>,
     pub properties: LayerProperties,
     pub mask: Option<LayerMask>,
     #[serde(skip)]
@@ -232,7 +228,6 @@ impl Layer {
             raster: self.raster.clone(),
             source: self.source.clone(),
             asset: self.asset.clone(),
-            source_revision: None,
             properties: self.properties.clone(),
             mask: self.mask.clone(),
             pending_operations: Vec::new(),
@@ -250,30 +245,6 @@ impl Layer {
             raster: Default::default(),
             source: None,
             asset: None,
-            source_revision: None,
-            properties: LayerProperties::default(),
-            mask: None,
-            pending_operations: Vec::new(),
-            effect: None,
-            selection: None,
-        }
-    }
-
-    pub fn image(id: LayerId, name: impl Into<Arc<str>>, kind: LayerKind, asset: AssetId) -> Self {
-        assert!(matches!(
-            kind,
-            LayerKind::ImportedImage | LayerKind::AiSuggestion
-        ));
-        Self {
-            id,
-            name: name.into(),
-            kind,
-            visible: true,
-            opacity: 1.0,
-            raster: Default::default(),
-            source: None,
-            asset: Some(asset),
-            source_revision: None,
             properties: LayerProperties::default(),
             mask: None,
             pending_operations: Vec::new(),
@@ -1352,7 +1323,6 @@ impl Document {
                     raster: Default::default(),
                     source: None,
                     asset: None,
-                    source_revision: None,
                     properties: LayerProperties::default(),
                     mask: None,
                     pending_operations: Vec::new(),
@@ -1506,10 +1476,7 @@ impl Document {
             Edit::SetReferences(references) => {
                 for &id in &references {
                     let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                    if !matches!(
-                        layer.kind,
-                        LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
-                    ) {
+                    if !matches!(layer.kind, LayerKind::Paint | LayerKind::Group) {
                         return Err(DocumentError::NotDrawable(id));
                     }
                 }
@@ -2170,60 +2137,6 @@ impl fmt::Display for DocumentError {
 
 impl std::error::Error for DocumentError {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputRole {
-    StyleReference,
-    CharacterReference,
-    Structure,
-    PreviousLayer,
-    CurrentLayer,
-    PreviousSuggestion,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ImageInput {
-    pub role: InputRole,
-    pub asset_id: AssetId,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SuggestionRequest {
-    pub document_id: Arc<str>,
-    pub source_revision: Revision,
-    pub width: u32,
-    pub height: u32,
-    pub inputs: Arc<[ImageInput]>,
-    /// `0` explores; `1` follows the current drawing closely.
-    pub fidelity: f32,
-    /// Stable across one pass so suggestions evolve instead of jumping.
-    pub continuity_seed: u64,
-}
-
-impl SuggestionRequest {
-    pub fn normalized(mut self) -> Self {
-        self.fidelity = self.fidelity.clamp(0.0, 1.0);
-        self
-    }
-
-    pub fn is_stale_for(&self, document: &Document) -> bool {
-        self.document_id != document.id || self.source_revision != document.revision
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SuggestionResult {
-    pub request_revision: Revision,
-    pub asset_id: AssetId,
-    pub elapsed_millis: u32,
-}
-
-pub trait InferenceBackend: Send + Sync {
-    type Error;
-
-    fn suggest(&self, request: SuggestionRequest) -> Result<SuggestionResult, Self::Error>;
-    fn cancel_before(&self, document_id: &str, revision: Revision);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2340,23 +2253,6 @@ mod tests {
                 .unwrap();
         }
         assert!(editor.undo.len() <= 2);
-    }
-
-    #[test]
-    fn stale_results_are_detected_by_revision() {
-        let document = Document::new("study", 800, 800);
-        let request = SuggestionRequest {
-            document_id: document.id.clone(),
-            source_revision: document.revision + 1,
-            width: 800,
-            height: 800,
-            inputs: Arc::from([]),
-            fidelity: 1.4,
-            continuity_seed: 7,
-        }
-        .normalized();
-        assert_eq!(request.fidelity, 1.0);
-        assert!(request.is_stale_for(&document));
     }
 
     #[test]
