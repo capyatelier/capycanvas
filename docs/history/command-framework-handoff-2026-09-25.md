@@ -12,6 +12,27 @@ and audit §7.5. What remains is the keybinding project (stages C–F) and the
 Apple bar, plus glass and the shared footer on the Windows bar that landed
 concurrently. The rest of this document is the original handoff.
 
+**Status update, 2026-09-26:** stages C–F are implemented in the shared core,
+GTK, Web and Android. See [settings](../ui/settings.md) for the behavior:
+
+- C: scoped bindings, held tool overrides, relative steps
+- D: finger taps, opt-in pen side buttons
+- E: remote and media keys, gamepads
+- F: keymap presets, keymap files, the scope-aware binding editor
+
+The Windows and Apple hosts still need to deliver their inputs:
+
+- Pointer `time_ns` with `set_touch_policy`
+- `pen_button` edges
+- Gamepad `axes` and `gamepad_*` keys
+- `ExportKeymap` and `ImportKeymap` host requests
+- The keymap section and editor fields in their shortcut pages
+
+The touch and pen button preference rows stay hidden on those platforms until
+they do. Apple Pencil double-tap and squeeze remain a separate host capability.
+Before any preset's revision changes, check it against the installed source
+applications.
+
 The shared catalog and command bars are implemented on GTK, Web and Android.
 The broader contextual shortcut, held-action, gesture, device and compatibility
 preset project is unfinished. The latest user report is that panel transparency
