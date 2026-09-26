@@ -1,6 +1,7 @@
 //! Reusable print simulation in D50 PCS, independent of artwork and delivery.
 use super::*;
 use layer_core::color::ProofRecipe;
+use layer_core::color::lab::{D50, lab_to_xyz, xyz_to_lab};
 mod black;
 mod lut;
 mod memory;

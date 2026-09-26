@@ -1,8 +1,7 @@
 //! Media-relative D50 PCS endpoints. Black/white policy belongs to the connection.
 use super::super::*;
-
-pub(super) const D50: [f64; 3] = [0.9642, 1., 0.8249];
 use super::lut::Pipeline;
+use layer_core::color::lab::xyz_to_lab;
 
 pub(super) enum Pcs {
     Matrix {
@@ -27,11 +26,6 @@ impl Pcs {
             return Err("Soft proofing requires an RGB or CMYK target profile".into());
         }
         if matrix_only(profile) {
-            let curves = [&profile.red_trc, &profile.green_trc, &profile.blue_trc];
-            let decode = curves.map(|c| c.as_ref().unwrap().make_linear_evaluator().map_err(error));
-            let encode = curves.map(|c| c.as_ref().unwrap().make_gamma_evaluator().map_err(error));
-            let [dr, dg, db] = decode;
-            let [er, eg, eb] = encode;
             let to_xyz = profile.colorant_matrix();
             let from_xyz = to_xyz.inverse();
             if to_xyz
@@ -44,8 +38,8 @@ impl Pcs {
                 return Err("Invalid proof profile matrix".into());
             }
             return Ok(Self::Matrix {
-                decode: [dr?, dg?, db?],
-                encode: [er?, eg?, eb?],
+                decode: trc_evaluators(profile, false)?,
+                encode: trc_evaluators(profile, true)?,
                 to_xyz: to_xyz.v,
                 from_xyz: from_xyz.v,
             });
@@ -96,31 +90,6 @@ impl Pcs {
     pub(super) fn roundtrip(&self, reverse: &Self, xyz: [f64; 3]) -> [f64; 3] {
         self.to_xyz(reverse.device_from_xyz(xyz))
     }
-}
-
-pub(super) fn xyz_to_lab(xyz: [f64; 3]) -> [f64; 3] {
-    let f = |v: f64| {
-        if v > (6f64 / 29.).powi(3) {
-            v.cbrt()
-        } else {
-            v * 841. / 108. + 4. / 29.
-        }
-    };
-    let [x, y, z] = std::array::from_fn(|i| f(xyz[i] / D50[i]));
-    [116. * y - 16., 500. * (x - y), 200. * (y - z)]
-}
-
-pub(super) fn lab_to_xyz([l, a, b]: [f64; 3]) -> [f64; 3] {
-    let y = (l + 16.) / 116.;
-    let f = |v: f64| {
-        if v > 6. / 29. {
-            v.powi(3)
-        } else {
-            (v - 4. / 29.) * 108. / 841.
-        }
-    };
-    let lab = [y + a / 500., y, y - b / 200.];
-    std::array::from_fn(|i| f(lab[i]) * D50[i])
 }
 
 pub(super) fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {

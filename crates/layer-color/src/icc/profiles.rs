@@ -122,6 +122,11 @@ fn definition(
     gray: bool,
 ) -> Result<Profile, String> {
     use moxcms::{Chromaticity, ColorPrimaries, Matrix3d, XyY};
+    for [x, y] in std::iter::once(white).chain(primaries) {
+        if !x.is_finite() || !y.is_finite() || x < 0. || y <= 0. || x + y > 1.00001 {
+            return Err("Invalid ICC chromaticities".into());
+        }
+    }
     let xy = |[x, y]: [f64; 2]| Chromaticity {
         x: x as f32,
         y: y as f32,
@@ -132,28 +137,16 @@ fn definition(
         y: white[1],
         yb: 1.,
     };
-    let d50 = moxcms::white_point_d50().to_xyzd();
+    let d50 = moxcms::white_point_d50();
     let mut profile = Profile::new_srgb();
     profile.update_rgb_colorimetry(wp, ColorPrimaries { red, green, blue });
-    profile.white_point = d50;
-    profile.media_white_point = Some(d50);
+    profile.white_point = d50.to_xyzd();
+    profile.media_white_point = Some(d50.to_xyzd());
     // Store the actual source-white -> D50 adaptation, not the Bradford cone
     // matrix itself. Profile suggestions undo this matrix to recover primaries.
-    let bradford = Matrix3d {
-        v: [
-            [0.8951, 0.2664, -0.1614],
-            [-0.7502, 1.7135, 0.0367],
-            [0.0389, -0.0685, 1.0296],
-        ],
-    };
-    let source_white = wp.to_xyzd();
-    let a =
-        layer_core::color::rgb::apply(bradford.v, [source_white.x, source_white.y, source_white.z]);
-    let b = layer_core::color::rgb::apply(bradford.v, [d50.x, d50.y, d50.z]);
-    let scaled = Matrix3d {
-        v: std::array::from_fn(|r| bradford.v[r].map(|v| v * b[r] / a[r])),
-    };
-    profile.chromatic_adaptation = Some(bradford.inverse().mat_mul(scaled));
+    profile.chromatic_adaptation = Some(Matrix3d {
+        v: layer_core::color::rgb::bradford(white, [d50.x, d50.y]),
+    });
     if gray {
         profile.color_space = DataColorSpace::Gray;
         profile.gray_trc = Some(curve);
@@ -203,11 +196,6 @@ pub(crate) fn matrix_profile(
     gamma: Option<f64>,
     gray: bool,
 ) -> Result<ColorProfile, String> {
-    for [x, y] in std::iter::once(white).chain(primaries) {
-        if !x.is_finite() || !y.is_finite() || x < 0. || y <= 0. || x + y > 1.00001 {
-            return Err("Invalid PNG chromaticities".into());
-        }
-    }
     let curve = if let Some(gamma) = gamma {
         if !(0.01..=10.).contains(&gamma) {
             return Err("Unsupported PNG gamma".into());
@@ -251,10 +239,6 @@ pub(crate) fn calibrated_rgb_profile(
 
 /// Materialize supported SDR CICP transfer/primaries as a reusable source ICC.
 pub(crate) fn nclx_profile(xy: [f32; 8], transfer: u32) -> Result<ColorProfile, String> {
-    if xy.chunks_exact(2).any(|p| !p[0].is_finite() || !p[1].is_finite()
-        || p[0] < 0. || p[1] <= 0. || p[0] + p[1] > 1.00001) {
-        return Err("Unsupported HEIF/AVIF color primaries".into());
-    }
     let curve = match transfer {
         13 => curve(RgbSpace::Srgb),
         1 | 6 | 14 | 15 => {

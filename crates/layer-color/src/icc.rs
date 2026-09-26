@@ -202,19 +202,6 @@ impl MatrixTransform {
         if !matrix_only(input) || !matrix_only(output) {
             return Ok(None);
         }
-        let curves = |p: &Profile, invert: bool| -> Result<_, String> {
-            let values = [&p.red_trc, &p.green_trc, &p.blue_trc].map(|curve| {
-                let curve = curve.as_ref().ok_or("ICC profile has no RGB curve")?;
-                if invert {
-                    curve.make_gamma_evaluator()
-                } else {
-                    curve.make_linear_evaluator()
-                }
-                .map_err(error)
-            });
-            let [r, g, b] = values;
-            Ok([r?, g?, b?])
-        };
         let mut source_matrix = input.colorant_matrix();
         if options.intent == RenderingIntent::AbsoluteColorimetric {
             let scale = media_white_scale(input, output)?;
@@ -227,8 +214,8 @@ impl MatrixTransform {
             return Err("Invalid ICC colorant matrix".into());
         }
         Ok(Some(Self {
-            input: curves(input, false)?,
-            output: curves(output, true)?,
+            input: trc_evaluators(input, false)?,
+            output: trc_evaluators(output, true)?,
             matrix,
         }))
     }
@@ -255,16 +242,55 @@ fn matrix_only(profile: &Profile) -> bool {
         && !has_lut(profile)
 }
 fn has_lut(profile: &Profile) -> bool {
-    [
-        &profile.lut_a_to_b_perceptual,
-        &profile.lut_a_to_b_colorimetric,
-        &profile.lut_a_to_b_saturation,
-        &profile.lut_b_to_a_perceptual,
-        &profile.lut_b_to_a_colorimetric,
-        &profile.lut_b_to_a_saturation,
-    ]
-    .iter()
-    .any(|v| v.is_some())
+    [false, true]
+        .into_iter()
+        .any(|reverse| lut_tags(profile, reverse).iter().any(|t| t.is_some()))
+}
+/// Perceptual, colorimetric and saturation tables, device-to-PCS or reverse.
+fn lut_tags(profile: &Profile, reverse: bool) -> [&Option<moxcms::LutWarehouse>; 3] {
+    if reverse {
+        [
+            &profile.lut_b_to_a_perceptual,
+            &profile.lut_b_to_a_colorimetric,
+            &profile.lut_b_to_a_saturation,
+        ]
+    } else {
+        [
+            &profile.lut_a_to_b_perceptual,
+            &profile.lut_a_to_b_colorimetric,
+            &profile.lut_a_to_b_saturation,
+        ]
+    }
+}
+/// ICC specifies A2B0/B2A0 as the fallback when the requested table is absent.
+fn lut_tag(
+    profile: &Profile,
+    intent: RenderingIntent,
+    reverse: bool,
+) -> Option<&moxcms::LutWarehouse> {
+    let tags = lut_tags(profile, reverse);
+    let index = match intent {
+        RenderingIntent::Perceptual => 0,
+        RenderingIntent::RelativeColorimetric | RenderingIntent::AbsoluteColorimetric => 1,
+        RenderingIntent::Saturation => 2,
+    };
+    tags[index].as_ref().or(tags[0].as_ref())
+}
+/// RGB curves toward linear, or with `invert` from linear to encoded.
+fn trc_evaluators(
+    profile: &Profile,
+    invert: bool,
+) -> Result<[Box<dyn moxcms::ToneCurveEvaluator + Send + Sync>; 3], String> {
+    let [r, g, b] = [&profile.red_trc, &profile.green_trc, &profile.blue_trc].map(|curve| {
+        let curve = curve.as_ref().ok_or("ICC profile has no RGB curve")?;
+        if invert {
+            curve.make_gamma_evaluator()
+        } else {
+            curve.make_linear_evaluator()
+        }
+        .map_err(error)
+    });
+    Ok([r?, g?, b?])
 }
 
 fn media_white_scale(input: &Profile, output: &Profile) -> Result<[f64; 3], String> {

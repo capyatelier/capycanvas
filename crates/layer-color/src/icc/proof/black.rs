@@ -93,40 +93,22 @@ pub(super) fn destination_black(
     if points.len() < 4 {
         return Err("Insufficient shadow response for black compensation".into());
     }
-    // Least squares c + bx + ax², solving with partial pivoting.
-    let mut system = [[0.; 4]; 3];
+    // Least squares c + bx + ax² from the normal equations.
+    let mut ata = [[0.; 3]; 3];
+    let mut atb = [0.; 3];
     for (x, y) in points {
         let basis = [1., x, x * x];
         for i in 0..3 {
             for j in 0..3 {
-                system[i][j] += basis[i] * basis[j];
+                ata[i][j] += basis[i] * basis[j];
             }
-            system[i][3] += basis[i] * y;
+            atb[i] += basis[i] * y;
         }
     }
-    for i in 0..3 {
-        let pivot = (i..3)
-            .max_by(|&a, &b| system[a][i].abs().total_cmp(&system[b][i].abs()))
-            .unwrap();
-        system.swap(i, pivot);
-        let divisor = system[i][i];
-        if divisor.abs() < 1e-12 {
-            return Err("Degenerate profile black response".into());
-        }
-        for j in i..4 {
-            system[i][j] /= divisor;
-        }
-        for row in 0..3 {
-            if row == i {
-                continue;
-            }
-            let scale = system[row][i];
-            for j in i..4 {
-                system[row][j] -= system[i][j] * scale;
-            }
-        }
+    let [c, b, a] = layer_core::color::rgb::apply(layer_core::color::rgb::inverse(ata), atb);
+    if [c, b, a].iter().any(|v| !v.is_finite()) {
+        return Err("Degenerate profile black response".into());
     }
-    let [c, b, a] = system.map(|row| row[3]);
     let discriminant = b * b - 4. * a * c;
     let l = if a.abs() < 1e-10 {
         if b.abs() < 1e-10 { 0. } else { -c / b }

@@ -32,12 +32,10 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
     }
     let opened = open(profile)?;
     if channels(&opened)? != ProfileChannels::Rgb
-        || (opened.red_trc.is_none()
-            || opened.green_trc.is_none()
-            || opened.blue_trc.is_none()
-            || opened.lut_a_to_b_perceptual.is_some()
-            || opened.lut_a_to_b_colorimetric.is_some()
-            || opened.lut_a_to_b_saturation.is_some())
+        || opened.red_trc.is_none()
+        || opened.green_trc.is_none()
+        || opened.blue_trc.is_none()
+        || lut_tags(&opened, false).iter().any(|t| t.is_some())
     {
         return Ok(None);
     }
@@ -47,7 +45,8 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
     let source = colorants(&opened);
     let adaptation = opened.chromatic_adaptation.map(|m| m.v);
     let native = adaptation
-        .and_then(inverse)
+        .map(layer_core::color::rgb::inverse)
+        .filter(|m| m.iter().flatten().all(|v| v.is_finite()))
         .map(|m| source.map(|c| layer_core::color::rgb::apply(m, c)));
     let xy = |v: [f64; 3]| {
         let sum: f64 = v.iter().sum();
@@ -91,41 +90,6 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
         }
     }
     Ok(None)
-}
-
-fn inverse(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
-    if m.iter().flatten().any(|v| !v.is_finite()) {
-        return None;
-    }
-    let mut rows: [[f64; 6]; 3] = std::array::from_fn(|r| {
-        std::array::from_fn(|c| {
-            if c < 3 {
-                m[r][c]
-            } else {
-                f64::from(c - 3 == r)
-            }
-        })
-    });
-    for k in 0..3 {
-        let pivot = (k..3).max_by(|&a, &b| rows[a][k].abs().total_cmp(&rows[b][k].abs()))?;
-        rows.swap(k, pivot);
-        let scale = rows[k][k];
-        if scale.abs() < 1e-12 {
-            return None;
-        }
-        rows[k].iter_mut().for_each(|v| *v /= scale);
-        for r in 0..3 {
-            if r == k {
-                continue;
-            }
-            let scale = rows[r][k];
-            let pivot = rows[k];
-            for (value, pivot) in rows[r].iter_mut().zip(pivot) {
-                *value -= scale * pivot;
-            }
-        }
-    }
-    Some(rows.map(|r| [r[3], r[4], r[5]]))
 }
 
 fn label(profile: &Profile) -> String {

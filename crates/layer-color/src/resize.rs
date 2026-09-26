@@ -72,6 +72,22 @@ fn taps(source: u32, target: u32, index: u32) -> Taps {
     }
 }
 
+/// Cubic lobes can overshoot coverage. Normalize associated RGB with it,
+/// preserving straight extended color rather than clipping.
+fn associate(sum: [f64; 4]) -> [f32; 4] {
+    let alpha = sum[3].clamp(0., 1.);
+    if alpha == 0. {
+        return [0.; 4];
+    }
+    let scale = alpha / sum[3];
+    [
+        (sum[0] * scale) as f32,
+        (sum[1] * scale) as f32,
+        (sum[2] * scale) as f32,
+        alpha as f32,
+    ]
+}
+
 /// At most four horizontally filtered rows plus one source row and one output
 /// accumulator. Residency depends on width, not photo height or reduction ratio.
 pub struct RowResampler {
@@ -146,20 +162,7 @@ impl RowResampler {
             }
         }
         for (out, sum) in output.iter_mut().zip(&self.sum) {
-            let alpha = sum[3].clamp(0., 1.);
-            if alpha == 0. {
-                *out = [0.; 4];
-            } else {
-                // Cubic lobes can overshoot coverage. Normalize associated RGB
-                // with it, preserving straight extended color rather than clipping.
-                let scale = alpha / sum[3];
-                *out = [
-                    (sum[0] * scale) as f32,
-                    (sum[1] * scale) as f32,
-                    (sum[2] * scale) as f32,
-                    alpha as f32,
-                ];
-            }
+            *out = associate(*sum);
             if out.iter().any(|v| !v.is_finite()) {
                 return Err("Resampled color exceeds the finite working range".into());
             }
@@ -242,23 +245,7 @@ impl AreaPreview {
         }
         Ok((
             self.extent,
-            self.pixels
-                .into_iter()
-                .map(|p| {
-                    let alpha = p[3].clamp(0., 1.);
-                    if alpha == 0. {
-                        [0.; 4]
-                    } else {
-                        let scale = alpha / p[3];
-                        [
-                            (p[0] * scale) as f32,
-                            (p[1] * scale) as f32,
-                            (p[2] * scale) as f32,
-                            alpha as f32,
-                        ]
-                    }
-                })
-                .collect(),
+            self.pixels.into_iter().map(associate).collect(),
         ))
     }
 }

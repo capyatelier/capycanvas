@@ -42,27 +42,8 @@ impl Pipeline {
         rendering: RenderingIntent,
         reverse: bool,
     ) -> Result<Self, String> {
-        let tags = if reverse {
-            [
-                &profile.lut_b_to_a_perceptual,
-                &profile.lut_b_to_a_colorimetric,
-                &profile.lut_b_to_a_saturation,
-            ]
-        } else {
-            [
-                &profile.lut_a_to_b_perceptual,
-                &profile.lut_a_to_b_colorimetric,
-                &profile.lut_a_to_b_saturation,
-            ]
-        };
-        let index = match rendering {
-            RenderingIntent::Perceptual => 0,
-            RenderingIntent::RelativeColorimetric | RenderingIntent::AbsoluteColorimetric => 1,
-            RenderingIntent::Saturation => 2,
-        };
-        // ICC specifies A2B0/B2A0 as the fallback when the requested table is
-        // absent. A missing reverse path still fails; never invent an inverse.
-        let lut = tags[index].as_ref().or(tags[0].as_ref()).ok_or_else(|| {
+        // A missing reverse path fails; never invent an inverse.
+        let lut = lut_tag(profile, rendering, reverse).ok_or_else(|| {
             format!(
                 "Proof profile lacks a {} transform",
                 if reverse {

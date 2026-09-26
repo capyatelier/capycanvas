@@ -130,12 +130,12 @@ impl WorkingDecoder {
         for (input, destination) in encoded.chunks(256 * bpp).zip(output.chunks_mut(256)) {
             let mut values = [[0f32; 4]; 256];
             let mut gray = [[0f32; 1]; 256];
+            let mut alphas = [1f32; 256];
             for (i, pixel) in input.chunks_exact(bpp).enumerate() {
-                let alpha = if channels.has_alpha() {
-                    code(pixel, channels.count() - 1) as f32 / maximum
-                } else {
-                    1.
-                };
+                if channels.has_alpha() {
+                    alphas[i] = code(pixel, channels.count() - 1) as f32 / maximum;
+                }
+                let alpha = alphas[i];
                 let mut codes = [code(pixel, 0); 3];
                 if matches!(
                     channels,
@@ -189,12 +189,8 @@ impl WorkingDecoder {
             }
             // Gray/CMYK transforms do not own coverage. Reinstall exact source
             // alpha independently of CMM formatter behavior in every case.
-            for (pixel, result) in input.chunks_exact(bpp).zip(destination) {
-                result[3] = if channels.has_alpha() {
-                    code(pixel, channels.count() - 1) as f32 / maximum
-                } else {
-                    1.
-                };
+            for (result, alpha) in destination.iter_mut().zip(alphas) {
+                result[3] = alpha;
                 if result.iter().any(|v| !v.is_finite()) {
                     return Err("Source profile produced non-finite working samples".into());
                 }

@@ -84,24 +84,8 @@ pub(super) fn validate(
         RenderingIntent::RelativeColorimetric,
         RenderingIntent::Perceptual,
     ] {
-        let index = match intent {
-            RenderingIntent::Perceptual => 0,
-            RenderingIntent::RelativeColorimetric | RenderingIntent::AbsoluteColorimetric => 1,
-            RenderingIntent::Saturation => 2,
-        };
-        for tags in [
-            [
-                &profile.lut_a_to_b_perceptual,
-                &profile.lut_a_to_b_colorimetric,
-                &profile.lut_a_to_b_saturation,
-            ],
-            [
-                &profile.lut_b_to_a_perceptual,
-                &profile.lut_b_to_a_colorimetric,
-                &profile.lut_b_to_a_saturation,
-            ],
-        ] {
-            if let Some(lut) = tags[index].as_ref().or(tags[0].as_ref()) {
+        for reverse in [false, true] {
+            if let Some(lut) = lut_tag(profile, intent, reverse) {
                 bound += stages(lut);
             }
         }
