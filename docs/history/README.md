@@ -38,6 +38,7 @@ remains at its existing path while implementation work continues.
 ## Documents, layers and filters
 
 - [Vector drawing and editing: artist workflows, formats and recommended scope](vector-drawing-research.md).
+- [Vector layers: tool subset, stroke storage and new-artist journey](vector-layers-research.md), with its [source reports](vector-layers-research/).
 - [Project validation checkpoint](project-validation.md).
 - [Layers research: illustration workflows and panel design](layers-research.md).
 - [Layers: recommended initial design](layers-initial-design.md).
