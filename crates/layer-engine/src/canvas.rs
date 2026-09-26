@@ -9,7 +9,7 @@ use crate::brush::{
 };
 use crate::feedback::{
     FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PredictionState,
-    TipSource, estimate_tip, finalized_count, surface_distance,
+    TipSource, finalized_count, surface_distance,
 };
 use crate::input::{
     InputConsumer, PenEvent, PenPhase, PressureCurve, SampleFlags, StrokeBuilder, ToolKind,
@@ -1646,43 +1646,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let predicted_dab_start = self.dabs.len();
         let taper_start = generator.modeled_distance() / active.brush.diameter.max(0.01);
         let taper = estimate.source == TipSource::Engine;
-        if estimate.source == TipSource::Platform {
-            let raw_tip = estimate_tip(
-                self.builder.real_points(),
-                self.builder.predicted_points(),
-                estimate.point.elapsed_micros,
-                self.view.document_to_surface,
-                active.feedback,
-            )
-            .unwrap()
-            .point;
-            for point in self
-                .builder
-                .predicted_points()
-                .iter()
-                .copied()
-                .filter(|point| {
-                    point.elapsed_micros > latest.elapsed_micros
-                        && point.elapsed_micros < estimate.point.elapsed_micros
-                })
-            {
-                let point = PredictionState::platform_point(
-                    latest,
-                    point,
-                    raw_tip,
-                    estimate.point,
-                    self.view.document_to_surface,
-                );
-                generator.append(point, &active.brush, &mut self.dabs);
-            }
-        }
-        for point in active.prediction.engine_intermediates() {
+        for point in active.prediction.preview_points(
+            latest,
+            self.builder.predicted_points(),
+            estimate,
+            self.view.document_to_surface,
+        ) {
             generator.append(point, &active.brush, &mut self.dabs);
-        }
-        if estimate.point.elapsed_micros > latest.elapsed_micros
-            || estimate.point.position != latest.position
-        {
-            generator.append(estimate.point, &active.brush, &mut self.dabs);
         }
         // Flush the actual swept endpoint just as finalization does. Coverage
         // by an earlier, wider contact is not the final pressure/pose.

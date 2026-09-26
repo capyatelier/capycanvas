@@ -87,6 +87,17 @@ pub(crate) enum TipSource {
 pub(crate) struct TipEstimate {
     pub point: StrokePoint,
     pub source: TipSource,
+    raw: StrokePoint,
+}
+
+impl TipEstimate {
+    fn new(point: StrokePoint, source: TipSource) -> Self {
+        Self {
+            point,
+            source,
+            raw: point,
+        }
+    }
 }
 
 /// Per-contact, preview-only state. Never changes recorded stroke samples.
@@ -387,10 +398,7 @@ impl PredictionState {
             self.lead = None;
             self.last_motion = None;
             self.continuing = false;
-            return Some(TipEstimate {
-                point: latest,
-                source: TipSource::Real,
-            });
+            return Some(TipEstimate::new(latest, TipSource::Real));
         }
         let requested = requested.max(latest.elapsed_micros);
         let limited = horizon.map_or(requested, |h| {
@@ -468,23 +476,16 @@ impl PredictionState {
                         output
                     })
                 };
-                return Some(self.output.as_ref().map_or(
-                    TipEstimate {
-                        point: latest,
-                        source: TipSource::Real,
-                    },
-                    |output| TipEstimate {
-                        point: output.point_at(output.horizon),
-                        source: TipSource::Engine,
-                    },
-                ));
+                return Some(match self.output.as_ref() {
+                    Some(output) => {
+                        TipEstimate::new(output.point_at(output.horizon), TipSource::Engine)
+                    }
+                    None => TipEstimate::new(latest, TipSource::Real),
+                });
             }
             self.immediate = MotionState::default();
             self.sustained = MotionState::default();
-            return Some(TipEstimate {
-                point: latest,
-                source: TipSource::Real,
-            });
+            return Some(TipEstimate::new(latest, TipSource::Real));
         }
 
         self.immediate = MotionState::default();
@@ -546,10 +547,7 @@ impl PredictionState {
             };
         }
         if lead == 0.0 {
-            estimate = TipEstimate {
-                point: latest,
-                source: TipSource::Real,
-            };
+            estimate = TipEstimate::new(latest, TipSource::Real);
         }
         self.lead = Some((requested, lead, surface));
         Some(estimate)
@@ -564,10 +562,33 @@ impl PredictionState {
         })
     }
 
+    pub fn preview_points<'a>(
+        &'a self,
+        latest: StrokePoint,
+        platform: &'a [StrokePoint],
+        estimate: TipEstimate,
+        transform: [f32; 6],
+    ) -> impl Iterator<Item = StrokePoint> + 'a {
+        let native = platform
+            .iter()
+            .filter(move |point| {
+                estimate.source == TipSource::Platform
+                    && point.elapsed_micros > latest.elapsed_micros
+                    && point.elapsed_micros < estimate.point.elapsed_micros
+            })
+            .map(move |&point| {
+                Self::platform_point(latest, point, estimate.raw, estimate.point, transform)
+            });
+        let terminal = (estimate.point.elapsed_micros > latest.elapsed_micros
+            || estimate.point.position != latest.position)
+            .then_some(estimate.point);
+        native.chain(self.engine_intermediates()).chain(terminal)
+    }
+
     /// Apply the same endpoint correction and safety radius to every native
     /// sample. Otherwise an intermediate point could leave a long loop even
     /// after the terminal estimate was shortened.
-    pub fn platform_point(
+    fn platform_point(
         anchor: StrokePoint,
         point: StrokePoint,
         raw_tip: StrokePoint,
@@ -603,7 +624,7 @@ pub(crate) fn finalized_count(real: &[StrokePoint], already_finalized: usize) ->
     stable.max(1).max(already_finalized).min(real.len())
 }
 
-pub(crate) fn estimate_tip(
+fn estimate_tip(
     real: &[StrokePoint],
     platform: &[StrokePoint],
     requested_elapsed_micros: u32,
@@ -633,10 +654,7 @@ pub(crate) fn estimate_tip(
             document_to_surface,
             PREDICTION_DISTANCE_PX,
         );
-        return Some(TipEstimate {
-            point,
-            source: TipSource::Platform,
-        });
+        return Some(TipEstimate::new(point, TipSource::Platform));
     }
 
     if target_time > latest.elapsed_micros {
@@ -650,10 +668,7 @@ pub(crate) fn estimate_tip(
         );
     }
 
-    Some(TipEstimate {
-        point: latest,
-        source: TipSource::Real,
-    })
+    Some(TipEstimate::new(latest, TipSource::Real))
 }
 
 fn sample_at_time(anchor: StrokePoint, predicted: &[StrokePoint], target: u32) -> StrokePoint {

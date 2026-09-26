@@ -228,50 +228,22 @@ fn replay_contacts(
                     if !queries.insert(id) {
                         return Err(invalid("duplicate query"));
                     }
-                    let latest = real
-                        .last()
-                        .ok_or_else(|| invalid("query without input"))?
-                        .elapsed_micros;
+                    let anchor = *real.last().ok_or_else(|| invalid("query without input"))?;
+                    let latest = anchor.elapsed_micros;
                     let config = policy.config;
                     let forecast = state
                         .estimate_for(&real, &platform, requested, now, policy.transform, config)
                         .ok_or_else(|| invalid("missing forecast for nonempty input"))?;
                     if let Some(writer) = frames.as_mut() {
-                        let anchor = *real.last().unwrap();
-                        let mut preview = vec![Sample::from(anchor)];
-                        if forecast.source == TipSource::Platform {
-                            let raw = crate::feedback::estimate_tip(
-                                &real,
+                        let preview: Vec<_> = std::iter::once(anchor)
+                            .chain(state.preview_points(
+                                anchor,
                                 &platform,
-                                forecast.point.elapsed_micros,
+                                forecast,
                                 policy.transform,
-                                config,
-                            )
-                            .unwrap()
-                            .point;
-                            preview.extend(
-                                platform
-                                    .iter()
-                                    .copied()
-                                    .filter(|p| {
-                                        p.elapsed_micros > latest
-                                            && p.elapsed_micros < forecast.point.elapsed_micros
-                                    })
-                                    .map(|p| {
-                                        Sample::from(PredictionState::platform_point(
-                                            anchor,
-                                            p,
-                                            raw,
-                                            forecast.point,
-                                            policy.transform,
-                                        ))
-                                    }),
-                            );
-                        }
-                        preview.extend(state.engine_intermediates().map(Sample::from));
-                        if forecast.point != anchor {
-                            preview.push(forecast.point.into());
-                        }
+                            ))
+                            .map(Sample::from)
+                            .collect();
                         let actual: Vec<_> = real[traced_real..]
                             .iter()
                             .copied()

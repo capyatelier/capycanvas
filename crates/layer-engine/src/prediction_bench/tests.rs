@@ -118,7 +118,9 @@ fn frame_export_is_causal_includes_corrections_and_does_not_change_predictions()
         real.extend(f["real"].as_array().unwrap().iter().cloned());
         let curve = f["preview"].as_array().unwrap();
         assert_eq!(curve[0], *real.last().unwrap());
-        assert_eq!(curve.last().unwrap()[0], f["target_us"]);
+        let tip = curve.last().unwrap();
+        assert_eq!(tip[0], f["target_us"]);
+        assert!(curve.len() == 1 || (0..3).any(|i| tip[i] != curve[0][i]));
         assert!(
             real.iter()
                 .all(|s| s[0].as_u64() <= f["latest_us"].as_u64())
