@@ -76,11 +76,7 @@ impl ResolvedLayout {
                         column: above.id,
                         before: false,
                     },
-                    bounds: Bounds {
-                        y: gap.y + (gap.height - height) * 0.5,
-                        height,
-                        ..gap
-                    },
+                    bounds: gap.slice(Axis::Vertical, (gap.height - height) * 0.5, height),
                 });
             }
         }

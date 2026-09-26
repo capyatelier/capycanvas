@@ -210,11 +210,7 @@ impl CollapsedColumnPlacement {
                 group: last.group,
                 edge: Edge::Bottom,
             },
-            bounds: Bounds {
-                y: self.empty.y,
-                height: 3.0_f32.min(self.empty.height),
-                ..self.empty
-            },
+            bounds: self.empty.slice(Axis::Vertical, 0., 3.0_f32.min(self.empty.height)),
         })
     }
     pub(super) fn translate(&mut self, delta: [f32; 2]) {

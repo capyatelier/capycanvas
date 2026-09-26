@@ -43,17 +43,6 @@ fn along(bounds: Bounds, axis: Axis) -> f32 {
         bounds.height
     }
 }
-fn slice(mut bounds: Bounds, axis: Axis, offset: f32, length: f32) -> Bounds {
-    if axis == Axis::Horizontal {
-        bounds.x += offset;
-        bounds.width = length;
-    } else {
-        bounds.y += offset;
-        bounds.height = length;
-    }
-    bounds
-}
-
 impl DockLayout {
     pub(crate) fn compact_band(&self, group: u32) -> Option<&DockBand> {
         self.bands
@@ -236,7 +225,7 @@ impl DockLayout {
             let gap = gap.min(size / (nodes.len() as f32 * 2.).max(1.));
             let mut offset = offsets[alignment.index()];
             for (node, length) in nodes.into_iter().zip(lengths) {
-                let mut b = slice(strip, axis, offset, length);
+                let mut b = strip.slice(axis, offset, length);
                 let cross = cross_size(node, length);
                 if axis == Axis::Vertical {
                     let width = b.width.min(cross);
@@ -326,14 +315,14 @@ impl DockLayout {
             ] {
                 let b = group.bounds;
                 let position = if before { 0. } else { along(b, axis) };
-                let hit = slice(b, axis, position - 12., 24.);
+                let hit = b.slice(axis, position - 12., 24.);
                 if hit.contains(point[0], point[1]) {
                     return Some(DropHint {
                         target: DockTarget::Split {
                             group: group.id,
                             edge,
                         },
-                        bounds: slice(b, axis, position - 1.5, 3.),
+                        bounds: b.slice(axis, position - 1.5, 3.),
                     });
                 }
             }
@@ -426,7 +415,7 @@ impl DockLayout {
         } else {
             return None;
         };
-        let mut hint = slice(bounds, axis, offset, reach * 2.);
+        let mut hint = bounds.slice(axis, offset, reach * 2.);
         hint = hint.strip(edge, WORKSPACE_SPACING * 4.);
         Some(DropHint {
             target: DockTarget::CompactEdge { edge, alignment },

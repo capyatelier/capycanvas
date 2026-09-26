@@ -1176,6 +1176,16 @@ pub struct Bounds {
     pub height: f32,
 }
 impl Bounds {
+    pub fn slice(mut self, axis: Axis, start: f32, extent: f32) -> Self {
+        if axis == Axis::Horizontal {
+            self.x += start;
+            self.width = extent;
+        } else {
+            self.y += start;
+            self.height = extent;
+        }
+        self
+    }
     pub fn interpolate_from(self, from: Self, progress: f32) -> Self {
         let p = progress.clamp(0.0, 1.0);
         let mix = |a: f32, b: f32| a + (b - a) * p;
@@ -1304,6 +1314,14 @@ pub struct GroupPlacement {
     pub tiles: Option<TileLayout>,
 }
 impl GroupPlacement {
+    pub fn body(&self) -> Bounds {
+        let tabs = if self.tabs_visible { TAB_BAR_HEIGHT } else { 0. };
+        Bounds {
+            y: self.bounds.y + tabs,
+            height: (self.bounds.height - tabs).max(0.),
+            ..self.bounds
+        }
+    }
     /// Presentation-only interpolation; external resize targets follow the panel.
     pub fn interpolate_from(&mut self, from: Bounds, progress: f32) {
         self.bounds = self.bounds.interpolate_from(from, progress);
@@ -3959,11 +3977,7 @@ impl ResolvedLayout {
     pub fn tile_group_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
         for group in self.groups.iter().rev() {
             let Some(tiles) = &group.tiles else { continue };
-            let mut body = group.bounds;
-            if group.tabs_visible {
-                body.y += TAB_BAR_HEIGHT;
-                body.height -= TAB_BAR_HEIGHT;
-            }
+            let body = group.body();
             if !body.contains(point[0], point[1]) {
                 continue;
             }
@@ -3972,8 +3986,8 @@ impl ResolvedLayout {
                 return None;
             }
             let config = config.panel(group.active).ok()?;
-            let horizontal = group.axis == Axis::Horizontal;
-            let size = config.tile_style.size()[if horizontal { 0 } else { 1 }] / 3.;
+            let axis = usize::from(group.axis == Axis::Vertical);
+            let size = config.tile_style.size()[axis] / 3.;
             let clip = Bounds {
                 width: body.width,
                 height: body.height,
@@ -3987,36 +4001,11 @@ impl ResolvedLayout {
                 if !clip.contains(center[0], center[1]) {
                     continue;
                 }
-                let zone = if horizontal {
-                    Bounds {
-                        x: center[0] - size / 2.,
-                        width: size,
-                        ..*b
-                    }
-                } else {
-                    Bounds {
-                        y: center[1] - size / 2.,
-                        height: size,
-                        ..*b
-                    }
-                };
-                if !zone.contains(local[0], local[1]) {
+                let half = [b.width, b.height][axis] / 2.;
+                if !b.slice(group.axis, half - size / 2., size).contains(local[0], local[1]) {
                     continue;
                 }
-                let line = if horizontal {
-                    Bounds {
-                        x: center[0] - 1.5,
-                        width: 3.,
-                        ..*b
-                    }
-                } else {
-                    Bounds {
-                        y: center[1] - 1.5,
-                        height: 3.,
-                        ..*b
-                    }
-                };
-                let line = line.intersection(clip)?;
+                let line = b.slice(group.axis, half - 1.5, 3.).intersection(clip)?;
                 return Some(DropHint {
                     target: DockTarget::TileGroup {
                         panel: group.active,
@@ -4037,11 +4026,7 @@ impl ResolvedLayout {
     pub fn tile_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
         for group in self.groups.iter().rev() {
             let Some(tiles) = &group.tiles else { continue };
-            let mut body = group.bounds;
-            if group.tabs_visible {
-                body.y += TAB_BAR_HEIGHT;
-                body.height -= TAB_BAR_HEIGHT;
-            }
+            let body = group.body();
             if !body.contains(point[0], point[1]) {
                 continue;
             }
@@ -4103,15 +4088,7 @@ impl ResolvedLayout {
             if !b.contains(x, y) {
                 continue;
             }
-            let body = if group.tabs_visible {
-                Bounds {
-                    y: b.y + TAB_BAR_HEIGHT,
-                    height: (b.height - TAB_BAR_HEIGHT).max(0.0),
-                    ..b
-                }
-            } else {
-                b
-            };
+            let body = group.body();
             // Extend every tab strip into the former upper body split
             // zone. The horizontal position still selects the exact tab slot.
             let tab_reach = if prepend_body { body.height * 0.2 } else { 0. };
@@ -4137,10 +4114,8 @@ impl ResolvedLayout {
                 });
             }
             let contents = Bounds {
-                y: b.y + if group.tabs_visible { TAB_BAR_HEIGHT } else { 0. },
-                height: (b.height - if group.tabs_visible { TAB_BAR_HEIGHT } else { 0. }
-                    - group.footer_grip.map_or(0., |grip| grip.height)).max(0.),
-                ..b
+                height: (body.height - group.footer_grip.map_or(0., |grip| grip.height)).max(0.),
+                ..body
             };
             let body_hint = || DropHint {
                 target: DockTarget::Tab {

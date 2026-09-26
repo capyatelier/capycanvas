@@ -1767,12 +1767,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if group.tiles.is_some() {
                 group.tiles = Some(toolbar_tile_layout(
                     preview.width,
-                    preview.height
-                        - if group.tabs_visible {
-                            TAB_BAR_HEIGHT
-                        } else {
-                            0.0
-                        },
+                    group.body().height,
                     group.axis,
                     self.state
                         .workspace
