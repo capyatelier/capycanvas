@@ -129,7 +129,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Content()){select(id);return;}}
     void show(FrameworkElement anchor=nullptr){refresh();popup.ShowAt(anchor?anchor:selector);}
     void styleTab(Tab& t){
-        t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});t.close.CornerRadius({12,12,12,12});
+        t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});t.close.CornerRadius({12*CornerFit,12*CornerFit,12*CornerFit,12*CornerFit});
         for(auto const& part:{t.select,t.close}){
             part.Background(clear());
             part.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),data->tint(L"text",18));

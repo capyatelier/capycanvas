@@ -117,10 +117,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void init(){
         data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
         fitCamera=button(data,L"Fit canvas",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"fit_canvas")}}));});
-        fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
+        fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});
         AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
         tooltip(fitCamera,L"Fit canvas");
-        auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));surface.CornerRadius({20,20,20,20});
+        auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));
+        surface.SizeChanged([button=fitCamera](auto&& sender,SizeChangedEventArgs const& e){
+            double r=e.NewSize().Height*.5*CornerFit;sender.template as<Border>().CornerRadius({r,r,r,r});button.CornerRadius({r,r,r,r});
+        });
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         zenCapy=button(data,L"Exit Zen mode",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"zen_mode")}}));});

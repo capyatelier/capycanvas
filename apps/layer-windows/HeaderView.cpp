@@ -136,7 +136,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
             if(found==workspaces.end()){
                 Primitives::ToggleButton item;item.UseLayoutRounding(false);item.MinWidth(0);item.MinHeight(0);item.Height(26);item.Padding({8,0,8,0});
-                item.BorderThickness({0});item.CornerRadius({15,15,15,15});item.FontSize(data->textSize());
+                item.BorderThickness({0});item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontSize(data->textSize());
                 // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
                 item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                 item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
@@ -236,7 +236,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         menuLabels.UseLayoutRounding(false);menuWidth=8;
         for(auto value:array(data->model,L"application_menus")){
             auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,str(spec,L"label"),[]{});style(item,data,false);item.Padding({8,0,8,0});
-            item.Height(26);item.CornerRadius({13,13,13,13});item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+            item.Height(26);item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
             item.Width(textWidth(str(spec,L"label"),false,true)+16);menuWidth+=item.Width()+(menus.empty()?0:2);
             AutomationProperties::SetAutomationId(item,L"application-menu-"+id);
             item.Flyout(menu([weak=weak_from_this(),id](auto target){if(auto self=weak.lock())
@@ -255,7 +255,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));self->fillMenu(item.Items(),object(spec,L"model"));target.Append(item);
             }
         }}));
-        menuCapsule=Border();menuCapsule.Height(36);menuCapsule.Padding({5,5,5,5});menuCapsule.CornerRadius({18,18,18,18});menuCapsule.Background(headerSurface(data));
+        menuCapsule=Border();menuCapsule.Height(36);menuCapsule.Padding({5,5,5,5});menuCapsule.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});menuCapsule.Background(headerSurface(data));
         menuCapsule.VerticalAlignment(VerticalAlignment::Center);menuCapsule.Child(menuLabels);
         menuGroup=Grid();menuGroup.VerticalAlignment(VerticalAlignment::Center);menuGroup.Children().Append(menuCapsule);menuGroup.Children().Append(menuOverflow);
         zen=command(L"zen_mode");settings=command(L"settings");
@@ -264,7 +264,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcher=ScrollViewer();switcher.UseLayoutRounding(false);switcher.Content(switches);switcher.Height(36);
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,5,5});switcher.CornerRadius({18,18,18,18});switcher.BorderThickness({0});
+        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,5,5});switcher.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});switcher.BorderThickness({0});
         switcher.Background(data->glass(L"switcher"));
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,L"Task workspaces");
         workspaceOverflow=button(data,L"Workspaces",[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});

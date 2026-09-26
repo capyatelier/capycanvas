@@ -56,6 +56,14 @@ struct Column:std::enable_shared_from_this<Column>{
             if(str(anchor,L"kind")==L"column"&&num(anchor,L"column",-1)==id)source=value.GetObject();}
         corners={SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         if(source.Size()){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+        auto open=object(geometry,L"open");auto openDirection=str(open,L"direction");
+        std::set<std::wstring> openSources;
+        for(auto value:array(open,L"connections"))openSources.insert(std::wstring(value.GetArray().GetStringAt(0)));
+        if(!openDirection.empty())for(auto value:array(geometry,L"groups"))for(auto iconValue:array(value.GetObject(),L"icons")){
+            auto tile=iconValue.GetObject();if(!openSources.contains(std::wstring(str(tile,L"panel"))))continue;
+            auto square=sourceCorners(O({{L"bounds",object(tile,L"bounds")},{L"direction",S(openDirection)}}),bounds);
+            for(int i=0;i<4;++i)if(square[i])corners[i]=0;
+        }
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
         surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),corners));
         background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
@@ -64,7 +72,7 @@ struct Column:std::enable_shared_from_this<Column>{
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
             auto pair=entry.GetArray();if(pair.Size()==2&&pair.GetNumberAt(0)==id)offset=pair.GetNumberAt(1);
         }
-        auto open=object(geometry,L"open");hstring origin;
+        hstring origin;
         for(auto value:array(object(data->state,L"customization"),L"column_drawers")){
             auto anchor=object(value.GetObject(),L"anchor");
             if(num(anchor,L"column") == id)origin=str(anchor,L"origin");
@@ -107,7 +115,8 @@ struct Column:std::enable_shared_from_this<Column>{
                 AutomationProperties::SetName(pick,str(panel,L"title"));tooltip(pick,str(panel,L"title"));
                 bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId;
                 pick.Background(active?selected(data):clear());
-                pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,!facing.empty()&&joined==panelId?facing:hstring{}));
+                auto sourceFacing=!facing.empty()&&joined==panelId?facing:openSources.contains(key)?openDirection:hstring{};
+                pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,sourceFacing));
                 AutomationProperties::SetItemStatus(pick,active?L"Selected":L"");
             }
         }
