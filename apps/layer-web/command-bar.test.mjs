@@ -9,8 +9,12 @@ export async function checkCommandBar({call, evaluate, settle}) {
     await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers:0});
   };
   const open = async () => {
-    await wait(`layerApp.state().commands.some(c=>c.id==='search_commands'&&c.enabled)`);
-    await key('k','KeyK',75,2); await wait(`document.querySelector('#command-bar').open`);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await wait(`layerApp.state().commands.some(c=>c.id==='search_commands'&&c.enabled)`);
+      await key('k','KeyK',75,2);
+      if (await evaluate(`new Promise(resolve=>{const end=performance.now()+1000;(function check(){if(document.querySelector('#command-bar').open||performance.now()>end)resolve(document.querySelector('#command-bar').open);else setTimeout(check,30);})();})`)) return;
+    }
+    assert.fail('Primary+K opens command search once the canvas is idle');
   };
   const query = text => evaluate(`(()=>{const e=document.querySelector('#command-search');e.value=${JSON.stringify(text)};e.dispatchEvent(new Event('input',{bubbles:true}));return null;})()`);
   const detail = async () => {
