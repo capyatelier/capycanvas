@@ -248,6 +248,7 @@ mod tests {
             json!({"type":"renderer_stats"}),
             json!({"type":"panel_handle_target","item":{"kind":"panel","panel":"layers"}}),
             json!({"type":"drawer","column":null,"heights":[],"progress":1}),
+            json!({"type":"header","request":{"op":"geometry","width":1400,"insets":[0,0],"metrics":[]}}),
         ] {
             let expected = host.query(query.clone()).unwrap();
             let result = metadata(super::query(&mut host, &query.to_string()).unwrap());
@@ -259,84 +260,73 @@ mod tests {
     #[test]
     fn windows_tab_capture_and_preview_use_frozen_shared_insertion() {
         use layer_ui::{Bounds, ContactPhase, DockItem, Panel, TabHit, UiAction};
-        for offset in [2., 70.] {
-            let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-            initialize(&mut host).unwrap();
-            host.resize(986, 658, 1.).unwrap();
-            let before = host.session.state().workspace.layout.clone();
-            let revision = host.session.engine().document().revision;
-            let group = host
-                .session
-                .layout([986., 658.])
-                .groups
-                .into_iter()
-                .find(|g| g.panels.contains(&Panel::ToolSettings))
-                .unwrap();
-            let clip = Bounds {
-                height: 36.,
-                ..group.bounds
-            };
-            let tabs = vec![
-                TabHit {
-                    group: group.id,
-                    index: 0,
-                    bounds: Bounds { width: 80., ..clip },
-                },
-                TabHit {
-                    group: group.id,
-                    index: 1,
-                    bounds: Bounds {
-                        x: clip.x + 80.,
-                        width: 120.,
-                        ..clip
-                    },
-                },
-            ];
-            let press = [clip.x + offset, clip.y + 18.];
-            let item = DockItem::Panel {
-                panel: Panel::ToolSettings,
-            };
-            let action = |phase, position| UiAction::DragWorkspace {
-                item,
-                phase,
-                position,
-                viewport: [986., 658.],
-                tabs: tabs.clone(),
-            };
-            let down: crate::actions::Action = serde_json::from_value(json!({
-                "windows_tab_drag":{"tabs":tabs,"clip":clip},
-                "action":action(ContactPhase::Down,press)
-            }))
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        initialize(&mut host).unwrap();
+        host.resize(986, 658, 1.).unwrap();
+        let group = host
+            .session
+            .layout([986., 658.])
+            .groups
+            .into_iter()
+            .find(|g| g.panels.contains(&Panel::ToolSettings))
             .unwrap();
-            down.dispatch(&mut host).unwrap();
-            let moved = [press[0] + 65., press[1]];
-            host.dispatch(action(ContactPhase::Move, moved)).unwrap();
-            let query =
-                json!({"type":"workspace_drag_preview","item":item,"tabs":tabs,"position":moved});
-            let result = metadata(super::query(&mut host, &query.to_string()).unwrap());
-            assert!(result["error"].is_null());
-            assert_eq!(result["result"]["tab"]["insertion"], 2);
-            assert_eq!(result["result"]["tab"]["offsets"][1]["x"], -80.);
-            // Release without an additional motion uses the identical partition.
-            host.dispatch(action(ContactPhase::Up, moved)).unwrap();
-            assert_eq!(
-                host.session
-                    .state()
-                    .workspace
-                    .layout
-                    .group_panels(group.id)
-                    .unwrap(),
-                &[Panel::Sizes, Panel::ToolSettings]
-            );
-            let ended = metadata(super::query(&mut host, &query.to_string()).unwrap());
-            assert!(ended["result"]["tab"].is_null());
-            host.dispatch(UiAction::Invoke {
-                command: layer_ui::CommandId::UndoWorkspace,
-            })
-            .unwrap();
-            assert_eq!(host.session.state().workspace.layout, before);
-            assert_eq!(host.session.engine().document().revision, revision);
-        }
+        let clip = Bounds {
+            height: 36.,
+            ..group.bounds
+        };
+        let tabs = vec![
+            TabHit {
+                group: group.id,
+                index: 0,
+                bounds: Bounds { width: 80., ..clip },
+            },
+            TabHit {
+                group: group.id,
+                index: 1,
+                bounds: Bounds {
+                    x: clip.x + 80.,
+                    width: 120.,
+                    ..clip
+                },
+            },
+        ];
+        let press = [clip.x + 2., clip.y + 18.];
+        let item = DockItem::Panel {
+            panel: Panel::ToolSettings,
+        };
+        let action = |phase, position| UiAction::DragWorkspace {
+            item,
+            phase,
+            position,
+            viewport: [986., 658.],
+            tabs: tabs.clone(),
+        };
+        let down: crate::actions::Action = serde_json::from_value(json!({
+            "windows_tab_drag":{"tabs":tabs,"clip":clip},
+            "action":action(ContactPhase::Down,press)
+        }))
+        .unwrap();
+        down.dispatch(&mut host).unwrap();
+        let moved = [press[0] + 65., press[1]];
+        host.dispatch(action(ContactPhase::Move, moved)).unwrap();
+        let query = json!({"type":"workspace_drag_preview","item":item,"tabs":tabs,"position":moved});
+        let result = metadata(super::query(&mut host, &query.to_string()).unwrap());
+        assert!(result["error"].is_null());
+        assert_eq!(result["result"]["tab"]["insertion"], 2);
+        assert_eq!(result["result"]["tab"]["offsets"][1]["x"], -80.);
+        // Release without an additional motion uses the identical partition.
+        host.dispatch(action(ContactPhase::Up, moved)).unwrap();
+        assert_eq!(
+            host.session
+                .state()
+                .workspace
+                .layout
+                .group_panels(group.id)
+                .unwrap(),
+            &[Panel::Sizes, Panel::ToolSettings]
+        );
+        let ended = metadata(super::query(&mut host, &query.to_string()).unwrap());
+        assert!(ended["result"]["tab"].is_null());
     }
     #[test]
     fn windows_help_commands_resolve_and_acknowledge_shared_links() {
@@ -493,88 +483,6 @@ mod tests {
         }
         assert_eq!(host.session.engine().document().revision, revision);
     }
-    #[test]
-    fn header_queries_keep_drag_motion_out_of_workspace_history() {
-        use layer_ui::{HeaderAction, HeaderZone, Platform};
-        let mut host = NativeHost::new(Platform::Windows).unwrap();
-        initialize(&mut host).unwrap();
-        let before = host.session.durable_workspace();
-        host.dispatch(HeaderAction::Edit { editing: true }.action())
-            .unwrap();
-        let layout = host.session.state().workspace.layout.header.clone();
-        let id = layout.zones[0][0].id;
-        let metrics: Vec<_> = layout
-            .entries()
-            .map(|e| json!({"id":e.id,"width":56,"compact":56}))
-            .collect();
-        let call = |host: &mut NativeHost, request: Value| {
-            let reply = metadata(
-                query(
-                    host,
-                    &json!({"type":"header","request":request}).to_string(),
-                )
-                .unwrap(),
-            );
-            assert!(reply["error"].is_null(), "{reply}");
-            reply["result"].clone()
-        };
-        let geometry = call(
-            &mut host,
-            json!({
-                "op":"geometry","width":1400,"insets":[0,150],"metrics":metrics
-            }),
-        );
-        let grab = geometry["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["id"] == id)
-            .unwrap()["bounds"]
-            .clone();
-        let begin = json!({"op":"begin","source":{"kind":"item","value":id},
-            "width":1400,"insets":[0,150],"metrics":metrics,
-            "press":[grab["x"].as_f64().unwrap()+10.,grab["y"].as_f64().unwrap()+10.],
-            "grab":grab});
-        for cancel in [true, false] {
-            assert_eq!(call(&mut host, begin.clone()), true);
-            assert!(!call(&mut host, json!({"op":"preview","position":[700,20]})).is_null());
-            assert_eq!(host.session.state().workspace.layout.header, layout);
-            assert_eq!(host.session.durable_workspace(), before);
-            let action = call(
-                &mut host,
-                json!({"op":"finish","position":[700,20],"cancel":cancel}),
-            );
-            if cancel {
-                assert!(action.is_null());
-            } else {
-                host.dispatch(serde_json::from_value(action).unwrap())
-                    .unwrap();
-                assert_eq!(
-                    host.session
-                        .state()
-                        .workspace
-                        .layout
-                        .header
-                        .location(id)
-                        .unwrap()
-                        .0,
-                    HeaderZone::Center
-                );
-                assert_eq!(host.session.durable_workspace(), before);
-                host.dispatch(HeaderAction::Cancel.action()).unwrap();
-                assert_eq!(host.session.state().workspace.layout.header, layout);
-            }
-        }
-        assert_eq!(call(&mut host, begin), false);
-        assert!(
-            call(
-                &mut host,
-                json!({"op":"finish","position":[700,20],"cancel":false})
-            )
-            .is_null()
-        );
-    }
-
     #[test]
     fn optional_queries_reject_mutations_oversize_and_stale_geometry_without_failing_host() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();

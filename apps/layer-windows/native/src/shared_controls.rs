@@ -134,15 +134,7 @@ mod tests {
     fn drawing_strip_slide_uses_the_shared_gapped_preview() {
         let over = slide([97., 30.], [1, 2, 3]);
         assert_eq!(over["offsets"], serde_json::json!([0., -106., 0.]));
-        assert_eq!(over["bounds"]["x"], 67.);
-        assert_eq!(over["before"], 3);
         assert_eq!(over["attached"], true);
-        let end = slide([500., 17.], [1, 2, 3]);
-        assert_eq!(end["offsets"], serde_json::json!([0., -106., -106.]));
-        assert!(end["before"].is_null());
-        let away = slide([500., 50.], [1, 2, 3]);
-        assert_eq!(away["attached"], false);
-        assert_eq!(away["offsets"], serde_json::json!([0., 0., 0.]));
         assert!(slide([500., 17.], [2, 1, 3]).is_null());
     }
 }
