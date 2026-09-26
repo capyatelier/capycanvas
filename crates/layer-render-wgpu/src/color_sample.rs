@@ -194,72 +194,66 @@ impl WgpuRasterizer {
         }
         self.uploads.finish(&encoder);
         encoder.submit(&self.queue);
-        let ready = buffer.clone();
         let tx = self.color_sampler.tx.clone();
         let space = self.document_color.space;
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let result = result
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                    .and_then(|_| {
-                        let data = ready
-                            .slice(..)
-                            .get_mapped_range()
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let mut sum = [0f64; 4];
-                        let mut weight = 0.;
-                        let perceptual = request.area.perceptual();
-                        let to_srgb = space.linear_transform(layer_core::color::RgbSpace::Srgb);
-                        let from_srgb = layer_core::color::RgbSpace::Srgb.linear_transform(space);
-                        for (i, texel) in data[..count as usize * stride as usize]
-                            .chunks_exact(stride as usize)
-                            .enumerate()
-                        {
-                            let dx = (left + i as u32 % width) as f64 - x as f64;
-                            let dy = (top + i as u32 / width) as f64 - y as f64;
-                            if perceptual && dx * dx + dy * dy > (request.area.width() as f64 * 0.5).powi(2) {
-                                continue;
-                            }
-                            weight += 1.;
-                            let color: [f32; 4] = if formats[i] {
-                                std::array::from_fn(|c| {
-                                    f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
-                                })
-                            } else {
-                                [
-                                    layer_core::color::srgb_decode(f32::from(texel[0]) / 255.),
-                                    layer_core::color::srgb_decode(f32::from(texel[1]) / 255.),
-                                    layer_core::color::srgb_decode(f32::from(texel[2]) / 255.),
-                                    f32::from(texel[3]) / 255.,
-                                ]
-                            };
-                            if color[3] > 0. {
-                                let alpha = color[3] as f64;
-                                if perceptual {
-                                    let rgb = [color[0], color[1], color[2]].map(|v| v as f64 / alpha);
-                                    let lab = layer_core::color::oklab::to_lab(layer_core::color::rgb::apply(to_srgb, rgb));
-                                    for c in 0..3 { sum[c] += lab[c] * alpha; }
-                                    sum[3] += alpha;
-                                } else {
-                                    for c in 0..4 { sum[c] += color[c] as f64; }
-                                }
-                            }
-                        }
-                        let rgba = if sum[3] > 0. {
-                            let mut rgb = [sum[0], sum[1], sum[2]].map(|v| v / sum[3]);
-                            if perceptual {
-                                rgb = layer_core::color::rgb::apply(from_srgb, layer_core::color::oklab::from_lab(rgb));
-                            }
-                            [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, (sum[3] / weight) as f32]
+        crate::raster::map_then(
+            &buffer,
+            buffer.size(),
+            move |data| {
+                let mut sum = [0f64; 4];
+                let mut weight = 0.;
+                let perceptual = request.area.perceptual();
+                let to_srgb = space.linear_transform(layer_core::color::RgbSpace::Srgb);
+                let from_srgb = layer_core::color::RgbSpace::Srgb.linear_transform(space);
+                for (i, texel) in data[..count as usize * stride as usize]
+                    .chunks_exact(stride as usize)
+                    .enumerate()
+                {
+                    let dx = (left + i as u32 % width) as f64 - x as f64;
+                    let dy = (top + i as u32 / width) as f64 - y as f64;
+                    if perceptual && dx * dx + dy * dy > (request.area.width() as f64 * 0.5).powi(2) {
+                        continue;
+                    }
+                    weight += 1.;
+                    let color: [f32; 4] = if formats[i] {
+                        std::array::from_fn(|c| {
+                            f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
+                        })
+                    } else {
+                        [
+                            layer_core::color::srgb_decode(f32::from(texel[0]) / 255.),
+                            layer_core::color::srgb_decode(f32::from(texel[1]) / 255.),
+                            layer_core::color::srgb_decode(f32::from(texel[2]) / 255.),
+                            f32::from(texel[3]) / 255.,
+                        ]
+                    };
+                    if color[3] > 0. {
+                        let alpha = color[3] as f64;
+                        if perceptual {
+                            let rgb = [color[0], color[1], color[2]].map(|v| v as f64 / alpha);
+                            let lab = layer_core::color::oklab::to_lab(layer_core::color::rgb::apply(to_srgb, rgb));
+                            for c in 0..3 { sum[c] += lab[c] * alpha; }
+                            sum[3] += alpha;
                         } else {
-                            [0.; 4]
-                        };
-                        Ok(ColorSample { request_id, rgba })
-                    });
-                ready.unmap();
+                            for c in 0..4 { sum[c] += color[c] as f64; }
+                        }
+                    }
+                }
+                let rgba = if sum[3] > 0. {
+                    let mut rgb = [sum[0], sum[1], sum[2]].map(|v| v / sum[3]);
+                    if perceptual {
+                        rgb = layer_core::color::rgb::apply(from_srgb, layer_core::color::oklab::from_lab(rgb));
+                    }
+                    [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, (sum[3] / weight) as f32]
+                } else {
+                    [0.; 4]
+                };
+                Ok(ColorSample { request_id, rgba })
+            },
+            move |result| {
                 let _ = tx.send(result);
-            });
+            },
+        );
         self.color_sampler.pending = true;
         Ok(true)
     }

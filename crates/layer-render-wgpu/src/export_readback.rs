@@ -151,11 +151,7 @@ impl WgpuRasterizer {
             .slice(..)
             .get_mapped_range()
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-        let bytes = mapped
-            .chunks_exact(padded_row_bytes as usize)
-            .flat_map(|row| &row[..row_bytes as usize])
-            .copied()
-            .collect();
+        let bytes = raster::unpadded_rows(&mapped, padded_row_bytes, row_bytes);
         drop(mapped);
         buffer.unmap();
         Ok(bytes)

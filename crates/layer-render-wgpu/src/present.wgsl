@@ -157,14 +157,10 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
     return Vertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), uv);
 }
+// Extended sRGB mirrors the transfer below zero. Preserve signed gamut
+// coordinates and above-white values for the browser's color transform.
 fn display_color(rgb: vec3<f32>) -> vec3<f32> {
-    if VIEW_EXTENDED_SRGB {
-        // Extended sRGB mirrors the transfer below zero. Preserve signed gamut
-        // coordinates and above-white values for the browser's color transform.
-        let magnitude=abs(rgb);
-        return sign(rgb)*select(magnitude*12.92,1.055*pow(magnitude,vec3(1./2.4))-.055,magnitude>vec3(.0031308));
-    }
-    return select(rgb * 12.92, 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, rgb > vec3<f32>(0.0031308));
+    return sdr_encode(select(max(rgb, vec3(0.)), rgb, VIEW_EXTENDED_SRGB), 0u);
 }
 // Some attachment conversions truncate instead of rounding to nearest. Select
 // the representable Float16 value explicitly; this is display-only quantization.
@@ -343,7 +339,7 @@ struct OverviewVertex {
     let halo = select(1., 0., dot(outline.rgb, vec3(.2126,.7152,.0722)) > .179);
     return OverviewVertex(surface_clip(point), uv, ab, cd, outline, background_scale, clip, halo);
 }
-fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
     return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),.000001),0.,1.));
 }
@@ -353,8 +349,8 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
     let paint = proof_artwork(coarse_area(v.uv, footprint),v.uv*camera.offset_document.zw);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
-    let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
-                   min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));
+    let edge = min(min(segment_distance(p,v.ab.xy,v.ab.zw),segment_distance(p,v.ab.zw,v.cd.xy)),
+                   min(segment_distance(p,v.cd.xy,v.cd.zw),segment_distance(p,v.cd.zw,v.ab.xy)));
     let scale = v.background_scale.w;
     rgb = mix(rgb,vec3(v.halo),clamp(1.5*scale+.5-edge,0.,1.));
     rgb = mix(rgb,view_ui_rgb(v.outline.rgb),clamp(.75*scale+.5-edge,0.,1.));
@@ -379,16 +375,12 @@ struct PickerVertex {
     let local = corners[index] * 48.;
     return PickerVertex(surface_clip(geometry.xy + local * geometry.z), local, geometry, sample.xyz, original.rgb, candidate.rgb);
 }
-fn picker_line(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
-    let d = b-a;
-    return length(p-a-d*clamp(dot(p-a,d)/dot(d,d),0.,1.));
-}
 // A small stacked-layer glyph accompanies the aim mark for raw-layer sampling.
 fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
     let q = p - center;
-    let top = min(picker_line(q,vec2(-3.5,0.),vec2(0.,-2.)),picker_line(q,vec2(0.,-2.),vec2(3.5,0.)));
-    let bottom = min(picker_line(q,vec2(-3.5,0.),vec2(0.,2.)),picker_line(q,vec2(0.,2.),vec2(3.5,0.)));
-    let back = min(picker_line(q,vec2(-3.5,2.8),vec2(0.,4.8)),picker_line(q,vec2(0.,4.8),vec2(3.5,2.8)));
+    let top = min(segment_distance(q,vec2(-3.5,0.),vec2(0.,-2.)),segment_distance(q,vec2(0.,-2.),vec2(3.5,0.)));
+    let bottom = min(segment_distance(q,vec2(-3.5,0.),vec2(0.,2.)),segment_distance(q,vec2(0.,2.),vec2(3.5,0.)));
+    let back = min(segment_distance(q,vec2(-3.5,2.8),vec2(0.,4.8)),segment_distance(q,vec2(0.,4.8),vec2(3.5,2.8)));
     return min(min(top,bottom),back)-.32;
 }
 @fragment fn picker_fragment(v: PickerVertex) -> @location(0) vec4<f32> {
@@ -399,7 +391,7 @@ fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
         let q = vec2((p.x-p.y)*.70710678, (p.x+p.y)*.70710678);
         let barrel = max(abs(q.x-10.)-6., abs(q.y)-2.5);
         let cap = max(abs(q.x-18.)-2., abs(q.y)-5.);
-        let tip = picker_line(p,vec2(0.),vec2(4.,-4.))-.65;
+        let tip = segment_distance(p,vec2(0.),vec2(4.,-4.))-.65;
         var d = min(min(abs(barrel)-.65,cap), tip);
         if v.sample.z > .5 { d = min(d,picker_layer_mark(p,vec2(9.,8.))); }
         let coverage = clamp((1.2+aa-d)/aa,0.,1.);
@@ -428,8 +420,8 @@ fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
     ring = mix(ring,vec3(1.-light),inner_light*.12);
     // One physical pixel of analytic coverage also smooths the interior circle.
     rgb = mix(rgb,ring,clamp((radius-32.+aa*.5)/aa,0.,1.));
-    let cross = min(picker_line(p,vec2(-2.8,0.),vec2(2.8,0.)),
-                    picker_line(p,vec2(0.,-2.8),vec2(0.,2.8)))-.32;
+    let cross = min(segment_distance(p,vec2(-2.8,0.),vec2(2.8,0.)),
+                    segment_distance(p,vec2(0.,-2.8),vec2(0.,2.8)))-.32;
     var mark = cross;
     if v.sample.z > .5 { mark = min(mark,picker_layer_mark(p,vec2(9.,-8.))); }
     // A fine white keyline, rather than a heavy halo, separates the aim from artwork.

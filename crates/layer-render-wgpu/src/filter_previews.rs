@@ -367,33 +367,26 @@ impl FilterPreviews {
         encoder.copy_buffer_to_buffer(winner, 0, &read, 0, 8);
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
-        let buffer = read.clone();
         let tx = self.tx.clone();
-        read.slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let result = result
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                    .and_then(|_| {
-                        let bytes = buffer
-                            .slice(..)
-                            .get_mapped_range()
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let preferred = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                        let value = if preferred > 0 {
-                            preferred
-                        } else {
-                            u32::from_le_bytes(bytes[4..8].try_into().unwrap())
-                        };
-                        drop(bytes);
-                        buffer.unmap();
-                        Ok(value)
-                    });
+        crate::raster::map_then(
+            &read,
+            8,
+            |bytes| {
+                let preferred = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                Ok(if preferred > 0 {
+                    preferred
+                } else {
+                    u32::from_le_bytes(bytes[4..8].try_into().unwrap())
+                })
+            },
+            move |result| {
                 let _ = tx.send(if last {
                     Ready::Point(result)
                 } else {
                     Ready::ProbeNext(result)
                 });
-            });
+            },
+        );
         Ok(())
     }
     fn render(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {

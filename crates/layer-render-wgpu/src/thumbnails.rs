@@ -292,35 +292,20 @@ impl UiImageTarget {
     ) {
         let [width, height] = self.size();
         let stride = self.stride;
-        let ready = self.buffer.clone();
-        self.buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let image = result
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                    .and_then(|_| {
-                        let data = ready
-                            .slice(..)
-                            .get_mapped_range()
-                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let mut bytes = Vec::with_capacity((width * height * 4) as usize);
-                        for row in data.chunks(stride as usize) {
-                            bytes.extend_from_slice(&row[..width as usize * 4]);
-                        }
-                        drop(data);
-                        Ok(ReadbackImage {
-                            request_id,
-                            width,
-                            height,
-                            stride: width * 4,
-                            bytes,
-                        })
-                    });
-                // A persistent staging buffer must also be reusable after a
-                // failed mapped-range access, not only after successful copies.
-                ready.unmap();
-                reply(image);
-            });
+        crate::raster::map_then(
+            &self.buffer,
+            self.buffer.size(),
+            move |data| {
+                Ok(ReadbackImage {
+                    request_id,
+                    width,
+                    height,
+                    stride: width * 4,
+                    bytes: crate::raster::unpadded_rows(data, stride, width * 4),
+                })
+            },
+            reply,
+        );
     }
 }
 
