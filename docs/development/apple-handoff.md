@@ -4692,9 +4692,7 @@ presentation-backend replacement will fix the retained stalls.
 Reanalysis of the earlier real-app Instruments captures now joins all 6 Mac and
 122 iPad recorded presentation requests to native frames. Requests and the last
 observed GPU completion precede their frame targets, but actual presentation is
-one refresh later. The new optional request analysis in `metal_frames.py` rejects
-ambiguous identities, multiple requests and invalid ordering; all 22 Metal
-analysis checks pass. These are small profiled samples from the earlier
+one refresh later. These are small profiled samples from the earlier
 `4a0a808` run, with incomplete capture coverage. They neither explain the current
 stalls nor establish input latency; see
 `artifacts/performance/retained-command-timeline-v1/checkpoint.json`.

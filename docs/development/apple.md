@@ -98,8 +98,7 @@ Xcode installation's `Contents/Developer` directory.
   [physical Pencil check](../../apps/layer-apple/INPUT.md#physical-pencil-smoke-check).
 - Use the [isolated drawing workloads](../../apps/layer-apple/PERFORMANCE.md#repeatable-native-drawing-workloads)
   for Release hardware measurements. [Capture/export](../../apps/layer-apple/PERFORMANCE.md#capture-locally)
-  and [Metal frame correlation](../../apps/layer-apple/PERFORMANCE.md#correlating-native-drawing-frames)
-  cover device traces and GPU debugging. Measure the display's actual refresh
+  covers device traces and GPU debugging. Measure the display's actual refresh
   rate; keep builds and UI automation idle during timing.
 - Keep raw logs and screenshots in ignored `artifacts/` or
   `apps/layer-apple/DerivedData/`; never commit private device or signing details.
