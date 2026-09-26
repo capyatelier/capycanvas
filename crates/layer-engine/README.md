@@ -46,4 +46,4 @@ arrangements.
 Read [brushes](../../docs/internals/brushes.md) and
 [input and stroke feedback](../../docs/internals/input.md) for the concepts behind
 these modules. The [performance guide](../../docs/development/testing.md#performance)
-includes the engine's input and dab-generation benchmark.
+describes the `layer-bench` GPU workloads that exercise the engine.

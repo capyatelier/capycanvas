@@ -120,14 +120,12 @@ driver, build profile, document, brush and display setup when comparing results.
 Pipeline startup and steady-state drawing should also be measured separately.
 
 ```bash
-cargo run --locked --release -p layer-engine --example hot_path
 cargo run --locked --release -p layer-bench -- --scenario painter --repeats 3
 ```
 
-The first command measures the engine hot path. The GPU harness measures completed
-workloads and produces explicit-export review images; it needs a hardware GPU.
-[GPU benchmark workloads](gpu-raster-benchmarks.md) describes its scenarios and
-options. The [optimization log](../history/optimization-log.md) records earlier
+The GPU harness measures completed workloads and produces explicit-export review
+images; it needs a hardware GPU. [GPU benchmark workloads](gpu-raster-benchmarks.md)
+describes its scenarios and options. The [optimization log](../history/optimization-log.md) records earlier
 measurements, not performance guarantees for an arbitrary device.
 
 Brush previews can be regenerated with:
