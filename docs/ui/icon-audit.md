@@ -267,6 +267,22 @@ Thirty bundled filters previously inherited the generic adjustment-sliders icon.
 
 Category mapping: Tone → Levels; Color → hue/saturation swatches; Detail → sharpened edge; Blur → diffuse disk; Artistic → flat brush; Distort → warped grid; Texture → grain. Native select-menu values, numeric fields, ordinary text menu entries, and noninteractive section headings remain text controls; they do not depend on a glyph to identify their action.
 
+## Canvas action bar — 2026-09-26
+
+| Command | Icon | Decision |
+| --- | --- | --- |
+| Free transform | `transform` | The existing transform box. |
+| Uniform transform | `link` | Chain links, as for a preserved aspect. |
+| Distort | `distort` | New: an irregular quad with four independent corner handles. |
+| Perspective | `perspective` | New: a trapezoid with handles at its four corners. |
+| Flip horizontally / vertically | `flip-horizontal`, `flip-vertical` | Reused from the view flips; the bar shows the icon alone. |
+| Rotate 90° left / right | `rotate-left`, `rotate-right` | Reused from view rotation; the bar shows the icon alone. |
+| Reset transform | `reset` | The circular reset arrow. |
+| Nearest neighbor / Bilinear / Bicubic | `mosaic`, `blur`, `sharpen` | Pixel blocks, a soft disk, a sharp edge. |
+| Remove last point | `back` | The back arrow. |
+| Mask to selection | `mask` | The layer mask glyph. |
+| Show canvas action bar | `toolbar` | The toolbar glyph. |
+
 ## Host integration
 
 Rust owns command, preset and panel identities. Android and web both load the same SVG bank; the layer-footer New Layer button uses the same symbol as the command. Android draws the original vectors into the actual device viewport instead of scaling a fixed bitmap and tinting the whole image. Foreground alpha is preserved, so secondary category glyphs match muted text while fixed swatch paints stay opaque. The icon fixture verifies black/white fills survive both theme changes and disabled compositing.

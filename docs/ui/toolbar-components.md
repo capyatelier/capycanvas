@@ -65,6 +65,12 @@ form remains available through overflow. Within one tool context, adding or
 removing fields retains compatible editors and open lists. A context change
 discards old editors and their action bindings.
 
+The [canvas action bar](canvas-action-bar.md) presents the same `ToolOption`
+actions and choices beside the object being edited. On the Web it builds them
+with the same `actionField` and `choiceField` builders as Tool Options; a
+segmented choice keeps its natural width there, and other choices open a
+dropdown.
+
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;
 a tap outside accepts valid text and ends editing. Inputs and dropdowns use the
