@@ -10,7 +10,6 @@ import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
-import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
 import {checkPortablePhoto} from "./portable-photo.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
@@ -259,8 +258,6 @@ try {
     await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--portable-photo")) {
     await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--gainmap-interchange")) {
-    await checkGainmapInterchange({evaluate});
   } else if (process.argv.includes("--hdr-performance")) {
     await measureHdr({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--hdr")) {

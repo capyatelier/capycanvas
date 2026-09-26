@@ -303,8 +303,7 @@ and tests exist, or silently reduce rich images to untagged RGBA8.
 Use the [shared Rust reader](../../crates/layer-color/src/photo/avif_io.rs)
 and the [portable photo core](../development/portable-photo-core.md).
 JPEG/AVIF/HEIC support is built into the application; GTK packages have no
-external photo-codec bundle. The [native reference tools](../../tools/validation/photo-codecs/README.md)
-remain optional independent test oracles. The current Rust HEIC variant limits
+external photo-codec bundle. The current Rust HEIC variant limits
 are accepted for initial integration and must remain explicit.
 
 1. Preserve independent exact high-depth, alpha, ICC/NCLX, grid and all 16

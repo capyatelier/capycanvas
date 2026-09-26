@@ -311,9 +311,7 @@ Original Rust dependency and toolchain notices are included under
 `share/doc/capycanvas/`. `LAYER_CARGO_ABOUT` can select the notice-generator binary.
 The GTK and Web packagers share `tools/build/about.toml` and require original
 license texts, including vendored dependencies. License harvesting can fetch
-missing notices from pinned upstream revisions. The independent native
-[codec reference tools](../../tools/validation/photo-codecs/README.md) are used
-only for optional interoperability tests and are not shipped in application packages.
+missing notices from pinned upstream revisions.
 
 The launcher accepts local
 file lists (`%F`) and declares the currently decoded image formats. An installer

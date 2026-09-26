@@ -47,8 +47,6 @@ impl GainMapMetadata {
     }
 }
 
-#[cfg(all(test, feature = "native-codec-reference", target_os = "linux"))]
-pub(super) mod native;
 mod jpeg;
 mod jpeg_container;
 mod metadata;
@@ -360,56 +358,6 @@ mod tests {
                     }
                 }
                 fallbacks.push(base[0][0]);
-                if let Some(directory) = std::env::var_os("LAYER_GAINMAP_OUTPUT") {
-                    let directory = std::path::PathBuf::from(directory);
-                    std::fs::create_dir_all(&directory).unwrap();
-                    let stem = format!(
-                        "{}-{}",
-                        if format == GainMapFormat::Jpeg {
-                            "jpeg"
-                        } else {
-                            "avif"
-                        },
-                        if exposure == 0. { "neutral" } else { "dark" }
-                    );
-                    let mut file = Vec::new();
-                    write_gainmap_rows(
-                        &mut file,
-                        extent,
-                        RgbSpace::Srgb,
-                        rendition,
-                        format,
-                        90,
-                        None,
-                        None,
-                        false,
-                        &cancel,
-                        read,
-                    )
-                    .unwrap();
-                    std::fs::write(
-                        directory.join(format!(
-                            "{stem}.{}",
-                            if format == GainMapFormat::Jpeg {
-                                "jpg"
-                            } else {
-                                "avif"
-                            }
-                        )),
-                        file,
-                    )
-                    .unwrap();
-                    std::fs::write(
-                        directory.join(format!("{stem}.json")),
-                        serde_json::to_vec(
-                            &base[0]
-                                .map(|v| (RgbSpace::Srgb.encode(v as f64) * 255.).round() as u8),
-                        )
-                        .unwrap(),
-                    )
-                    .unwrap();
-                }
-
                 if format == GainMapFormat::Jpeg {
                     let mut file = Vec::new();
                     write_gainmap_rows(
@@ -517,19 +465,6 @@ mod tests {
                         "both metadata schemas must exist"
                     );
                 }
-            }
-            let directory = std::env::var_os("LAYER_GAINMAP_OUTPUT").map(std::path::PathBuf::from);
-            if let Some(d) = directory {
-                std::fs::create_dir_all(&d).unwrap();
-                std::fs::write(
-                    d.join(if transparent {
-                        "edited.avif"
-                    } else {
-                        "edited.jpg"
-                    }),
-                    &encoded,
-                )
-                .unwrap();
             }
             let source = read_photo(Cursor::new(&encoded), DecodeLimits::default()).unwrap();
             assert_eq!(source.extent, extent);

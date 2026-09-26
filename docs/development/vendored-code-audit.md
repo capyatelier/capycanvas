@@ -345,31 +345,13 @@ Research: [Ottosson's Oklab reference](https://bottosson.github.io/posts/oklab/)
 4. **Product changes that help:** none; this is a development workflow decision.
    Dropping Android would remove it, but would be disproportionate to about 59 KiB.
 
-**Adjacent third-party assets and validation-only sources.** These are included
-so “all vendored code” does not hide a font or a downloaded patched dependency.
+**Adjacent third-party assets and test data.** These are included so “all
+vendored code” does not hide a font or third-party test inputs.
 
 | Item | Why retained | Alternatives | No downsides? | Product/workflow changes that help |
 | --- | --- | --- | --- | --- |
 | **Roboto-derived battery font**, [CapyBatteryNumerals-Bold.ttf](../../apps/layer-linux/fonts/CapyBatteryNumerals-Bold.ttf), 4,916 bytes plus notice | GTK battery digits match Android; local font is static bold, digits-only, renamed | Use the system UI font or require an externally installed font | Runtime remains functional, but exact glyph metrics/appearance vary and layout needs checking | Accept platform-native battery typography. This is an easy cosmetic tradeoff if exact visual parity is unimportant |
 | **HEVC/HEIF testdata** in both codec snapshots, plus [derived HEIC fixtures](../../crates/layer-color/tests/fixtures/heif/README.md) | Independent encoded inputs and regression coverage | Download pinned upstream fixtures on demand or regenerate with independent encoders | No production behavior change, but offline tests/reproducibility become harder; deleting tests loses assurance | Keep committed small fixtures and make a larger conformance corpus an explicit optional validation step |
-| **Validation-only libheif 1.23.4 plus local source-profile patch** | Independent HEIC reference must retain source NCLX after RGB passthrough, including bitstream-only metadata | Use an upstream release with equivalent behavior; compare raw YUV plus metadata separately against unmodified libheif; or isolate profile checks to committed independent vectors | No production runtime downside, but changing the oracle can lose exactly the source-color coverage it was introduced to provide | Change validation strategy, not the product. Do not restore these native libraries to production merely to remove this test patch |
-| **Validation-only libde265 1.1.3** | Independent HEVC decoding behind libheif | Compatible system development package or a pinned test image | No product change; version/build reproducibility differs | Accept a qualified system reference environment |
-| **Validation-only libavif 1.4.2** | Independent AVIF container/metadata/precision and gain-map validation | Compatible system package or test image | No product change; available API/version must match the reference tools | Accept a qualified system reference environment |
-| **Validation-only dav1d 1.5.3** | Independent AV1 decoder for libavif | System dav1d or another independently qualified libavif backend | No product change; changing decoder changes the reference being used | Standardize the test environment/backend |
-| **Validation-only libaom 3.14.1** | Independent AV1 encoding and known-sample fixtures | System libaom or pregenerated independently verified fixtures | No product change; fixture regeneration/version reproducibility changes | Run fixture generation in a dedicated pinned environment |
-| **Validation-only libjpeg-turbo 3.1.4.1** | JPEG component of the independent HDR reference stack | Compatible system library/test image | No product change; reference output/build settings may differ | Accept a qualified system reference environment |
-| **Validation-only libultrahdr 2.0.0** | Independent JPEG gain-map interchange oracle | Compatible system package/test image or committed independent reference results | No product change; availability and regeneration coverage differ | Make reference regeneration a dedicated optional workflow |
-
-The seven native libraries above are downloaded only by the opt-in
-[reference recipe](../../tools/validation/photo-codecs/photo-codecs.py), which
-pins [upstream archive URLs, versions and hashes](../../tools/validation/photo-codecs/photo-codecs.json).
-Only libheif has a local source patch; the other six are unmodified source builds.
-They are excluded from application packages. These are test-environment
-dependencies, not seven additional committed production forks. Upstream source
-research for the exceptional patch: [libheif's conversion implementation](https://raw.githubusercontent.com/strukturag/libheif/v1.23.4/libheif/context.cc)
-and [its decoding options](https://github.com/strukturag/libheif/blob/v1.23.4/libheif/api/libheif/heif_decoding.h).
-The local [patch](../../tools/validation/photo-codecs/libheif-source-profile.patch)
-is the precise behavior being preserved.
 
 The font's [local provenance](../../apps/layer-linux/fonts/LICENSE.txt) identifies
 Roboto 3.005; [Roboto's upstream](https://github.com/googlefonts/roboto-3-classic)

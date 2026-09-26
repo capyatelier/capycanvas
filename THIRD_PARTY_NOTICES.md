@@ -129,22 +129,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Optional native codec reference tools
-
-Application photo decoding, encoding and previews use shared Rust codecs.
-The C/C++ programs under `tools/validation/photo-codecs/` are optional independent
-interoperability oracles, excluded from application builds and packages.
-
-Their pinned recipe builds libheif 1.23.4 and libde265 1.1.3 (LGPL-3.0-or-later),
-libavif 1.4.2 and dav1d 1.5.3 (BSD-2-Clause), libultrahdr 2.0.0 (Apache-2.0),
-libaom 3.14.1 (BSD-2-Clause and the AOM patent license), and libjpeg-turbo 3.1.4.1
-(IJG, BSD-3-Clause and zlib for the applicable components). Exact source hashes
-and license filenames are in `tools/validation/photo-codecs/photo-codecs.json`.
-Running that reference build retains original notices, corresponding sources,
-local patch and build recipe with the generated reference libraries. The narrow
-Capy bridge and helper use the project's MIT OR Apache-2.0 terms. The libheif
-source-metadata patch retains upstream's LGPL-3.0-or-later terms.
-
 ## Oklab color conversion — MIT
 
 The `working_to_oklab` and `working_from_oklab` functions in

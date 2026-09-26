@@ -87,7 +87,7 @@ Codec fidelity tolerances remain the existing numerical tests; a finite large
 decode alone is not a worst-case codec fidelity proof.
 
 Reproduction (set `LD_LIBRARY_PATH` to the built package's GTK library directory
-and `CAPY_PHOTO_CODEC_DIR` to its photo directory for test executables):
+for test executables):
 
 ```sh
 cargo test --locked --offline --release -p layer-linux --no-run

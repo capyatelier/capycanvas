@@ -300,68 +300,6 @@ fn rust_avif_lossless_stills_preserve_alpha_color_geometry_and_density() {
 }
 
 #[test]
-#[ignore = "requires independent capy-hdr-codec outputs in LAYER_AVIF_HDR_REFERENCE"]
-fn rust_avif_gainmap_matches_native_hdr_reference() {
-    let root = std::path::PathBuf::from(
-        std::env::var_os("LAYER_AVIF_HDR_REFERENCE").expect("HDR references"),
-    );
-    let photo = read(
-        Cursor::new(std::fs::read(root.join("source")).unwrap()),
-        DecodeLimits::default(),
-        &AtomicBool::new(false),
-    )
-    .unwrap();
-    assert_eq!(photo.source.interpretation.depth, SampleDepth::F16);
-    let base = std::fs::read(root.join("decoded")).unwrap();
-    let gain = std::fs::read(root.join("decoded-gain")).unwrap();
-    let metadata = std::fs::read(root.join("decoded-metadata")).unwrap();
-    let m: Vec<f32> = metadata
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
-    let primaries = u32::from_le_bytes(base[8..12].try_into().unwrap());
-    let matrix = match primaries {
-        1 => RgbSpace::Srgb.linear_transform(RgbSpace::Srgb),
-        9 => layer_core::color::hdr::bt2020_to_srgb(),
-        12 => RgbSpace::DisplayP3.linear_transform(RgbSpace::Srgb),
-        _ => panic!("unexpected oracle primaries"),
-    };
-    let mut rows = photo.source.rows();
-    let mut row = vec![0; photo.source.row_bytes()];
-    let mut largest = 0f32;
-    for y in 0..photo.source.extent[1] {
-        rows.read(y, &mut row).unwrap();
-        for (x, p) in row.chunks_exact(8).enumerate() {
-            let i = y as usize * photo.source.extent[0] as usize + x;
-            let normalized = |bytes: &[u8], at| {
-                f32::from(u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap())) / 65535.
-            };
-            let actual = layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| {
-                u16::from_le_bytes(p[c * 2..c * 2 + 2].try_into().unwrap())
-            }))
-            .unwrap();
-            let linear = std::array::from_fn(|c| {
-                let base =
-                    RgbSpace::Srgb.decode(f64::from(normalized(&base, 20 + i * 8 + c * 2))) as f32;
-                let gain = normalized(&gain, i * 6 + c * 2).powf(1. / m[6 + c]);
-                f64::from((base + m[9 + c]) * (m[c] + gain * (m[3 + c] - m[c])).exp2() - m[12 + c])
-            });
-            let expected = layer_core::color::rgb::apply(matrix, linear);
-            for c in 0..3 {
-                let error = (actual[c] - expected[c] as f32).abs();
-                largest = largest.max(error);
-                assert!(
-                    error < 0.02 + 0.005 * expected[c].abs() as f32,
-                    "({x},{y}) channel={c}: {actual:?} != {expected:?}"
-                );
-            }
-            assert!((actual[3] - normalized(&base, 20 + i * 8 + 6)).abs() < 0.001);
-        }
-    }
-    println!("AVIF HDR reference maximum absolute error: {largest}");
-}
-
-#[test]
 #[ignore = "requires tools/validation/avif_reference.py fixtures"]
 fn rust_avif_grids_and_sequences_match_native_reference() {
     let root = std::path::PathBuf::from(

@@ -327,11 +327,8 @@ validation rejects the old codec directory, helper executables and codec librari
 The pinned GTK runtime remains a platform dependency with its original notices,
 corresponding source and rebuild recipe.
 
-The C/C++ bridge, HDR helper, libheif patch and pinned build recipe now live under
-`tools/validation/photo-codecs/`. Independent Rust interoperability tests use the
-explicit `native-codec-reference` feature and `CAPY_PHOTO_CODEC_DIR`; executable-
-relative bundle discovery is removed. `libloading` is a Linux test dependency
-only, including when all production features are selected.
+The independent native codec interoperability oracle is retired; no feature,
+bridge or `CAPY_PHOTO_CODEC_DIR` bundle remains.
 
 GTK and Web share original Rust notice harvesting/rendering under `tools/build/`,
 with each package selecting its actual target. GTK now includes both original

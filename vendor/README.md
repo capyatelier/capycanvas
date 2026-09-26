@@ -205,35 +205,6 @@ every call. The cache uses the features exposed by the actual device, not its
 adapter, and is recreated with each device. See the
 [Huion Web pen investigation](../docs/development/web-pen-huion-2026-09-20.md).
 
-## HEIF/AVIF source color preservation
-
-The validation-only
-[`libheif-source-profile.patch`](../tools/validation/photo-codecs/libheif-source-profile.patch)
-applies to upstream libheif **1.23.4**. With
-`output_image_nclx_profile_passthrough` enabled, the RGB conversion pipeline can
-return pixels without their source NCLX primaries/transfer. The patch restores
-an actually present source profile after successful passthrough conversion,
-including profiles signalled only by the compressed bitstream. It does not
-invent a profile for an untagged source or change sample conversion.
-
-The pinned archive, dynamic libde265 backend and bridge are built by
-[`tools/validation/photo-codecs/photo-codecs.py`](../tools/validation/photo-codecs/photo-codecs.py). No codec source
-is downloaded during a Cargo build. The optional reference build verifies the
-source hashes and retains recipe, patch and library checksums, corresponding
-sources and licenses. Application packages do not include these reference codecs.
-The patch is supplied under libheif's LGPL-3.0-or-later terms.
-
-Reference: [libheif 1.23.4 decoding options](https://github.com/strukturag/libheif/blob/v1.23.4/libheif/api/libheif/heif_decoding.h).
-
-AVIF now uses unmodified **libavif 1.4.2** with **dav1d 1.5.3**, both BSD-2-Clause,
-through bridge ABI 2. The shared source archive/notice packaging includes both.
-libavif supplies still/sequence metadata; Rust applies clean aperture, rotation
-and mirroring while packing original samples into tiles. The HEIF profile patch
-continues to apply only to the libheif/HEIC route. The independent AVIF oracle uses
-system libavif 1.3.0 with AOM; source-constructed lossless fixtures additionally
-compare against known samples. Reference:
-[libavif 1.4.2 API](https://github.com/AOMediaCodec/libavif/blob/v1.4.2/include/avif/avif.h).
-
 ## Android front-buffer presentation
 
 `wgpu-core` 30.0.1 is pinned to upstream revision
