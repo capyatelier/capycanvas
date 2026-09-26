@@ -123,9 +123,9 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     PopupOwner(menu != null)
     HoverTip("More") {
         Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape)
-            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); pressedAt = SystemClock.uptimeMillis() } }
+            .pointerInput(Unit) { awaitEachGesture { pressedAt = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).uptimeMillis } }
             .clickable(role = Role.Button, onClickLabel = "More") {
-                if (menu == null && pressedAt - closedAt > 300) host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) {
+                if (menu == null && closedAt < pressedAt) host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) {
                     menu = it as? JSONObject
                 }
             }, contentAlignment = Alignment.Center) {

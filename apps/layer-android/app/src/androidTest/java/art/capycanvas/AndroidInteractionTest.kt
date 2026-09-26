@@ -100,7 +100,7 @@ class AndroidInteractionTest {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
                     if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        view.descendant<ViewRootForTest>()?.find(hasTag("brush-slider-preview")) != null
+                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu").any { root.find(hasTag(it)) != null } } == true
                     }?.let { view ->
                         val p = IntArray(2); view.getLocationOnScreen(p)
                         if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
@@ -1828,4 +1828,180 @@ class AndroidInteractionTest {
         println("PASS Huion tonal interval: mouse/finger/stylus, native numbers, cancellation, compact panel/toolbar, GPU Quick Mask and saved masks")
     }
 
+    private fun canvasBar() = state().optJSONObject("canvas_bar")
+    private fun barKind() = canvasBar()?.getJSONObject("context")?.getString("kind")
+    private fun nativeGlassRegions() = kotlinx.coroutines.runBlocking {
+        host.withNative { JSONObject(Native.displayStatus(it)).optInt("glass_regions", -1) }
+    }
+    private fun onMain(block: () -> Unit) = if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) block() else instrumentation.runOnMainSync(block)
+    private fun glassBoxes(): Int { var count = 0; onMain { count = host.glassBoxesForTest.size }; return count }
+    private fun textBounds(text: String): Rect? {
+        var result: Rect? = null
+        onMain {
+            findNode(hasLabel(text), owner)?.let { (root, node) ->
+                val base = IntArray(2); owner.view.getLocationOnScreen(base)
+                val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                result = node.boundsInRoot.translate(Offset((origin[0] - base[0]).toFloat(), (origin[1] - base[1]).toFloat()))
+            }
+        }
+        return result
+    }
+    private fun drag(from: Offset, to: Offset, steps: Int = 8, hold: () -> Unit = {}) {
+        event(MotionEvent.ACTION_DOWN, from)
+        for (i in 1..steps) { SystemClock.sleep(16); event(MotionEvent.ACTION_MOVE, from + (to - from) * (i / steps.toFloat())) }
+        hold()
+        event(MotionEvent.ACTION_UP)
+    }
+    private fun captureCanvasBar(name: String, check: (android.graphics.Bitmap, Offset) -> Unit = { _, _ -> }) {
+        SystemClock.sleep(400); settle()
+        val image = instrumentation.uiAutomation.takeScreenshot()
+        val origin = IntArray(2)
+        instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+        try {
+            val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/canvas-bar/$name.png")
+            file.parentFile!!.mkdirs(); file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            check(image, Offset(origin[0].toFloat(), origin[1].toFloat()))
+        } finally { image.recycle() }
+    }
+
+    @Test fun canvasActionBarJourneysAcrossDevices() {
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun enabled(command: String) = state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }
+        fun clear() {
+            if (enabled("cancel_transform")) invoke("cancel_transform")
+            if (enabled("deselect")) invoke("deselect")
+        }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val originalTransparency = transparency()
+        fixture.getJSONObject("layout").put("bands", JSONArray(fixture.getJSONObject("layout").array("bands").objects().filter { it.getInt("id") != 42 }))
+        val devices = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
+        popupInput = true
+        try {
+            for (device in devices) {
+                restore()
+                clear(); invoke("fit_canvas"); invoke("rectangle_select")
+                waitFor("no bar without a selection") { canvasBar() == null && !exists("canvas-action-bar") }
+                val glassBefore = glassBoxes()
+                val work = bounds("workspace")
+                fun at(x: Float, y: Float) = Offset(work.left + x * density, work.top + y * density)
+                val selection = Rect(at(620f, 220f), at(840f, 380f))
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                drag(selection.topLeft, selection.bottomRight)
+                waitFor("$device selection bar", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                invoke("fill_selection")
+                settle()
+                var bar = bounds("canvas-action-bar")
+                assertTrue("$device selection bar sits below the selection: $bar vs $selection", bar.top >= selection.bottom && bar.top - selection.bottom < 60 * density)
+                assertEquals("$device bar centres on the selection", selection.center.x, bar.center.x, 2 * density)
+                waitFor("$device glass registered once", 5_000) { glassBoxes() == glassBefore + 1 }
+                val nativeShown = nativeGlassRegions()
+
+                tool = device
+                val selectionContext = canvasBar()!!.getJSONObject("context").toString()
+                val padding = Offset(bar.left + 3 * density, bar.center.y)
+                tap(padding); settle()
+                assertEquals("$device bar padding tap keeps the selection", selectionContext, canvasBar()?.getJSONObject("context")?.toString())
+                assertTrue(exists("canvas-action-bar"))
+
+                tap(bounds("canvas-bar-action-scale_rotate").center)
+                waitFor("$device transform bar", 5_000) { barKind() == "transform" && exists("canvas-bar-action-apply_transform") }
+                assertTrue("$device bar tap keeps window focus", owner.view.hasWindowFocus())
+                settle()
+                bar = bounds("canvas-action-bar")
+                val anchor = canvasBar()!!.opt("anchor").toString()
+                tap(Offset(bar.left + 3 * density, bar.center.y)); settle()
+                assertEquals("$device bar tap never reaches the transform", anchor, canvasBar()!!.opt("anchor").toString())
+
+                var hiddenWhileHeld = false
+                var glassWhileHeld = -1
+                drag(selection.center, selection.center + Offset(30 * density, 20 * density)) {
+                    waitFor("$device bar hides during a canvas contact") { !exists("canvas-action-bar") }
+                    hiddenWhileHeld = true
+                    waitFor("$device glass leaves with the bar") { glassBoxes() == glassBefore }
+                    glassWhileHeld = nativeGlassRegions()
+                }
+                assertTrue(hiddenWhileHeld)
+                assertTrue("$device native glass region count falls: $glassWhileHeld < $nativeShown", glassWhileHeld in 0 until nativeShown)
+                SystemClock.sleep(60)
+                assertFalse("$device bar waits for input to settle", exists("canvas-action-bar"))
+                waitFor("$device bar returns after the contact", 3_000) { exists("canvas-action-bar") }
+                val returned = SystemClock.uptimeMillis()
+                while (SystemClock.uptimeMillis() - returned < 500) { assertTrue("$device bar returns once", exists("canvas-action-bar")); SystemClock.sleep(16) }
+                waitFor("$device glass returns") { glassBoxes() == glassBefore + 1 }
+
+                tap(bounds("canvas-bar-more").center)
+                waitFor("$device More menu", 5_000) { popupCount() == 1 }
+                instrumentation.runOnMainSync { assertTrue("$device More leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+                assertEquals("$device More keeps the transform", "transform", barKind())
+                if (device == MotionEvent.TOOL_TYPE_MOUSE) {
+                    tap(bounds("canvas-bar-more").center)
+                    waitFor("More toggles closed") { popupCount() == 0 }
+                    SystemClock.sleep(300)
+                    assertEquals("More stays closed after its toggle", 0, popupCount())
+                } else {
+                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                    waitFor("$device Back closes More") { popupCount() == 0 }
+                }
+                assertEquals("$device closing More keeps the transform", "transform", barKind())
+
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                    tap(bounds("canvas-bar-more").center)
+                    waitFor("More reopens", 5_000) { popupCount() == 1 && textBounds("Show canvas action bar") != null }
+                    tap(textBounds("Show canvas action bar")!!.center)
+                    waitFor("Hide the bar from More", 5_000) { popupCount() == 0 && !state().getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_bar").getBoolean("visible") }
+                    waitFor("completion-only bar", 5_000) { exists("canvas-bar-action-apply_transform") && !exists("canvas-bar-action-transform_flip_horizontal") }
+                    settle()
+                    val edge = bounds("canvas-action-bar")
+                    assertTrue("completion-only bar sits on the bottom edge: $edge", edge.top > selection.bottom + 100 * density)
+                    assertEquals("transform", barKind())
+                    tap(bounds("canvas-bar-action-apply_transform").center)
+                    waitFor("Apply ends the transform", 5_000) { barKind() != "transform" }
+                    waitFor("no selection bar while the toggle is off") { !exists("canvas-action-bar") }
+                    invoke("show_canvas_action_bar")
+                    waitFor("selection bar returns with the toggle", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                } else {
+                    tap(bounds("canvas-bar-action-cancel_transform").center)
+                    waitFor("$device Cancel ends the transform", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                }
+
+                instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(work.width / density / 2, work.height / density / 2)))) }
+                invoke("zen_mode")
+                waitFor("$device Zen hides docked chrome") { snapshot().optBoolean("chrome_hidden") }
+                waitFor("$device Zen keeps the bar", 3_000) { exists("canvas-action-bar") }
+                invoke("zen_mode")
+                waitFor("$device Zen ends") { !snapshot().optBoolean("chrome_hidden") }
+                invoke("deselect")
+                waitFor("$device Deselect removes the bar") { canvasBar() == null && !exists("canvas-action-bar") }
+                waitFor("$device glass count returns", 3_000) { glassBoxes() == glassBefore }
+                println("PASS canvas bar device=$device")
+            }
+
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            restore(); clear(); invoke("fit_canvas"); invoke("rectangle_select")
+            val work = bounds("workspace")
+            val stripes = Rect(Offset(work.left + 520 * density, work.top + 200 * density), Offset(work.left + 940 * density, work.top + 470 * density))
+            invoke("brush")
+            for (i in 0..10) drag(Offset(stripes.left + i * 40 * density, stripes.top), Offset(stripes.left + i * 40 * density + 20 * density, stripes.bottom), 6)
+            invoke("rectangle_select")
+            drag(Offset(work.left + 620 * density, work.top + 220 * density), Offset(work.left + 840 * density, work.top + 330 * density))
+            waitFor("selection bar for captures", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+            tap(bounds("canvas-bar-action-scale_rotate").center)
+            waitFor("transform bar for captures", 5_000) { exists("canvas-bar-action-apply_transform") }
+            for (theme in listOf("light", "dark")) for (level in listOf(0, 3)) {
+                action(obj("type" to "set_theme", "theme" to theme)); transparency(level)
+                waitFor("$theme/$level bar", 5_000) { exists("canvas-bar-action-apply_transform") }
+                val apply = bounds("canvas-bar-action-apply_transform")
+                val accent = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("accent"))
+                captureCanvasBar("$theme-level$level") { image, origin ->
+                    val pixel = image.getPixel((apply.left + origin.x + 3 * density).toInt(), (apply.center.y + origin.y).toInt())
+                    for (shift in listOf(0, 8, 16)) assertEquals("$theme/$level Apply uses the accent", (accent shr shift and 255).toFloat(), (pixel shr shift and 255).toFloat(), 24f)
+                }
+            }
+            clear()
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency)
+        }
+        println("PASS canvas action bar: selection and transform bars, chrome taps, hide and return, More, toggle, Apply/Cancel, Zen, glass, light/dark")
+    }
 }
