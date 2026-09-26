@@ -209,6 +209,27 @@ impl SourceRows<'_> {
     }
 }
 
+/// Straight 8-bit RGBA codes in the default profile, one `pixel(x, y)` per sample.
+#[cfg(any(test, feature = "test-support"))]
+pub fn rgba8_source(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Arc<SourceImage> {
+    let mut builder = SourceBuilder::new(
+        extent,
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::U8,
+            profile: Default::default(),
+            profile_assumed: false,
+        },
+        crate::ProjectLimits::default().asset_bytes as usize,
+    )
+    .unwrap();
+    for y in 0..extent[1] {
+        let row: Vec<u8> = (0..extent[0]).flat_map(|x| pixel(x, y)).collect();
+        builder.push_row(&row).unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
 /// Source decoding accumulates one row band and compresses it before continuing.
 /// `max_bytes` limits final compressed ownership; packing is one 256-row band
 /// plus one tile (64.5 MiB at the 32768×RGBA16 limit).

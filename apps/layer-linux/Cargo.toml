@@ -25,3 +25,6 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 raw-window-handle = "0.6"
 glib-unix = "0.22"
 half = "2.7"
+
+[dev-dependencies]
+layer-core = { path = "../../crates/layer-core", features = ["test-support"] }

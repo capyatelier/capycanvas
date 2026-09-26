@@ -22,6 +22,7 @@ pollster = "0.4"
 wgpu.workspace = true
 
 [dev-dependencies]
+layer-core = { path = "../../../crates/layer-core", features = ["test-support"] }
 png = "0.17.16"
 
 [target.'cfg(target_os = "windows")'.dependencies]

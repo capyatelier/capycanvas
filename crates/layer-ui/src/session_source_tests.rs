@@ -1,14 +1,12 @@
+use layer_core::color::source::rgba8_source;
+use std::sync::Arc;
+
 #[test]
 fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let source = Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4]));
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new("touch placement", 200, 150), [800, 600]).unwrap();
-    session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    session.place_layer_source("Photo", source, None).unwrap();
     let input = |id, phase, position| UiInput::Pointer { id, phase, position,
         kind: PointerKind::Touch, button: PointerButton::Primary };
     assert!(!session.input(input(1, ContactPhase::Down, [10., 10.])).unwrap().paint);
@@ -47,15 +45,8 @@ fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
 
 #[test]
 fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_together() {
-    use layer_core::{Affine, color::{SampleDepth, source::*}};
-    let source = |extent: [u32; 2]| {
-        let mut builder = SourceBuilder::new(extent, SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-            profile: Default::default(), profile_assumed: false,
-        }, 1 << 20).unwrap();
-        for _ in 0..extent[1] { builder.push_row(&vec![255; extent[0] as usize * 4]).unwrap(); }
-        builder.finish().unwrap()
-    };
+    use layer_core::Affine;
+    let source = |extent| Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4]));
     let first = source([600, 400]);
     let second = source([100, 300]);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
@@ -111,7 +102,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
 #[test]
 fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     use crate::{ImageLayerDestination, LayerDropPosition};
-    use layer_core::{Layer, LayerKind, color::{SampleDepth, source::*}};
+    use layer_core::{Layer, LayerKind};
     let mut doc = Document::new("drop", 200, 150);
     let group_id = doc.allocate_layer_id();
     let mut group = Layer::paint(group_id, "Group");
@@ -125,12 +116,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     clipped.properties.clipped = true;
     doc.layers.insert(1, clipped);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600]).unwrap();
-    let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    builder.push_row(&[255; 8]).unwrap();
-    let source = builder.finish().unwrap();
+    let source = Arc::unwrap_or_clone(rgba8_source([2, 1], |_, _| [255; 4]));
     assert_eq!(session.image_layer_drop_hint(group_id.0, 0.5), Some(LayerDropPosition::Into));
     assert_eq!(session.image_layer_drop_hint(2, 0.9), Some(LayerDropPosition::Above));
     assert_eq!(session.image_layer_drop_hint(1, 0.1), None, "insertion must not change a clipping base");
@@ -167,14 +153,8 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
 
 #[test]
 fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    builder.push_row(&[255; 8]).unwrap();
     let mut doc = Document::new("locked photo", 200, 150);
-    doc.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    doc.layers[0].source = Some(rgba8_source([2, 1], |_, _| [255; 4]));
     doc.layers[0].properties.locked = true;
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600]).unwrap();
     let before = session.engine.document().clone();

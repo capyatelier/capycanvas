@@ -17,6 +17,7 @@ png = "0.17.16"
 crc32fast = "1.5"
 
 [dev-dependencies]
+layer-core = { path = "../layer-core", features = ["test-support"] }
 layer-engine = { path = "../layer-engine" }
 
 [target.'cfg(target_vendor = "apple")'.dev-dependencies]
