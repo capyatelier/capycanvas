@@ -38,12 +38,12 @@ mod dry_material;
 mod material_tiles;
 mod bindings;
 use brush_tiles::BrushTile;
+#[cfg(not(target_arch = "wasm32"))]
 mod export_readback;
 mod view_color;
 mod working_color;
 pub use view_color::SdrSurfaceColor;
 mod raster;
-pub use export_readback::ExportReadback;
 pub use raster::{CaptureSource, RasterCapture, TileCapture};
 mod deferred;
 mod paint_transform;
@@ -1437,6 +1437,7 @@ impl WgpuRasterizer {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn copy_rgba8_srgb(
         &mut self,
         destination: &mut [u8],
@@ -3250,107 +3251,6 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    pub fn readback_srgb_rgba8(&mut self) -> Result<Vec<u8>, GpuRasterError> {
-        // Legacy synchronous inspection/tests. Interactive hosts transfer the
-        // ticket returned by begin_export_readback to their file worker.
-        self.pipelines.export.compile();
-        Ok(self.begin_export_readback(0)?.finish()?.bytes)
-    }
-
-    /// Schedule export conversion without compiling a shader on the input owner.
-    pub fn export_ready(&self) -> bool {
-        if self.pipelines.export.ready() {
-            return true;
-        }
-        if let Some(startup) = &self.startup {
-            startup.compiler.pipeline(&self.pipelines.export, 0);
-            startup.compiler.start();
-        }
-        false
-    }
-    /// Encode a document-sized sRGB snapshot in GPU order. Transfer its ticket
-    /// to a worker for synchronization, row packing and image encoding.
-    pub fn begin_export_readback(
-        &mut self,
-        request_id: u64,
-    ) -> Result<ExportReadback, GpuRasterError> {
-        if !self.export_ready() {
-            return Err(GpuRasterError::Effect("Export shader is preparing".into()));
-        }
-        let [width, height] = self.document_extent;
-        if width == 0 || height == 0 {
-            return Err(GpuRasterError::InvalidExtent);
-        }
-        let row_bytes = width.checked_mul(4).ok_or(GpuRasterError::SizeOverflow)?;
-        let padded_row_bytes = align_up(row_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let size = padded_row_bytes as u64 * height as u64;
-        if size > self.device.limits().max_buffer_size { return Err(GpuRasterError::SizeOverflow); }
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("layer explicit readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let export_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("layer explicit sRGB export"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: EXPORT_FORMAT,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let mut encoder = crate::submission::CommandEncoder::new(
-            &self.device,
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("layer explicit readback encoder"),
-            },
-        );
-        self.encode_artwork_readback(&export_texture, &mut encoder)?;
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &export_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.uploads.finish(&encoder);
-        let submission = encoder.submit(&self.queue);
-        let (sender, receiver) = mpsc::channel();
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result.map_err(|error| error.to_string()));
-            });
-        Ok(ExportReadback::new(
-            self.device().clone(),
-            buffer,
-            submission,
-            receiver,
-            request_id,
-            [width, height],
-            padded_row_bytes,
-        ))
-    }
 }
 
 impl WgpuRasterizer {
@@ -6486,9 +6386,6 @@ fn fullscreen_pipeline(
         label,
     )
     .immediate()
-}
-fn align_up(value: u32, alignment: u32) -> u32 {
-    value.div_ceil(alignment) * alignment
 }
 
 fn style_bytes(style: &StyleGpu) -> &[u8] {

@@ -90,11 +90,6 @@ impl SnapshotRenderer {
         }
         Ok(headroom)
     }
-    pub fn inspect_hdr_output(&mut self) -> Result<layer_color::OutputStatistics, String> {
-        self.hdr_rows(|extent, space, read| {
-            layer_color::photo::inspect_hdr_rows(extent, space, read)
-        })
-    }
 
     pub(super) fn hdr_rows(
         &mut self,

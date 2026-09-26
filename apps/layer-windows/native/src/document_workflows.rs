@@ -717,12 +717,7 @@ mod tests {
         assert!(task.error.is_none(), "{}: {:?}", task.kind, task.error);
     }
     fn pixels(gpu: &mut WgpuRasterizer) -> Vec<u8> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while !gpu.export_ready() {
-            assert!(Instant::now() < deadline, "export did not prepare");
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        gpu.begin_export_readback(0).unwrap().finish().unwrap().bytes
+        gpu.readback_srgb_rgba8().unwrap()
     }
     fn settle(host: &mut NativeHost) {
         let deadline = Instant::now() + Duration::from_secs(60);

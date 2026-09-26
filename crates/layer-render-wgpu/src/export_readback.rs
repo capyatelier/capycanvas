@@ -1,5 +1,4 @@
-//! An explicit export owns its staging buffer, never the live renderer. Waiting
-//! and packing rows belong to the file worker, after GPU submission by the owner.
+//! Blocking whole-document sRGB readback for tests and benchmarks.
 use super::*;
 
 impl WgpuRasterizer {
@@ -83,90 +82,82 @@ impl WgpuRasterizer {
         }
         Ok(())
     }
-}
 
-pub struct ExportReadback {
-    device: wgpu::Device,
-    buffer: wgpu::Buffer,
-    submission: wgpu::SubmissionIndex,
-    receiver: mpsc::Receiver<Result<(), String>>,
-    request_id: u64,
-    extent: [u32; 2],
-    padded_row_bytes: u32,
-}
-impl ExportReadback {
-    pub(super) fn new(
-        device: wgpu::Device,
-        buffer: wgpu::Buffer,
-        submission: wgpu::SubmissionIndex,
-        receiver: mpsc::Receiver<Result<(), String>>,
-        request_id: u64,
-        extent: [u32; 2],
-        padded_row_bytes: u32,
-    ) -> Self {
-        Self {
-            device,
-            buffer,
-            submission,
-            receiver,
-            request_id,
-            extent,
-            padded_row_bytes,
+    pub fn readback_srgb_rgba8(&mut self) -> Result<Vec<u8>, GpuRasterError> {
+        self.pipelines.export.compile();
+        let [width, height] = self.document_extent;
+        if width == 0 || height == 0 {
+            return Err(GpuRasterError::InvalidExtent);
         }
-    }
-    /// Worker only. The document can change or close after the ticket is issued;
-    /// the copied texture and its queue position preserve the captured pixels.
-    pub fn finish(self) -> Result<ReadbackImage, GpuRasterError> {
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.submission.clone()),
-                timeout: Some(READBACK_TIMEOUT),
-            })
-            .map_err(|e| GpuRasterError::WaitFailed(e.to_string()))?;
-        self.receiver
-            .recv_timeout(READBACK_TIMEOUT)
-            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
-            .map_err(GpuRasterError::MapFailed)?;
-        self.image()
-    }
-    /// Nonblocking completion for event-loop hosts. Yield before polling again
-    /// so the browser can deliver WebGPU's map callback.
-    pub fn try_finish(&mut self) -> Result<Option<ReadbackImage>, GpuRasterError> {
-        self.device
-            .poll(wgpu::PollType::Poll)
-            .map_err(|e| GpuRasterError::WaitFailed(e.to_string()))?;
-        match self.receiver.try_recv() {
-            Ok(result) => {
-                result.map_err(GpuRasterError::MapFailed)?;
-                self.image().map(Some)
-            }
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(e) => Err(GpuRasterError::MapFailed(e.to_string())),
+        let row_bytes = width.checked_mul(4).ok_or(GpuRasterError::SizeOverflow)?;
+        let padded_row_bytes = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let size = padded_row_bytes as u64 * height as u64;
+        if size > self.device.limits().max_buffer_size {
+            return Err(GpuRasterError::SizeOverflow);
         }
-    }
-    fn image(&self) -> Result<ReadbackImage, GpuRasterError> {
-        let mapped = self
-            .buffer
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("layer explicit readback"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let export_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layer explicit sRGB export"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: EXPORT_FORMAT,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("layer explicit readback encoder"),
+            },
+        );
+        self.encode_artwork_readback(&export_texture, &mut encoder)?;
+        encoder.copy_texture_to_buffer(
+            export_texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row_bytes),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.uploads.finish(&encoder);
+        encoder.submit(&self.queue);
+        let (sender, receiver) = mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result.map_err(|error| error.to_string()));
+            });
+        raster::wait_mapping(&self.device, &receiver).map_err(GpuRasterError::MapFailed)?;
+        let mapped = buffer
             .slice(..)
             .get_mapped_range()
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-        let [width, height] = self.extent;
-        let stride = width * 4;
-        let mut bytes = vec![0; stride as usize * height as usize];
-        for (source, destination) in mapped
-            .chunks_exact(self.padded_row_bytes as usize)
-            .zip(bytes.chunks_exact_mut(stride as usize))
-        {
-            destination.copy_from_slice(&source[..stride as usize]);
-        }
+        let bytes = mapped
+            .chunks_exact(padded_row_bytes as usize)
+            .flat_map(|row| &row[..row_bytes as usize])
+            .copied()
+            .collect();
         drop(mapped);
-        self.buffer.unmap();
-        Ok(ReadbackImage {
-            request_id: self.request_id,
-            width,
-            height,
-            stride,
-            bytes,
-        })
+        buffer.unmap();
+        Ok(bytes)
     }
 }
