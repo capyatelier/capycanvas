@@ -262,6 +262,125 @@ not a shipped default. Search for “shortcut,” “gesture,” or “device”
 find the relevant binding settings. Recent actions can be local and bounded;
 no network/AI service is necessary for command search.
 
+#### 2.2.1 Command bar presentation and interaction plan
+
+Use Blender's [Menu Search][bl-search] as the main workflow reference: summon a
+compact search popup, type part of an action name, use arrows/Enter or click to
+execute. Its manual also describes menu-location information and a separate
+developer operator search. The accessible reference is the versioned 3.5 manual;
+this comparison does not assert a fresh visual inspection of Blender's latest
+release. [Krita Search Actions][kr-action-search] confirms the drawing-app use
+case (Ctrl+Enter); use it as a secondary reference, not the visual specification.
+[VS Code][vsc-command] supports the familiar Primary+Shift+P entry convention.
+[Raycast][ray-search] illustrates immediate text matching, while its
+[action panel][ray-actions] demonstrates right-aligned shortcuts and progressive
+disclosure. [Figma Actions][figma-actions] supplies a visible toolbar entry as
+well as a keyboard trigger. The design below is Capy's proposal, not a claim
+that those products share its exact appearance, ranking or timings.
+
+**Opening and placement.** A single shortcut press opens the bar and focuses
+search; no hold is needed. Propose Primary+Shift+P on native desktop and optional
+F3 for Blender-style access, both rebindable. Validate OS/browser delivery before
+shipping: the current Web reservation rules reject Primary+Shift+P, and function
+keys can have system meanings. Choose a verified Web alternative during host
+integration, retain a visible “Search commands…” menu/toolbar control on every
+host, and do not advertise an unavailable shortcut. Space retains canvas pan.
+Repeated key-down must not open multiple bars or close the newly opened one.
+
+Use one transient surface at the upper center of the active editor window,
+roughly 520–600 logical pixels wide on desktop, bounded by available space. Keep
+its top/search field anchored as results change. Touch uses the same search/list
+model with native touch-sized rows and keyboard-aware positioning; compact
+windows use the available width and a shorter list. A visible dismiss control
+remains available without a keyboard. Opening by keyboard/controller preserves
+the last valid editor context; pointer/touch activation captures the context
+before its button takes focus. Pointer hover does not silently retarget commands.
+
+**Minimal result rows.** Show an action name and, when assigned and usable, one
+effective shortcut at the right. Reuse a small monochrome action icon where it
+helps recognition; a toggle's checkmark can occupy that gutter. Add a short
+qualifier only to distinguish otherwise ambiguous results, such as artwork Undo
+versus palette-order Undo. Full menu paths, descriptions and disabled reasons
+belong to the selected-result detail line, not a second line on every row. Do
+not show command IDs, capability/category badges, all alternative bindings,
+thumbnails, counts or per-row configuration buttons. A footer provides compact
+keyboard guidance when relevant; a needed explanation replaces that hint rather
+than growing a details pane. No tabs or category filter toolbar in the first UI.
+
+Aim for 6–8 visible desktop results with native scrolling and larger rows/fewer
+visible items on touch. An empty query shows at most five recently executed,
+currently available commands, with a small stable set of common commands as the
+first-use fallback. Reopening starts a fresh query. Cap the result viewport;
+ordinary filtering must not repeatedly resize or slide the surface around.
+
+**Search and selection.** Match labels and curated aliases with word-prefix and
+fuzzy matching; e.g. “lasso” and “freehand selection” can find the same action.
+Exact label/alias matches win; context and recent use refine comparable matches.
+Use a stable tie-break, and freeze ordering for an unchanged query/context so
+late history updates do not move an item under the user. Search existing public
+commands, tool/brush choices, effects and named adjustments. General queries
+must not be overwhelmed by every brush variant; prefer the general command and
+expand choices when requested, while allowing a specific brush name to match.
+
+The first result is selected; arrows move selection, Enter or a tap/click
+activates, Escape dismisses the root bar. Selecting an unavailable match explains
+why; Enter does not execute a different row. Keep strongly matching unavailable
+commands discoverable, but omit them from empty-query suggestions. Hide retired
+and private actions entirely. Mouse hover changes selection only on actual
+pointer movement, so a stationary cursor cannot steal keyboard selection.
+Outside press dismisses and is consumed, including its matching release, so it
+cannot start a stroke or activate the underlying control. Preserve native text
+editing, IME composition, screen-reader selection announcements and focus return.
+
+**Execution and additional input.** Validate then dispatch through the shared
+catalog. Close after accepting a simple invocation and restore the appropriate
+editor focus. Normal visible action results provide feedback; use an existing
+status notice only when the outcome would otherwise be unclear. Errors stay
+readable; asynchronous actions hand off to their normal dialog/progress owner.
+Preserve the originating document and focused history domain through execution.
+If an active stroke or operation cannot safely yield, decline opening without
+committing or canceling it implicitly; give a concise reason.
+
+An action needing one value or choice opens a second step inside the same
+surface: e.g. “Brush size” followed by a value and unit, or “Select brush” followed
+by brush names. Show its current value and validate before applying; Escape
+returns to the previous search without changes. Complex configuration opens the
+existing native dialog. Hover and arrow browsing do not preview document edits.
+Held actions remain cataloged/bindable; search runs an explicit persistent
+counterpart where provided, never an indefinitely active temporary hold.
+
+**Visual finish and motion.** Use Capy's existing theme colors, type scale,
+icons, spacing and native dialog/popover styling, including the dialog exception
+in [corner policy](../ui/squircle-corners.md). Use a quiet opaque surface, subtle
+border/shadow and restrained selection color with readable contrast in both
+themes. Keep the artwork recognizable behind it. Avoid adding live canvas blur
+or new visual effects to the command-bar rendering path.
+
+Prototype a 100–140 ms ease-out entrance with opacity and at most 4–6 logical
+pixels of translation, and an 80–100 ms exit. These are tuning targets, not
+measured results or mandatory overrides of native motion conventions. Input is
+accepted immediately; dispatch never waits for animation. Results do not stagger,
+bounce or animate their ranking. Selection changes immediately; a short color
+transition may soften feedback without delaying the indicator. Respect reduced
+motion and native animation settings, and support interruption/reopening cleanly.
+
+**Speed and acceptance.** Keep normalized search text/indexes cached in Rust;
+bound matching/publication work, reuse native rows and discard stale query
+responses. Matching uses local metadata, with no deliberate typing debounce,
+network lookup, file/device access or effect-preview generation. Host text entry
+must remain responsive even while an older result computation is pending.
+
+Initial measurable targets on representative supported hardware: warm opener to
+interactive first paint p95 at most 50 ms; query-to-presented-results p95 at most
+50 ms, with next-frame feedback as the normal goal; bounded matching itself p95
+under 5 ms for the agreed large catalog fixture. Measure cold open separately,
+including keyboard appearance on mobile, and refine budgets from baseline host
+measurements. These budgets concern command-bar response, not the duration of
+exporting a document or performing an expensive command. Validate 60/120 Hz
+frame pacing, fast typing/backspacing/arrows/Enter, large catalogs, both themes,
+text scaling, reduced motion, IME and real touch/pen focus transitions. A quick
+open-type-Enter sequence must never lose input or execute stale results.
+
 ### 2.3 Contextual binding resolution
 
 Separate **binding** from **invocation**. A binding records a trigger, context
@@ -1101,7 +1220,7 @@ substitute a destructive or semantically different command.
 | Stage | Concrete changes | Completion evidence |
 | --- | --- | --- |
 | A. Catalog, moderate shared work | Explicit stable IDs/descriptors; adapt callable CommandIds and user-facing nested actions; shared availability reasons, typed targets/parameters and tool category/capability metadata; reuse in existing projections | Coverage ledger has no unexplained omissions; descriptor invocation matches current state/history/requests; ID compatibility and live availability verified; see section 7.1 |
-| B. Command bar, moderate shared and six-host work | Shared query/result/selection model; native search surfaces; visible opener; configurable trigger; focus/accessibility; parameter entry | Same command dispatched from search/menu/key/button yields same state and history; disabled reason and stale-document tests; keyboard and touch usability on all hosts |
+| B. Command bar, moderate shared and six-host work | Shared query/result/selection model; minimal native search/list surface; visible opener and verified key trigger; focus/accessibility; parameter entry; restrained motion | Same command dispatched from search/menu/key/button yields same state/history; no stale or lost-input execution; keyboard/touch usability, minimal-row review and measured response/frame pacing; see section 2.2.1 |
 | C. Resolver and held actions, substantial shared work | Context matching, rich physical/logical events, token lifecycle, momentary overrides, relative adjustments, settings migration | Modifier truth tables and overlap conflicts pass; all begin/update/end/cancel paths verified; existing settings and family cycling retained |
 | D. Gesture/pen support, substantial native integration | Touch tap/hold arbitration; opt-in pen-button bindings; Pencil interactions; native timing/slop/capture | Real devices do not split strokes, scroll unexpectedly or leave stuck modes; complete cancellation/reconnect matrix |
 | E. Controller adapters, device-dependent | Start with keyboard emulation; add HID/gamepad/encoders only where capability is verified | Hardware controls invoke shared actions with correct repeat/axis/transaction behavior; unavailable devices explained |
@@ -1301,6 +1420,10 @@ version, not an assertion that every installed copy matches it.
 | [Corel Painter official shortcut tutorial][painter-legacy] | Painter 12-era reference; legacy rows only, verify against target current build. |
 | [PaintTool SAI FAQ][sai-faq] | Official local-help reference; no verified online default keymap obtained. |
 | [Figma Actions][figma-actions] | Searchable actions and Primary+K entry. |
+| [Blender Menu Search][bl-search] | Primary command-bar workflow comparison, versioned 3.5 manual; latest page/image retrieval unavailable during this follow-up. |
+| [Krita Search Actions][kr-action-search] | Secondary drawing-app reference; Ctrl+Enter and rebindable search action. |
+| [VS Code Command Palette][vsc-command] | Primary+Shift+P access and keyboard command discovery. |
+| Raycast [Search Bar][ray-search] and [Action Panel][ray-actions] | Text matching, shortcut hints and secondary action disclosure; Capy's surface remains narrowly scoped to app commands. |
 | [Wacom ExpressKeys][hw-wacom], [CSP Tabmate][hw-tabmate] | Driver mappings versus app-aware tool rotation/temporary tools. |
 | [Apple Pencil interaction][hw-pencil] | Native tap/squeeze API and preferred actions. |
 | [WebHID][hw-webhid], [Web Bluetooth][hw-webble] | Browser capability limits; distinct transport interfaces. |
@@ -1358,6 +1481,11 @@ version, not an assertion that every installed copy matches it.
 [painter-legacy]: https://www.corel.com/img/content/community/tutorials/p12/Painter_Shortcuts.pdf
 [sai-faq]: https://www.systemax.jp/en/sai/faq.html
 [figma-actions]: https://help.figma.com/hc/en-us/articles/23570416033943-Use-the-actions-menu-in-Figma-Design
+[bl-search]: https://docs.blender.org/manual/en/3.5/interface/controls/templates/operator_search.html
+[kr-action-search]: https://docs.krita.org/en/reference_manual/preferences/shortcut_settings.html
+[vsc-command]: https://code.visualstudio.com/docs/editing/getting-started/userinterface#_command-palette
+[ray-search]: https://manual.raycast.com/search-bar
+[ray-actions]: https://manual.raycast.com/action-panel
 [hw-wacom]: https://101.wacom.com/UserHelp/en/ExpressKeys_EKR.htm
 [hw-tabmate]: https://www.clip-studio.com/site/gd_en/csp/userguide/csp_userguide/500_menu/500_menu_file_cliptabmate_setting2.htm
 [hw-pencil]: https://developer.apple.com/documentation/uikit/uipencilinteraction
