@@ -85,7 +85,10 @@ function Select-Choice([string]$Id,[string]$Name){
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
 function Sdr { ProofPanel;if(!(Find 'proof-panel-exposure')){Invoke 'proof-panel-mode-sdr'};$null=Control 'proof-panel-exposure' }
 function ProofPanel {
- if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}
+ if(!@((Model).layout.groups|Where-Object active -eq 'proof').Count){
+  Invoke 'panel-tab-proof'
+  Wait-Until {@((Model).layout.groups|Where-Object active -eq 'proof').Count} 'Proof tab did not become active'
+ }
  $null=Control 'proof-panel-mode'
 }
 function Setup {
@@ -318,7 +321,8 @@ try {
    [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x+25,$y-15);[CapyRowPointer]::Up()
    Wait-Until {$m=Model;!$m.state.sdr_appearance_preview -and (($m.windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore)} 'Dial release did not commit'
   } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
-  $dialAfter=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress
+  $settled=@{value=''};Wait-Until {$now=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress;$same=$now -eq $settled.value;$settled.value=$now;Start-Sleep -Milliseconds 150;$same} 'Dial commit did not settle'
+  $dialAfter=$settled.value
   Command 'undo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial did not undo in one step'
   Command 'redo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialAfter} 'Dial redo failed'
   Command 'undo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial final undo failed'
