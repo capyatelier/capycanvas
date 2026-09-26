@@ -64,6 +64,18 @@ impl Operation {
     pub fn placing(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.placement.is_some())
     }
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+    pub fn dragging(&self) -> bool {
+        self.current.as_ref().is_some_and(|t| t.drag.is_some())
+    }
+    pub fn placement_count(&self) -> usize {
+        self.current
+            .as_ref()
+            .and_then(|t| t.placement.as_ref())
+            .map_or(0, |p| p.count())
+    }
 }
 fn center(b: Rect) -> Point {
     Point {
@@ -90,6 +102,8 @@ fn local_handle(bounds: Rect, side: [f32; 2]) -> Point {
         y: c.y + side[1] * (bounds.max.y - c.y),
     }
 }
+/// Half the side of a drawn transform handle, in logical pixels.
+pub(super) const HANDLE_HALF_SIZE: f32 = 3.5;
 const HANDLES: [[f32; 2]; 8] = [
     [-1., -1.],
     [0., -1.],
@@ -542,20 +556,44 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()?;
         Ok(true)
     }
-    pub(super) fn append_transform_overlay(&self, segments: &mut Vec<CursorSegment>) {
-        let Some(t) = &self.operation.current else {
-            return;
-        };
+    fn transform_surface_map(&self, t: &Transaction) -> impl Fn(Point) -> [f32; 2] {
         let camera = Affine(self.state.camera.view().document_to_surface);
         let dpi = self
             .logical_viewport
             .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
-        let map = |p| {
-            let p = camera.map(t.basis.map(p));
+        let basis = t.basis;
+        move |p| {
+            let p = camera.map(basis.map(p));
             [p.x / dpi, p.y / dpi]
+        }
+    }
+    /// Every transform handle centre, in logical surface pixels.
+    pub(super) fn transform_handle_points(&self) -> Vec<[f32; 2]> {
+        let Some(t) = &self.operation.current else {
+            return Vec::new();
         };
-        let affine = t.pose.affine(center(t.bounds));
-        let corners = [0, 2, 4, 6].map(|i| map(affine.map(local_handle(t.bounds, HANDLES[i]))));
+        let map = self.transform_surface_map(t);
+        t.handle_points(self.ruler_reach()).into_iter().map(map).collect()
+    }
+    pub(super) fn transform_document_bounds(&self) -> Option<[f32; 4]> {
+        let t = self.operation.current.as_ref()?;
+        let corners = t.corners().map(|p| t.basis.map(p));
+        Some(corners.iter().fold(
+            [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
+            |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
+        ))
+    }
+    /// The transformed box corners, in logical surface pixels.
+    pub(super) fn transform_hull(&self) -> Option<[[f32; 2]; 4]> {
+        let t = self.operation.current.as_ref()?;
+        Some(t.corners().map(self.transform_surface_map(t)))
+    }
+    pub(super) fn append_transform_overlay(&self, segments: &mut Vec<CursorSegment>) {
+        let Some(t) = &self.operation.current else {
+            return;
+        };
+        let map = self.transform_surface_map(t);
+        let corners = t.corners().map(&map);
         let mut line = |a, b, solid| {
             segments.push(CursorSegment {
                 from: a,
@@ -568,21 +606,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         for i in 0..4 {
             line(corners[i], corners[(i + 1) % 4], false);
         }
-        let rotate = t.rotate_handle(self.ruler_reach());
+        let reach = self.ruler_reach();
+        let affine = t.pose.affine(center(t.bounds));
         line(
             map(affine.map(local_handle(t.bounds, [0., -1.]))),
-            map(rotate),
+            map(t.rotate_handle(reach)),
             true,
         );
-        for p in HANDLES
-            .into_iter()
-            .map(|h| affine.map(local_handle(t.bounds, h)))
-            .chain([rotate])
-        {
+        for p in t.handle_points(reach) {
             let [x, y] = map(p);
             segments.push(CursorSegment {
-                from: [x - 3.5, y - 3.5],
-                to: [x + 3.5, y + 3.5],
+                from: [x - HANDLE_HALF_SIZE, y - HANDLE_HALF_SIZE],
+                to: [x + HANDLE_HALF_SIZE, y + HANDLE_HALF_SIZE],
                 distance: 0.,
                 marker: 2.,
                 scale: 1.,
@@ -592,6 +627,18 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 impl Transaction {
+    fn corners(&self) -> [Point; 4] {
+        let affine = self.pose.affine(center(self.bounds));
+        [0, 2, 4, 6].map(|i| affine.map(local_handle(self.bounds, HANDLES[i])))
+    }
+    fn handle_points(&self, reach: f32) -> Vec<Point> {
+        let affine = self.pose.affine(center(self.bounds));
+        HANDLES
+            .into_iter()
+            .map(|h| affine.map(local_handle(self.bounds, h)))
+            .chain([self.rotate_handle(reach)])
+            .collect()
+    }
     fn rotate_handle(&self, reach: f32) -> Point {
         let top = self
             .pose

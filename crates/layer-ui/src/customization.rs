@@ -1072,6 +1072,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Fullscreen => "Enter or leave full screen",
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::Drawings => "Select, reorder or close an open drawing",
+                CommandId::ShowCanvasActionBar => "Show next steps beside selections, transforms and placed images",
                 CommandId::NewDocument => "Create a drawing",
                 CommandId::OpenDocument => "Open an editable drawing",
                 CommandId::SaveDocument => "Save the current drawing",

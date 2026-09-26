@@ -1058,6 +1058,7 @@ mod floating_drop_tests;
 pub struct DockLayout {
     pub header: crate::HeaderLayout,
     pub canvas_info: crate::CanvasInfoLayout,
+    pub canvas_bar: crate::CanvasBarPreference,
     #[serde(skip)]
     pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
@@ -1756,6 +1757,7 @@ impl Default for DockLayout {
             panels: PanelConfig::defaults(),
             header: Default::default(),
             canvas_info: Default::default(),
+            canvas_bar: Default::default(),
             header_presentation: Default::default(),
             floating: Vec::new(),
             collapsed: Vec::new(),

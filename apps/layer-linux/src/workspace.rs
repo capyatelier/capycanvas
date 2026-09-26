@@ -1651,6 +1651,7 @@ impl Workspace {
             None
         };
         let facts = ChromeFacts {
+            canvas_bar: None,
             contact_tab,
             zen_button: self
                 .zen_capy

@@ -4,7 +4,7 @@ use layer_core::{Edit, Point, Rect, Ruler, RulerConstraint, RulerGeometry};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment};
 
-const HIT_DISTANCE: f32 = 12.;
+pub(crate) const HIT_DISTANCE: f32 = 12.;
 #[derive(Clone, Copy)]
 enum Grab {
     Body,

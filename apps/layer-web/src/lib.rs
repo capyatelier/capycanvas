@@ -821,6 +821,7 @@ impl WebApp {
             tool_actions,
             tool_set,
             tool_panels,
+            canvas_bar,
             layers,
             layer_tools,
             adjustments,
@@ -872,6 +873,7 @@ impl WebApp {
         field!(tool_actions);
         field!(tool_set);
         field!(tool_panels);
+        field!(canvas_bar);
         field!(layers);
         field!(layer_tools);
         field!(adjustments);

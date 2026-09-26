@@ -77,7 +77,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
-pub use session::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
+pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
 mod settings;
 mod shortcuts;
 mod theme;
@@ -243,7 +243,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
         &[CommandId::ShowRulers, CommandId::SnapRulers],
-        &[CommandId::ZenMode, CommandId::Fullscreen],
+        &[CommandId::ShowCanvasActionBar, CommandId::ZenMode, CommandId::Fullscreen],
         &[CommandId::ResetLayout],
     ],
 };
@@ -654,6 +654,7 @@ pub enum CommandId {
     Website,
     SourceCode,
     Drawings,
+    ShowCanvasActionBar,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -666,6 +667,7 @@ impl CommandId {
             Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
+            Self::ShowCanvasActionBar => platform.canvas_bar(),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -858,13 +860,14 @@ impl CommandId {
             Self::LowerLayer => "down",
             Self::ResetLayout => "reset-layout",
             Self::NewWindow | Self::Drawings => "new-window",
+            Self::ShowCanvasActionBar => "toolbar",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 126] = [
+    pub const ALL: [Self; 127] = [
         Self::SearchCommands,
         Self::DrawingBrush,
         Self::Sculpt,
@@ -993,6 +996,7 @@ impl CommandId {
         Self::Website,
         Self::SourceCode,
         Self::Drawings,
+        Self::ShowCanvasActionBar,
     ];
     pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
@@ -1154,6 +1158,7 @@ impl CommandId {
             Self::Fullscreen => "Full screen",
             Self::NewWindow => "New Window",
             Self::Drawings => "Drawings…",
+            Self::ShowCanvasActionBar => "Show canvas action bar",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),
@@ -1259,6 +1264,7 @@ pub struct UiState {
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
     pub tool_panels: ToolPanels,
+    pub canvas_bar: Option<CanvasBarView>,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
     pub adjustments: Vec<AdjustmentChoice>,
@@ -1424,6 +1430,10 @@ pub enum UiAction {
         context: ToolbarContext,
         action: Box<UiAction>,
     },
+    CanvasBarEdit {
+        context: CanvasBarContext,
+        action: Box<UiAction>,
+    },
     ColorPicker {
         action: ColorPickerAction,
     },
@@ -1560,7 +1570,8 @@ pub mod regions {
     pub const CUSTOMIZATION: u32 = 128;
     pub const COLOR_PREVIEW: u32 = 256;
     pub const COMMAND_SEARCH: u32 = 512;
-    pub const ALL: u32 = 1023;
+    pub const CANVAS_BAR: u32 = 1024;
+    pub const ALL: u32 = 2047;
 }
 
 pub fn srgb_to_linear(value: f32) -> f32 {

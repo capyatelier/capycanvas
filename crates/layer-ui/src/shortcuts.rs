@@ -353,6 +353,7 @@ impl CommandId {
             Self::Website => "command.Website",
             Self::SourceCode => "command.SourceCode",
             Self::Drawings => "command.Drawings",
+            Self::ShowCanvasActionBar => "command.ShowCanvasActionBar",
         }.into()
     }
 }

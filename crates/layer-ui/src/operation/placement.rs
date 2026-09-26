@@ -18,6 +18,9 @@ pub(crate) struct PlacementInsertion {
     pub selected: BTreeSet<layer_core::LayerId>,
 }
 impl Placement {
+    pub(super) fn count(&self) -> usize {
+        self.members.len()
+    }
     pub(super) fn preview_layers(&self, doc: &Document, affine: Affine) -> Result<Vec<Layer>, String> {
         self.members.iter().map(|original| {
             let mut layer = original.clone();

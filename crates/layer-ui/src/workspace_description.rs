@@ -89,6 +89,9 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
     if before.canvas_info != after.canvas_info {
         return "Changed canvas information display".into();
     }
+    if before.canvas_bar != after.canvas_bar {
+        return "Changed canvas action bar".into();
+    }
     let added: Vec<_> = after
         .panels
         .iter()

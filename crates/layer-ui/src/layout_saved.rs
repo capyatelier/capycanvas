@@ -7,6 +7,8 @@ struct SavedDockLayout {
     header: crate::HeaderLayout,
     #[serde(default)]
     canvas_info: crate::CanvasInfoLayout,
+    #[serde(default)]
+    canvas_bar: crate::CanvasBarPreference,
     bands: Vec<DockBand>,
     #[serde(
         default = "PanelConfig::defaults",
@@ -34,6 +36,7 @@ impl<'de> Deserialize<'de> for DockLayout {
         let mut layout = Self {
             header: saved.header,
             canvas_info: saved.canvas_info,
+            canvas_bar: saved.canvas_bar,
             bands: saved.bands,
             panels: saved.panels,
             floating: saved.floating,

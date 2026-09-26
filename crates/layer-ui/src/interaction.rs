@@ -48,6 +48,9 @@ pub struct ChromeFacts {
     /// Visible standalone Capy hit target; using it must not reveal over the button.
     #[serde(default)]
     pub zen_button: Option<crate::Bounds>,
+    /// Visible canvas action bar; hovering it must not reveal docked chrome.
+    #[serde(default)]
+    pub canvas_bar: Option<crate::Bounds>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -104,6 +107,8 @@ pub struct InputReply {
     pub cancel_paint: bool,
     pub dismiss_popups: bool,
     pub chrome_hidden: bool,
+    /// The canvas action bar hides while a canvas contact is in progress.
+    pub canvas_bar_hidden: bool,
     /// Whether to show the standalone top-left Capy while chrome is hidden.
     pub keep_zen_button: bool,
     /// Retired partial-Zen wire fields; current interaction always leaves these false.

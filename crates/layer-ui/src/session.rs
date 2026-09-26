@@ -36,6 +36,9 @@ pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingV
 mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
+#[path = "canvas_bar.rs"]
+mod canvas_bar;
+pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
 };
@@ -105,6 +108,7 @@ pub struct UiSession<R: CanvasRenderer> {
     engine: CanvasEngine<R>,
     state: UiState,
     last_toolbar_context: Option<ToolbarContext>,
+    canvas_bar: canvas_bar::CanvasBarState,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
     rendering_suspended: bool,
@@ -249,6 +253,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
                 tool_panels: ToolPanels::default(),
+                canvas_bar: None,
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
                 adjustments: effects::catalog(&effect_catalog, &Default::default()),
@@ -274,6 +279,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             effect_catalog,
             last_toolbar_context: None,
+            canvas_bar: Default::default(),
             pending_filters: None,
         };
         session.apply_brush()?;
@@ -1226,6 +1232,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
+        reply.canvas_bar_hidden = self.canvas_bar_contact();
         reply.keep_zen_button = self.interaction.hidden && self.state.settings.zen_show_capy;
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
@@ -1276,6 +1283,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 && self.interaction.facts.zen_button.is_some_and(|bounds| {
                                     bounds.contains(position[0], position[1])
                                 }))
+                                && !self.interaction.facts.canvas_bar.is_some_and(|bounds| {
+                                    bounds.contains(position[0], position[1])
+                                })
                                 && self.layout(viewport).near_chrome(
                                     position,
                                     viewport,
@@ -2106,6 +2116,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar.visible)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::PreviewSdr && self.state.preview_sdr)
             || (id == CommandId::SoftProof && (self.state.soft_proof
@@ -2133,6 +2144,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("This toolbar control belongs to a previous tool or edit target".into());
             }
             return self.dispatch(*action);
+        }
+        if let UiAction::CanvasBarEdit { context, action } = action {
+            return self.canvas_bar_edit(context, *action);
         }
         if self.defer_selection_action(&action) {
             return Ok(self.changed(0, true));
@@ -2266,7 +2280,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::NudgeDivider { .. }
                 | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
-                    command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar
+                    command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar | CommandId::ShowCanvasActionBar
                 }
         )
         .then(|| {
@@ -2299,7 +2313,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         let (mut changed, wake) = match action {
             UiAction::CommandSearch { .. } | UiAction::ExecuteCommand { .. } => unreachable!("handled above"),
-            UiAction::ToolbarEdit { .. } => unreachable!("validated before dispatch"),
+            UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } => unreachable!("validated before dispatch"),
             UiAction::ToggleSliderBookmark { control } => {
                 let binding = control.slider().ok_or("Not a brush slider")?;
                 let field = binding.field(&self.state).ok_or("This slider is unavailable")?;
@@ -4333,6 +4347,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request(HostRequestKind::Drawings)?;
                 Ok((HOST, false))
             }
+            CommandId::ShowCanvasActionBar => {
+                let bar = &mut self.state.workspace.layout.canvas_bar;
+                bar.visible = !bar.visible;
+                Ok((LAYOUT | COMMANDS, false))
+            }
             CommandId::Website | CommandId::SourceCode => {
                 self.request(HostRequestKind::OpenLink {
                     link: if command == CommandId::Website {
@@ -4701,6 +4720,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.update_shader_idle();
         self.update_toolbar_context();
+        let regions = regions | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 };
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
         }
@@ -5187,6 +5207,7 @@ mod tests {
     include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
+    include!("canvas_bar_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -15213,7 +15234,7 @@ mod tests {
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
                 ["show_rulers", "snap_rulers"],
-                ["zen_mode", "fullscreen"],
+                ["show_canvas_action_bar", "zen_mode", "fullscreen"],
                 ["reset_layout"]
             ])
         );

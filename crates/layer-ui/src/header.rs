@@ -455,6 +455,21 @@ impl Default for CanvasInfoLayout {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CanvasBarPreference {
+    pub visible: bool,
+    pub placement: crate::CanvasBarPlacement,
+}
+impl Default for CanvasBarPreference {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            placement: crate::CanvasBarPlacement::NearObject,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HeaderPresentation {
     /// Zero until the host implements this header projection.

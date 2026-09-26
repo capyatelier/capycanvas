@@ -265,7 +265,9 @@ fn entry(
     };
     let target = match &action {
         UiAction::Layer { .. } => CommandTarget::ActiveLayer,
-        UiAction::Customize { .. } | UiAction::WorkspaceManager { .. } => CommandTarget::Workspace,
+        UiAction::Customize { .. }
+        | UiAction::WorkspaceManager { .. }
+        | UiAction::Invoke { command: CommandId::ShowCanvasActionBar } => CommandTarget::Workspace,
         UiAction::Color {
             action: ColorAction::Library { .. },
         } => CommandTarget::Palette,
@@ -303,7 +305,7 @@ fn entry(
                 | CommandId::InvertSelection,
         } => CommandHistory::Document,
         UiAction::Invoke {
-            command: CommandId::UndoWorkspace | CommandId::RedoWorkspace,
+            command: CommandId::UndoWorkspace | CommandId::RedoWorkspace | CommandId::ShowCanvasActionBar,
         }
         | UiAction::Customize { .. } => CommandHistory::Workspace,
         UiAction::Color {
@@ -400,6 +402,7 @@ fn action_description(action: &UiAction) -> &'static str {
             UndoWorkspace => "Restore the previous toolbar, panel or workspace layout.",
             RedoWorkspace => "Reapply an undone workspace layout change.",
             ZenMode => "Hide or restore workspace controls to give the canvas more room.",
+            ShowCanvasActionBar => "Show next steps beside selections, transforms and placed images.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",

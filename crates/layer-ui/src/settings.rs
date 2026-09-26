@@ -24,6 +24,9 @@ pub enum Platform {
     Android,
 }
 impl Platform {
+    pub fn canvas_bar(self) -> bool {
+        matches!(self, Self::Generic | Self::Gtk | Self::Web | Self::Android)
+    }
     pub fn color_picker(self) -> bool {
         matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios | Self::Windows)
     }
