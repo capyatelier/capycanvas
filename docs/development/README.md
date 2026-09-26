@@ -55,6 +55,10 @@ The [shared workflow centralization handoff](shared-workflow-centralization-hand
 tracks portable color/photo, export, profile-library and recovery rules that Web
 and Android should consolidate before Windows adds the same workflows.
 
+The [canvas action bar and transforms plan](canvas-action-bar-transforms.md)
+sequences Phase 1 of the [photo editing build list](../history/photo-editing-research.md):
+the contextual bar on every host and one transform session with Distort and Warp.
+
 [Stroke recording and prediction datasets](stroke-recording.md) explains how to
 collect tablet input from Diagnostics and replay it for predictor comparisons.
 
