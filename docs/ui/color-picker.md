@@ -200,9 +200,6 @@ library access.
   managed textures through GTK's GPU renderer, including Display P3, transparent
   colors, and HDR-to-SDR rendition. The existing native color-panel and HDR-picker
   regressions cover the retained readouts, controls, and field/arc rendering.
-- Application/library Clippy completes with existing repository warnings.
-  All-target Clippy is blocked by the existing approximate-TAU error in
-  `layer-render-wgpu/examples/contact_gallery.rs:381`.
 - A broader GPU run also selects
   `spatial_filters_match_linear_sampling_oracles`, which fails its Ripple oracle
   with 91,837 differing pixels. The identical failure was reproduced from an

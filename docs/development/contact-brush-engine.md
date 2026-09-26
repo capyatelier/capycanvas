@@ -149,14 +149,12 @@ The largest GPU sample in these runs was 0.249 ms. The broad tests use the same
 1000×760 surface and include self-crossings and page changes. Compilation and
 one-time paper generation happen during brush preparation, before pen-down.
 
-Reproduce the gallery and timings:
+Reproduce the timings:
 
 ```sh
-cargo run --locked --release -p layer-render-wgpu --example contact_gallery -- artifacts/contact-brushes/gallery
 cargo test --locked --release -p layer-render-wgpu --test contact --test project -- --test-threads=1
 bash tools/performance/workspace-motion.sh gtk --native-test=native_contact_brushes
 CAPY_CONTACT_PREVIEWS_ONLY=1 cargo run --locked --release -p layer-bench -- --brush-previews
 ```
 
-Generated review files are in `artifacts/contact-brushes/gallery/index.html`,
-`timings.csv`, `stress-timings.csv` and `artifacts/contact-brushes/gtk/`.
+Generated GTK review files are in `artifacts/contact-brushes/gtk/`.
