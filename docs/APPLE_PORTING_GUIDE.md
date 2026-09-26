@@ -70,6 +70,18 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   Metal. Add shared UI journeys under `apps/layer-apple/Shared/Tests` and register
   them in both `EditorLaunchTests`. Physical iPad XCUITests need **Settings →
   Developer → Enable UI Automation** and an unlocked device.
+- **Stale journeys.** Shared layout and tool changes (fitted columns, renamed
+  tools, merged tool sets) break journeys that assume window positions or
+  labels. Place canvas strokes and samples relative to `editorPaper(in:)`,
+  select items by label rather than index, reveal scrolled controls before
+  activating them, and wait for published state instead of reading it right
+  after a click. When a journey fails, first check whether the reference hosts
+  changed the rule; fix Apple only when it disagrees with them.
+- **Exact history.** Displayed Undo/Redo pixels must match exactly; the shared
+  renderer redraws rounded pages at pen-up. Compare against a stroke only after
+  it stops changing, and do not add tolerances for display differences.
+- **One UI run at a time.** Swift fixtures that open windows steal focus from a
+  running XCUITest batch; run them before or after, not alongside.
 - **Performance.** Record `CAPY_WORKLOAD` runs (`ink`, `layered-4k`) on both
   devices before and after, and summarize them with
   `tools/performance/apple_trace.py`.
