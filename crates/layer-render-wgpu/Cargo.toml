@@ -10,7 +10,7 @@ layer-core = { path = "../layer-core" }
 layer-color = { path = "../layer-color" }
 layer-render = { path = "../layer-render" }
 pollster = "0.4.0"
-wgpu = "30.0.1"
+wgpu.workspace = true
 naga = { version = "30.0.0", features = ["wgsl-in"] }
 web-time = "1.1.0"
 png = "0.17.16"

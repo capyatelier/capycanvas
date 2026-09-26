@@ -12,4 +12,4 @@ layer-render-wgpu = { path = "../layer-render-wgpu" }
 layer-ui = { path = "../layer-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-wgpu = "30.0.1"
+wgpu.workspace = true

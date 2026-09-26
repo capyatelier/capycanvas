@@ -19,7 +19,7 @@ layer-workspace = { path = "../../../crates/layer-workspace", features = ["nativ
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pollster = "0.4"
-wgpu = "30.0.1"
+wgpu.workspace = true
 
 [dev-dependencies]
 png = "0.17.16"

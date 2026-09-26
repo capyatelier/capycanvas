@@ -35,6 +35,9 @@ rust_h265 = { path = "vendor/rust_h265" }
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[workspace.dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl", "webgpu"] }
+
 [profile.release]
 debug = 1
 
