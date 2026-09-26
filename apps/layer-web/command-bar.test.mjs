@@ -8,7 +8,10 @@ export async function checkCommandBar({call, evaluate, settle}) {
     await call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers:0});
   };
-  const open = async () => { await key('k','KeyK',75,2); await wait(`document.querySelector('#command-bar').open`); };
+  const open = async () => {
+    await wait(`layerApp.state().commands.some(c=>c.id==='search_commands'&&c.enabled)`);
+    await key('k','KeyK',75,2); await wait(`document.querySelector('#command-bar').open`);
+  };
   const query = text => evaluate(`(()=>{const e=document.querySelector('#command-search');e.value=${JSON.stringify(text)};e.dispatchEvent(new Event('input',{bubbles:true}));return null;})()`);
   const detail = async () => {
     const [text, shared] = await evaluate(`[document.querySelector('#command-detail').textContent,layerApp.state().command_search.detail]`);
