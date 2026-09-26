@@ -82,6 +82,8 @@ function Open-Drawings {
  Wait-Until {$selector.Current.ItemStatus -eq 'Closed'} 'Previous drawing popup is still closing'
  Invoke 'drawing-selector'
  Wait-Until {$selector.Current.ItemStatus -eq 'Open' -and (Find 'drawing-list')} 'Drawing selector did not open'
+ $settled=@{bounds=''}
+ Wait-Until {$now=[string](Find 'drawing-list').Current.BoundingRectangle;$same=$now -eq $settled.bounds;$settled.bounds=$now;Start-Sleep -Milliseconds 80;$same} 'Drawing selector did not settle'
 }
 function Invoke([string]$Value,[switch]$Name){
  $item=Control $Value -Name:$Name
