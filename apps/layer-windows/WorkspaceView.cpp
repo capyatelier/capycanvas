@@ -337,7 +337,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }signature.Insert(L"headers",headers);signature.Insert(L"tab_style",S(str(object(snapshot,L"windows_tab_styles"),to_hstring(id).c_str())));
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key){group.key=std::move(key);build(group,geometry,panel);}
-            bool hidden=flag(snapshot,L"chrome_hidden")&&(!flag(geometry,L"floating")||flag(snapshot,L"hide_floating_panels"));
+            bool hidden=flag(snapshot,L"chrome_hidden")&&!flag(geometry,L"floating");
             group.hidden=hidden;
             int z=flag(geometry,L"floating")?100+2*order:0;++order;
             group.order=z;
