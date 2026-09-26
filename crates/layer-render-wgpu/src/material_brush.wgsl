@@ -2,7 +2,6 @@
 // compiler sees only that operation's control flow. Style retains its packed
 // operation field for the shared batch layout and reservoir pass.
 override MATERIAL_OPERATION: u32;
-override CONTACT_FILM_CULL: bool = true;
 
 const OP_DEPOSIT: u32 = 0u;
 const OP_COVERAGE: u32 = 1u;
@@ -645,7 +644,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // dark contact seams on Adreno for large, multi-contact batches.
     let range = material_sources.header.zw;
     let tooth = contact_paper(world);
-    if CONTACT_FILM_CULL && contact_uniform() && style.render_mode.x < 0.5 {
+    if contact_uniform() && style.render_mode.x < 0.5 {
         var ceiling = 1.0;
         if contact_feature(1u, style.contact_a.x > 0.5) && range.y > 0u {
             ceiling = dabs[range.x].invariants.z;

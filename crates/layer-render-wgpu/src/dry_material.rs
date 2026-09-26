@@ -147,9 +147,6 @@ impl Pipelines {
                                     ("MATERIAL_OPERATION", (index / 2) as f64),
                                     ("CONTACT_FLAGS", f64::from(flags)),
                                     ("MATERIAL_IN_PLACE", f64::from(in_place)),
-                                    // The generic kernel also serves as an
-                                    // independent reference for film culling.
-                                    ("CONTACT_FILM_CULL", f64::from(flags != u32::MAX)),
                                 ],
                                 ..Default::default()
                             },
