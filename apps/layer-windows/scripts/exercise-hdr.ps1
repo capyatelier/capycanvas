@@ -105,13 +105,13 @@ function Select-Choice([string]$Id,[string]$Name){
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
-function Sdr { ProofPanel;$null=Control 'proof-panel-exposure' }
+function Sdr { ProofPanel;if(!(Find 'proof-panel-exposure')){Invoke 'proof-panel-mode-sdr'};$null=Control 'proof-panel-exposure' }
 function ProofPanel {
  if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}
  $null=Control 'proof-panel-mode'
 }
 function Setup {
- ProofPanel;Invoke 'proof-panel-setup'
+ ProofPanel;if(!(Find 'proof-panel-setup')){Invoke 'proof-panel-mode-print'};Invoke 'proof-panel-setup'
  Wait-Until {(Model).windows_document.kind -eq 'proof' -and (Find 'proof-profile')} 'Proof Setup did not open'
 }
 function Picker([string]$Name){
@@ -268,8 +268,8 @@ try {
  Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and (Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available} 'Closing the clean selector fixture drawing failed' 60
  $display=(Model).windows_display
  Button 'Test SDR output';Wait-Until {(Model).windows_display.headroom -eq 1} 'Synthetic SDR fallback did not apply'
- $before=(Model).state.document_file|ConvertTo-Json -Compress
  Sdr
+ $before=(Model).state.document_file|ConvertTo-Json -Compress
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  (Control 'proof-panel-exposure').SetFocus();Set-Text 'proof-panel-exposure' '-25';[CapyRowPointer]::Key([uint32]$review.Id,0x1B);Idle
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'Cancelled SDR field edited the drawing'}
@@ -321,10 +321,11 @@ try {
  Command 'redo' 'Edit';Wait-Until {[Math]::Abs((Model).windows_proof_form.rendition.exposure+0.4) -lt 0.0001} 'Proof field Redo failed'
  Command 'undo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'Proof field final Undo failed'
  $proofHistory=(Model).state.document_file|ConvertTo-Json -Compress
- Select-Choice 'proof-panel-mode' 'SDR';Wait-Until {(Model).state.preview_sdr} 'Proof panel SDR mode failed'
- Select-Choice 'proof-panel-mode' 'Off';Wait-Until {!(Model).state.preview_sdr} 'Proof panel Off failed'
+ Invoke 'proof-panel-mode-sdr';Wait-Until {(Model).state.preview_sdr} 'Proof panel SDR mode failed'
+ Invoke 'proof-panel-mode-off';Wait-Until {!(Model).state.preview_sdr} 'Proof panel Off failed'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $proofHistory){throw 'Proof panel modes edited history'}
  # Real native capture with injected mouse/touch/pen; each edit has one history step.
+ Invoke 'proof-panel-mode-sdr';Wait-Until {(Model).state.preview_sdr} 'The SDR dial did not appear in SDR mode'
  $dialBefore=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress
  foreach($device in @('mouse','touch','pen')){
   Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"
@@ -344,6 +345,7 @@ try {
   Command 'redo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialAfter} 'Dial redo failed'
   Command 'undo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial final undo failed'
  }
+ Invoke 'proof-panel-mode-off';Wait-Until {!(Model).state.preview_sdr} 'Proof panel Off failed after the dial'
  $plain=Delivery 'SDR.png' 'PNG'
  $pq=Delivery 'HDR.png' 'HDR PNG · BT.2020 PQ'
  $exr=Delivery 'HDR.exr' 'OpenEXR · 32-bit float'
@@ -358,8 +360,8 @@ try {
 
  $file=(Model).state.document_file|ConvertTo-Json -Compress
  Button 'Test HDR output';Wait-Until {(Model).windows_display.headroom -eq 5 -and (Model).state.hdr_display_available} 'Synthetic HDR switch did not apply'
- Select-Choice 'proof-panel-mode' 'SDR';Wait-Until {(Model).state.preview_sdr} 'SDR preview did not enable'
- Select-Choice 'proof-panel-mode' 'Off';Button 'Test SDR output';Wait-Until {!(Model).state.hdr_display_available} 'Synthetic return to SDR failed'
+ Invoke 'proof-panel-mode-sdr';Wait-Until {(Model).state.preview_sdr} 'SDR preview did not enable'
+ Invoke 'proof-panel-mode-off';Button 'Test SDR output';Wait-Until {!(Model).state.hdr_display_available} 'Synthetic return to SDR failed'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $file){throw 'Display switching modified artwork/history'}
  if((Delivery 'SDR-after-switch.png' 'PNG') -ne $plain){throw 'Display switching changed SDR export'}
  Setup;Button 'Apply';Idle;Wait-Until {(Model).windows_proof.bytes -gt 0} 'HDR print proof failed' 60

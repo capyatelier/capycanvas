@@ -77,7 +77,7 @@ function ProofPanel {
  Wait-Until {(Find 'proof-panel-mode')} 'Retained Proof panel did not open'
 }
 function Setup {
- ProofPanel;Invoke 'proof-panel-setup'
+ ProofPanel;if(!(Find 'proof-panel-setup')){Invoke 'proof-panel-mode-print'};Invoke 'proof-panel-setup'
  Wait-Until {(Model).windows_document.kind -eq 'proof' -and (Find 'proof-profile')} 'Proof Setup did not open'
 }
 function Picker([string]$Name){
