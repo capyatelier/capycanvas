@@ -1,7 +1,7 @@
 //! Document jobs transfer immutable state; the live canvas remains on its owner.
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
 //!
-use crate::document_io::{Stream, atomic_write, check_cancelled, io_error, location};
+use crate::document_io::{atomic_write, check_cancelled, io_error, location};
 use layer_core::{Project, ProjectLimits};
 use layer_host::{NativeHost, Renderer};
 use layer_render::{CanvasRenderer, EffectValidationRequest};
@@ -278,12 +278,12 @@ fn prepare(
     };
     let imported = match source {
         Source::Create(options) => layer_ui::ImportedDocument { project: options.project()?, source: layer_ui::ImportSource::Master },
-        Source::Recovery(path) => layer_ui::read_import(Stream { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancel },
+        Source::Recovery(path) => layer_ui::read_import(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
             layer_ui::ImportIntent::Recovery, environment.photo_policy, "Recovered drawing", limits, Default::default(), cancel)?,
         Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel)?)?; *imported },
         Source::Open(path) => {
             let file = File::open(&path).map_err(|e| io_error("open", e))?;
-            layer_ui::read_import(Stream { inner: BufReader::new(file), cancel }, layer_ui::ImportIntent::Open,
+            layer_ui::read_import(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
                 environment.photo_policy, path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"),
                 limits, Default::default(), cancel)?
         }

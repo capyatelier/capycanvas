@@ -9,7 +9,7 @@ use jni::{
 use layer_ui::{DocumentRequest, HostRequestKind, ImagePlacementContext};
 use std::{
     fs::File,
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::BufReader,
     os::fd::FromRawFd,
 };
 
@@ -40,23 +40,6 @@ fn active(a: &crate::app::App, id: u32) -> Result<(), String> {
         Ok(())
     } else {
         Err("The image import request is no longer active".into())
-    }
-}
-struct CancelRead {
-    file: File,
-    control: layer_render_wgpu::snapshot::CaptureControl,
-}
-impl Read for CancelRead {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        if self.control.is_cancelled() {
-            return Err(std::io::Error::other("Image import cancelled"));
-        }
-        self.file.read(out)
-    }
-}
-impl Seek for CancelRead {
-    fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
-        self.file.seek(from)
     }
 }
 
@@ -149,7 +132,9 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
         let name = name
             .rsplit_once('.')
             .map_or(name.as_str(), |(stem, _)| stem);
-        b.images.read(BufReader::new(CancelRead { file, control: b.control.clone() }), name, b.control.cancellation_flag())
+        let control = b.control.clone();
+        let file = layer_core::Cancellable { inner: file, cancelled: move || control.is_cancelled() };
+        b.images.read(BufReader::new(file), name, b.control.cancellation_flag())
     })();
     if result.is_err() {
         b.images.invalidate();

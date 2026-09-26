@@ -8,7 +8,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    io::{Cursor, Read, Seek, Write},
     mem::ManuallyDrop,
     os::fd::FromRawFd,
     sync::{
@@ -269,11 +269,6 @@ pub unsafe extern "C" fn capy_apple_document_recovery(app:*mut CapyApple,id:u64)
     }).unwrap_or(std::ptr::null_mut())
 }
 
-struct Stream<'a> {
-    file: ManuallyDrop<File>,
-    task: &'a CapyProjectTask,
-}
-
 /// # Safety
 /// Session owner only. Used as a barrier before a host decides whether to close.
 #[unsafe(no_mangle)]
@@ -352,31 +347,8 @@ pub unsafe extern "C" fn capy_project_matches(
 ) -> i32 {
     unsafe { task.as_ref() }.map_or(0, |t| i32::from(t.epoch == epoch && t.revision == revision))
 }
-impl Stream<'_> {
-    fn cancelled(&self) -> std::io::Result<()> {
-        self.task.check_cancelled().map_err(std::io::Error::other)
-    }
-}
-impl Read for Stream<'_> {
-    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        self.cancelled()?;
-        self.file.read(bytes)
-    }
-}
-impl Seek for Stream<'_> {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        self.cancelled()?;
-        self.file.seek(position)
-    }
-}
-impl Write for Stream<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.cancelled()?;
-        self.file.write(bytes)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
-    }
+fn host_file(fd: i32) -> ManuallyDrop<File> {
+    ManuallyDrop::new(unsafe { File::from_raw_fd(fd) })
 }
 
 /// # Safety
@@ -391,10 +363,8 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         if fd < 0 {
             return Err("Missing project output".into());
         }
-        let stream = Stream {
-            file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }),
-            task,
-        };
+        let file = host_file(fd);
+        let stream = layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() };
         match payload {
             Payload::Save { snapshot, project } => {
                 if let Some(snapshot) = snapshot.take() {
@@ -484,9 +454,11 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
                 let name = name?;
                 let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
                 match input? {
-                    Input::File(fd) => images.read(Stream {
-                        file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }), task,
-                    }, stem, task.control.cancellation_flag()),
+                    Input::File(fd) => {
+                        let file = host_file(fd);
+                        images.read(layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
+                            stem, task.control.cancellation_flag())
+                    }
                     Input::Bytes(bytes) => images.read(Cursor::new(bytes), stem, task.control.cancellation_flag()),
                     Input::Assume(profile) => images.interpret(profile, task.control.is_cancelled()),
                     Input::New(_) => Err("Choose images to place".into()),
@@ -510,10 +482,13 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
                 project: options.unwrap_or(context.new_options).project()?,
                 source: layer_ui::ImportSource::Master,
             }),
-            Input::File(fd) => *imported = Some(layer_ui::read_import(Stream {
-                file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }), task,
-            }, layer_ui::ImportIntent::Open, context.photo_policy, name, limits,
-                Default::default(), task.control.cancellation_flag())?),
+            Input::File(fd) => {
+                let file = host_file(fd);
+                *imported = Some(layer_ui::read_import(
+                    layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
+                    layer_ui::ImportIntent::Open, context.photo_policy, name, limits,
+                    Default::default(), task.control.cancellation_flag())?)
+            }
             Input::Bytes(bytes) => *imported = Some(layer_ui::read_import(Cursor::new(bytes),
                 layer_ui::ImportIntent::Open, context.photo_policy, name, limits,
                 Default::default(), task.control.cancellation_flag())?),

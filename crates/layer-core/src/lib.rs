@@ -8,6 +8,8 @@
 mod atomic_file;
 #[cfg(unix)]
 pub use atomic_file::{atomic_write, atomic_write_checked};
+mod cancellable;
+pub use cancellable::Cancellable;
 
 pub mod color;
 pub mod binary_payload;

@@ -553,9 +553,9 @@ impl Task {
                 path.file_stem().and_then(|s| s.to_str()).unwrap_or("Image")
             };
             task.images.read(
-                crate::document_io::Stream {
+                layer_core::Cancellable {
                     inner: file,
-                    cancel: self.control.cancellation_flag(),
+                    cancelled: || self.control.is_cancelled(),
                 },
                 name,
                 self.control.cancellation_flag(),

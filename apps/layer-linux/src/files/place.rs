@@ -1,7 +1,7 @@
 //! Retained file/clipboard image import. Transfer uses a bounded buffer and a
 //! private temporary file; decode/CMM work runs outside the GTK owner.
 use crate::workspace::Workspace;
-use super::reader::CancelRead;
+use super::reader::cancellable_file;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use std::{
@@ -197,7 +197,7 @@ fn read_sources(
         let name = if paste { "Clipboard image".into() } else {
             path.file_stem().unwrap_or_default().to_string_lossy().into_owned()
         };
-        let reader = CancelRead::new(&path, cancelled.clone()).map_err(|e| e.to_string())?;
+        let reader = cancellable_file(&path, cancelled.clone()).map_err(|e| e.to_string())?;
         images.read(BufReader::new(reader), &name, &cancelled)
             .map_err(|e| format!("{name}: {e}. No images were imported."))?;
     }

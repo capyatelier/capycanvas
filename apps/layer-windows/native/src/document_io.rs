@@ -2,7 +2,7 @@
 use layer_ui::DocumentLocation;
 use std::{
     fs::{self, OpenOptions},
-    io::{BufWriter, Read, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
@@ -38,32 +38,6 @@ pub(crate) fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
         Err("Document operation cancelled".into())
     } else {
         Ok(())
-    }
-}
-pub(crate) struct Stream<'a, T> {
-    pub inner: T,
-    pub cancel: &'a AtomicBool,
-}
-impl<T: Read> Read for Stream<'_, T> {
-    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        check_cancelled(self.cancel).map_err(std::io::Error::other)?;
-        self.inner.read(bytes)
-    }
-}
-impl<T: std::io::Seek> std::io::Seek for Stream<'_, T> {
-    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
-        check_cancelled(self.cancel).map_err(std::io::Error::other)?;
-        self.inner.seek(position)
-    }
-}
-impl<T: Write> Write for Stream<'_, T> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        check_cancelled(self.cancel).map_err(std::io::Error::other)?;
-        self.inner.write(bytes)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        check_cancelled(self.cancel).map_err(std::io::Error::other)?;
-        self.inner.flush()
     }
 }
 struct Temporary(PathBuf);
@@ -104,9 +78,9 @@ pub(crate) fn atomic_write_seek(
         }
     }
     let (temporary, file) = reserved.ok_or("Could not reserve a temporary drawing file")?;
-    let mut stream = Stream {
+    let mut stream = layer_core::Cancellable {
         inner: BufWriter::new(file),
-        cancel,
+        cancelled: || cancel.load(Ordering::Acquire),
     };
     write(&mut stream)?;
     stream.flush().map_err(|e| io_error("write", e))?;

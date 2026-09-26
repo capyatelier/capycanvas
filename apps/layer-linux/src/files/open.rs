@@ -142,7 +142,7 @@ pub(crate) fn read(
     policy: layer_ui::PhotoOpenPolicy,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(Project, Option<DocumentLocation>), String> {
-    let file = super::reader::CancelRead::new(path, cancelled.clone())
+    let file = super::reader::cancellable_file(path, cancelled.clone())
         .map_err(|e| format!("Cannot open file: {e}"))?;
     let imported = layer_ui::read_import(file, layer_ui::ImportIntent::Open, policy,
         &path.file_name().unwrap_or_default().to_string_lossy(), Default::default(), Default::default(), &cancelled)?;
