@@ -3711,7 +3711,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.input_pending = self.engine.has_pending_input();
         let modified = self.state.document_file.modified;
         self.refresh_file_state();
-        if modified != self.state.document_file.modified {
+        self.files.pending_modified_change |= modified != self.state.document_file.modified;
+        if self.files.pending_modified_change && self.require_idle().is_ok() {
+            self.files.pending_modified_change = false;
             changed |= regions::DOCUMENT;
         }
         changed |= self.poll_document_close();
@@ -6063,6 +6065,25 @@ mod tests {
         assert_eq!(s.engine.checkpoint(), checkpoint);
         invoke(&mut s, CommandId::Redo);
         assert_eq!(s.engine.document().layer(layer).unwrap().raster, committed);
+    }
+
+    #[test]
+    fn a_contact_on_a_clean_document_announces_the_modification_when_it_finishes() {
+        let mut s = session(Platform::Android);
+        s.frame(0, 0).unwrap();
+        let revision = s.state.revision;
+        s.pen(event(&s, 1, PenPhase::Down, 0.3)).unwrap();
+        let change = s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        assert!(s.state.document_file.modified);
+        assert_eq!(change.regions & regions::DOCUMENT, 0);
+        assert_eq!(s.state.revision, revision, "pen-down must not republish the editor model");
+        s.pen(event(&s, 1, PenPhase::Up, 0.3)).unwrap();
+        let change = s.frame(20_000_000, 28_000_000).unwrap();
+        assert!(!s.engine.has_active_stroke());
+        assert!(s.state.document_file.modified);
+        assert_ne!(change.regions & regions::DOCUMENT, 0);
+        assert!(s.state.revision > revision);
     }
 
     #[test]

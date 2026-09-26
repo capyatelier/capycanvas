@@ -181,6 +181,7 @@ pub(super) struct DocumentFiles {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
     pub(super) saved_checkpoint: u64,
     pub(super) unpublished: bool,
+    pub(super) pending_modified_change: bool,
     replace_in_place: bool,
     replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
