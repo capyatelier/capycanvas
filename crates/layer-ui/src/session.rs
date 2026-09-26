@@ -2168,21 +2168,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.workspace_read_only
             && !continuing_effect_gesture
+            && !action.is_host_report()
             && !matches!(
                 &action,
                 UiAction::WorkspaceManager { .. }
-                    | UiAction::CompleteRequest { .. }
-                    | UiAction::CloseSettings
-                    | UiAction::RestoreSettings { .. }
-                    | UiAction::MeasureColumnDrawers { .. }
-                    | UiAction::MeasureDrawerTiles { .. }
-                    | UiAction::MeasureColumnScroll { .. }
-                    | UiAction::MeasurePanels { .. }
-                    | UiAction::MeasureTitlebar { .. }
-                    | UiAction::MeasureHeader { .. }
-                    | UiAction::MeasureWorkspaceBottom { .. }
-                    | UiAction::SystemThemeChanged { .. }
-                    | UiAction::WindowFullscreen { .. }
                     | UiAction::Invoke {
                         command: CommandId::ApplyTransform | CommandId::CancelTransform
                     }
@@ -2198,7 +2187,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         phase: ContactPhase::Up | ContactPhase::Cancel,
                         ..
                     }
-
             )
         {
             return Err(
@@ -2206,24 +2194,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .into(),
             );
         }
-        if self.workspace_transition
-            && !continuing_effect_gesture
-            && !matches!(
-                &action,
-                UiAction::CompleteRequest { .. }
-                    | UiAction::CloseSettings
-                    | UiAction::RestoreSettings { .. }
-                    | UiAction::MeasureColumnDrawers { .. }
-                    | UiAction::MeasureDrawerTiles { .. }
-                    | UiAction::MeasureColumnScroll { .. }
-                    | UiAction::SystemThemeChanged { .. }
-                    | UiAction::MeasurePanels { .. }
-                    | UiAction::MeasureTitlebar { .. }
-                    | UiAction::MeasureHeader { .. }
-                    | UiAction::MeasureWorkspaceBottom { .. }
-                    | UiAction::WindowFullscreen { .. }
-            )
-        {
+        if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() {
             return Err("A workspace change is in progress".into());
         }
         use regions::*;
@@ -2440,65 +2411,46 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (DOCUMENT | BRUSH | if host { HOST } else { 0 }, !host)
             }
             UiAction::MeasureWorkspaceBottom { inset } => {
-                if !inset.is_finite() || !(0.0..1_000_000.0).contains(&inset) {
+                if !measured(inset) {
                     return Err("Invalid workspace bottom clearance".into());
                 }
-                if self.state.workspace.layout.bottom_inset == inset {
-                    (0, false)
-                } else {
-                    self.state.workspace.layout.bottom_inset = inset;
-                    (LAYOUT, false)
-                }
+                replace_if_changed(&mut self.state.workspace.layout.bottom_inset, inset)
             }
             UiAction::MeasureTitlebar { insets } => {
-                if !insets
-                    .into_iter()
-                    .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
-                {
+                if !insets.into_iter().all(measured) {
                     return Err("Invalid titlebar measurement".into());
                 }
-                if self.state.workspace.layout.titlebar_insets == insets {
-                    (0, false)
-                } else {
-                    self.state.workspace.layout.titlebar_insets = insets;
-                    (LAYOUT, false)
-                }
+                replace_if_changed(&mut self.state.workspace.layout.titlebar_insets, insets)
             }
             UiAction::MeasureHeader { height, items } => {
-                if !height.is_finite()
-                    || !(0.0..1_000_000.).contains(&height)
+                if !measured(height)
                     || items.len() > 128
                     || items.iter().enumerate().any(|(i, m)| {
                         self.state.workspace.layout.header.entry(m.id).is_err()
                             || items[..i].iter().any(|n| n.id == m.id)
                             || ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
                                 .into_iter()
-                                .all(|v| v.is_finite() && (0.0..1_000_000.).contains(&v))
+                                .all(measured)
                     })
                 {
                     return Err("Invalid window-bar measurement".into());
                 }
-                let presentation = HeaderPresentation { height, items };
-                if self.state.workspace.layout.header_presentation == presentation {
-                    (0, false)
-                } else {
-                    self.state.workspace.layout.header_presentation = presentation;
-                    (LAYOUT, false)
-                }
+                replace_if_changed(
+                    &mut self.state.workspace.layout.header_presentation,
+                    HeaderPresentation { height, items },
+                )
             }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
                 for measurement in measurements {
                     if ![measurement.tab_width, measurement.content_height]
                         .into_iter()
-                        .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                        .all(measured)
                     {
                         return Err("Invalid panel measurement".into());
                     }
                     if measurement.scroll.is_some_and(|m| {
-                        ![m.fixed_height, m.unit_height]
-                            .into_iter()
-                            .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                        ![m.fixed_height, m.unit_height].into_iter().all(measured)
                             || m.fixed_height > measurement.content_height
                     }) {
                         return Err("Invalid panel scroll measurement".into());
@@ -2513,12 +2465,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         accepted.push(measurement);
                     }
                 }
-                if self.state.workspace.layout.measurements == accepted {
-                    (0, false)
-                } else {
-                    self.state.workspace.layout.measurements = accepted;
-                    (LAYOUT, false)
-                }
+                replace_if_changed(&mut self.state.workspace.layout.measurements, accepted)
             }
             UiAction::DragWorkspace {
                 item,
@@ -4965,6 +4912,16 @@ impl<R: CanvasRenderer> UiSession<R> {
 
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
+}
+fn measured(value: f32) -> bool {
+    value.is_finite() && (0.0..1_000_000.0).contains(&value)
+}
+fn replace_if_changed<T: PartialEq>(slot: &mut T, value: T) -> (u32, bool) {
+    if *slot == value {
+        return (0, false);
+    }
+    *slot = value;
+    (regions::LAYOUT, false)
 }
 fn valid_viewport(viewport: [f32; 2]) -> Result<(), String> {
     if viewport.into_iter().all(|v| v.is_finite() && v > 0.0) {

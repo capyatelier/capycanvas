@@ -165,22 +165,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn action_without_renderer(action: &UiAction) -> bool {
         match action {
             UiAction::Invoke { command } => Self::command_without_renderer(*command),
-            UiAction::CompleteRequest { .. }
-            | UiAction::CloseSettings
-            | UiAction::OpenSettings { .. }
-            | UiAction::RestoreSettings { .. }
-            | UiAction::Preferences { .. }
-            | UiAction::SetTheme { .. }
-            | UiAction::SystemThemeChanged { .. }
-            | UiAction::WindowFullscreen { .. }
-            | UiAction::MeasurePanels { .. }
-            | UiAction::MeasureTitlebar { .. }
-            | UiAction::MeasureHeader { .. }
-            | UiAction::MeasureWorkspaceBottom { .. }
-            | UiAction::MeasureColumnDrawers { .. }
-            | UiAction::MeasureDrawerTiles { .. }
-            | UiAction::MeasureColumnScroll { .. } => true,
-            _ => false,
+            UiAction::OpenSettings { .. } | UiAction::Preferences { .. } | UiAction::SetTheme { .. } => true,
+            _ => action.is_host_report(),
         }
     }
 

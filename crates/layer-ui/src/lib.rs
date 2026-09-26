@@ -326,9 +326,19 @@ pub fn ui_catalog() -> UiCatalog {
             .collect(),
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandId {
+macro_rules! command_ids {
+    ($($name:ident),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum CommandId {
+            $($name),*
+        }
+        impl CommandId {
+            pub const ALL: [Self; [$(stringify!($name)),*].len()] = [$(Self::$name),*];
+        }
+    };
+}
+command_ids! {
     SearchCommands,
     DrawingBrush,
     Sculpt,
@@ -380,7 +390,6 @@ pub enum CommandId {
     SwapMaskColors,
     FillSelectionMask,
     ClearSelectionMask,
-
     SelectionBrushPressure,
     SelectionNew,
     SelectionAdd,
@@ -431,8 +440,8 @@ pub enum CommandId {
     RotateRight,
     FlipHorizontal,
     FlipVertical,
-    Settings,
     ToggleTheme,
+    Settings,
     AddLayer,
     DeleteLayer,
     RaiseLayer,
@@ -670,133 +679,6 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 124] = [
-        Self::SearchCommands,
-        Self::DrawingBrush,
-        Self::Sculpt,
-        Self::SdrRendition,
-        Self::PreviewSdr,
-        Self::SoftProofSetup,
-        Self::SoftProof,
-        Self::GamutWarning,
-        Self::Histogram,
-        Self::ImportImage,
-        Self::PasteImage,
-        Self::DocumentProperties,
-        Self::AssignProfile,
-        Self::ConvertColorSpace,
-        Self::ChangeBitDepth,
-        Self::RepairSourceProfile,
-        Self::RasterizeSource,
-        Self::NewDocument,
-        Self::OpenDocument,
-        Self::SaveDocument,
-        Self::SaveDocumentAs,
-        Self::ExportDocument,
-        Self::CloseDocument,
-        Self::Pen,
-        Self::Pencil,
-        Self::Brush,
-        Self::Eraser,
-        Self::Airbrush,
-        Self::Decoration,
-        Self::Blend,
-        Self::Liquify,
-        Self::Lasso,
-        Self::Select,
-        Self::RectangleSelect,
-        Self::EllipseSelect,
-        Self::PolygonSelect,
-        Self::ColorSelect,
-        Self::SelectionBrush,
-        Self::TonalSelect,
-        Self::QuickMask,
-        Self::ReturnToArtwork,
-        Self::NewSelectionLayer,
-        Self::SaveSelectionLayer,
-        Self::Reselect,
-        Self::SelectionOutline,
-        Self::MaskOverlay,
-        Self::MaskOverlayProtected,
-        Self::ResetMaskColors,
-        Self::SwapMaskColors,
-        Self::FillSelectionMask,
-        Self::ClearSelectionMask,
-
-        Self::SelectionBrushPressure,
-        Self::SelectionNew,
-        Self::SelectionAdd,
-        Self::SelectionSubtract,
-        Self::SelectionIntersect,
-        Self::SelectionAntialias,
-        Self::SelectionConstrainAngles,
-        Self::SelectionFixedRatio,
-        Self::SelectionFixedSize,
-        Self::SelectionFromCenter,
-        Self::CompleteSelection,
-        Self::CancelSelection,
-        Self::SelectionVisible,
-        Self::SelectionEditing,
-        Self::SelectionReference,
-        Self::Move,
-        Self::ScaleRotate,
-        Self::ApplyTransform,
-        Self::CancelTransform,
-        Self::TransformAspect,
-        Self::PlacementOriginalSize,
-        Self::Hand,
-        Self::Eyedropper,
-        Self::Gradient,
-        Self::Figure,
-        Self::Ruler,
-        Self::ShowRulers,
-        Self::SnapRulers,
-        Self::DeleteRuler,
-        Self::AutoSelect,
-        Self::Fill,
-        Self::Undo,
-        Self::Redo,
-        Self::ClearLayer,
-        Self::FillSelection,
-        Self::SelectAll,
-        Self::Deselect,
-        Self::InvertSelection,
-        Self::UndoWorkspace,
-        Self::RedoWorkspace,
-        Self::NewToolbar,
-        Self::ManageToolbars,
-        Self::CustomizeWorkspaceUi,
-        Self::FitCanvas,
-        Self::ZoomIn,
-        Self::ZoomOut,
-        Self::RotateLeft,
-        Self::RotateRight,
-        Self::FlipHorizontal,
-        Self::FlipVertical,
-        Self::ToggleTheme,
-        Self::Settings,
-        Self::AddLayer,
-        Self::DeleteLayer,
-        Self::RaiseLayer,
-        Self::LowerLayer,
-        Self::ResetLayout,
-        Self::ZenMode,
-        Self::Fullscreen,
-        Self::NewWindow,
-        Self::KeyboardShortcuts,
-        Self::About,
-        Self::Website,
-        Self::SourceCode,
-        Self::Drawings,
-        Self::ShowCanvasActionBar,
-        Self::TransformFlipHorizontal,
-        Self::TransformFlipVertical,
-        Self::TransformRotateLeft,
-        Self::TransformRotateRight,
-        Self::ResetTransform,
-        Self::RemoveSelectionPoint,
-        Self::MaskSelection,
-    ];
     pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
         Self::Sculpt,
@@ -1315,6 +1197,25 @@ pub enum UiAction {
         error: Option<String>,
     },
     CloseSettings,
+}
+impl UiAction {
+    pub(crate) fn is_host_report(&self) -> bool {
+        matches!(
+            self,
+            Self::CompleteRequest { .. }
+                | Self::CloseSettings
+                | Self::RestoreSettings { .. }
+                | Self::MeasureColumnDrawers { .. }
+                | Self::MeasureDrawerTiles { .. }
+                | Self::MeasureColumnScroll { .. }
+                | Self::MeasurePanels { .. }
+                | Self::MeasureTitlebar { .. }
+                | Self::MeasureHeader { .. }
+                | Self::MeasureWorkspaceBottom { .. }
+                | Self::SystemThemeChanged { .. }
+                | Self::WindowFullscreen { .. }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -633,64 +633,48 @@ pub enum Panel {
     CustomToolbar(u32),
 }
 
-// Retain the original system-panel string IDs in saved workspaces and DOM keys.
+const PANEL_NAMES: [(Panel, &str); 17] = [
+    (Panel::Toolbar, "toolbar"),
+    (Panel::Commands, "commands"),
+    (Panel::Brushes, "brushes"),
+    (Panel::BrushSets, "brush_sets"),
+    (Panel::FilterTypes, "filter_types"),
+    (Panel::SculptSets, "sculpt_sets"),
+    (Panel::Tools, "tools"),
+    (Panel::ToolSettings, "tool_settings"),
+    (Panel::Color, "color"),
+    (Panel::Palettes, "palettes"),
+    (Panel::Sizes, "sizes"),
+    (Panel::Layers, "layers"),
+    (Panel::Adjustments, "adjustments"),
+    (Panel::Properties, "properties"),
+    (Panel::Stats, "stats"),
+    (Panel::Navigator, "navigator"),
+    (Panel::Proof, "proof"),
+];
 impl From<Panel> for String {
     fn from(panel: Panel) -> Self {
         match panel {
-            Panel::Toolbar => "toolbar".into(),
-            Panel::Commands => "commands".into(),
-            Panel::Brushes => "brushes".into(),
-            Panel::BrushSets => "brush_sets".into(),
-            Panel::FilterTypes => "filter_types".into(),
-            Panel::SculptSets => "sculpt_sets".into(),
-            Panel::Tools => "tools".into(),
-            Panel::ToolSettings => "tool_settings".into(),
-            Panel::Color => "color".into(),
-            Panel::Palettes => "palettes".into(),
-            Panel::Sizes => "sizes".into(),
-            Panel::Layers => "layers".into(),
-            Panel::Adjustments => "adjustments".into(),
-            Panel::Properties => "properties".into(),
-            Panel::Stats => "stats".into(),
-            Panel::Navigator => "navigator".into(),
-            Panel::Proof => "proof".into(),
             Panel::CustomToolbar(id) => format!("toolbar:{id}"),
+            _ => PANEL_NAMES.iter().find(|(p, _)| *p == panel).unwrap().1.into(),
         }
     }
 }
 impl TryFrom<String> for Panel {
     type Error = String;
     fn try_from(value: String) -> Result<Self, String> {
-        Ok(match value.as_str() {
-            "toolbar" => Self::Toolbar,
-            "commands" => Self::Commands,
-            "brushes" => Self::Brushes,
-            "brush_sets" => Self::BrushSets,
-            "filter_types" => Self::FilterTypes,
-            "sculpt_sets" => Self::SculptSets,
-            "tools" => Self::Tools,
-            "tool_settings" => Self::ToolSettings,
-            "color" => Self::Color,
-            "palettes" => Self::Palettes,
-            "sizes" => Self::Sizes,
-            "layers" => Self::Layers,
-            "adjustments" => Self::Adjustments,
-            "properties" => Self::Properties,
-            "stats" => Self::Stats,
-            "navigator" => Self::Navigator,
-            "proof" => Self::Proof,
-            _ => {
-                let id: u32 = value
-                    .strip_prefix("toolbar:")
-                    .and_then(|id| id.parse().ok())
-                    .filter(|id| *id > 0)
-                    .ok_or("Unknown panel identity")?;
-                if value != format!("toolbar:{id}") {
-                    return Err("Invalid toolbar identity".into());
-                }
-                Self::CustomToolbar(id)
-            }
-        })
+        if let Some((panel, _)) = PANEL_NAMES.iter().find(|(_, name)| *name == value) {
+            return Ok(*panel);
+        }
+        let id: u32 = value
+            .strip_prefix("toolbar:")
+            .and_then(|id| id.parse().ok())
+            .filter(|id| *id > 0)
+            .ok_or("Unknown panel identity")?;
+        if value != format!("toolbar:{id}") {
+            return Err("Invalid toolbar identity".into());
+        }
+        Ok(Self::CustomToolbar(id))
     }
 }
 

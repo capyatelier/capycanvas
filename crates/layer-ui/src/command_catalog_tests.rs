@@ -21,8 +21,6 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
         } else {
             assert!(!ids.iter().any(|v| **v == id), "retired {command:?}");
         }
-        // Compatibility snapshot of the v1 spelling, now explicit in source.
-        assert_eq!(command.shortcut_id(), format!("command.{command:?}"));
     }
     assert_eq!(
         catalog.iter().find(|d| d.id == "canvas.pan").unwrap().kind,

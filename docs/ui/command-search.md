@@ -21,7 +21,7 @@ include their typed arguments. Active-layer adapters omit transient layer IDs
 and the next value of boolean toggles; invocation resolves a fresh menu model
 against the current editing target. Resource and saved-selection choices retain
 their resource IDs. Labels and Rust `Debug` formatting are not identities.
-The explicit legacy shortcut ID mapping preserves existing v1 preferences.
+Shortcut IDs keep the v1 `command.<Variant>` spelling of existing preferences.
 Menu items that repeat an active-layer command, such as the Layer menu's Clear,
 Delete, Rasterize Source and Repair Source Profile, share that command's ID.
 The managed Restore Starting Layout item likewise shares the Reset Layout
