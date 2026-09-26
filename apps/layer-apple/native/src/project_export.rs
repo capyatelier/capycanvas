@@ -25,9 +25,6 @@ impl Task {
     fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
         let document = &self.original.project.document;
         recipe.validate_for_document(document)?;
-        preferences::validate_export(&recipe, document.color)?;
-        recipe.size.extent([document.width, document.height])?;
-        recipe.output_resolution(document.resolution)?;
         self.recipe = recipe;
         self.previews.clear();
         self.clipped = 0;

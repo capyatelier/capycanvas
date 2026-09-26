@@ -400,12 +400,11 @@ impl ExportPresets {
         &mut self,
         action: ExportPresetAction,
         color: DocumentColor,
-        validate: impl Fn(&ExportRecipe) -> Result<(), String>,
     ) -> Result<ExportPresetView, String> {
         match &action {
             ExportPresetAction::Save { recipe, .. }
             | ExportPresetAction::Update { recipe, .. }
-            | ExportPresetAction::Remember { recipe, .. } => validate(recipe)?,
+            | ExportPresetAction::Remember { recipe, .. } => recipe.validate_for_color(color)?,
             _ => (),
         }
         let mut changed = true;
@@ -438,7 +437,7 @@ impl ExportPresets {
         };
         let recipe = index.map(|index| self.recipe(index, color)).transpose()?;
         if let Some(recipe) = &recipe {
-            validate(recipe)?;
+            recipe.validate_for_color(color)?;
         }
         Ok(ExportPresetView {
             names: Self::DESTINATIONS
@@ -457,15 +456,17 @@ impl ExportPresets {
 fn worker_protocol_validates_before_mutation_and_lists_only_names() {
     let mut library = ExportPresets::default();
     let recipe = ExportRecipe::wide_color();
+    let hdr = ExportRecipe::web_share()
+        .draft(crate::ExportDraftAction::Format(crate::ExportFormat::Exr))
+        .recipe;
     assert!(
         library
             .operate(
                 ExportPresetAction::Save {
                     name: "Rejected".into(),
-                    recipe: recipe.clone()
+                    recipe: hdr
                 },
                 Default::default(),
-                |_| Err("Unsupported ICC".into())
             )
             .is_err()
     );
@@ -477,16 +478,13 @@ fn worker_protocol_validates_before_mutation_and_lists_only_names() {
                 recipe: recipe.clone(),
             },
             Default::default(),
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(view.index, Some(4));
     assert!(view.changed);
     let mut restored = ExportPresets::decode(&library.encode().unwrap()).unwrap();
     let view = restored
-        .operate(ExportPresetAction::List, Default::default(), |_| {
-            panic!("Listing must not parse ICC data")
-        })
+        .operate(ExportPresetAction::List, Default::default())
         .unwrap();
     assert_eq!(view.names.len(), 5);
     assert!(view.recipe.is_none());
@@ -495,7 +493,6 @@ fn worker_protocol_validates_before_mutation_and_lists_only_names() {
         .operate(
             ExportPresetAction::Get { index: 4 },
             Default::default(),
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(view.recipe, Some(recipe));

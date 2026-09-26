@@ -162,9 +162,7 @@ pub(crate) fn presets(
         } else {
             Default::default()
         };
-        let view = library.operate(action, document.color, |recipe| {
-            recipe.validate_for_document(document)
-        })?;
+        let view = library.operate(action, document.color)?;
         if view.changed {
             let bytes = library.encode()?;
             atomic_write(&path, cancel, |file| {

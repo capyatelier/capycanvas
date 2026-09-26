@@ -170,14 +170,19 @@ impl<P> ExportRecipe<P> {
     }
 }
 impl ExportRecipe {
-    /// Validate the complete delivery transform and size on a file worker.
-    pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
+    /// Validate the delivery transform from a document color on a file worker.
+    pub fn validate_for_color(&self, color: DocumentColor) -> Result<(), String> {
         self.validate()?;
-        if self.format.is_hdr() && !document.color.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
+        if self.format.is_hdr() && !color.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
         if layer_color::profile_channels(&self.profile.profile)? != self.profile.channels {
             return Err("Profile channels do not match the ICC data".into());
         }
-        layer_color::WorkingEncoder::new(document.color.space, &self.interpretation(), self.encoding)?;
+        layer_color::WorkingEncoder::new(color.space, &self.interpretation(), self.encoding)?;
+        Ok(())
+    }
+    /// Validate the complete delivery transform and size on a file worker.
+    pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
+        self.validate_for_color(document.color)?;
         self.size.extent([document.width, document.height])?;
         self.output_resolution(document.resolution)?;
         Ok(())
@@ -619,5 +624,13 @@ mod tests {
         let recipe=ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
         assert_eq!(recipe.profile,ExportProfile::builtin(RgbSpace::Srgb));
         recipe.validate_for_document(&document).unwrap();
+    }
+    #[test]
+    fn validate_for_color_rejects_mismatched_profile_channels_and_sdr_documents_for_hdr() {
+        let exr = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
+        assert_eq!(exr.validate_for_color(DocumentColor::default()).unwrap_err(), "HDR delivery requires an HDR document");
+        let mut gray = ExportRecipe::web_share();
+        gray.profile.channels = ProfileChannels::Gray;
+        assert_eq!(gray.validate_for_color(DocumentColor::default()).unwrap_err(), "Profile channels do not match the ICC data");
     }
 }

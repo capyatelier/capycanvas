@@ -588,7 +588,6 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     let result = (|| {
         let selected: layer_ui::ExportRecipe =
             serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
-        selected.validate()?;
         let Payload::Export {
             recipe,
             snapshot: Some(snapshot),
@@ -597,11 +596,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
         else {
             return Err("Export task is no longer configurable".into());
         };
-        layer_color::WorkingEncoder::new(
-            snapshot.project.document.color.space,
-            &selected.interpretation(),
-            selected.encoding,
-        )?;
+        selected.validate_for_document(&snapshot.project.document)?;
         *recipe = selected;
         Ok(())
     })();

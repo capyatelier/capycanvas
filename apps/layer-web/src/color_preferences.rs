@@ -60,18 +60,7 @@ pub fn raster_worker_export_presets(
         layer_ui::ExportPresets::decode(&bytes.to_vec()).map_err(js)?
     };
     let view = library
-        .operate(request.action, request.color, |recipe| {
-            recipe.validate()?;
-            if layer_color::profile_channels(&recipe.profile.profile)? != recipe.profile.channels {
-                return Err("Profile channels do not match the ICC data".into());
-            }
-            layer_color::WorkingEncoder::new(
-                request.color.space,
-                &recipe.interpretation(),
-                recipe.encoding,
-            )?;
-            Ok(())
-        })
+        .operate(request.action, request.color)
         .map_err(js)?;
     let result = js_sys::Object::new();
     js_sys::Reflect::set(&result, &js("view"), &serialize(&view)?)?;

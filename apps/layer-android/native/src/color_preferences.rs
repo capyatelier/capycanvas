@@ -23,18 +23,7 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
         let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let color: layer_core::color::DocumentColor =
             serde_json::from_str(&read(&mut env, &color)?).map_err(error)?;
-        let view = library.operate(request, color, |recipe| {
-            recipe.validate()?;
-            if layer_color::profile_channels(&recipe.profile.profile)? != recipe.profile.channels {
-                return Err("Profile channels do not match the ICC data".into());
-            }
-            layer_color::WorkingEncoder::new(
-                color.space,
-                &recipe.interpretation(),
-                recipe.encoding,
-            )?;
-            Ok(())
-        })?;
+        let view = library.operate(request, color)?;
         let result = env
             .new_object_array(2, "java/lang/Object", JObject::null())
             .map_err(error)?;
