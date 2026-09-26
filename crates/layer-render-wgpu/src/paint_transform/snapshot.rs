@@ -2,7 +2,7 @@
 //! surfaces are shared. Before overwriting one, copy it into a reusable snapshot
 //! tile; untouched paint and original-photo tiles require no capture allocation.
 use super::*;
-use pixel_transform::{TRANSFORM_SLOTS, TransformTile};
+use pixel_transform::{TRANSFORM_SLOTS, TransformSource, TransformTile};
 use std::collections::BTreeMap;
 
 pub(super) struct SnapshotPage {

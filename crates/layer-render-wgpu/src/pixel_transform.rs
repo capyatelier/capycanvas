@@ -6,6 +6,9 @@ use std::hash::{Hash, Hasher};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
+/// Enough source neighborhoods for every job of a large layer's frame, so a
+/// continuous drag reuses them instead of cycling through a smaller cache.
+const BINDING_CAPACITY: usize = 4096;
 
 pub(super) struct TransformTile<'a> {
     pub view: &'a wgpu::TextureView,
@@ -29,8 +32,18 @@ pub struct TransformTarget<'a> {
 
 pub(super) struct TiledTransformRecord<'a> {
     pub target: [u32; 2],
+    /// Pixel position of the target page within the attachment it is drawn to.
+    pub slot: [u32; 2],
     pub sources: &'a [[u32; 2]],
     pub source_size: [u32; 2],
+}
+/// One region drawn into a shared attachment by `encode_batch`.
+pub(super) struct BatchDraw<'a> {
+    pub source: &'a TransformSource,
+    pub job: usize,
+    pub identity: bool,
+    /// x, y, width, height in the attachment.
+    pub scissor: [u32; 4],
 }
 struct SourceBinding {
     used: u64,
@@ -54,7 +67,7 @@ pub struct PixelTransform {
     source_upload: Vec<u8>,
     bindings: std::collections::HashMap<u64, Vec<SourceBinding>>,
     binding_count: usize,
-    binding_clock: u64,
+    binding_frame: u64,
     uniforms: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     stride: u32,
     capacity: u64,
@@ -201,7 +214,7 @@ impl PixelTransform {
             source_upload: Vec::new(),
             bindings: Default::default(),
             binding_count: 0,
-            binding_clock: 0,
+            binding_frame: 0,
             uniforms: None,
             stride: 48_u32.div_ceil(device.limits().min_uniform_buffer_offset_alignment)
                 * device.limits().min_uniform_buffer_offset_alignment,
@@ -228,7 +241,7 @@ impl PixelTransform {
             source_upload: Vec::new(),
             bindings: Default::default(),
             binding_count: 0,
-            binding_clock: 0,
+            binding_frame: 0,
             uniforms: None,
             stride: self.stride,
             capacity: 0,
@@ -275,7 +288,6 @@ impl PixelTransform {
             tile.view.hash(&mut hash);
         }
         let key = hash.finish();
-        self.binding_clock = self.binding_clock.wrapping_add(1);
         let binding = if let Some(cached) = self.bindings.get_mut(&key).and_then(|bucket| {
             bucket.iter_mut().find(|b| {
                 b.selection == *selection
@@ -286,7 +298,7 @@ impl PixelTransform {
                         .all(|(view, tile)| *view == *tile.view)
             })
         }) {
-            cached.used = self.binding_clock;
+            cached.used = self.binding_frame;
             cached.binding.clone()
         } else {
             let mut entries = Vec::with_capacity(TRANSFORM_SLOTS + 2);
@@ -315,27 +327,20 @@ impl PixelTransform {
                 layout: &self.source_layout,
                 entries: &entries,
             });
-            if self.binding_count == 256 {
-                let (key, index, _) = self
-                    .bindings
-                    .iter()
-                    .flat_map(|(key, bucket)| {
-                        bucket
-                            .iter()
-                            .enumerate()
-                            .map(move |(i, b)| (*key, i, b.used))
-                    })
-                    .min_by_key(|v| v.2)
-                    .unwrap();
-                let bucket = self.bindings.get_mut(&key).unwrap();
-                bucket.swap_remove(index);
-                if bucket.is_empty() {
-                    self.bindings.remove(&key);
+            if self.binding_count >= BINDING_CAPACITY {
+                for recent in [self.binding_frame.saturating_sub(1), self.binding_frame] {
+                    self.bindings.retain(|_, bucket| {
+                        bucket.retain(|b| b.used >= recent);
+                        !bucket.is_empty()
+                    });
+                    self.binding_count = self.bindings.values().map(Vec::len).sum();
+                    if self.binding_count < BINDING_CAPACITY {
+                        break;
+                    }
                 }
-                self.binding_count -= 1;
             }
             self.bindings.entry(key).or_default().push(SourceBinding {
-                used: self.binding_clock,
+                used: self.binding_frame,
                 views: tiles.iter().map(|t| t.view.clone()).collect(),
                 selection: selection.clone(),
                 binding: binding.clone(),
@@ -352,6 +357,7 @@ impl PixelTransform {
     pub fn begin_frame(&mut self) {
         self.next_record = 0;
         self.source_next_record = 0;
+        self.binding_frame += 1;
     }
     // wgpu views hash by stable resource identity, not mutable texel contents.
     #[allow(clippy::mutable_key_type)]
@@ -481,8 +487,8 @@ impl PixelTransform {
                     inverse[5],
                     0.,
                     0.,
-                    (job.target[0] * super::PAGE_SIZE) as f32,
-                    (job.target[1] * super::PAGE_SIZE) as f32,
+                    (job.target[0] * super::PAGE_SIZE) as f32 - job.slot[0] as f32,
+                    (job.target[1] * super::PAGE_SIZE) as f32 - job.slot[1] as f32,
                     f32::from(transform.interpolation == Interpolation::Linear)
                         + 2. * f32::from(identity || affine == Affine::IDENTITY)
                         + 4. * f32::from(self.placement),
@@ -543,6 +549,45 @@ impl PixelTransform {
             offsets[1] + index as u32 * source_stride,
             target,
         );
+    }
+    /// Draw prepared regions of several targets into one attachment with a
+    /// single pass. Regions share the attachment through their slots.
+    pub(super) fn encode_batch(
+        &self,
+        encoder: &mut crate::submission::CommandEncoder,
+        attachment: &wgpu::TextureView,
+        offsets: [u32; 2],
+        draws: &[BatchDraw<'_>],
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("batched transform regions"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: attachment,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        for draw in draws {
+            let region = offsets[0] + (draw.job as u32 * 2 + u32::from(draw.identity)) * self.stride;
+            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region]);
+            pass.set_bind_group(
+                1,
+                &draw.source.binding,
+                &[offsets[1] + draw.job as u32 * self.source_stride],
+            );
+            let [x, y, w, h] = draw.scissor;
+            pass.set_scissor_rect(x, y, w, h);
+            pass.draw(0..3, 0..1);
+        }
     }
     fn draw(
         &self,

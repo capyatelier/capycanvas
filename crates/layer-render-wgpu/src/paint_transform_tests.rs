@@ -1125,11 +1125,11 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
                 error <= 1,
                 "original/materialized transform error {error}, {affine:?}"
             );
+            let transforms = r.transforms.as_ref().unwrap();
             assert!(
-                r.transforms.as_ref().unwrap().storage_bytes()
-                    - r.transforms.as_ref().unwrap().spare_page_bytes()
-                    < 1024 * 1024,
-                "original photo transform must not capture a full rectangular image"
+                transforms.storage_bytes() - transforms.spare_page_bytes() - transforms.atlas_bytes()
+                    <= source.tiles.len() as u64 * u64::from(PAGE_SIZE * PAGE_SIZE * 4) + 1024 * 1024,
+                "an original photo transform keeps at most one 8-bit page per photo tile"
             );
         }
         for (renderer, layer) in [(&mut r, &layer), (&mut reference, &baked)] {

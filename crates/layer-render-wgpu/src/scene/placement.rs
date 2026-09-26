@@ -246,6 +246,7 @@ pub(super) fn encode(
             &job.transform,
             &[TiledTransformRecord {
                 target: job.tile,
+                slot: [0, 0],
                 sources: &coordinates,
                 source_size: job.source_size,
             }],

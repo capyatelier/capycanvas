@@ -15,6 +15,8 @@ mod selection_painting;
 mod submissions;
 #[path = "paint_transform_tests.rs"]
 mod transforms;
+#[path = "transform_latency_tests.rs"]
+mod transform_latency;
 #[path = "placement_tests.rs"]
 mod placement;
 
