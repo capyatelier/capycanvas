@@ -338,10 +338,12 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.CloseButtonText(L"Done");
             }else if(stage==L"preview"){
                 text(flag(details,L"copy")?L"Review the flattened converted copy. The open drawing keeps its current color space.":L"Review the complete drawing before applying this change.");
-                for(uint32_t i=0;i<2;++i){text(array(details,L"preview_labels").Size()==2?array(details,L"preview_labels").GetStringAt(i):i?L"After":L"Before");Image image;image.MaxHeight(210);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,i);}
+                auto sdr=flag(details,L"has_sdr_preview");
+                for(uint32_t i=0;i<(sdr?3u:2u);++i){text(i==2?L"Encoded SDR base":i?(sdr?L"Decoded HDR (SDR display)":L"After"):L"Before");Image image;image.MaxHeight(210);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,i);}
                 text(L"Clipped channels: "+to_hstring(uint64_t(num(details,L"clipped_channels"))));
+                if(flag(details,L"range_blocked"))text(L"Some colors exceed the selected HDR output range. Enable clipping or choose SDR output.");
                 if(flag(details,L"adds_layer"))text(L"Existing raster edits are preserved; the corrected source will be added as a separate layer.");
-                dialog.PrimaryButtonText(kind==L"export"?L"Export…":flag(details,L"copy")?L"Save copy…":L"Apply");
+                dialog.PrimaryButtonText(kind==L"export"?L"Export…":flag(details,L"copy")?L"Save copy…":L"Apply");dialog.IsPrimaryButtonEnabled(!flag(details,L"range_blocked"));
             }else{
                 if(kind==L"depth"){
                     depth.Header(box_value(L"Precision"));for(auto label:{L"8-bit SDR",L"16-bit SDR",L"16-bit float HDR",L"32-bit float HDR"})depth.Items().Append(box_value(label));depth.SelectedIndex(depthIndex(str(object(details,L"color"),L"depth")));body.Children().Append(depth);

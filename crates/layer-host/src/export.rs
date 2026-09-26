@@ -1,0 +1,353 @@
+//! Profiled delivery copies rendered from immutable native snapshots on a
+//! worker. The output recipe never edits the master document.
+use crate::{Renderer, tasks::Preview};
+use layer_core::color::RgbSpace;
+use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu, SnapshotPreview, SnapshotRenderer};
+use layer_ui::{DocumentExport, ExportFormat, ExportRecipe, UiSession};
+use serde_json::{Value, json};
+use std::io::{BufWriter, Seek, Write};
+
+/// Encodes the renderer's configured output extent and resolution.
+pub fn write_recipe(
+    renderer: &mut SnapshotRenderer,
+    output: impl Write + Seek,
+    recipe: &ExportRecipe,
+) -> Result<layer_color::OutputStatistics, String> {
+    recipe.validate()?;
+    let (target, matte, clip) = (
+        recipe.interpretation(),
+        recipe.background.matte(),
+        recipe.format.maps_hdr_range(),
+    );
+    if let Some(format) = recipe.format.gainmap() {
+        return renderer.write_gainmap(output, format, recipe.jpeg_quality, matte, clip);
+    }
+    match recipe.format {
+        ExportFormat::Exr => renderer.write_exr(output),
+        ExportFormat::Png => renderer.write_png(output, &target, recipe.encoding, matte),
+        ExportFormat::Tiff => renderer.write_tiff(output, &target, recipe.encoding, matte),
+        ExportFormat::Jpeg => renderer.write_jpeg(
+            output,
+            &target,
+            recipe.encoding,
+            matte.ok_or("Choose a JPEG background")?,
+            recipe.jpeg_quality,
+        ),
+        _ => renderer.write_hdr_png(output, clip),
+    }
+}
+
+pub struct RecipePreview {
+    pub after: SnapshotPreview,
+    /// The decoded SDR base of a gain-map delivery.
+    pub sdr_base: Option<SnapshotPreview>,
+    /// Whether an OpenEXR delivery keeps any transparency.
+    pub transparent: Option<bool>,
+    pub clipped: u64,
+    /// Unmapped HDR delivery refuses to clip out-of-range colors.
+    pub range_blocked: bool,
+}
+
+/// Simulates the delivery at its output extent, reduced to `size`.
+pub fn preview_recipe(
+    renderer: &mut SnapshotRenderer,
+    size: [u32; 2],
+    space: RgbSpace,
+    headroom: f32,
+    recipe: &ExportRecipe,
+) -> Result<RecipePreview, String> {
+    recipe.validate()?;
+    renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
+    let matte = recipe.background.matte();
+    let (after, sdr_base, transparent, statistics) = if let Some(format) = recipe.format.gainmap() {
+        let (hdr, base, statistics) = renderer.preview_gainmap_output(
+            size,
+            space,
+            headroom,
+            format,
+            recipe.jpeg_quality,
+            matte,
+        )?;
+        (hdr, Some(base), None, statistics)
+    } else if recipe.format == ExportFormat::Exr {
+        let (preview, transparent) =
+            renderer.preview_document_with_coverage(size, space, headroom)?;
+        (preview, None, Some(transparent), Default::default())
+    } else if recipe.format.is_hdr() {
+        let (preview, statistics) = renderer.preview_hdr_output(size, space, headroom)?;
+        (preview, None, None, statistics)
+    } else {
+        let (preview, statistics) = renderer.preview_output(
+            size,
+            space,
+            &recipe.interpretation(),
+            recipe.encoding,
+            matte,
+        )?;
+        (preview, None, None, statistics)
+    };
+    let clipped = statistics.clipped_channels;
+    Ok(RecipePreview {
+        after,
+        sdr_base,
+        transparent,
+        clipped,
+        range_blocked: clipped > 0 && recipe.format.is_hdr() && !recipe.format.maps_hdr_range(),
+    })
+}
+
+pub struct ExportTask {
+    original: DocumentExport,
+    gpu: SnapshotGpu,
+    renderer: Option<SnapshotRenderer>,
+    recipe: ExportRecipe,
+    previews: Vec<Preview>,
+    clipped: u64,
+    range_blocked: bool,
+    space: RgbSpace,
+    name: String,
+}
+
+impl ExportTask {
+    pub fn capture(
+        session: &UiSession<Renderer>,
+        request: u32,
+        name: &str,
+        space: RgbSpace,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            original: session.capture_project_export(request)?,
+            gpu: crate::tasks::gpu(session)?.snapshot_gpu(),
+            renderer: None,
+            recipe: ExportRecipe::web_share(),
+            previews: Vec::new(),
+            clipped: 0,
+            range_blocked: false,
+            space,
+            name: name.to_owned(),
+        })
+    }
+
+    pub fn document(&self) -> &layer_core::Document {
+        &self.original.project.document
+    }
+
+    pub fn recipe(&self) -> &ExportRecipe {
+        &self.recipe
+    }
+
+    pub fn previews(&self) -> &[Preview] {
+        &self.previews
+    }
+
+    pub fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
+        recipe.validate_for_document(self.document())?;
+        self.recipe = recipe;
+        self.previews.clear();
+        self.clipped = 0;
+        self.range_blocked = false;
+        Ok(())
+    }
+
+    fn renderer(&mut self, control: CaptureControl) -> Result<&mut SnapshotRenderer, String> {
+        let renderer = match self.renderer.take() {
+            Some(renderer) => renderer,
+            None => self
+                .gpu
+                .capture(
+                    self.original.project.clone(),
+                    self.original.background,
+                    self.original.time,
+                    Default::default(),
+                    control,
+                )
+                .map_err(|e| e.to_string())?,
+        };
+        Ok(self.renderer.insert(renderer))
+    }
+
+    /// Previews are the artwork, the delivery, and a gain-map's SDR base.
+    pub fn compare(&mut self, control: CaptureControl) -> Result<(), String> {
+        let (space, recipe) = (self.space, self.recipe.clone());
+        let renderer = self.renderer(control)?;
+        let before = renderer.preview_document([512, 384], space)?;
+        let output = preview_recipe(renderer, [512, 384], space, 1., &recipe)?;
+        self.previews = [before, output.after]
+            .into_iter()
+            .chain(output.sdr_base)
+            .map(|p| {
+                Ok(Preview {
+                    extent: p.extent,
+                    pixels: p.encoded_bytes(space)?,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        self.clipped = output.clipped;
+        self.range_blocked = output.range_blocked;
+        Ok(())
+    }
+
+    pub fn details(&self) -> Result<Value, String> {
+        let document = self.document();
+        let extent = [document.width, document.height];
+        let name = std::path::Path::new(&self.name).file_stem();
+        Ok(json!({
+            "color": document.color,
+            "extent": extent,
+            "resolution": document.resolution,
+            "recipe": self.recipe,
+            "form": layer_ui::ExportForm::new(document),
+            "suggested_name": name.and_then(|s| s.to_str()).unwrap_or("Export"),
+            "extension": self.recipe.format.extension(),
+            "format_name": self.recipe.format.name(),
+            "output_extent": self.recipe.size.extent(extent)?,
+            "clipped_channels": self.clipped,
+            "has_sdr_preview": self.previews.len() == 3,
+            "range_blocked": self.range_blocked,
+            "sampled_time": document.has_animated_effects().then_some(self.original.time),
+        }))
+    }
+
+    pub fn write(
+        &mut self,
+        stream: impl Write + Seek,
+        control: CaptureControl,
+    ) -> Result<(), String> {
+        if self.range_blocked {
+            return Err(
+                "Some colors exceed the selected HDR output range. Enable clipping or choose SDR output."
+                    .into(),
+            );
+        }
+        let recipe = self.recipe.clone();
+        let document = self.document();
+        let extent = recipe.size.extent([document.width, document.height])?;
+        let resolution = recipe.output_resolution(document.resolution)?;
+        let renderer = self.renderer(control)?;
+        renderer.set_output_extent(extent)?;
+        renderer.set_output_resolution(resolution)?;
+        let mut output = BufWriter::new(stream);
+        let statistics = write_recipe(renderer, &mut output, &recipe)?;
+        output.flush().map_err(|e| e.to_string())?;
+        self.clipped = statistics.clipped_channels;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NativeHost;
+    use layer_core::color::{
+        ColorProfile, SampleDepth,
+        source::{SourceBuilder, SourceChannels, SourceInterpretation},
+    };
+    use layer_render_wgpu::WgpuRasterizer;
+    use layer_ui::{CommandId, ExportDraftAction, UiAction};
+    use std::io::Cursor;
+
+    fn export(pixel: [f32; 4]) -> (NativeHost, ExportTask) {
+        let mut document = layer_core::Document::new("Export", 8, 6);
+        document.color.depth = SampleDepth::F32;
+        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        host.session = UiSession::new(
+            Renderer(Some(gpu.into())),
+            document,
+            [8, 6],
+            layer_ui::Platform::Mac,
+        )
+        .unwrap();
+        let interpretation = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::F32,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        };
+        let mut source = SourceBuilder::new([8, 6], interpretation, 1 << 20).unwrap();
+        let row: Vec<u8> = pixel
+            .repeat(8)
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        for _ in 0..6 {
+            source.push_row(&row).unwrap();
+        }
+        host.session
+            .import_layer_source("Photo", source.finish().unwrap())
+            .unwrap();
+        host.session.frame(0, 0).unwrap();
+        host.dispatch(UiAction::Invoke {
+            command: CommandId::ExportDocument,
+        })
+        .unwrap();
+        let request = host.session.state().requests.last().unwrap().id;
+        let task = ExportTask::capture(&host.session, request, "", RgbSpace::Srgb).unwrap();
+        (host, task)
+    }
+
+    fn written(task: &mut ExportTask) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        task.write(Cursor::new(&mut bytes), Default::default())?;
+        Ok(bytes)
+    }
+
+    #[test]
+    fn export_task_blocks_clipped_unmapped_hdr_and_writes_mapped() {
+        let (host, mut task) = export([100., -0.5, 2., 1.]);
+        let format = |format| {
+            ExportRecipe::web_share()
+                .draft(ExportDraftAction::Format(format))
+                .recipe
+        };
+        task.configure(format(ExportFormat::PngHdr)).unwrap();
+        assert!(written(&mut task).is_err());
+        task.compare(Default::default()).unwrap();
+        let details = task.details().unwrap();
+        assert_eq!(details["range_blocked"], true);
+        assert_eq!(details["has_sdr_preview"], false);
+        assert!(written(&mut task).is_err());
+        task.configure(format(ExportFormat::PngHdrMapped)).unwrap();
+        task.compare(Default::default()).unwrap();
+        assert_eq!(task.details().unwrap()["range_blocked"], false);
+        let photo = layer_color::photo::read_photo(
+            Cursor::new(written(&mut task).unwrap()),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(photo.extent, [8, 6]);
+        assert_eq!(photo.interpretation.depth, SampleDepth::F16);
+        drop((task, host));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn gainmap_previews_keep_before_after_and_base() {
+        let (host, mut task) = export([4., 2., 1., 1.]);
+        let recipe = ExportRecipe::web_share()
+            .draft_for_color(
+                task.document().color,
+                ExportDraftAction::Format(ExportFormat::AvifHdr),
+            )
+            .recipe;
+        task.configure(recipe).unwrap();
+        task.compare(Default::default()).unwrap();
+        assert_eq!(task.previews().len(), 3);
+        assert!(
+            task.previews()
+                .iter()
+                .all(|p| p.pixels.len() == (p.extent[0] * p.extent[1] * 4) as usize)
+        );
+        let details = task.details().unwrap();
+        assert_eq!(details["has_sdr_preview"], true);
+        assert_eq!(details["range_blocked"], false);
+        let photo = layer_color::photo::read_photo(
+            Cursor::new(written(&mut task).unwrap()),
+            Default::default(),
+        )
+        .unwrap();
+        assert!(photo.interpretation.depth.is_float());
+        drop((task, host));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+}

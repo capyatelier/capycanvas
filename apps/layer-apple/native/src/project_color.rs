@@ -45,6 +45,17 @@ pub unsafe extern "C" fn capy_project_compare(task: *const CapyProjectTask) -> i
     })
 }
 /// # Safety
+/// Worker only, before comparison or writing. The output recipe never edits the master.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_export_options(task: *const CapyProjectTask, recipe: *const c_char) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
+    let recipe = unsafe { read_title(recipe) }.map(str::to_owned);
+    task.perform(|payload| match payload {
+        Payload::Export(export) => export.configure(serde_json::from_str(&recipe?).map_err(|e| e.to_string())?),
+        _ => Err("Not an export task".into()),
+    })
+}
+/// # Safety
 /// File worker only. Returns owned metadata JSON. Parsing profiles stays off owner.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *mut c_char {
@@ -80,7 +91,7 @@ pub unsafe extern "C" fn capy_project_preview(task: *const CapyProjectTask, afte
 pub unsafe extern "C" fn capy_project_preview_at(task: *const CapyProjectTask, index: u32, output: *mut CapyProjectPreview) -> i32 {
     let (Some(task), Some(output)) = (unsafe { task.as_ref() }, unsafe { output.as_mut() }) else { return -1; };
     let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
-    let previews = match &state.payload { Payload::Color(c) => c.previews(), Payload::Source(s) => s.previews(), Payload::Export(e) => &e.previews, _ => return -1 };
+    let previews = match &state.payload { Payload::Color(c) => c.previews(), Payload::Source(s) => s.previews(), Payload::Export(e) => e.previews(), _ => return -1 };
     let Some(preview) = previews.get(index as usize) else { return -1; };
     *output = CapyProjectPreview { width: preview.extent[0], height: preview.extent[1], pixels: preview.pixels.as_ptr(), count: preview.pixels.len() };
     0

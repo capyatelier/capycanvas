@@ -30,34 +30,13 @@ fn thumbnail(
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
-    let mut range_blocked = false;
-    let mut transparent=None;
-    let mut fallback=None;
-    let (preview, clipped) = if let Some(recipe) = output {
-        recipe.validate()?;
-        renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
-        if let Some(format)=recipe.format.gainmap(){
-            let (preview,base,stats)=renderer.preview_gainmap_output([220,160],view.space(),headroom,format,recipe.jpeg_quality,recipe.background.matte())?;
-            range_blocked=stats.clipped_channels>0&&!recipe.format.maps_hdr_range();
-            fallback=Some(Box::new(present(base,false,false,None,false,None,None)));
-            (preview,Some(stats.clipped_channels))
-        } else if recipe.format == layer_ui::ExportFormat::Exr {
-            let (preview, alpha) = renderer.preview_document_with_coverage([220,160], view.space(), headroom)?;
-            transparent = Some(alpha);
-            (preview, Some(0))
-        } else if recipe.format.is_hdr() {
-            let (preview, stats) = renderer.preview_hdr_output([220, 160], view.space(), headroom)?;
-            range_blocked = stats.clipped_channels > 0 && !recipe.format.maps_hdr_range();
-            (preview, Some(stats.clipped_channels))
-        } else {
-            let (preview, stats) = renderer.preview_output(
-                [220, 160], view.space(), &recipe.interpretation(), recipe.encoding, recipe.background.matte(),
-            )?;
-            (preview, Some(stats.clipped_channels))
-        }
+    let (preview, clipped, range_blocked, transparent, fallback) = if let Some(recipe) = output {
+        let output = layer_host::export::preview_recipe(&mut renderer, [220, 160], view.space(), headroom, &recipe)?;
+        let fallback = output.sdr_base.map(|base| Box::new(present(base, false, false, None, false, None, None)));
+        (output.after, Some(output.clipped), output.range_blocked, output.transparent, fallback)
     } else {
-        let (preview,alpha)=renderer.preview_document_with_coverage([220,160],view.space(),headroom)?;
-        transparent=Some(alpha);(preview,None)
+        let (preview, alpha) = renderer.preview_document_with_coverage([220, 160], view.space(), headroom)?;
+        (preview, None, false, Some(alpha), None)
     };
     Ok(present(preview,display_hdr,hdr,clipped,range_blocked,transparent,fallback))
 }

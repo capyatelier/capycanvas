@@ -2,12 +2,12 @@
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
 use layer_core::Project;
-use layer_host::{Renderer, open::OpenEnvironment, tasks::{ColorTask, Preview, SourceTask}, window::OpenAdoption};
+use layer_host::{Renderer, export::ExportTask, open::OpenEnvironment, tasks::{ColorTask, SourceTask}, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
-    io::{Cursor, Read, Seek, Write},
+    io::{Cursor, Read, Write},
     mem::ManuallyDrop,
     os::fd::FromRawFd,
     sync::{
@@ -22,9 +22,6 @@ mod color;
 pub use color::*;
 #[path = "project_inspection.rs"]
 mod inspection;
-#[path = "project_export.rs"]
-mod export;
-pub use export::*;
 #[path = "project_preferences.rs"]
 mod preferences;
 pub use preferences::*;
@@ -54,7 +51,7 @@ enum Payload {
         request: u32,
         device: wgpu::Device,
     },
-    Export(Box<export::Task>),
+    Export(Box<ExportTask>),
     Retired {
         _renderer: Option<Box<WgpuRasterizer>>,
     },
@@ -764,7 +761,7 @@ pub unsafe extern "C" fn capy_apple_export_task(
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
         let revision = session.engine().document().revision;
-        let export = export::Task::capture(session, id)?;
+        let export = ExportTask::capture(session, id, "", DISPLAY_SPACE)?;
         *output = CapyProjectTask::new(
             Payload::Export(Box::new(export)),
             epoch,

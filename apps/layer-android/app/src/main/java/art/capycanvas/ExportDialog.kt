@@ -85,7 +85,7 @@ import org.json.JSONObject
     fun choices(key:String, labels:List<Pair<String,String>>) = labels.filter { pair -> draft?.getJSONArray(key)?.values()?.contains(pair.first) != false }
     AlertDialog(onDismissRequest = ::dismiss, title = { Text("Export image") },
         dismissButton = { TextButton(::dismiss) { Text("Cancel") } },
-        confirmButton = { TextButton(enabled = recipe != null && !preview.busy && !preferenceBusy && !(recipe?.optString("format") in listOf("PngHdr","JpegHdr","AvifHdr") && preview.clipped>0), modifier = Modifier.testTag("export-choose-file"), onClick = {
+        confirmButton = { TextButton(enabled = recipe != null && !preview.busy && !preferenceBusy && !preview.rangeBlocked, modifier = Modifier.testTag("export-choose-file"), onClick = {
             scope.launch {
                 try {
                     val selected = selectedRecipe()
@@ -152,7 +152,7 @@ import org.json.JSONObject
                     Image(if(index==1&&previewMode=="sdr")preview.sdr?:image else image,if(index==0)"Artwork preview" else "Output preview",Modifier.fillMaxWidth().height(180.dp))
                 }
                 if(preview.images.isNotEmpty())Text(if(preview.sdr!=null)"Decoded JPEG/AVIF output, including compression and the encoded SDR base. HDR reconstruction is mapped for this SDR preview." else if(recipe?.optString("format")?.contains("Hdr")==true||recipe?.optString("format")=="Exr")"Mapped SDR preview of HDR delivery." else "sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")
-                if(preview.clipped>0)Text(if(recipe?.optString("format") in listOf("PngHdr","JpegHdr","AvifHdr"))"Some colors exceed the delivery range. Enable Clip out-of-range HDR colors or choose OpenEXR." else "Some colors exceed the output gamut and will be clipped.")
+                if(preview.clipped>0)Text(if(preview.rangeBlocked)"Some colors exceed the delivery range. Enable Clip out-of-range HDR colors or choose OpenEXR." else "Some colors exceed the output gamut and will be clipped.")
                 preview.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }

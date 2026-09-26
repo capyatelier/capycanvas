@@ -138,32 +138,12 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
     let result = (|| {
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
-        recipe.validate()?;
         let (previews,stats)=std::thread::Builder::new().name("capy-output-preview".into()).stack_size(8*1024*1024).spawn(move || {
-            let extent=recipe.size.extent([job.project.document.width,job.project.document.height])?;
             let mut renderer=job.gpu.capture(job.project,job.background,job.time,Default::default(),job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
-            renderer.set_output_extent(extent)?;
-            let mut previews = vec![before];
-            let statistics = if let Some(format) = recipe.format.gainmap() {
-                let (hdr, sdr, stats) = renderer.preview_gainmap_output(
-                    [512,384], layer_core::color::RgbSpace::Srgb, 1., format,
-                    recipe.jpeg_quality, recipe.background.matte(),
-                )?;
-                previews.extend([hdr, sdr]);
-                stats
-            } else {
-                let (after, stats) = if recipe.format == layer_ui::ExportFormat::Exr {
-                    (renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?,layer_color::OutputStatistics::default())
-                } else if recipe.format.is_hdr() {
-                    renderer.preview_hdr_output([512,384],layer_core::color::RgbSpace::Srgb,1.)?
-                } else {
-                    renderer.preview_output([512,384],layer_core::color::RgbSpace::Srgb,&recipe.interpretation(),recipe.encoding,recipe.background.matte())?
-                };
-                previews.push(after);
-                stats
-            };
-            Ok::<_,String>((previews,serde_json::json!({"extent":extent,"clipped_channels":statistics.clipped_channels}).to_string()))
+            let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
+            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
+            Ok::<_,String>(([before,output.after].into_iter().chain(output.sdr_base).collect::<Vec<_>>(),json.to_string()))
         }).map_err(error)?.join().map_err(|_|"Output preview worker failed".to_string())??;
         let result = env
             .new_object_array(previews.len() as i32 + 1, "java/lang/Object", jni::objects::JObject::null())

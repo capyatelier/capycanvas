@@ -3,16 +3,16 @@
 use layer_core::{Project, color::RgbSpace};
 use layer_host::{
     NativeHost, Renderer,
-    tasks::{ColorTask, Preview, SourceTask},
+    export::ExportTask,
+    tasks::{ColorTask, SourceTask},
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use layer_ui::{DocumentRequest, HostRequestKind, UiSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::Write;
+use std::time::{Duration, Instant};
 
-#[path = "document_export.rs"]
-mod export;
 #[path = "document_proof.rs"]
 mod proof;
 
@@ -78,7 +78,11 @@ static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 enum Payload {
     Profiles,
     Proof(Box<proof::Task>),
-    Export(Box<export::Task>),
+    Export {
+        task: Box<ExportTask>,
+        destination: usize,
+        notice: Option<String>,
+    },
     Import(Import),
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
@@ -130,7 +134,11 @@ impl Task {
                 request: DocumentRequest::Export { name },
             } => (
                 "export",
-                Payload::Export(Box::new(export::Task::capture(session, id, name)?)),
+                Payload::Export {
+                    task: Box::new(ExportTask::capture(session, id, name, RgbSpace::Srgb)?),
+                    destination: 0,
+                    notice: None,
+                },
             ),
             HostRequestKind::Document {
                 request: DocumentRequest::Place | DocumentRequest::Paste,
@@ -272,17 +280,17 @@ impl Task {
                 json!({"profiles":crate::color_storage::list(self.control.cancellation_flag())?})
             }
             Payload::Proof(task) => task.details(self.control.cancellation_flag())?,
-            Payload::Export(task) => {
+            Payload::Export { task, .. } => {
                 if self.preset_view.is_null() {
                     let view = crate::color_storage::presets(
                         layer_ui::ExportPresetAction::Get { index: 0 },
-                        &task.original.project.document,
+                        task.document(),
                         self.control.cancellation_flag(),
                     )
                     .or_else(|_| {
                         crate::color_storage::presets(
                             layer_ui::ExportPresetAction::List,
-                            &task.original.project.document,
+                            task.document(),
                             self.control.cancellation_flag(),
                         )
                     })?;
@@ -387,7 +395,7 @@ impl Task {
                     mut recipe,
                     profile_id,
                 } => {
-                    let Payload::Export(task) = &mut self.payload else {
+                    let Payload::Export { task, .. } = &mut self.payload else {
                         return Err("No export is pending".into());
                     };
                     if let Some(id) = profile_id {
@@ -408,7 +416,12 @@ impl Task {
                     if self.stage != "preview" {
                         return Err("Preview the export first".into());
                     }
-                    let Payload::Export(task) = &mut self.payload else {
+                    let Payload::Export {
+                        task,
+                        destination,
+                        notice,
+                    } = &mut self.payload
+                    else {
                         return Err("No export is pending".into());
                     };
                     crate::document_io::location(&path)?;
@@ -418,15 +431,15 @@ impl Task {
                         |file| task.write(file, self.control.clone()),
                     )?;
                     let remember = layer_ui::ExportPresetAction::Remember {
-                        index: task.destination.min(3),
+                        index: (*destination).min(3),
                         recipe: task.recipe().clone(),
                     };
                     if let Err(error) = crate::color_storage::presets(
                         remember,
-                        &task.original.project.document,
+                        task.document(),
                         self.control.cancellation_flag(),
                     ) {
-                        task.notice = Some(format!("Image saved; export preferences were not saved: {error}"));
+                        *notice = Some(format!("Image saved; export preferences were not saved: {error}"));
                     }
                     self.stage = "saved";
                     Ok(())
@@ -452,19 +465,22 @@ impl Task {
                             _ => {}
                         }
                     }
-                    let Payload::Export(task) = &mut self.payload else {
+                    let Payload::Export {
+                        task, destination, ..
+                    } = &mut self.payload
+                    else {
                         return Err("No export is pending".into());
                     };
                     let view = crate::color_storage::presets(
                         action,
-                        &task.original.project.document,
+                        task.document(),
                         self.control.cancellation_flag(),
                     )?;
                     if let Some(recipe) = &view.recipe {
                         task.configure(recipe.clone())?;
                     }
                     if let Some(index) = view.index {
-                        task.destination = index;
+                        *destination = index;
                     }
                     self.preset_view = serde_json::to_value(view).map_err(|e| e.to_string())?;
                     self.stage = "options";
@@ -667,7 +683,7 @@ impl Task {
     }
     pub fn notice(&self) -> Option<&str> {
         match &self.payload {
-            Payload::Export(task) => task.notice.as_deref(),
+            Payload::Export { notice, .. } => notice.as_deref(),
             _ => None,
         }
     }
@@ -689,7 +705,7 @@ impl Task {
         let previews = match &self.payload {
             Payload::Color(task) => task.previews(),
             Payload::Source(task) => task.previews(),
-            Payload::Export(task) => &task.previews,
+            Payload::Export { task, .. } => task.previews(),
             _ => return Err("No comparison preview".into()),
         };
         let preview = previews

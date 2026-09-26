@@ -7,7 +7,7 @@ use jni::{
     sys::{jboolean, jint, jlong},
 };
 use layer_core::Project;
-use layer_host::{Renderer, open::OpenEnvironment, window::OpenAdoption};
+use layer_host::{Renderer, export::ExportTask, open::OpenEnvironment, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
@@ -25,9 +25,7 @@ struct Environment {
 enum Payload {
     Save(Option<Project>),
     Export {
-        gpu: layer_render_wgpu::snapshot::SnapshotGpu,
-        snapshot: Option<layer_ui::DocumentExport>,
-        recipe: layer_ui::ExportRecipe,
+        export: Box<ExportTask>,
         control: layer_render_wgpu::snapshot::CaptureControl,
     },
     Open {
@@ -315,65 +313,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     out.flush().map_err(error)?;
                     out.get_ref().sync_all().map_err(error)
                 }
-                Payload::Export {
-                    gpu,
-                    snapshot,
-                    recipe,
-                    control,
-                } => {
-                    recipe.validate()?;
-                    let snapshot = snapshot.take().ok_or("Export already encoded")?;
-                    let extent = recipe.size.extent([
-                        snapshot.project.document.width,
-                        snapshot.project.document.height,
-                    ])?;
-                    let resolution =
-                        recipe.output_resolution(snapshot.project.document.resolution)?;
-                    let mut renderer = gpu
-                        .capture(
-                            snapshot.project,
-                            snapshot.background,
-                            snapshot.time,
-                            Default::default(),
-                            control.clone(),
-                        )
-                        .map_err(error)?;
-                    renderer.set_output_extent(extent)?;
-                    renderer.set_output_resolution(resolution)?;
-                    let target = recipe.interpretation();
-                    let mut out = BufWriter::new(input.ok_or("Missing export output")?);
-                    match recipe.format {
-                        layer_ui::ExportFormat::Exr => renderer.write_exr(&mut out),
-                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut out, recipe.format.maps_hdr_range()),
-                        layer_ui::ExportFormat::JpegHdr | layer_ui::ExportFormat::JpegHdrMapped | layer_ui::ExportFormat::AvifHdr | layer_ui::ExportFormat::AvifHdrMapped => renderer.write_gainmap(
-                            &mut out, recipe.format.gainmap().unwrap(), recipe.jpeg_quality,
-                            recipe.background.matte(), recipe.format.maps_hdr_range(),
-                        ),
-                        layer_ui::ExportFormat::Png => renderer.write_png(
-                            &mut out,
-                            &target,
-                            recipe.encoding,
-                            recipe.background.matte(),
-                        ),
-                        layer_ui::ExportFormat::Tiff => renderer.write_tiff(
-                            &mut out,
-                            &target,
-                            recipe.encoding,
-                            recipe.background.matte(),
-                        ),
-                        layer_ui::ExportFormat::Jpeg => renderer.write_jpeg(
-                            &mut out,
-                            &target,
-                            recipe.encoding,
-                            recipe
-                                .background
-                                .matte()
-                                .ok_or("Choose a JPEG background")?,
-                            recipe.jpeg_quality,
-                        ),
-                    }?;
-                    out.flush().map_err(error)?;
-                    out.get_ref().sync_all().map_err(error)
+                Payload::Export { export, control } => {
+                    let out = input.ok_or("Missing export output")?;
+                    export.write(&out, control.clone())?;
+                    out.sync_all().map_err(error)
                 }
                 Payload::Open { .. } => {
                     prepare(t, input, width.max(0) as u32, height.max(0) as u32)
@@ -520,16 +463,12 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
         }
         let epoch = a.host.session.state().document_file.epoch;
         let revision = a.host.session.engine().document().revision;
-        let snapshot = a.host.session.capture_project_export(id as u32)?;
-        let gpu = a
-            .host
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or("Canvas is unavailable")?
-            .snapshot_gpu();
+        let export = ExportTask::capture(
+            &a.host.session,
+            id as u32,
+            "",
+            layer_core::color::RgbSpace::Srgb,
+        )?;
         Ok(Box::into_raw(Box::new(Task {
             owner: a.window.documents.selected(),
             epoch,
@@ -541,9 +480,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             gpu_generation: a.gpu_generation,
             open_control: Default::default(),
             payload: Payload::Export {
-                gpu,
-                snapshot: Some(snapshot),
-                recipe: layer_ui::ExportRecipe::web_share(),
+                export: Box::new(export),
                 control: crate::inspection::control(cancel),
             },
         })) as jlong)
@@ -568,17 +505,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     let result = (|| {
         let selected: layer_ui::ExportRecipe =
             serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
-        let Payload::Export {
-            recipe,
-            snapshot: Some(snapshot),
-            ..
-        } = &mut unsafe { task(handle) }.payload
-        else {
+        let Payload::Export { export, .. } = &mut unsafe { task(handle) }.payload else {
             return Err("Export task is no longer configurable".into());
         };
-        selected.validate_for_document(&snapshot.project.document)?;
-        *recipe = selected;
-        Ok(())
+        export.configure(selected)
     })();
     fail(&mut env, result);
 }

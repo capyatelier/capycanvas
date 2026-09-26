@@ -1368,6 +1368,7 @@ dependencies = [
  "layer-color",
  "layer-core",
  "layer-engine",
+ "layer-host",
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",

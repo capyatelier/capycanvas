@@ -87,39 +87,12 @@ pub(crate) fn write_snapshot(
         .map_err(|e| e.to_string())?;
         renderer.set_output_extent(extent)?;
         renderer.set_output_resolution(resolution)?;
-        let target = recipe.interpretation();
         let mut clipped = 0;
         layer_core::atomic_write_checked(
             path,
             |file| {
-                let statistics = match recipe.format {
-                    ExportFormat::Exr => renderer.write_exr(file),
-                    ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(file, recipe.format.maps_hdr_range()),
-                    ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => renderer.write_gainmap(file,recipe.format.gainmap().unwrap(),recipe.jpeg_quality,recipe.background.matte(),recipe.format.maps_hdr_range()),
-                    ExportFormat::Png => renderer.write_png(
-                        file,
-                        &target,
-                        recipe.encoding,
-                        recipe.background.matte(),
-                    ),
-                    ExportFormat::Tiff => renderer.write_tiff(
-                        file,
-                        &target,
-                        recipe.encoding,
-                        recipe.background.matte(),
-                    ),
-                    ExportFormat::Jpeg => renderer.write_jpeg(
-                        file,
-                        &target,
-                        recipe.encoding,
-                        recipe
-                            .background
-                            .matte()
-                            .ok_or("Choose a JPEG background")?,
-                        recipe.jpeg_quality,
-                    ),
-                }?;
-                clipped = statistics.clipped_channels;
+                clipped = layer_host::export::write_recipe(&mut renderer, file, &recipe)?
+                    .clipped_channels;
                 Ok(())
             },
             || job.publish(),

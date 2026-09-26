@@ -1,5 +1,6 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
+pub mod export;
 pub mod gpu;
 mod header;
 mod snapshot;

@@ -66,7 +66,7 @@ fn pending(
         .ok_or_else(|| missing.to_string())
 }
 
-fn gpu(session: &UiSession<Renderer>) -> Result<&WgpuRasterizer, String> {
+pub(crate) fn gpu(session: &UiSession<Renderer>) -> Result<&WgpuRasterizer, String> {
     session
         .engine()
         .backend()
