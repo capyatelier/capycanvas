@@ -33,7 +33,7 @@ mod tonal_checks {
     }
     #[test]
     fn tonal_controls_and_masks_are_available_on_native_hosts() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for platform in Platform::ALL {
             let mut s = session(platform);
             invoke(&mut s, CommandId::TonalSelect);
             assert!(s.state.tool_set.subtools.iter().any(|item| item.icon == "tonal-select"));

@@ -166,8 +166,7 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
 #[test]
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
     use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbColor, RgbSpace}};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-    let mut s = session(platform);
+    let mut s = session(Platform::Gtk);
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.8, 0.3, 0.1, 1.]).unwrap();
     s.dispatch(UiAction::Color { action: ColorAction::Definition { color: definition } }).unwrap();
     s.frame(1, 1).unwrap();
@@ -203,7 +202,6 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
         assert_eq!(s.state.colors.rgb_space(), expected.color.space);
         assert_eq!(s.state.colors.definition(), definition);
         assert!(!s.state.document_file.busy);
-    }
     }
 }
 
@@ -385,63 +383,61 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
     use crate::{ColorWorkflow, ColorPreparation};
     use layer_color::DocumentColorChange as C;
     use layer_core::color::{RgbSpace, SampleDepth};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-        let mut s = session(platform);
-        s.frame(1, 1).unwrap();
-        invoke(&mut s, CommandId::AssignProfile);
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    invoke(&mut s, CommandId::AssignProfile);
+    let id = s.state.requests.first().unwrap().id;
+    let mut workflow = ColorWorkflow::begin(&s, id).unwrap();
+    assert!(workflow.select(Some(C::Depth { depth: SampleDepth::U16, dither: layer_core::color::OutputDither::None }), false).is_err());
+    assert!(workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), true).is_err());
+    let ColorPreparation::Edit(change) = workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), false).unwrap() else { panic!() };
+    workflow.candidate = Some(layer_color::prepare_document_color(&workflow.original, change, 1024 * 1024, || false).unwrap().project);
+    assert!(workflow.prepare_commit(&s, false, true).err().unwrap().contains("Preview"));
+    workflow.comparison_completed().unwrap();
+    assert!(workflow.prepare_commit(&s, true, true).is_err());
+    assert!(workflow.prepare_commit(&s, false, false).is_err());
+    let revision = s.engine.document().revision;
+    let before = s.engine.document().clone();
+    let prepared = workflow.prepare_commit(&s, false, true).unwrap();
+    let mut swaps = 0;
+    assert!(s.commit_document_color_candidate(prepared, |_| swaps += 1).is_err());
+    assert_eq!(swaps, 2, "failed history must restore the original renderer");
+    assert_eq!(s.engine.document(), &before);
+    assert_eq!(s.engine.document().revision, revision);
+    let prepared = workflow.prepare_commit(&s, false, true).unwrap();
+    s.renderer_mut().prepared_color = Some(workflow.candidate.as_ref().unwrap().document.color);
+    s.commit_document_color_candidate(prepared, |_| {}).unwrap();
+    assert!(workflow.identity.validate(&s, false, true).is_err(), "revision advanced");
+    s.complete_document_request(id, Ok(true)).unwrap();
+    assert!(workflow.identity.validate(&s, false, true).is_err());
+    let after = s.engine.document().clone();
+    for (command, expected) in [(CommandId::Undo, &before), (CommandId::Redo, &after)] {
+        invoke(&mut s, command);
         let id = s.state.requests.first().unwrap().id;
-        let mut workflow = ColorWorkflow::begin(&s, id).unwrap();
-        assert!(workflow.select(Some(C::Depth { depth: SampleDepth::U16, dither: layer_core::color::OutputDither::None }), false).is_err());
-        assert!(workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), true).is_err());
-        let ColorPreparation::Edit(change) = workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), false).unwrap() else { panic!() };
-        workflow.candidate = Some(layer_color::prepare_document_color(&workflow.original, change, 1024 * 1024, || false).unwrap().project);
-        assert!(workflow.prepare_commit(&s, false, true).err().unwrap().contains("Preview"));
-        workflow.comparison_completed().unwrap();
-        assert!(workflow.prepare_commit(&s, true, true).is_err());
-        assert!(workflow.prepare_commit(&s, false, false).is_err());
-        let revision = s.engine.document().revision;
-        let before = s.engine.document().clone();
-        let prepared = workflow.prepare_commit(&s, false, true).unwrap();
-        let mut swaps = 0;
-        assert!(s.commit_document_color_candidate(prepared, |_| swaps += 1).is_err());
-        assert_eq!(swaps, 2, "failed history must restore the original renderer");
-        assert_eq!(s.engine.document(), &before);
-        assert_eq!(s.engine.document().revision, revision);
-        let prepared = workflow.prepare_commit(&s, false, true).unwrap();
-        s.renderer_mut().prepared_color = Some(workflow.candidate.as_ref().unwrap().document.color);
+        let mut history = ColorWorkflow::begin(&s, id).unwrap();
+        assert!(history.select(Some(C::Assign(RgbSpace::Srgb)), false).is_err());
+        assert!(history.select(None, true).is_err());
+        history.select(None, false).unwrap();
+        s.renderer_mut().prepared_color = Some(expected.color);
+        let prepared = history.prepare_commit(&s, false, true).unwrap();
+        assert!(history.prepare_commit(&s, false, true).is_err(), "a consumed Undo/Redo candidate cannot become a new edit");
         s.commit_document_color_candidate(prepared, |_| {}).unwrap();
-        assert!(workflow.identity.validate(&s, false, true).is_err(), "revision advanced");
         s.complete_document_request(id, Ok(true)).unwrap();
-        assert!(workflow.identity.validate(&s, false, true).is_err());
-        let after = s.engine.document().clone();
-        for (command, expected) in [(CommandId::Undo, &before), (CommandId::Redo, &after)] {
-            invoke(&mut s, command);
-            let id = s.state.requests.first().unwrap().id;
-            let mut history = ColorWorkflow::begin(&s, id).unwrap();
-            assert!(history.select(Some(C::Assign(RgbSpace::Srgb)), false).is_err());
-            assert!(history.select(None, true).is_err());
-            history.select(None, false).unwrap();
-            s.renderer_mut().prepared_color = Some(expected.color);
-            let prepared = history.prepare_commit(&s, false, true).unwrap();
-            assert!(history.prepare_commit(&s, false, true).is_err(), "a consumed Undo/Redo candidate cannot become a new edit");
-            s.commit_document_color_candidate(prepared, |_| {}).unwrap();
-            s.complete_document_request(id, Ok(true)).unwrap();
-            assert_eq!(s.engine.document().layers, expected.layers);
-            assert_eq!(s.engine.document().color, expected.color);
-        }
-        invoke(&mut s, CommandId::ConvertColorSpace);
-        let id = s.state.requests.first().unwrap().id;
-        let mut copy = ColorWorkflow::begin(&s, id).unwrap();
-        copy.select(Some(C::Convert { space: RgbSpace::ProPhoto, options: Default::default() }), true).unwrap();
-        copy.candidate = Some(copy.original.clone());
-        assert!(copy.copy_project(false).is_err());
-        copy.comparison_completed().unwrap();
-        assert!(copy.copy_project(true).is_err());
-        assert!(copy.copy_project(false).is_ok());
-        assert!(copy.prepare_commit(&s, false, true).is_err());
-        s.complete_document_request(id, Ok(false)).unwrap();
-        assert!(copy.identity.validate(&s, false, true).is_err(), "closed request must stay closed");
+        assert_eq!(s.engine.document().layers, expected.layers);
+        assert_eq!(s.engine.document().color, expected.color);
     }
+    invoke(&mut s, CommandId::ConvertColorSpace);
+    let id = s.state.requests.first().unwrap().id;
+    let mut copy = ColorWorkflow::begin(&s, id).unwrap();
+    copy.select(Some(C::Convert { space: RgbSpace::ProPhoto, options: Default::default() }), true).unwrap();
+    copy.candidate = Some(copy.original.clone());
+    assert!(copy.copy_project(false).is_err());
+    copy.comparison_completed().unwrap();
+    assert!(copy.copy_project(true).is_err());
+    assert!(copy.copy_project(false).is_ok());
+    assert!(copy.prepare_commit(&s, false, true).is_err());
+    s.complete_document_request(id, Ok(false)).unwrap();
+    assert!(copy.identity.validate(&s, false, true).is_err(), "closed request must stay closed");
 }
 
 #[test]

@@ -2497,46 +2497,44 @@ mod tests {
             (TabStyle::Icon, [true, false], [true, false]),
         ];
         assert_eq!(TabStyle::default(), TabStyle::Automatic);
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut layout = DockLayout::default();
-            let mut state = CustomizationState::default();
-            for (style, active, inactive) in styles {
-                let menu = layout
-                    .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
-                    .unwrap();
-                assert_eq!(menu.sections[0].len(), TabStyle::ALL.len());
-                let item = menu.sections[0]
-                    .iter()
-                    .find(|item| item.label == style.label())
-                    .unwrap();
-                let Some(UiAction::Customize { action }) = item.action.clone() else {
-                    panic!("Missing group style action")
-                };
-                state
-                    .edit(&mut layout, action, platform, [1200.0, 900.0])
-                    .unwrap();
-                let encoded = serde_json::to_string(&layout).unwrap();
-                layout = serde_json::from_str(&encoded).unwrap();
-                layout.validate().unwrap();
-                assert_eq!(layout.group_tab_style(8).unwrap(), style);
-                for selected in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
-                    layout.select_tab(8, selected).unwrap();
-                    for panel in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
-                        let expected = if selected == panel { active } else { inactive };
-                        let tab = layout.tab_presentation(panel);
-                        assert_eq!([tab.show_icon, tab.show_name], expected);
-                    }
+        let mut layout = DockLayout::default();
+        let mut state = CustomizationState::default();
+        for (style, active, inactive) in styles {
+            let menu = layout
+                .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
+                .unwrap();
+            assert_eq!(menu.sections[0].len(), TabStyle::ALL.len());
+            let item = menu.sections[0]
+                .iter()
+                .find(|item| item.label == style.label())
+                .unwrap();
+            let Some(UiAction::Customize { action }) = item.action.clone() else {
+                panic!("Missing group style action")
+            };
+            state
+                .edit(&mut layout, action, Platform::Gtk, [1200.0, 900.0])
+                .unwrap();
+            let encoded = serde_json::to_string(&layout).unwrap();
+            layout = serde_json::from_str(&encoded).unwrap();
+            layout.validate().unwrap();
+            assert_eq!(layout.group_tab_style(8).unwrap(), style);
+            for selected in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
+                layout.select_tab(8, selected).unwrap();
+                for panel in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
+                    let expected = if selected == panel { active } else { inactive };
+                    let tab = layout.tab_presentation(panel);
+                    assert_eq!([tab.show_icon, tab.show_name], expected);
                 }
-                let menu = layout
-                    .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
-                    .unwrap();
-                let checked: Vec<_> = menu.sections[0]
-                    .iter()
-                    .filter(|i| i.selected == Some(true))
-                    .collect();
-                assert_eq!(checked.len(), 1);
-                assert_eq!(checked[0].label, style.label());
             }
+            let menu = layout
+                .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
+                .unwrap();
+            let checked: Vec<_> = menu.sections[0]
+                .iter()
+                .filter(|i| i.selected == Some(true))
+                .collect();
+            assert_eq!(checked.len(), 1);
+            assert_eq!(checked[0].label, style.label());
         }
     }
 

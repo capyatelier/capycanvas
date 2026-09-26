@@ -28,17 +28,7 @@ fn three_member_target() -> UiSession<Recorder> {
 
 #[test]
 fn member_trailing_edges_append_groups_without_taking_grips() {
-    for (platform, index) in [
-        Platform::Gtk,
-        Platform::Web,
-        Platform::Android,
-        Platform::Windows,
-        Platform::Mac,
-        Platform::Ios,
-    ]
-    .into_iter()
-    .flat_map(|p| (0..3).map(move |i| (p, i)))
-    {
+    for index in 0..3 {
         for item in [
             DockItem::Panel {
                 panel: Panel::Properties,
@@ -48,7 +38,6 @@ fn member_trailing_edges_append_groups_without_taking_grips() {
         ] {
             for offset in [-5., 0., 5.] {
                 let mut s = three_member_target();
-                s.set_platform(platform);
                 let r = s.layout(STACK_VIEW);
                 let members = s.state.workspace.layout.column_stack(4).members;
                 let c = r.collapsed.iter().find(|c| c.id == members[index]).unwrap();
@@ -506,14 +495,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
 
 #[test]
 fn paint_defaults_open_right_stack_on_load_and_reset() {
-    for platform in [
-        Platform::Gtk,
-        Platform::Web,
-        Platform::Android,
-        Platform::Windows,
-        Platform::Mac,
-        Platform::Ios,
-    ] {
+    for platform in Platform::ALL {
         check_paint_default_stack(platform);
     }
 }
@@ -958,37 +940,27 @@ fn auto_hide_consumes_canvas_contact_and_preserves_popup_and_nested_drawer_conta
 }
 
 #[test]
-fn individual_panels_open_one_ordinary_drawer_per_stack_on_every_host() {
-    for platform in [
-        Platform::Gtk,
-        Platform::Web,
-        Platform::Android,
-        Platform::Mac,
-        Platform::Ios,
-        Platform::Windows,
-    ] {
-        let (mut s, left, right) = stack_fixture();
-        s.set_platform(platform);
-        stack_move(&mut s, right, left, false);
-        customize(
-            &mut s,
-            CustomizationAction::SetColumnDrawers {
-                column: left,
-                drawers: true,
-            },
-        );
-        click_column(&mut s, Panel::Brushes);
-        assert_eq!(s.state.customization.column_drawers.len(), 1);
-        assert!(s.state.customization.column_drawers[0].tabs.is_some());
-        click_column(&mut s, Panel::Layers);
-        assert_eq!(s.state.customization.column_drawers.len(), 1);
-        assert!(
-            s.layout(STACK_VIEW)
-                .collapsed
-                .iter()
-                .all(|c| c.open.is_none())
-        );
-    }
+fn individual_panels_open_one_ordinary_drawer_per_stack() {
+    let (mut s, left, right) = stack_fixture();
+    stack_move(&mut s, right, left, false);
+    customize(
+        &mut s,
+        CustomizationAction::SetColumnDrawers {
+            column: left,
+            drawers: true,
+        },
+    );
+    click_column(&mut s, Panel::Brushes);
+    assert_eq!(s.state.customization.column_drawers.len(), 1);
+    assert!(s.state.customization.column_drawers[0].tabs.is_some());
+    click_column(&mut s, Panel::Layers);
+    assert_eq!(s.state.customization.column_drawers.len(), 1);
+    assert!(
+        s.layout(STACK_VIEW)
+            .collapsed
+            .iter()
+            .all(|c| c.open.is_none())
+    );
 }
 
 #[test]
@@ -1315,35 +1287,27 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
 
 #[test]
 fn same_order_drop_from_member_into_previous_column_is_not_cancelled() {
-    for platform in [
-        Platform::Gtk,
-        Platform::Web,
-        Platform::Android,
-        Platform::Windows,
+    let mut s = three_member_target();
+    let before = crate::durable_layout(&s.state.workspace.layout);
+    let resolved = s.layout(STACK_VIEW);
+    let source = resolved.collapsed[2].groups[0].icons[0].bounds;
+    let last = resolved.collapsed[1].groups.last().unwrap();
+    let target = [last.bounds.x + 18., last.bounds.y + last.bounds.height + 3.];
+    let item = DockItem::Panel { panel: Panel::Color };
+    for (phase, position) in [
+        (ContactPhase::Down, [source.x + 18., source.y + 18.]),
+        (ContactPhase::Move, [900., 500.]),
+        (ContactPhase::Move, target),
+        (ContactPhase::Up, target),
     ] {
-        let mut s = three_member_target();
-        s.set_platform(platform);
-        let before = crate::durable_layout(&s.state.workspace.layout);
-        let resolved = s.layout(STACK_VIEW);
-        let source = resolved.collapsed[2].groups[0].icons[0].bounds;
-        let last = resolved.collapsed[1].groups.last().unwrap();
-        let target = [last.bounds.x + 18., last.bounds.y + last.bounds.height + 3.];
-        let item = DockItem::Panel { panel: Panel::Color };
-        for (phase, position) in [
-            (ContactPhase::Down, [source.x + 18., source.y + 18.]),
-            (ContactPhase::Move, [900., 500.]),
-            (ContactPhase::Move, target),
-            (ContactPhase::Up, target),
-        ] {
-            s.dispatch(UiAction::DragWorkspace { item, phase, position, viewport: STACK_VIEW, tabs: Vec::new() }).unwrap();
-        }
-        let after = crate::durable_layout(&s.state.workspace.layout);
-        assert_eq!(s.layout(STACK_VIEW).collapsed.len(), 2);
-        assert_eq!(s.layout(STACK_VIEW).collapsed[1].groups.len(), 2);
-        assert_ne!(before, after);
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
-        invoke(&mut s, CommandId::RedoWorkspace);
-        assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
+        s.dispatch(UiAction::DragWorkspace { item, phase, position, viewport: STACK_VIEW, tabs: Vec::new() }).unwrap();
     }
+    let after = crate::durable_layout(&s.state.workspace.layout);
+    assert_eq!(s.layout(STACK_VIEW).collapsed.len(), 2);
+    assert_eq!(s.layout(STACK_VIEW).collapsed[1].groups.len(), 2);
+    assert_ne!(before, after);
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
 }

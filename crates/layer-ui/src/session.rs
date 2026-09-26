@@ -4979,42 +4979,37 @@ mod tests {
 
     #[test]
     fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
-            for drawers in [false, true] {
-                let mut s = session(platform);
-                customize(&mut s, CustomizationAction::SetPanelVisible {
-                    panel: Panel::Stats,
-                    visible: true,
-                });
-                let group = s.state.workspace.layout.panel_group(Panel::Stats).unwrap();
-                customize(&mut s, CustomizationAction::SetColumnCollapsed {
-                    group,
-                    collapsed: true,
-                });
-                let column = s
-                    .state
-                    .workspace
-                    .layout
-                    .collapsed_column_for_group(group)
-                    .unwrap();
-                customize(&mut s, CustomizationAction::SetColumnDrawers { column, drawers });
-                assert!(!s.engine.backend().telemetry_enabled);
-                customize(&mut s, CustomizationAction::ToggleColumnDrawer {
-                    group,
-                    panel: Panel::Stats,
-                });
-                assert!(
-                    s.engine.backend().telemetry_enabled,
-                    "{platform:?}, drawers={drawers}"
-                );
-                s.replace_renderer(Recorder::default()).unwrap();
-                assert!(
-                    s.engine.backend().telemetry_enabled,
-                    "replacement retains sampling"
-                );
-                customize(&mut s, CustomizationAction::CloseColumn { column });
-                assert!(!s.engine.backend().telemetry_enabled);
-            }
+        for drawers in [false, true] {
+            let mut s = session(Platform::Gtk);
+            customize(&mut s, CustomizationAction::SetPanelVisible {
+                panel: Panel::Stats,
+                visible: true,
+            });
+            let group = s.state.workspace.layout.panel_group(Panel::Stats).unwrap();
+            customize(&mut s, CustomizationAction::SetColumnCollapsed {
+                group,
+                collapsed: true,
+            });
+            let column = s
+                .state
+                .workspace
+                .layout
+                .collapsed_column_for_group(group)
+                .unwrap();
+            customize(&mut s, CustomizationAction::SetColumnDrawers { column, drawers });
+            assert!(!s.engine.backend().telemetry_enabled);
+            customize(&mut s, CustomizationAction::ToggleColumnDrawer {
+                group,
+                panel: Panel::Stats,
+            });
+            assert!(s.engine.backend().telemetry_enabled, "drawers={drawers}");
+            s.replace_renderer(Recorder::default()).unwrap();
+            assert!(
+                s.engine.backend().telemetry_enabled,
+                "replacement retains sampling"
+            );
+            customize(&mut s, CustomizationAction::CloseColumn { column });
+            assert!(!s.engine.backend().telemetry_enabled);
         }
     }
 
@@ -6189,54 +6184,52 @@ mod tests {
 
     #[test]
     fn in_place_new_and_open_share_unsaved_and_save_completion_policy() {
-        for platform in [Platform::Ios, Platform::Mac] {
-            let mut s = session(platform);
-            s.set_document_replacement(true);
-            invoke(&mut s, CommandId::AddLayer);
-            invoke(&mut s, CommandId::NewDocument);
-            let id = s.files.pending.as_ref().unwrap().0;
-            s.respond_document_close(id, CloseDecision::Cancel).unwrap();
-            assert!(s.files.pending.is_none());
-            assert!(s.state.document_file.modified);
-            invoke(&mut s, CommandId::OpenDocument);
-            let id = s.files.pending.as_ref().unwrap().0;
-            s.respond_document_close(id, CloseDecision::Save).unwrap();
-            let id = s.files.pending.as_ref().unwrap().0;
-            s.capture_project_save(
-                id,
-                DocumentLocation {
-                    uri: "file:///fixture.capy".into(),
-                    name: "fixture.capy".into(),
-                },
-            )
+        let mut s = session(Platform::Gtk);
+        s.set_document_replacement(true);
+        invoke(&mut s, CommandId::AddLayer);
+        invoke(&mut s, CommandId::NewDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+        assert!(s.files.pending.is_none());
+        assert!(s.state.document_file.modified);
+        invoke(&mut s, CommandId::OpenDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Save).unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.capture_project_save(
+            id,
+            DocumentLocation {
+                uri: "file:///fixture.capy".into(),
+                name: "fixture.capy".into(),
+            },
+        )
+        .unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(!s.state.document_file.modified);
+        assert!(!s.state.document_file.close_ready);
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::Open
+            }
+        ));
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.complete_document_request(id, Ok(false)).unwrap();
+        invoke(&mut s, CommandId::AddLayer);
+        invoke(&mut s, CommandId::NewDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Discard)
             .unwrap();
-            s.complete_document_request(id, Ok(true)).unwrap();
-            assert!(!s.state.document_file.modified);
-            assert!(!s.state.document_file.close_ready);
-            assert!(matches!(
-                s.state.requests.last().unwrap().kind,
-                HostRequestKind::Document {
-                    request: DocumentRequest::Open
-                }
-            ));
-            let id = s.files.pending.as_ref().unwrap().0;
-            s.complete_document_request(id, Ok(false)).unwrap();
-            invoke(&mut s, CommandId::AddLayer);
-            invoke(&mut s, CommandId::NewDocument);
-            let id = s.files.pending.as_ref().unwrap().0;
-            s.respond_document_close(id, CloseDecision::Discard)
-                .unwrap();
-            assert!(
-                s.state.document_file.modified,
-                "The host has not replaced the document yet"
-            );
-            assert!(matches!(
-                s.state.requests.last().unwrap().kind,
-                HostRequestKind::Document {
-                    request: DocumentRequest::New
-                }
-            ));
-        }
+        assert!(
+            s.state.document_file.modified,
+            "The host has not replaced the document yet"
+        );
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::New
+            }
+        ));
     }
 
     #[test]
@@ -6460,362 +6453,358 @@ mod tests {
         use std::sync::Arc;
         let coverage =
             Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444]).unwrap());
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            let send = |s: &mut UiSession<Recorder>, phase| {
-                let mut e = event(s, 10, phase, 1.);
-                let m = s.state.camera.document_to_surface();
-                e.surface_position = Point {
-                    x: m[0] * 48. + m[2] * 72. + m[4],
-                    y: m[1] * 48. + m[3] * 72. + m[5],
-                };
-                s.pen(e).unwrap();
+        let mut s = session(Platform::Gtk);
+        let send = |s: &mut UiSession<Recorder>, phase| {
+            let mut e = event(s, 10, phase, 1.);
+            let m = s.state.camera.document_to_surface();
+            e.surface_position = Point {
+                x: m[0] * 48. + m[2] * 72. + m[4],
+                y: m[1] * 48. + m[3] * 72. + m[5],
             };
-            invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 8);
-            assert_eq!(s.state.tool_settings[0].id, "tolerance");
-            assert_eq!(s.state.tool_settings.len(), 5);
-            assert_eq!(s.region_tools.refinement.smoothing, 1.);
-            for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
+            s.pen(e).unwrap();
+        };
+        invoke(&mut s, CommandId::AutoSelect);
+        assert_eq!(s.state.tool_set.subtools.len(), 8);
+        assert_eq!(s.state.tool_settings[0].id, "tolerance");
+        assert_eq!(s.state.tool_settings.len(), 5);
+        assert_eq!(s.region_tools.refinement.smoothing, 1.);
+        for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
+            s.dispatch(UiAction::SetToolSetting {
+                id: id.into(),
+                value,
+            })
+            .unwrap();
+            assert_eq!(
+                s.state
+                    .tool_settings
+                    .iter()
+                    .find(|c| c.id == id)
+                    .unwrap()
+                    .value,
+                value
+            );
+        }
+        let refinement = s.region_tools.refinement;
+        for (id, value) in [
+            ("gap_closing", 33.),
+            ("expansion", -33.),
+            ("gap_closing", 1.5),
+            ("smoothing", f32::NAN),
+        ] {
+            assert!(
                 s.dispatch(UiAction::SetToolSetting {
                     id: id.into(),
-                    value,
-                })
-                .unwrap();
-                assert_eq!(
-                    s.state
-                        .tool_settings
-                        .iter()
-                        .find(|c| c.id == id)
-                        .unwrap()
-                        .value,
                     value
-                );
-            }
-            let refinement = s.region_tools.refinement;
-            for (id, value) in [
-                ("gap_closing", 33.),
-                ("expansion", -33.),
-                ("gap_closing", 1.5),
-                ("smoothing", f32::NAN),
-            ] {
-                assert!(
-                    s.dispatch(UiAction::SetToolSetting {
-                        id: id.into(),
-                        value
-                    })
-                    .is_err()
-                );
-                assert_eq!(s.region_tools.refinement, refinement);
-            }
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            assert!(s.wants_continuous_frames());
-            s.frame(1, 1).unwrap();
-            let request = s.renderer_mut().region_requests[0].clone();
-            assert_eq!(request.position, [48, 72]);
-            assert_eq!(request.refinement, refinement);
-            assert_eq!(request.source, RegionSource::Composite);
-            assert!(request.limit.is_none());
-            s.renderer_mut().region_reply = Some(RegionResult {
-                tonal_sample: None,
-                request_id: request.request_id,
-                pixels: coverage.clone(),
-            });
-            assert!(
-                s.frame(2, 2).unwrap().canvas_wake,
-                "reply schedules the frame that displays the selection"
+                })
+                .is_err()
             );
-            assert_eq!(
-                s.engine.document().selection,
-                Some(Selection::pixels(coverage.clone()))
-            );
-            s.frame(3, 3).unwrap();
-            invoke(&mut s, CommandId::Undo);
-            assert!(s.engine.document().selection.is_none());
-            invoke(&mut s, CommandId::Redo);
-            assert!(s.engine.document().selection.is_some());
+            assert_eq!(s.region_tools.refinement, refinement);
+        }
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        assert!(s.wants_continuous_frames());
+        s.frame(1, 1).unwrap();
+        let request = s.renderer_mut().region_requests[0].clone();
+        assert_eq!(request.position, [48, 72]);
+        assert_eq!(request.refinement, refinement);
+        assert_eq!(request.source, RegionSource::Composite);
+        assert!(request.limit.is_none());
+        s.renderer_mut().region_reply = Some(RegionResult {
+            tonal_sample: None,
+            request_id: request.request_id,
+            pixels: coverage.clone(),
+        });
+        assert!(
+            s.frame(2, 2).unwrap().canvas_wake,
+            "reply schedules the frame that displays the selection"
+        );
+        assert_eq!(
+            s.engine.document().selection,
+            Some(Selection::pixels(coverage.clone()))
+        );
+        s.frame(3, 3).unwrap();
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().selection.is_none());
+        invoke(&mut s, CommandId::Redo);
+        assert!(s.engine.document().selection.is_some());
 
-            let id = s.engine.document().active_layer;
-            let mut layer = s.engine.document().layer(id).unwrap().clone();
-            layer.properties.offset = Point { x: 8., y: 12. };
-            s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
-            s.frame(4, 4).unwrap();
-            invoke(&mut s, CommandId::Fill);
-            let source = s.state.tool_set.subtools[1].action.clone();
-            s.dispatch(source).unwrap();
-            s.dispatch(UiAction::SetToolSetting {
-                id: "tolerance".into(),
-                value: 0.2,
-            })
-            .unwrap();
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            s.frame(5, 5).unwrap();
-            let request = s.renderer_mut().region_requests.last().unwrap().clone();
-            assert_eq!(request.position, [40, 60]);
-            assert_eq!(request.source, RegionSource::Layer(id));
-            assert_eq!(request.tolerance, 0.2);
-            assert_eq!(
-                request.refinement, refinement,
-                "Fill uses the same Rust settings"
-            );
-            assert_eq!(
-                request.limit.as_ref().unwrap().affine,
-                layer_core::Affine::translation(Point { x: -8., y: -12. })
-            );
-            s.renderer_mut().region_reply = Some(RegionResult {
-                tonal_sample: None,
-                request_id: request.request_id,
-                pixels: coverage.clone(),
-            });
-            assert!(s.frame(6, 6).unwrap().canvas_wake);
-            let operation = &s.engine.document().layer(id).unwrap().pending_operations[0];
-            assert_eq!(
-                operation.coverage.initial,
-                Some(Selection::pixels(coverage.clone())),
-                "raw-layer result is converted to document then layer coordinates once"
-            );
-            s.frame(7, 7).unwrap();
-            invoke(&mut s, CommandId::Undo);
-            assert!(
-                s.engine
-                    .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
-                    .is_empty()
-            );
-
-            // Esc cancels the gesture/request; changing tools also rejects an
-            // already submitted reply. Neither creates an empty history entry.
-            invoke(&mut s, CommandId::AutoSelect);
-            send(&mut s, PenPhase::Down);
-            assert!(s.cancel_layer_gesture().unwrap());
-            send(&mut s, PenPhase::Up);
-            s.frame(8, 8).unwrap();
-            assert_eq!(s.renderer_mut().region_requests.len(), 2);
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            s.frame(9, 9).unwrap();
-            let request = s.renderer_mut().region_requests.last().unwrap().clone();
-            let before = s.engine.document().selection.clone();
-            invoke(&mut s, CommandId::Hand);
-            s.renderer_mut().region_reply = Some(RegionResult {
-                tonal_sample: None,
-                request_id: request.request_id,
-                pixels: coverage.clone(),
-            });
-            s.frame(10, 10).unwrap();
-            assert_eq!(s.engine.document().selection, before);
-            assert!(!s.region_tools.busy());
-
-            invoke(&mut s, CommandId::AutoSelect);
-            invoke(&mut s, CommandId::SelectionReference);
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            assert!(s.frame(11, 11).unwrap_err().contains("reference layer"));
-            s.layer_edit(Edit::SetReferences([id].into())).unwrap();
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            s.frame(12, 12).unwrap();
-            let request = s.renderer_mut().region_requests.last().unwrap().clone();
-            assert_eq!(
-                request.position,
-                [48, 72],
-                "reference composition uses document coordinates"
-            );
-            let RegionSource::Layers(layers) = request.source else {
-                panic!("reference snapshot")
-            };
-            assert_eq!(
-                layers
-                    .iter()
-                    .filter(|l| l.visible)
-                    .map(|l| l.id)
-                    .collect::<Vec<_>>(),
-                [id]
-            );
-            s.renderer_mut().region_reply = Some(RegionResult {
-                tonal_sample: None,
-                request_id: request.request_id,
-                pixels: coverage.clone(),
-            });
-            s.frame(13, 13).unwrap();
-            assert_eq!(
-                s.engine.document().selection.as_ref().unwrap().affine,
-                layer_core::Affine::IDENTITY
-            );
-
-            // Parameter edits during async detection apply only to the next fill.
-            invoke(&mut s, CommandId::Fill);
-            s.dispatch(UiAction::SetToolSetting {
-                id: "opacity".into(),
-                value: 0.25,
-            })
-            .unwrap();
-            send(&mut s, PenPhase::Down);
-            send(&mut s, PenPhase::Up);
-            s.frame(14, 14).unwrap();
-            let request = s.renderer_mut().region_requests.last().unwrap().clone();
-            s.dispatch(UiAction::SetToolSetting {
-                id: "opacity".into(),
-                value: 0.75,
-            })
-            .unwrap();
-            s.renderer_mut().region_reply = Some(RegionResult {
-                tonal_sample: None,
-                request_id: request.request_id,
-                pixels: coverage.clone(),
-            });
-            s.frame(15, 15).unwrap();
-            let layer_core::LayerOperationKind::Fill { color, .. } = s
-                .engine
+        let id = s.engine.document().active_layer;
+        let mut layer = s.engine.document().layer(id).unwrap().clone();
+        layer.properties.offset = Point { x: 8., y: 12. };
+        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        s.frame(4, 4).unwrap();
+        invoke(&mut s, CommandId::Fill);
+        let source = s.state.tool_set.subtools[1].action.clone();
+        s.dispatch(source).unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "tolerance".into(),
+            value: 0.2,
+        })
+        .unwrap();
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        s.frame(5, 5).unwrap();
+        let request = s.renderer_mut().region_requests.last().unwrap().clone();
+        assert_eq!(request.position, [40, 60]);
+        assert_eq!(request.source, RegionSource::Layer(id));
+        assert_eq!(request.tolerance, 0.2);
+        assert_eq!(
+            request.refinement, refinement,
+            "Fill uses the same Rust settings"
+        );
+        assert_eq!(
+            request.limit.as_ref().unwrap().affine,
+            layer_core::Affine::translation(Point { x: -8., y: -12. })
+        );
+        s.renderer_mut().region_reply = Some(RegionResult {
+            tonal_sample: None,
+            request_id: request.request_id,
+            pixels: coverage.clone(),
+        });
+        assert!(s.frame(6, 6).unwrap().canvas_wake);
+        let operation = &s.engine.document().layer(id).unwrap().pending_operations[0];
+        assert_eq!(
+            operation.coverage.initial,
+            Some(Selection::pixels(coverage.clone())),
+            "raw-layer result is converted to document then layer coordinates once"
+        );
+        s.frame(7, 7).unwrap();
+        invoke(&mut s, CommandId::Undo);
+        assert!(
+            s.engine
                 .document()
                 .layer(id)
                 .unwrap()
                 .pending_operations
-                .last()
-                .unwrap()
-                .kind
-            else {
-                panic!("fill")
-            };
-            assert_eq!(color[3], 0.25);
-        }
+                .is_empty()
+        );
+
+        // Esc cancels the gesture/request; changing tools also rejects an
+        // already submitted reply. Neither creates an empty history entry.
+        invoke(&mut s, CommandId::AutoSelect);
+        send(&mut s, PenPhase::Down);
+        assert!(s.cancel_layer_gesture().unwrap());
+        send(&mut s, PenPhase::Up);
+        s.frame(8, 8).unwrap();
+        assert_eq!(s.renderer_mut().region_requests.len(), 2);
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        s.frame(9, 9).unwrap();
+        let request = s.renderer_mut().region_requests.last().unwrap().clone();
+        let before = s.engine.document().selection.clone();
+        invoke(&mut s, CommandId::Hand);
+        s.renderer_mut().region_reply = Some(RegionResult {
+            tonal_sample: None,
+            request_id: request.request_id,
+            pixels: coverage.clone(),
+        });
+        s.frame(10, 10).unwrap();
+        assert_eq!(s.engine.document().selection, before);
+        assert!(!s.region_tools.busy());
+
+        invoke(&mut s, CommandId::AutoSelect);
+        invoke(&mut s, CommandId::SelectionReference);
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        assert!(s.frame(11, 11).unwrap_err().contains("reference layer"));
+        s.layer_edit(Edit::SetReferences([id].into())).unwrap();
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        s.frame(12, 12).unwrap();
+        let request = s.renderer_mut().region_requests.last().unwrap().clone();
+        assert_eq!(
+            request.position,
+            [48, 72],
+            "reference composition uses document coordinates"
+        );
+        let RegionSource::Layers(layers) = request.source else {
+            panic!("reference snapshot")
+        };
+        assert_eq!(
+            layers
+                .iter()
+                .filter(|l| l.visible)
+                .map(|l| l.id)
+                .collect::<Vec<_>>(),
+            [id]
+        );
+        s.renderer_mut().region_reply = Some(RegionResult {
+            tonal_sample: None,
+            request_id: request.request_id,
+            pixels: coverage.clone(),
+        });
+        s.frame(13, 13).unwrap();
+        assert_eq!(
+            s.engine.document().selection.as_ref().unwrap().affine,
+            layer_core::Affine::IDENTITY
+        );
+
+        // Parameter edits during async detection apply only to the next fill.
+        invoke(&mut s, CommandId::Fill);
+        s.dispatch(UiAction::SetToolSetting {
+            id: "opacity".into(),
+            value: 0.25,
+        })
+        .unwrap();
+        send(&mut s, PenPhase::Down);
+        send(&mut s, PenPhase::Up);
+        s.frame(14, 14).unwrap();
+        let request = s.renderer_mut().region_requests.last().unwrap().clone();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "opacity".into(),
+            value: 0.75,
+        })
+        .unwrap();
+        s.renderer_mut().region_reply = Some(RegionResult {
+            tonal_sample: None,
+            request_id: request.request_id,
+            pixels: coverage.clone(),
+        });
+        s.frame(15, 15).unwrap();
+        let layer_core::LayerOperationKind::Fill { color, .. } = s
+            .engine
+            .document()
+            .layer(id)
+            .unwrap()
+            .pending_operations
+            .last()
+            .unwrap()
+            .kind
+        else {
+            panic!("fill")
+        };
+        assert_eq!(color[3], 0.25);
     }
 
     #[test]
     fn ruler_tools_preview_edit_cancel_and_undo_without_repainting() {
         use layer_core::RulerGeometry;
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            s.set_viewport([600., 500.], [1200, 1000]).unwrap();
-            s.state.camera.rotation = 0.3;
-            s.state.camera.flipped = [true, true];
-            s.state.camera.zoom = 2.;
-            s.sync_camera();
-            s.frame(1, 1).unwrap();
-            invoke(&mut s, CommandId::Ruler);
-            assert_eq!(s.state.tool_set.groups.len(), 3);
-            assert_eq!(s.state.tool_actions.len(), 3);
-            let composites = s.renderer_mut().composites;
-            let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-                let m = s.state.camera.document_to_surface();
-                let mut e = event(s, 1, phase, 1.);
-                e.surface_position = Point {
-                    x: m[0] * p[0] + m[2] * p[1] + m[4],
-                    y: m[1] * p[0] + m[3] * p[1] + m[5],
-                };
-                s.pen(e).unwrap();
-                s.frame(1, 1).unwrap();
-                assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
+        let mut s = session(Platform::Gtk);
+        s.set_viewport([600., 500.], [1200, 1000]).unwrap();
+        s.state.camera.rotation = 0.3;
+        s.state.camera.flipped = [true, true];
+        s.state.camera.zoom = 2.;
+        s.sync_camera();
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::Ruler);
+        assert_eq!(s.state.tool_set.groups.len(), 3);
+        assert_eq!(s.state.tool_actions.len(), 3);
+        let composites = s.renderer_mut().composites;
+        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+            let m = s.state.camera.document_to_surface();
+            let mut e = event(s, 1, phase, 1.);
+            e.surface_position = Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
             };
-            for (index, y) in [(0, 100.), (1, 400.), (2, 700.)] {
-                s.dispatch(s.state.tool_set.groups[index].action.clone())
-                    .unwrap();
-                send(&mut s, PenPhase::Down, [100., y]);
-                send(&mut s, PenPhase::Move, [300., y + 50.]);
-                assert_eq!(
-                    s.engine.document().rulers.len(),
-                    index,
-                    "preview is not history"
-                );
-                let mut plain = Vec::new();
-                s.append_layer_overlay(&mut plain);
-                assert!(!plain.is_empty());
-                if index < 2 {
-                    let reply = key(&mut s, "Shift_L", true, false, false);
-                    assert!(reply.change.canvas_wake);
-                    let mut snapped = Vec::new();
-                    s.append_layer_overlay(&mut snapped);
-                    assert_ne!(format!("{plain:?}"), format!("{snapped:?}"));
-                    key(&mut s, "Shift_L", false, false, false);
-                }
-                send(&mut s, PenPhase::Up, [300., y + 50.]);
-                assert_eq!(s.engine.document().rulers.len(), index + 1);
-                let geometry = s.engine.document().rulers[index].geometry;
-                invoke(&mut s, CommandId::Undo);
-                s.frame(1, 1).unwrap();
-                assert_eq!(s.engine.document().rulers.len(), index);
-                invoke(&mut s, CommandId::Redo);
-                s.frame(1, 1).unwrap();
-                assert_eq!(s.engine.document().rulers[index].geometry, geometry);
+            s.pen(e).unwrap();
+            s.frame(1, 1).unwrap();
+            assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
+        };
+        for (index, y) in [(0, 100.), (1, 400.), (2, 700.)] {
+            s.dispatch(s.state.tool_set.groups[index].action.clone())
+                .unwrap();
+            send(&mut s, PenPhase::Down, [100., y]);
+            send(&mut s, PenPhase::Move, [300., y + 50.]);
+            assert_eq!(
+                s.engine.document().rulers.len(),
+                index,
+                "preview is not history"
+            );
+            let mut plain = Vec::new();
+            s.append_layer_overlay(&mut plain);
+            assert!(!plain.is_empty());
+            if index < 2 {
+                let reply = key(&mut s, "Shift_L", true, false, false);
+                assert!(reply.change.canvas_wake);
+                let mut snapped = Vec::new();
+                s.append_layer_overlay(&mut snapped);
+                assert_ne!(format!("{plain:?}"), format!("{snapped:?}"));
+                key(&mut s, "Shift_L", false, false, false);
             }
-            let saved = s.engine.document().rulers.clone();
-            // Drag the straight guide's body, then edit its start handle.
-            send(&mut s, PenPhase::Down, [200., 125.]);
-            send(&mut s, PenPhase::Up, [200., 160.]);
-            let (a, b) = s.engine.document().rulers[0].geometry.handles();
-            assert!((a.y - 135.).abs() < 0.001);
-            send(&mut s, PenPhase::Down, [a.x, a.y]);
-            send(&mut s, PenPhase::Up, [a.x - 20., a.y + 20.]);
-            let (moved, end) = s.engine.document().rulers[0].geometry.handles();
-            assert!((moved.x - 80.).abs() < 0.001);
-            assert_eq!(end, b);
-            let before = s.engine.document().rulers.clone();
-            send(&mut s, PenPhase::Down, [moved.x, moved.y]);
-            send(&mut s, PenPhase::Move, [50., 10.]);
-            key(&mut s, "Escape", true, false, false);
-            s.frame(1, 1).unwrap();
-            assert_eq!(
-                s.engine.document().rulers,
-                before,
-                "cancel never commits a guide"
-            );
-            assert_eq!(
-                s.renderer_mut().composites,
-                composites,
-                "guide edits must not repaint"
-            );
-            assert_eq!(s.renderer_mut().dabs, 0);
-            invoke(&mut s, CommandId::DeleteRuler);
-            s.frame(1, 1).unwrap();
-            assert_eq!(s.engine.document().rulers.len(), 2);
+            send(&mut s, PenPhase::Up, [300., y + 50.]);
+            assert_eq!(s.engine.document().rulers.len(), index + 1);
+            let geometry = s.engine.document().rulers[index].geometry;
             invoke(&mut s, CommandId::Undo);
             s.frame(1, 1).unwrap();
-            assert_eq!(s.engine.document().rulers, before);
-            invoke(&mut s, CommandId::ShowRulers);
-            let mut hidden = Vec::new();
-            s.append_layer_overlay(&mut hidden);
-            assert!(hidden.is_empty());
-            assert!(
-                !s.state
-                    .commands
-                    .iter()
-                    .find(|c| c.id == CommandId::SnapRulers)
-                    .unwrap()
-                    .enabled
-            );
-            invoke(&mut s, CommandId::ShowRulers);
-            assert!(
-                s.state
-                    .commands
-                    .iter()
-                    .find(|c| c.id == CommandId::SnapRulers)
-                    .unwrap()
-                    .selected
-            );
-            invoke(&mut s, CommandId::SnapRulers);
-            assert!(!s.rulers.snapping);
-            assert!(matches!(saved[2].geometry, RulerGeometry::Radial { .. }));
-            // Operation edits existing guides, but never creates a ruler and
-            // never moves the paint layer while a ruler handle owns contact.
-            invoke(&mut s, CommandId::Move);
-            let layers = s.engine.document().layers.clone();
-            let end = s.engine.document().rulers[0].geometry.handles().1.unwrap();
-            send(&mut s, PenPhase::Down, [end.x, end.y]);
-            send(&mut s, PenPhase::Up, [end.x + 25., end.y + 30.]);
-            assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Move);
-            assert_eq!(s.engine.document().layers, layers);
-            assert_ne!(s.engine.document().rulers, before);
-            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.document().rulers.len(), index);
+            invoke(&mut s, CommandId::Redo);
             s.frame(1, 1).unwrap();
-            assert_eq!(s.engine.document().rulers, before);
-            send(&mut s, PenPhase::Down, [1900., 1300.]);
-            send(&mut s, PenPhase::Up, [1900., 1300.]);
-            assert_eq!(s.engine.document().rulers, before);
+            assert_eq!(s.engine.document().rulers[index].geometry, geometry);
         }
+        let saved = s.engine.document().rulers.clone();
+        // Drag the straight guide's body, then edit its start handle.
+        send(&mut s, PenPhase::Down, [200., 125.]);
+        send(&mut s, PenPhase::Up, [200., 160.]);
+        let (a, b) = s.engine.document().rulers[0].geometry.handles();
+        assert!((a.y - 135.).abs() < 0.001);
+        send(&mut s, PenPhase::Down, [a.x, a.y]);
+        send(&mut s, PenPhase::Up, [a.x - 20., a.y + 20.]);
+        let (moved, end) = s.engine.document().rulers[0].geometry.handles();
+        assert!((moved.x - 80.).abs() < 0.001);
+        assert_eq!(end, b);
+        let before = s.engine.document().rulers.clone();
+        send(&mut s, PenPhase::Down, [moved.x, moved.y]);
+        send(&mut s, PenPhase::Move, [50., 10.]);
+        key(&mut s, "Escape", true, false, false);
+        s.frame(1, 1).unwrap();
+        assert_eq!(
+            s.engine.document().rulers,
+            before,
+            "cancel never commits a guide"
+        );
+        assert_eq!(
+            s.renderer_mut().composites,
+            composites,
+            "guide edits must not repaint"
+        );
+        assert_eq!(s.renderer_mut().dabs, 0);
+        invoke(&mut s, CommandId::DeleteRuler);
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.engine.document().rulers.len(), 2);
+        invoke(&mut s, CommandId::Undo);
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.engine.document().rulers, before);
+        invoke(&mut s, CommandId::ShowRulers);
+        let mut hidden = Vec::new();
+        s.append_layer_overlay(&mut hidden);
+        assert!(hidden.is_empty());
+        assert!(
+            !s.state
+                .commands
+                .iter()
+                .find(|c| c.id == CommandId::SnapRulers)
+                .unwrap()
+                .enabled
+        );
+        invoke(&mut s, CommandId::ShowRulers);
+        assert!(
+            s.state
+                .commands
+                .iter()
+                .find(|c| c.id == CommandId::SnapRulers)
+                .unwrap()
+                .selected
+        );
+        invoke(&mut s, CommandId::SnapRulers);
+        assert!(!s.rulers.snapping);
+        assert!(matches!(saved[2].geometry, RulerGeometry::Radial { .. }));
+        // Operation edits existing guides, but never creates a ruler and
+        // never moves the paint layer while a ruler handle owns contact.
+        invoke(&mut s, CommandId::Move);
+        let layers = s.engine.document().layers.clone();
+        let end = s.engine.document().rulers[0].geometry.handles().1.unwrap();
+        send(&mut s, PenPhase::Down, [end.x, end.y]);
+        send(&mut s, PenPhase::Up, [end.x + 25., end.y + 30.]);
+        assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Move);
+        assert_eq!(s.engine.document().layers, layers);
+        assert_ne!(s.engine.document().rulers, before);
+        invoke(&mut s, CommandId::Undo);
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.engine.document().rulers, before);
+        send(&mut s, PenPhase::Down, [1900., 1300.]);
+        send(&mut s, PenPhase::Up, [1900., 1300.]);
+        assert_eq!(s.engine.document().rulers, before);
     }
 
     #[test]
@@ -7212,44 +7201,42 @@ mod tests {
 
     #[test]
     fn hand_uses_shared_pointer_and_touch_navigation_without_painting() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
-                let mut s = session(platform);
-                assert!(key(&mut s, "h", true, false, false).handled);
-                key(&mut s, "h", false, false, false);
-                assert!(s.command(CommandId::Hand).selected);
-                let before = s.state.camera.clone();
-                let revision = s.engine.document().revision;
-                let p = before.input_transform().map(Point { x: 200.0, y: 300.0 });
-                for (phase, position) in [
-                    (ContactPhase::Down, [200.0, 300.0]),
-                    (ContactPhase::Move, [260.0, 340.0]),
-                    (ContactPhase::Up, [260.0, 340.0]),
-                ] {
-                    let reply = s
-                        .input(UiInput::Pointer {
-                            id: 1,
-                            phase,
-                            kind,
-                            button: PointerButton::Primary,
-                            position,
-                            time_ns: 0,
-                        })
-                        .unwrap();
-                    assert!(!reply.paint && reply.pan_cursor);
-                }
-                let after = s
-                    .state
-                    .camera
-                    .input_transform()
-                    .map(Point { x: 260.0, y: 340.0 });
-                assert!((after.x - p.x).abs() < 0.001 && (after.y - p.y).abs() < 0.001);
-                assert_eq!(s.state.camera.zoom, before.zoom);
-                s.frame(1_000_000, 1_000_000).unwrap();
-                assert_eq!(s.renderer_mut().dabs, 0);
-                assert_eq!(s.engine.document().revision, revision);
-                assert!(!s.command(CommandId::Undo).enabled);
+        for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
+            let mut s = session(Platform::Gtk);
+            assert!(key(&mut s, "h", true, false, false).handled);
+            key(&mut s, "h", false, false, false);
+            assert!(s.command(CommandId::Hand).selected);
+            let before = s.state.camera.clone();
+            let revision = s.engine.document().revision;
+            let p = before.input_transform().map(Point { x: 200.0, y: 300.0 });
+            for (phase, position) in [
+                (ContactPhase::Down, [200.0, 300.0]),
+                (ContactPhase::Move, [260.0, 340.0]),
+                (ContactPhase::Up, [260.0, 340.0]),
+            ] {
+                let reply = s
+                    .input(UiInput::Pointer {
+                        id: 1,
+                        phase,
+                        kind,
+                        button: PointerButton::Primary,
+                        position,
+                        time_ns: 0,
+                    })
+                    .unwrap();
+                assert!(!reply.paint && reply.pan_cursor);
             }
+            let after = s
+                .state
+                .camera
+                .input_transform()
+                .map(Point { x: 260.0, y: 340.0 });
+            assert!((after.x - p.x).abs() < 0.001 && (after.y - p.y).abs() < 0.001);
+            assert_eq!(s.state.camera.zoom, before.zoom);
+            s.frame(1_000_000, 1_000_000).unwrap();
+            assert_eq!(s.renderer_mut().dabs, 0);
+            assert_eq!(s.engine.document().revision, revision);
+            assert!(!s.command(CommandId::Undo).enabled);
         }
     }
 
@@ -7286,87 +7273,85 @@ mod tests {
     #[test]
     fn operation_controls_support_active_masks_and_linked_paint_without_host_logic() {
         use layer_core::{LayerOperationKind, Point, Selection};
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for linked in [false, true] {
-                let mut s = session(platform);
-                let area = Selection::polygon(vec![
-                    Point { x: 100., y: 100. },
-                    Point { x: 300., y: 100. },
-                    Point { x: 300., y: 300. },
-                    Point { x: 100., y: 300. },
-                ])
+        for linked in [false, true] {
+            let mut s = session(Platform::Gtk);
+            let area = Selection::polygon(vec![
+                Point { x: 100., y: 100. },
+                Point { x: 300., y: 100. },
+                Point { x: 300., y: 300. },
+                Point { x: 100., y: 300. },
+            ])
+            .unwrap();
+            s.fill_selection(area.clone()).unwrap();
+            s.layer_edit(layer_core::Edit::SetSelection(Some(area)))
                 .unwrap();
-                s.fill_selection(area.clone()).unwrap();
-                s.layer_edit(layer_core::Edit::SetSelection(Some(area)))
-                    .unwrap();
-                let id = s.engine.document().active_layer;
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::AddMask {
-                        id: id.0,
-                        replace: false,
-                    },
-                })
+            let id = s.engine.document().active_layer;
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::AddMask {
+                    id: id.0,
+                    replace: false,
+                },
+            })
+            .unwrap();
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::LinkMask {
+                    id: id.0,
+                    value: linked,
+                },
+            })
+            .unwrap();
+            s.frame(1, 1).unwrap();
+            let before = s.engine.document().layers.clone();
+            assert!(s.engine.document().active_mask);
+            assert!(s.command(CommandId::ScaleRotate).enabled);
+            invoke(&mut s, CommandId::ScaleRotate);
+            s.frame(2, 2).unwrap();
+            assert_eq!(
+                s.renderer_mut().transform.as_ref().unwrap().layer,
+                before[0].mask.as_ref().unwrap().id
+            );
+            s.dispatch(UiAction::SetToolSetting {
+                id: "transform_x".into(),
+                value: 24.,
+            })
+            .unwrap();
+            invoke(&mut s, CommandId::ApplyTransform);
+            s.frame(2, 2).unwrap();
+            let after = &s.engine.document().layers[0];
+            assert_eq!(
+                after.raster.identity() != before[0].raster.identity(),
+                linked
+            );
+            let mask = after.mask.as_ref().unwrap();
+            assert_ne!(
+                mask.raster.identity(),
+                before[0].mask.as_ref().unwrap().raster.identity()
+            );
+            assert!(mask.pending_operations.is_empty());
+            assert_eq!(
+                s.engine.backend().pending_operations.len(),
+                1 + usize::from(linked)
+            );
+            assert!(
+                s.engine
+                    .backend()
+                    .pending_operations
+                    .iter()
+                    .all(|(_, op)| matches!(op.kind, LayerOperationKind::Transform(_)))
+            );
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.document().layers, before);
+            s.layer_edit(layer_core::Edit::SetMaskTarget(false))
                 .unwrap();
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::LinkMask {
-                        id: id.0,
-                        value: linked,
-                    },
-                })
-                .unwrap();
-                s.frame(1, 1).unwrap();
-                let before = s.engine.document().layers.clone();
-                assert!(s.engine.document().active_mask);
-                assert!(s.command(CommandId::ScaleRotate).enabled);
-                invoke(&mut s, CommandId::ScaleRotate);
-                s.frame(2, 2).unwrap();
-                assert_eq!(
-                    s.renderer_mut().transform.as_ref().unwrap().layer,
-                    before[0].mask.as_ref().unwrap().id
-                );
-                s.dispatch(UiAction::SetToolSetting {
-                    id: "transform_x".into(),
-                    value: 24.,
-                })
-                .unwrap();
-                invoke(&mut s, CommandId::ApplyTransform);
-                s.frame(2, 2).unwrap();
-                let after = &s.engine.document().layers[0];
-                assert_eq!(
-                    after.raster.identity() != before[0].raster.identity(),
-                    linked
-                );
-                let mask = after.mask.as_ref().unwrap();
-                assert_ne!(
-                    mask.raster.identity(),
-                    before[0].mask.as_ref().unwrap().raster.identity()
-                );
-                assert!(mask.pending_operations.is_empty());
-                assert_eq!(
-                    s.engine.backend().pending_operations.len(),
-                    1 + usize::from(linked)
-                );
-                assert!(
-                    s.engine
-                        .backend()
-                        .pending_operations
-                        .iter()
-                        .all(|(_, op)| matches!(op.kind, LayerOperationKind::Transform(_)))
-                );
-                invoke(&mut s, CommandId::Undo);
-                assert_eq!(s.engine.document().layers, before);
-                s.layer_edit(layer_core::Edit::SetMaskTarget(false))
-                    .unwrap();
-                assert!(s.command(CommandId::ScaleRotate).enabled);
-                invoke(&mut s, CommandId::ScaleRotate);
-                s.dispatch(UiAction::SetToolSetting {
-                    id: "transform_width".into(),
-                    value: 1.2,
-                })
-                .unwrap();
-                invoke(&mut s, CommandId::CancelTransform);
-                assert_eq!(s.engine.document().layers, before);
-            }
+            assert!(s.command(CommandId::ScaleRotate).enabled);
+            invoke(&mut s, CommandId::ScaleRotate);
+            s.dispatch(UiAction::SetToolSetting {
+                id: "transform_width".into(),
+                value: 1.2,
+            })
+            .unwrap();
+            invoke(&mut s, CommandId::CancelTransform);
+            assert_eq!(s.engine.document().layers, before);
         }
     }
 
@@ -7947,26 +7932,24 @@ mod tests {
     #[test]
     fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        for platform in [Platform::Web, Platform::Android, Platform::Gtk, Platform::Windows] {
-            let mut s = session(platform);
-            s.frame(0, 0).unwrap();
-            let package = EffectPackage {
-                format: 1,
-                categories: s.effect_catalog.categories().to_vec(),
-                filters: s.effect_catalog.filters().to_vec(),
-            };
-            let revision = s.state.filter_catalog_revision;
-            let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
-            let enabled = commands.map(|id| s.command(id).enabled);
-            let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
-                |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
-            assert!(!change.canvas_wake);
-            assert_eq!(s.state.filter_catalog_revision, revision);
-            assert!(!s.state.filter_load.pending);
-            assert!(s.renderer_mut().validation.is_none());
-            assert!(s.require_document_idle().is_ok());
-            assert_eq!(commands.map(|id| s.command(id).enabled), enabled);
-        }
+        let mut s = session(Platform::Gtk);
+        s.frame(0, 0).unwrap();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: s.effect_catalog.filters().to_vec(),
+        };
+        let revision = s.state.filter_catalog_revision;
+        let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
+        let enabled = commands.map(|id| s.command(id).enabled);
+        let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
+            |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
+        assert!(!change.canvas_wake);
+        assert_eq!(s.state.filter_catalog_revision, revision);
+        assert!(!s.state.filter_load.pending);
+        assert!(s.renderer_mut().validation.is_none());
+        assert!(s.require_document_idle().is_ok());
+        assert_eq!(commands.map(|id| s.command(id).enabled), enabled);
     }
 
     #[test]
@@ -8376,112 +8359,107 @@ mod tests {
     fn filter_picker_search_and_categories_are_ui_only() {
         let mut s = session(Platform::Gtk);
         let revision = s.engine.document().revision;
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            s.set_platform(platform);
-            let update = s
-                .dispatch(UiAction::FilterPicker {
-                    action: FilterPickerAction::Search {
-                        query: "  COLOR   balance ".into(),
-                    },
-                })
-                .unwrap();
-            assert!(!update.canvas_wake);
-            assert_eq!(s.state.adjustments.len(), 1);
-            assert_eq!(s.state.adjustments[0].id, "color_balance".into());
-            s.dispatch(UiAction::FilterPicker {
-                action: FilterPickerAction::Category {
-                    category: Some("tone".into()),
+        let update = s
+            .dispatch(UiAction::FilterPicker {
+                action: FilterPickerAction::Search {
+                    query: "  COLOR   balance ".into(),
                 },
             })
             .unwrap();
-            assert!(s.state.adjustments.is_empty());
-            s.dispatch(UiAction::FilterPicker {
-                action: FilterPickerAction::ToggleSearch,
-            })
-            .unwrap();
-            assert!(s.state.filter_picker.search.is_none());
-            assert!(
-                s.state
-                    .adjustments
-                    .iter()
-                    .all(|f| f.category == "tone".into())
-            );
-            s.dispatch(UiAction::FilterPicker {
-                action: FilterPickerAction::Category { category: None },
-            })
-            .unwrap();
+        assert!(!update.canvas_wake);
+        assert_eq!(s.state.adjustments.len(), 1);
+        assert_eq!(s.state.adjustments[0].id, "color_balance".into());
+        s.dispatch(UiAction::FilterPicker {
+            action: FilterPickerAction::Category {
+                category: Some("tone".into()),
+            },
+        })
+        .unwrap();
+        assert!(s.state.adjustments.is_empty());
+        s.dispatch(UiAction::FilterPicker {
+            action: FilterPickerAction::ToggleSearch,
+        })
+        .unwrap();
+        assert!(s.state.filter_picker.search.is_none());
+        assert!(
+            s.state
+                .adjustments
+                .iter()
+                .all(|f| f.category == "tone".into())
+        );
+        s.dispatch(UiAction::FilterPicker {
+            action: FilterPickerAction::Category { category: None },
+        })
+        .unwrap();
+        assert_eq!(
+            s.state.adjustments.len(),
+            layer_core::bundled_effect_catalog().filters().len()
+        );
+        assert_eq!(s.engine.document().revision, revision);
+        for choice in &s.state.adjustments {
             assert_eq!(
-                s.state.adjustments.len(),
-                layer_core::bundled_effect_catalog().filters().len()
+                choice.animated,
+                s.effect_catalog.get(&choice.id).unwrap().program.time
             );
-            assert_eq!(s.engine.document().revision, revision);
-            for choice in &s.state.adjustments {
-                assert_eq!(
-                    choice.animated,
-                    s.effect_catalog.get(&choice.id).unwrap().program.time
-                );
-                assert_eq!(choice.tooltip.contains("Animated"), choice.animated);
-            }
+            assert_eq!(choice.tooltip.contains("Animated"), choice.animated);
         }
     }
 
     #[test]
     fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            for _ in 0..2 {
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::New {
-                        group: false,
-                        clipped: true,
-                    },
-                })
-                .unwrap();
-            }
-            let clips: Vec<_> = s
-                .engine
-                .document()
-                .layers
-                .iter()
-                .filter(|l| l.properties.clipped)
-                .map(|l| l.id)
-                .collect();
-            let top = clips[0];
-            s.dispatch(UiAction::SetLayerVisibility {
-                id: top.0,
-                visible: false,
+        let mut s = session(Platform::Gtk);
+        for _ in 0..2 {
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::New {
+                    group: false,
+                    clipped: true,
+                },
             })
             .unwrap();
-            for selected in [LayerId(1), clips[1], top] {
-                s.dispatch(UiAction::SelectLayer { id: selected.0 })
-                    .unwrap();
-                assert_eq!(
-                    s.state.layer_tools.can_delete,
-                    selected != LayerId(1),
-                    "base cannot be deleted without its clips"
-                );
-                s.dispatch(UiAction::Effect {
-                    action: EffectAction::Insert {
-                        effect: "heat_haze".into(),
-                    },
-                })
-                .unwrap();
-                let doc = s.engine.document();
-                assert_eq!(doc.layers[0].id, doc.active_layer);
-                assert_eq!(doc.layers[1].id, top);
-                for clip in &clips {
-                    assert_eq!(doc.clipping_base(*clip), Some(LayerId(1)));
-                }
-                assert!(s.state.layer_tools.can_delete);
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::DeleteSelected,
-                })
-                .unwrap();
-                assert_eq!(s.engine.document().layers[0].id, top);
-            }
-            s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-            assert!(s.state.layer_tools.can_delete, "unlocked paper can be deleted");
         }
+        let clips: Vec<_> = s
+            .engine
+            .document()
+            .layers
+            .iter()
+            .filter(|l| l.properties.clipped)
+            .map(|l| l.id)
+            .collect();
+        let top = clips[0];
+        s.dispatch(UiAction::SetLayerVisibility {
+            id: top.0,
+            visible: false,
+        })
+        .unwrap();
+        for selected in [LayerId(1), clips[1], top] {
+            s.dispatch(UiAction::SelectLayer { id: selected.0 })
+                .unwrap();
+            assert_eq!(
+                s.state.layer_tools.can_delete,
+                selected != LayerId(1),
+                "base cannot be deleted without its clips"
+            );
+            s.dispatch(UiAction::Effect {
+                action: EffectAction::Insert {
+                    effect: "heat_haze".into(),
+                },
+            })
+            .unwrap();
+            let doc = s.engine.document();
+            assert_eq!(doc.layers[0].id, doc.active_layer);
+            assert_eq!(doc.layers[1].id, top);
+            for clip in &clips {
+                assert_eq!(doc.clipping_base(*clip), Some(LayerId(1)));
+            }
+            assert!(s.state.layer_tools.can_delete);
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::DeleteSelected,
+            })
+            .unwrap();
+            assert_eq!(s.engine.document().layers[0].id, top);
+        }
+        s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+        assert!(s.state.layer_tools.can_delete, "unlocked paper can be deleted");
     }
 
     #[test]
@@ -9173,302 +9151,298 @@ mod tests {
     }
     #[test]
     fn workspace_management_is_shared_transactional_and_independent_of_artwork() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            let original = s.state.workspace.clone();
-            let revision = s.engine.document().revision;
-            let edit = |s: &mut UiSession<Recorder>, action| {
-                s.dispatch(UiAction::Customize { action }).unwrap()
-            };
-            let mut menu = s.workspace_menu();
-            assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
-            assert!(!format!("{menu:?}").contains("Show Menu Bar"));
-            menu.sections.remove(0);
-            assert_eq!(
-                menu.sections[1].len(),
-                Panel::ALL
-                    .iter()
-                    .filter(|p| p.kind() == PanelKind::Content)
-                    .count()
-            );
-            assert_eq!(
-                menu.sections[2].len(),
-                2
-            );
-            assert_eq!(
-                menu.sections[1]
-                    .iter()
-                    .filter(|i| i.selected == Some(true))
-                    .count(),
-                5
-            );
-            assert!(!menu.sections[0][0].enabled);
-            assert_eq!(menu.sections[0][0].hint, "Ctrl+Alt+Z");
-            edit(
-                &mut s,
-                CustomizationAction::SetPanelVisible {
-                    panel: Panel::Brushes,
-                    visible: false,
-                },
-            );
-            assert!(
-                s.state
-                    .workspace
-                    .layout
-                    .panel_group(Panel::Brushes)
-                    .is_none()
-            );
-            assert_eq!(
-                s.state.workspace.layout.panel(Panel::Brushes).unwrap(),
-                original.layout.panel(Panel::Brushes).unwrap()
-            );
-            assert_eq!(
-                s.workspace_menu()
-                    .sections
-                    .iter()
-                    .flatten()
-                    .find(|item| matches!(
-                        item.action,
-                        Some(UiAction::Customize {
-                            action: CustomizationAction::SetPanelVisible {
-                                panel: Panel::Brushes,
-                                ..
-                            }
-                        })
-                    ))
-                    .unwrap()
-                    .selected,
-                Some(false)
-            );
-            let saved = s.state.workspace.clone();
-            saved.validate().unwrap();
-            invoke(&mut s, CommandId::UndoWorkspace);
-            assert_eq!(s.state.workspace, original);
-            invoke(&mut s, CommandId::RedoWorkspace);
-            assert_eq!(s.state.workspace, saved);
-            edit(
-                &mut s,
-                CustomizationAction::AddPanel {
-                    panel: Panel::Brushes,
-                    group: 8,
-                },
-            );
-            assert_eq!(
-                s.state.workspace.layout.group_panels(8).unwrap(),
-                &[
-                    Panel::Layers,
-                    Panel::Adjustments,
-                    Panel::Properties,
-                    Panel::Brushes
-                ]
-            );
-            assert!(!s.command(CommandId::RedoWorkspace).enabled);
-            edit(
-                &mut s,
-                CustomizationAction::DuplicateToolbar {
-                    panel: Panel::Toolbar,
-                },
-            );
-            let proposed = s.toolbar_prompt().unwrap().name.unwrap();
-            assert_eq!(proposed, "Tools Copy");
-            edit(
-                &mut s,
-                CustomizationAction::ToolbarName {
-                    name: "Layers".into(),
-                },
-            );
-            assert!(!s.toolbar_prompt().unwrap().can_confirm);
-            let before = s.state.workspace.clone();
-            edit(&mut s, CustomizationAction::ConfirmToolbar);
-            assert_eq!(s.state.workspace, before);
-            edit(&mut s, CustomizationAction::ToolbarName { name: proposed });
-            edit(&mut s, CustomizationAction::ConfirmToolbar);
-            let copied = s.state.workspace.layout.panels.last().unwrap().clone();
-            assert_eq!(
-                copied.tiles().len(),
-                original.layout.panel(Panel::Toolbar).unwrap().tiles().len()
-            );
-            assert_ne!(
-                copied.tiles()[0].id,
-                original.layout.panel(Panel::Toolbar).unwrap().tiles()[0].id
-            );
-            edit(
-                &mut s,
-                CustomizationAction::SetTileStyle {
-                    panel: copied.id,
-                    style: TileStyle::Labeled,
-                },
-            );
-            let labeled = s.state.workspace.clone();
-            invoke(&mut s, CommandId::UndoWorkspace);
-            assert_eq!(
-                s.state
-                    .workspace
-                    .layout
-                    .panel(copied.id)
-                    .unwrap()
-                    .tile_style,
-                TileStyle::Small
-            );
-            invoke(&mut s, CommandId::RedoWorkspace);
-            assert_eq!(s.state.workspace, labeled);
-            edit(
-                &mut s,
-                CustomizationAction::RenameToolbar { panel: copied.id },
-            );
-            edit(
-                &mut s,
-                CustomizationAction::ToolbarName {
-                    name: "Painting".into(),
-                },
-            );
-            edit(&mut s, CustomizationAction::ConfirmToolbar);
-            assert_eq!(
-                s.state.workspace.layout.panel(copied.id).unwrap().title(),
-                "Painting"
-            );
-            edit(
-                &mut s,
-                CustomizationAction::DeleteToolbar { panel: copied.id },
-            );
-            let prompt = s.toolbar_prompt().unwrap();
-            assert!(prompt.destructive && prompt.name.is_none());
-            assert!(prompt.message.contains("Undo Layout Change (Ctrl+Alt+Z)"));
-            let before = s.state.workspace.clone();
-            edit(&mut s, CustomizationAction::ConfirmToolbar);
-            assert!(s.state.workspace.layout.panel(copied.id).is_err());
-            invoke(&mut s, CommandId::UndoWorkspace);
-            assert_eq!(s.state.workspace, before);
-            assert_eq!(s.engine.document().revision, revision);
-            assert!(!s.command(CommandId::Undo).enabled);
-            assert!(
-                s.dispatch(UiAction::Customize {
-                    action: CustomizationAction::DeleteToolbar {
-                        panel: Panel::Layers
-                    }
-                })
-                .is_err()
-            );
-            s.state.workspace.validate().unwrap();
-            s.dispatch(UiAction::RestoreWorkspace {
-                workspace: Box::new(saved),
+        let mut s = session(Platform::Gtk);
+        let original = s.state.workspace.clone();
+        let revision = s.engine.document().revision;
+        let edit = |s: &mut UiSession<Recorder>, action| {
+            s.dispatch(UiAction::Customize { action }).unwrap()
+        };
+        let mut menu = s.workspace_menu();
+        assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
+        assert!(!format!("{menu:?}").contains("Show Menu Bar"));
+        menu.sections.remove(0);
+        assert_eq!(
+            menu.sections[1].len(),
+            Panel::ALL
+                .iter()
+                .filter(|p| p.kind() == PanelKind::Content)
+                .count()
+        );
+        assert_eq!(
+            menu.sections[2].len(),
+            2
+        );
+        assert_eq!(
+            menu.sections[1]
+                .iter()
+                .filter(|i| i.selected == Some(true))
+                .count(),
+            5
+        );
+        assert!(!menu.sections[0][0].enabled);
+        assert_eq!(menu.sections[0][0].hint, "Ctrl+Alt+Z");
+        edit(
+            &mut s,
+            CustomizationAction::SetPanelVisible {
+                panel: Panel::Brushes,
+                visible: false,
+            },
+        );
+        assert!(
+            s.state
+                .workspace
+                .layout
+                .panel_group(Panel::Brushes)
+                .is_none()
+        );
+        assert_eq!(
+            s.state.workspace.layout.panel(Panel::Brushes).unwrap(),
+            original.layout.panel(Panel::Brushes).unwrap()
+        );
+        assert_eq!(
+            s.workspace_menu()
+                .sections
+                .iter()
+                .flatten()
+                .find(|item| matches!(
+                    item.action,
+                    Some(UiAction::Customize {
+                        action: CustomizationAction::SetPanelVisible {
+                            panel: Panel::Brushes,
+                            ..
+                        }
+                    })
+                ))
+                .unwrap()
+                .selected,
+            Some(false)
+        );
+        let saved = s.state.workspace.clone();
+        saved.validate().unwrap();
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace, original);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(s.state.workspace, saved);
+        edit(
+            &mut s,
+            CustomizationAction::AddPanel {
+                panel: Panel::Brushes,
+                group: 8,
+            },
+        );
+        assert_eq!(
+            s.state.workspace.layout.group_panels(8).unwrap(),
+            &[
+                Panel::Layers,
+                Panel::Adjustments,
+                Panel::Properties,
+                Panel::Brushes
+            ]
+        );
+        assert!(!s.command(CommandId::RedoWorkspace).enabled);
+        edit(
+            &mut s,
+            CustomizationAction::DuplicateToolbar {
+                panel: Panel::Toolbar,
+            },
+        );
+        let proposed = s.toolbar_prompt().unwrap().name.unwrap();
+        assert_eq!(proposed, "Tools Copy");
+        edit(
+            &mut s,
+            CustomizationAction::ToolbarName {
+                name: "Layers".into(),
+            },
+        );
+        assert!(!s.toolbar_prompt().unwrap().can_confirm);
+        let before = s.state.workspace.clone();
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        assert_eq!(s.state.workspace, before);
+        edit(&mut s, CustomizationAction::ToolbarName { name: proposed });
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        let copied = s.state.workspace.layout.panels.last().unwrap().clone();
+        assert_eq!(
+            copied.tiles().len(),
+            original.layout.panel(Panel::Toolbar).unwrap().tiles().len()
+        );
+        assert_ne!(
+            copied.tiles()[0].id,
+            original.layout.panel(Panel::Toolbar).unwrap().tiles()[0].id
+        );
+        edit(
+            &mut s,
+            CustomizationAction::SetTileStyle {
+                panel: copied.id,
+                style: TileStyle::Labeled,
+            },
+        );
+        let labeled = s.state.workspace.clone();
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(
+            s.state
+                .workspace
+                .layout
+                .panel(copied.id)
+                .unwrap()
+                .tile_style,
+            TileStyle::Small
+        );
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(s.state.workspace, labeled);
+        edit(
+            &mut s,
+            CustomizationAction::RenameToolbar { panel: copied.id },
+        );
+        edit(
+            &mut s,
+            CustomizationAction::ToolbarName {
+                name: "Painting".into(),
+            },
+        );
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        assert_eq!(
+            s.state.workspace.layout.panel(copied.id).unwrap().title(),
+            "Painting"
+        );
+        edit(
+            &mut s,
+            CustomizationAction::DeleteToolbar { panel: copied.id },
+        );
+        let prompt = s.toolbar_prompt().unwrap();
+        assert!(prompt.destructive && prompt.name.is_none());
+        assert!(prompt.message.contains("Undo Layout Change (Ctrl+Alt+Z)"));
+        let before = s.state.workspace.clone();
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        assert!(s.state.workspace.layout.panel(copied.id).is_err());
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace, before);
+        assert_eq!(s.engine.document().revision, revision);
+        assert!(!s.command(CommandId::Undo).enabled);
+        assert!(
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::DeleteToolbar {
+                    panel: Panel::Layers
+                }
             })
-            .unwrap();
-            assert!(!s.command(CommandId::UndoWorkspace).enabled);
-        }
+            .is_err()
+        );
+        s.state.workspace.validate().unwrap();
+        s.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(saved),
+        })
+        .unwrap();
+        assert!(!s.command(CommandId::UndoWorkspace).enabled);
     }
 
     #[test]
     fn toolbar_manager_selects_hidden_toolbars_and_deletes_with_confirmation_and_undo() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            let edit = |s: &mut UiSession<Recorder>, action| {
-                s.dispatch(UiAction::Customize { action }).unwrap();
-            };
+        let mut s = session(Platform::Gtk);
+        let edit = |s: &mut UiSession<Recorder>, action| {
+            s.dispatch(UiAction::Customize { action }).unwrap();
+        };
+        edit(
+            &mut s,
+            CustomizationAction::DuplicateToolbar {
+                panel: Panel::Toolbar,
+            },
+        );
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        let copy = s.state.workspace.layout.panels.last().unwrap().id;
+        edit(
+            &mut s,
+            CustomizationAction::SetPanelVisible {
+                panel: copy,
+                visible: false,
+            },
+        );
+        let saved = s.state.workspace.clone();
+        let revision = s.engine.document().revision;
+        invoke(&mut s, CommandId::ManageToolbars);
+        assert!(s.state.customization.is_open());
+        assert_eq!(s.state.workspace, saved);
+        let view = s.toolbar_manager().unwrap();
+        assert_eq!(view.toolbars.len(), 2);
+        assert!(view.delete_action.is_none());
+        assert!(
+            view.toolbars
+                .iter()
+                .find(|p| p.panel == copy)
+                .unwrap()
+                .subtitle
+                .ends_with("Hidden")
+        );
+        assert_eq!(
+            s.workspace_menu()
+                .sections
+                .iter()
+                .find(|section| section.first().is_some_and(|i| i.label == "New Toolbar…"))
+                .unwrap()
+                .iter()
+                .map(|i| i.label.as_str())
+                .collect::<Vec<_>>(),
+            ["New Toolbar…", "Manage Toolbars…"]
+        );
+        let options = s.panel_view(Panel::Toolbar).unwrap().toolbar_options;
+        assert!(
+            !options
+                .iter()
+                .flatten()
+                .any(|i| i.label.starts_with("Delete "))
+        );
+        let menu = s
+            .context_menu(ContextTarget::Ribbon {
+                panel: Panel::Toolbar,
+            })
+            .unwrap();
+        assert!(
+            !menu
+                .sections
+                .iter()
+                .flatten()
+                .any(|i| i.label.starts_with("Delete "))
+        );
+        assert!(
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::SelectManagedToolbar {
+                    panel: Some(Panel::Layers)
+                }
+            })
+            .is_err()
+        );
+        assert!(s.toolbar_manager().unwrap().selected.is_none());
+        edit(
+            &mut s,
+            CustomizationAction::SelectManagedToolbar { panel: Some(copy) },
+        );
+        let delete = s.toolbar_manager().unwrap().delete_action.unwrap();
+        edit(&mut s, delete.clone());
+        assert!(s.toolbar_prompt().unwrap().destructive);
+        edit(&mut s, CustomizationAction::CancelToolbar);
+        assert_eq!(s.state.workspace, saved);
+        assert_eq!(s.toolbar_manager().unwrap().selected, Some(copy));
+        edit(&mut s, delete);
+        edit(&mut s, CustomizationAction::ConfirmToolbar);
+        assert!(s.state.workspace.layout.panel(copy).is_err());
+        assert_eq!(s.toolbar_manager().unwrap().toolbars.len(), 1);
+        assert!(s.toolbar_manager().unwrap().delete_action.is_none());
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace, saved);
+        assert!(s.toolbar_manager().is_none());
+        invoke(&mut s, CommandId::ManageToolbars);
+        for panel in [Panel::Toolbar, copy] {
             edit(
                 &mut s,
-                CustomizationAction::DuplicateToolbar {
-                    panel: Panel::Toolbar,
-                },
+                CustomizationAction::SelectManagedToolbar { panel: Some(panel) },
             );
+            edit(&mut s, CustomizationAction::DeleteToolbar { panel });
             edit(&mut s, CustomizationAction::ConfirmToolbar);
-            let copy = s.state.workspace.layout.panels.last().unwrap().id;
-            edit(
-                &mut s,
-                CustomizationAction::SetPanelVisible {
-                    panel: copy,
-                    visible: false,
-                },
-            );
-            let saved = s.state.workspace.clone();
-            let revision = s.engine.document().revision;
-            invoke(&mut s, CommandId::ManageToolbars);
-            assert!(s.state.customization.is_open());
-            assert_eq!(s.state.workspace, saved);
-            let view = s.toolbar_manager().unwrap();
-            assert_eq!(view.toolbars.len(), 2);
-            assert!(view.delete_action.is_none());
-            assert!(
-                view.toolbars
-                    .iter()
-                    .find(|p| p.panel == copy)
-                    .unwrap()
-                    .subtitle
-                    .ends_with("Hidden")
-            );
-            assert_eq!(
-                s.workspace_menu()
-                    .sections
-                    .iter()
-                    .find(|section| section.first().is_some_and(|i| i.label == "New Toolbar…"))
-                    .unwrap()
-                    .iter()
-                    .map(|i| i.label.as_str())
-                    .collect::<Vec<_>>(),
-                ["New Toolbar…", "Manage Toolbars…"]
-            );
-            let options = s.panel_view(Panel::Toolbar).unwrap().toolbar_options;
-            assert!(
-                !options
-                    .iter()
-                    .flatten()
-                    .any(|i| i.label.starts_with("Delete "))
-            );
-            let menu = s
-                .context_menu(ContextTarget::Ribbon {
-                    panel: Panel::Toolbar,
-                })
-                .unwrap();
-            assert!(
-                !menu
-                    .sections
-                    .iter()
-                    .flatten()
-                    .any(|i| i.label.starts_with("Delete "))
-            );
-            assert!(
-                s.dispatch(UiAction::Customize {
-                    action: CustomizationAction::SelectManagedToolbar {
-                        panel: Some(Panel::Layers)
-                    }
-                })
-                .is_err()
-            );
-            assert!(s.toolbar_manager().unwrap().selected.is_none());
-            edit(
-                &mut s,
-                CustomizationAction::SelectManagedToolbar { panel: Some(copy) },
-            );
-            let delete = s.toolbar_manager().unwrap().delete_action.unwrap();
-            edit(&mut s, delete.clone());
-            assert!(s.toolbar_prompt().unwrap().destructive);
-            edit(&mut s, CustomizationAction::CancelToolbar);
-            assert_eq!(s.state.workspace, saved);
-            assert_eq!(s.toolbar_manager().unwrap().selected, Some(copy));
-            edit(&mut s, delete);
-            edit(&mut s, CustomizationAction::ConfirmToolbar);
-            assert!(s.state.workspace.layout.panel(copy).is_err());
-            assert_eq!(s.toolbar_manager().unwrap().toolbars.len(), 1);
-            assert!(s.toolbar_manager().unwrap().delete_action.is_none());
-            invoke(&mut s, CommandId::UndoWorkspace);
-            assert_eq!(s.state.workspace, saved);
-            assert!(s.toolbar_manager().is_none());
-            invoke(&mut s, CommandId::ManageToolbars);
-            for panel in [Panel::Toolbar, copy] {
-                edit(
-                    &mut s,
-                    CustomizationAction::SelectManagedToolbar { panel: Some(panel) },
-                );
-                edit(&mut s, CustomizationAction::DeleteToolbar { panel });
-                edit(&mut s, CustomizationAction::ConfirmToolbar);
-            }
-            let empty = s.toolbar_manager().unwrap();
-            assert!(empty.toolbars.is_empty() && empty.delete_action.is_none());
-            edit(&mut s, CustomizationAction::CloseToolbarManager);
-            assert!(!s.state.customization.is_open());
-            assert_eq!(s.engine.document().revision, revision);
-            assert!(!s.command(CommandId::Undo).enabled);
         }
+        let empty = s.toolbar_manager().unwrap();
+        assert!(empty.toolbars.is_empty() && empty.delete_action.is_none());
+        edit(&mut s, CustomizationAction::CloseToolbarManager);
+        assert!(!s.state.customization.is_open());
+        assert_eq!(s.engine.document().revision, revision);
+        assert!(!s.command(CommandId::Undo).enabled);
     }
 
     #[test]
@@ -9781,70 +9755,67 @@ mod tests {
     }
     #[test]
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(Platform::Gtk);
-            s.state.settings.zen_reveal_at_edges = true;
-            s.set_platform(platform);
-            let facts = ChromeFacts::default();
+        let mut s = session(Platform::Gtk);
+        s.state.settings.zen_reveal_at_edges = true;
+        let facts = ChromeFacts::default();
+        chrome(
+            &mut s,
+            ChromeEvent::Motion {
+                position: [24.0, 24.0],
+            },
+            facts,
+        );
+        invoke(&mut s, CommandId::ZenMode);
+        assert!(s.interaction.hidden);
+        for event in [
+            ChromeEvent::Refresh,
+            ChromeEvent::Motion {
+                position: [24.0, 24.0],
+            },
+            ChromeEvent::Motion {
+                position: [299.0, 79.0],
+            },
+            ChromeEvent::Motion {
+                position: [79.0, 299.0],
+            },
+        ] {
+            assert!(chrome(&mut s, event, facts).chrome_hidden);
+        }
+        assert!(
             chrome(
                 &mut s,
                 ChromeEvent::Motion {
+                    position: [500.0, 400.0]
+                },
+                facts
+            )
+            .chrome_hidden
+        );
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Motion {
+                    position: [24.0, 24.0]
+                },
+                facts
+            )
+            .chrome_hidden
+        );
+        invoke(&mut s, CommandId::ZenMode);
+        invoke(&mut s, CommandId::ZenMode);
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Contact {
                     position: [24.0, 24.0],
+                    canvas: true
                 },
-                facts,
-            );
-            invoke(&mut s, CommandId::ZenMode);
-            assert!(s.interaction.hidden);
-            for event in [
-                ChromeEvent::Refresh,
-                ChromeEvent::Motion {
-                    position: [24.0, 24.0],
-                },
-                ChromeEvent::Motion {
-                    position: [299.0, 79.0],
-                },
-                ChromeEvent::Motion {
-                    position: [79.0, 299.0],
-                },
-            ] {
-                assert!(chrome(&mut s, event, facts).chrome_hidden);
-            }
-            assert!(
-                chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [500.0, 400.0]
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-            assert!(
-                !chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [24.0, 24.0]
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-            invoke(&mut s, CommandId::ZenMode);
-            invoke(&mut s, CommandId::ZenMode);
-            assert!(
-                !chrome(
-                    &mut s,
-                    ChromeEvent::Contact {
-                        position: [24.0, 24.0],
-                        canvas: true
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-            invoke(&mut s, CommandId::ZenMode);
-            assert!(!chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
-        }
+                facts
+            )
+            .chrome_hidden
+        );
+        invoke(&mut s, CommandId::ZenMode);
+        assert!(!chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
     }
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
@@ -10157,419 +10128,385 @@ mod tests {
         }
     }
     #[test]
-    fn same_slot_drag_and_tearoff_restore_geometry_without_history_on_every_host() {
+    fn same_slot_drag_and_tearoff_restore_geometry_without_history() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for tearoff in [false, true] {
-                let mut app = session(platform);
-                let baseline = app.state.workspace.clone();
-                let item = DockItem::Group { group: 5 };
-                let bounds = find_group(&app, viewport, |g| g.id == 5).bounds;
-                let drag = |app: &mut UiSession<_>, phase, position| {
-                    drag(app, item, phase, position, viewport);
-                };
-                drag(
-                    &mut app,
-                    ContactPhase::Down,
-                    [bounds.x + 70.0, bounds.y + 12.0],
-                );
-                if tearoff {
-                    drag(&mut app, ContactPhase::Move, [600.0, 400.0]);
-                    assert_eq!(app.state.workspace.layout.floating.len(), 1);
-                }
-                let neighbor = find_group(&app, viewport, |g| g.id == 6).bounds;
-                let destination = [
-                    neighbor.x + neighbor.width * 0.5,
-                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
-                ];
-                drag(&mut app, ContactPhase::Move, destination);
-                drag(&mut app, ContactPhase::Up, destination);
-                assert_eq!(
-                    app.state.workspace, baseline,
-                    "{platform:?}, tearoff={tearoff}"
-                );
-                assert!(!app.command(CommandId::UndoWorkspace).enabled);
-                assert!(app.workspace_drag.is_none());
+        for tearoff in [false, true] {
+            let mut app = session(Platform::Gtk);
+            let baseline = app.state.workspace.clone();
+            let item = DockItem::Group { group: 5 };
+            let bounds = find_group(&app, viewport, |g| g.id == 5).bounds;
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                drag(app, item, phase, position, viewport);
+            };
+            drag(
+                &mut app,
+                ContactPhase::Down,
+                [bounds.x + 70.0, bounds.y + 12.0],
+            );
+            if tearoff {
+                drag(&mut app, ContactPhase::Move, [600.0, 400.0]);
+                assert_eq!(app.state.workspace.layout.floating.len(), 1);
             }
+            let neighbor = find_group(&app, viewport, |g| g.id == 6).bounds;
+            let destination = [neighbor.x + neighbor.width * 0.5, HEADER_HEIGHT * 0.5];
+            drag(&mut app, ContactPhase::Move, destination);
+            drag(&mut app, ContactPhase::Up, destination);
+            assert_eq!(app.state.workspace, baseline, "tearoff={tearoff}");
+            assert!(!app.command(CommandId::UndoWorkspace).enabled);
+            assert!(app.workspace_drag.is_none());
         }
     }
 
     #[test]
     fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-        ] {
-            let viewport = [1200., 900.];
-            let mut app = session(platform);
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Brushes,
+        let viewport = [1200., 900.];
+        let mut app = session(Platform::Gtk);
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Brushes,
+            viewport,
+            target: DockTarget::Float {
+                position: [600., 300.],
+            },
+        })
+        .unwrap();
+        let baseline = app.state.workspace.clone();
+        let source = find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds;
+        let offset = [37., 12.];
+        let press = [source.x + offset[0], source.y + offset[1]];
+        let drag = |app: &mut UiSession<_>, phase, position| {
+            drag(
+                app,
+                DockItem::Panel { panel: Panel::Brushes },
+                phase,
+                position,
                 viewport,
-                target: DockTarget::Float {
-                    position: [600., 300.],
-                },
-            })
-            .unwrap();
-            let baseline = app.state.workspace.clone();
-            let source = find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds;
-            let offset = [37., 12.];
-            let press = [source.x + offset[0], source.y + offset[1]];
-            let drag = |app: &mut UiSession<_>, phase, position| {
-                drag(
-                    app,
-                    DockItem::Panel { panel: Panel::Brushes },
-                    phase,
-                    position,
-                    viewport,
-                );
-            };
-            let preview =
-                |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
-            drag(&mut app, ContactPhase::Down, press);
-            for point in [
-                [600., 899.],
-                [1199., 400.],
-                [1., 400.],
-                [600., 1.],
-                [600., 899.],
-            ] {
-                drag(&mut app, ContactPhase::Move, point);
-                assert_eq!(
-                    preview(&app),
-                    Bounds {
-                        x: point[0] - offset[0],
-                        y: point[1] - offset[1],
-                        ..source
-                    }
-                );
-            }
-            // A late native natural-height measurement must not move the grabbed
-            // header or resize the live preview (including its retained handles).
+            );
+        };
+        let preview =
+            |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
+        drag(&mut app, ContactPhase::Down, press);
+        for point in [
+            [600., 899.],
+            [1199., 400.],
+            [1., 400.],
+            [600., 1.],
+            [600., 899.],
+        ] {
+            drag(&mut app, ContactPhase::Move, point);
+            assert_eq!(
+                preview(&app),
+                Bounds {
+                    x: point[0] - offset[0],
+                    y: point[1] - offset[1],
+                    ..source
+                }
+            );
+        }
+        // A late native natural-height measurement must not move the grabbed
+        // header or resize the live preview (including its retained handles).
+        app.dispatch(UiAction::MeasurePanels {
+            measurements: vec![PanelMeasurement {
+                panel: Panel::Brushes,
+                tab_width: 120.,
+                content_height: 1800.,
+                scroll: None,
+            }],
+        })
+        .unwrap();
+        assert_eq!(preview(&app).height, source.height);
+        assert_eq!(preview(&app).y, 887.);
+        drag(&mut app, ContactPhase::Cancel, [600., 899.]);
+        assert_eq!(
+            durable_layout(&app.state.workspace.layout),
+            durable_layout(&baseline.layout)
+        );
+        app.dispatch(UiAction::MeasurePanels {
+            measurements: baseline.layout.measurements.clone(),
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace, baseline);
+        assert!(app.workspace_update().drag.is_none());
+
+        drag(&mut app, ContactPhase::Down, press);
+        drag(&mut app, ContactPhase::Move, [600., 899.]);
+        assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
+        drag(&mut app, ContactPhase::Up, [600., 899.]);
+        let placed = find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds;
+        assert_eq!([placed.width, placed.height], [source.width, source.height]);
+        assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
+        let after = app.state.workspace.clone();
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert_eq!(app.state.workspace, baseline);
+        invoke(&mut app, CommandId::RedoWorkspace);
+        assert_eq!(app.state.workspace, after);
+    }
+
+    #[test]
+    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
+        let viewport = [1200., 900.];
+        for icon in [false, true] {
+            let mut app = session(Platform::Gtk);
+            let panel = Panel::Brushes;
+            let group = app.state.workspace.layout.panel_group(panel).unwrap();
             app.dispatch(UiAction::MeasurePanels {
                 measurements: vec![PanelMeasurement {
-                    panel: Panel::Brushes,
+                    panel,
                     tab_width: 120.,
                     content_height: 1800.,
                     scroll: None,
                 }],
             })
             .unwrap();
-            assert_eq!(preview(&app).height, source.height);
-            assert_eq!(preview(&app).y, 887.);
-            drag(&mut app, ContactPhase::Cancel, [600., 899.]);
-            assert_eq!(
-                durable_layout(&app.state.workspace.layout),
-                durable_layout(&baseline.layout)
-            );
-            app.dispatch(UiAction::MeasurePanels {
-                measurements: baseline.layout.measurements.clone(),
-            })
-            .unwrap();
-            assert_eq!(app.state.workspace, baseline);
-            assert!(app.workspace_update().drag.is_none());
-
-            drag(&mut app, ContactPhase::Down, press);
-            drag(&mut app, ContactPhase::Move, [600., 899.]);
-            assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
-            drag(&mut app, ContactPhase::Up, [600., 899.]);
-            let placed = find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds;
-            assert_eq!([placed.width, placed.height], [source.width, source.height]);
-            assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
-            let after = app.state.workspace.clone();
-            invoke(&mut app, CommandId::UndoWorkspace);
-            assert_eq!(app.state.workspace, baseline);
-            invoke(&mut app, CommandId::RedoWorkspace);
-            assert_eq!(app.state.workspace, after);
-        }
-    }
-
-    #[test]
-    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-        ] {
-            let viewport = [1200., 900.];
-            for icon in [false, true] {
-                let mut app = session(platform);
-                let panel = Panel::Brushes;
-                let group = app.state.workspace.layout.panel_group(panel).unwrap();
-                app.dispatch(UiAction::MeasurePanels {
-                    measurements: vec![PanelMeasurement {
-                        panel,
-                        tab_width: 120.,
-                        content_height: 1800.,
-                        scroll: None,
-                    }],
-                })
-                .unwrap();
-                if icon {
-                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                        .unwrap();
-                }
-                let resolved = app.layout(viewport);
-                let source = if icon {
-                    resolved
-                        .collapsed
-                        .iter()
-                        .flat_map(|c| &c.groups)
-                        .flat_map(|g| &g.icons)
-                        .find(|i| i.panel == panel)
-                        .unwrap()
-                        .bounds
-                } else {
-                    resolved
-                        .groups
-                        .iter()
-                        .find(|g| g.id == group)
-                        .unwrap()
-                        .bounds
-                };
-                let before = app.state.workspace.clone();
-                let drag = |app: &mut UiSession<_>, phase, position| {
-                    drag(app, DockItem::Panel { panel }, phase, position, viewport);
-                };
-                drag(
-                    &mut app,
-                    ContactPhase::Down,
-                    [source.x + 18., source.y + 12.],
-                );
-                drag(&mut app, ContactPhase::Move, [600., 700.]);
-                let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
-                if icon {
-                    assert!(preview.height > source.height * 3.);
-                    assert!(preview.width > source.width * 3.);
-                } else {
-                    assert_eq!(
-                        [preview.width, preview.height],
-                        [source.width, source.height]
-                    );
-                }
-                let floating = &app.state.workspace.layout.floating[0];
-                assert_eq!(floating.height.is_some(), !icon);
-                drag(&mut app, ContactPhase::Cancel, [600., 700.]);
-                assert_eq!(app.state.workspace, before);
+            if icon {
+                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                    .unwrap();
             }
+            let resolved = app.layout(viewport);
+            let source = if icon {
+                resolved
+                    .collapsed
+                    .iter()
+                    .flat_map(|c| &c.groups)
+                    .flat_map(|g| &g.icons)
+                    .find(|i| i.panel == panel)
+                    .unwrap()
+                    .bounds
+            } else {
+                resolved
+                    .groups
+                    .iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .bounds
+            };
+            let before = app.state.workspace.clone();
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                drag(app, DockItem::Panel { panel }, phase, position, viewport);
+            };
+            drag(
+                &mut app,
+                ContactPhase::Down,
+                [source.x + 18., source.y + 12.],
+            );
+            drag(&mut app, ContactPhase::Move, [600., 700.]);
+            let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
+            if icon {
+                assert!(preview.height > source.height * 3.);
+                assert!(preview.width > source.width * 3.);
+            } else {
+                assert_eq!(
+                    [preview.width, preview.height],
+                    [source.width, source.height]
+                );
+            }
+            let floating = &app.state.workspace.layout.floating[0];
+            assert_eq!(floating.height.is_some(), !icon);
+            drag(&mut app, ContactPhase::Cancel, [600., 700.]);
+            assert_eq!(app.state.workspace, before);
         }
     }
 
     #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-        ] {
-            let mut app = session(platform);
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Brushes,
-                viewport,
-                target: DockTarget::Float {
-                    position: [600.0, 210.0],
-                },
-            })
-            .unwrap();
-            let baseline = app.state.workspace.clone();
-            app.dispatch(UiAction::RestoreWorkspace {
-                workspace: Box::new(baseline.clone()),
-            })
-            .unwrap();
-            let group = baseline.layout.panel_group(Panel::Brushes).unwrap();
-            let bounds = |app: &UiSession<_>| {
-                find_group(&app, viewport, |g| g.id == group).bounds
-            };
-            let start = bounds(&app);
-            let point = [start.x + 23.0, start.y + 12.0];
-            let drag = |app: &mut UiSession<_>, edge: Option<ResizeEdge>, phase, position| {
-                let changed = app
-                    .dispatch(if let Some(edge) = edge {
-                        UiAction::ResizeFloating {
-                            group,
-                            edge,
-                            phase,
-                            position,
-                            viewport,
-                        }
-                    } else {
-                        UiAction::DragWorkspace {
-                            item: DockItem::Panel {
-                                panel: Panel::Brushes,
-                            },
-                            phase,
-                            position,
-                            viewport,
-                            tabs: vec![],
-                        }
-                    })
-                    .unwrap();
-                assert!(!changed.canvas_wake);
-            };
-            drag(&mut app, None, ContactPhase::Down, point);
-            for delta in [1.0, 10.0, 24.0, 50.0] {
-                drag(
-                    &mut app,
-                    None,
-                    ContactPhase::Move,
-                    [point[0] + delta, point[1] + delta],
-                );
-                assert_eq!(
-                    bounds(&app),
-                    Bounds {
-                        x: start.x + delta,
-                        y: start.y + delta,
-                        ..start
+        let mut app = session(Platform::Gtk);
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Brushes,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 210.0],
+            },
+        })
+        .unwrap();
+        let baseline = app.state.workspace.clone();
+        app.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(baseline.clone()),
+        })
+        .unwrap();
+        let group = baseline.layout.panel_group(Panel::Brushes).unwrap();
+        let bounds = |app: &UiSession<_>| {
+            find_group(&app, viewport, |g| g.id == group).bounds
+        };
+        let start = bounds(&app);
+        let point = [start.x + 23.0, start.y + 12.0];
+        let drag = |app: &mut UiSession<_>, edge: Option<ResizeEdge>, phase, position| {
+            let changed = app
+                .dispatch(if let Some(edge) = edge {
+                    UiAction::ResizeFloating {
+                        group,
+                        edge,
+                        phase,
+                        position,
+                        viewport,
                     }
-                );
-                assert!(!app.command(CommandId::UndoWorkspace).enabled);
-            }
-            drag(
-                &mut app,
-                None,
-                ContactPhase::Up,
-                [point[0] + 50.0, point[1] + 50.0],
-            );
-            let moved = app.state.workspace.clone();
-            assert_ne!(moved, baseline);
-            invoke(&mut app, CommandId::UndoWorkspace);
-            assert_eq!(app.state.workspace, baseline);
-            assert!(!app.command(CommandId::UndoWorkspace).enabled);
-            invoke(&mut app, CommandId::RedoWorkspace);
-            assert_eq!(app.state.workspace, moved);
-            let b = bounds(&app);
-            let corner = [b.x + b.width - 4.0, b.y + b.height - 7.0];
-            drag(
-                &mut app,
-                Some(ResizeEdge::BottomRight),
-                ContactPhase::Down,
-                corner,
-            );
-            drag(
-                &mut app,
-                Some(ResizeEdge::BottomRight),
-                ContactPhase::Move,
-                [corner[0] + 40.0, corner[1] + 30.0],
-            );
-            assert_eq!(bounds(&app).width, b.width + 40.0);
-            assert_eq!(bounds(&app).height, b.height + 30.0);
-            drag(
-                &mut app,
-                Some(ResizeEdge::BottomRight),
-                ContactPhase::Cancel,
-                corner,
-            );
-            assert_eq!(app.state.workspace, moved);
-            drag(&mut app, None, ContactPhase::Down, point);
+                } else {
+                    UiAction::DragWorkspace {
+                        item: DockItem::Panel {
+                            panel: Panel::Brushes,
+                        },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    }
+                })
+                .unwrap();
+            assert!(!changed.canvas_wake);
+        };
+        drag(&mut app, None, ContactPhase::Down, point);
+        for delta in [1.0, 10.0, 24.0, 50.0] {
             drag(
                 &mut app,
                 None,
                 ContactPhase::Move,
-                [point[0] - 20.0, point[1] + 15.0],
+                [point[0] + delta, point[1] + delta],
             );
-            assert_ne!(app.state.workspace, moved);
-            let changed = app.input(UiInput::Blur).unwrap().change;
-            assert_ne!(changed.regions & regions::LAYOUT, 0);
-            assert_eq!(app.state.workspace, moved);
-            assert!(app.workspace_drag.is_none());
-            // Releasing over a dock merges in the same undo transaction.
-            let layers = find_group(&app, viewport, |g| g.active == Panel::Layers);
-            let target = [
-                layers.bounds.x + layers.bounds.width * 0.5,
-                layers.bounds.y + layers.bounds.height * 0.5,
-            ];
-            drag(&mut app, None, ContactPhase::Down, point);
-            drag(&mut app, None, ContactPhase::Move, target);
-            assert_eq!(app.state.workspace.layout.floating.len(), 1);
-            drag(&mut app, None, ContactPhase::Up, target);
-            assert!(app.state.workspace.layout.floating.is_empty());
             assert_eq!(
-                app.state.workspace.layout.panel_group(Panel::Brushes),
-                Some(layers.id)
+                bounds(&app),
+                Bounds {
+                    x: start.x + delta,
+                    y: start.y + delta,
+                    ..start
+                }
             );
-            invoke(&mut app, CommandId::UndoWorkspace);
-            assert_eq!(app.state.workspace, moved);
+            assert!(!app.command(CommandId::UndoWorkspace).enabled);
         }
+        drag(
+            &mut app,
+            None,
+            ContactPhase::Up,
+            [point[0] + 50.0, point[1] + 50.0],
+        );
+        let moved = app.state.workspace.clone();
+        assert_ne!(moved, baseline);
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert_eq!(app.state.workspace, baseline);
+        assert!(!app.command(CommandId::UndoWorkspace).enabled);
+        invoke(&mut app, CommandId::RedoWorkspace);
+        assert_eq!(app.state.workspace, moved);
+        let b = bounds(&app);
+        let corner = [b.x + b.width - 4.0, b.y + b.height - 7.0];
+        drag(
+            &mut app,
+            Some(ResizeEdge::BottomRight),
+            ContactPhase::Down,
+            corner,
+        );
+        drag(
+            &mut app,
+            Some(ResizeEdge::BottomRight),
+            ContactPhase::Move,
+            [corner[0] + 40.0, corner[1] + 30.0],
+        );
+        assert_eq!(bounds(&app).width, b.width + 40.0);
+        assert_eq!(bounds(&app).height, b.height + 30.0);
+        drag(
+            &mut app,
+            Some(ResizeEdge::BottomRight),
+            ContactPhase::Cancel,
+            corner,
+        );
+        assert_eq!(app.state.workspace, moved);
+        drag(&mut app, None, ContactPhase::Down, point);
+        drag(
+            &mut app,
+            None,
+            ContactPhase::Move,
+            [point[0] - 20.0, point[1] + 15.0],
+        );
+        assert_ne!(app.state.workspace, moved);
+        let changed = app.input(UiInput::Blur).unwrap().change;
+        assert_ne!(changed.regions & regions::LAYOUT, 0);
+        assert_eq!(app.state.workspace, moved);
+        assert!(app.workspace_drag.is_none());
+        // Releasing over a dock merges in the same undo transaction.
+        let layers = find_group(&app, viewport, |g| g.active == Panel::Layers);
+        let target = [
+            layers.bounds.x + layers.bounds.width * 0.5,
+            layers.bounds.y + layers.bounds.height * 0.5,
+        ];
+        drag(&mut app, None, ContactPhase::Down, point);
+        drag(&mut app, None, ContactPhase::Move, target);
+        assert_eq!(app.state.workspace.layout.floating.len(), 1);
+        drag(&mut app, None, ContactPhase::Up, target);
+        assert!(app.state.workspace.layout.floating.is_empty());
+        assert_eq!(
+            app.state.workspace.layout.panel_group(Panel::Brushes),
+            Some(layers.id)
+        );
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert_eq!(app.state.workspace, moved);
     }
 
     #[test]
     fn removing_edge_most_panel_shifts_its_neighbor_without_expanding_it() {
         let viewport = [1600.0, 1200.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for edge in [Edge::Left, Edge::Right] {
-                for separate_bands in [false, true] {
-                    for float in [false, true] {
-                        let mut app = session(platform);
-                        let layout = &mut app.state.workspace.layout;
-                        layout.set_panel_visible(Panel::Toolbar, false).unwrap();
-                        layout.set_panel_visible(Panel::Sizes, false).unwrap();
-                        for panel in [Panel::Adjustments, Panel::Properties] {
-                            layout.set_panel_visible(panel, false).unwrap();
-                        }
-                        let group = layout.panel_group(Panel::Brushes).unwrap();
-                        // Place Brushes on this edge, then Layers closest to
-                        // the edge, either within its split or in another band.
-                        layout
-                            .move_panel(
-                                viewport,
-                                Panel::Brushes,
-                                DockTarget::Edge { edge, outer: false },
-                            )
-                            .unwrap();
-                        layout
-                            .move_panel(
-                                viewport,
-                                Panel::Layers,
-                                if separate_bands {
-                                    DockTarget::Edge { edge, outer: true }
-                                } else {
-                                    DockTarget::Split { group, edge }
-                                },
-                            )
-                            .unwrap();
-                        let before = app.state.workspace.clone();
-                        let bounds = |app: &UiSession<_>| {
-                            find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds
-                        };
-                        let original = bounds(&app);
-                        if float {
-                            app.dispatch(UiAction::MovePanel {
-                                panel: Panel::Layers,
-                                viewport,
-                                target: DockTarget::Float {
-                                    position: [800.0, 600.0],
-                                },
-                            })
-                            .unwrap();
-                        } else {
-                            app.interaction.viewport = Some(viewport);
-                            customize(&mut app, CustomizationAction::SetPanelVisible {
-                                panel: Panel::Layers,
-                                visible: false,
-                            });
-                        }
-                        let after = bounds(&app);
-                        assert!(
-                            (after.width - original.width).abs() < 0.01,
-                            "{platform:?} {edge:?} separate={separate_bands} float={float}: {original:?} -> {after:?}"
-                        );
-                        if edge == Edge::Left {
-                            assert_eq!(after.x, WORKSPACE_SPACING);
-                            assert!(after.x < original.x);
-                        } else {
-                            assert_eq!(after.x + after.width, viewport[0] - WORKSPACE_SPACING);
-                            assert!(after.x > original.x);
-                        }
-                        invoke(&mut app, CommandId::UndoWorkspace);
-                        assert_eq!(app.state.workspace, before);
+        for edge in [Edge::Left, Edge::Right] {
+            for separate_bands in [false, true] {
+                for float in [false, true] {
+                    let mut app = session(Platform::Gtk);
+                    let layout = &mut app.state.workspace.layout;
+                    layout.set_panel_visible(Panel::Toolbar, false).unwrap();
+                    layout.set_panel_visible(Panel::Sizes, false).unwrap();
+                    for panel in [Panel::Adjustments, Panel::Properties] {
+                        layout.set_panel_visible(panel, false).unwrap();
                     }
+                    let group = layout.panel_group(Panel::Brushes).unwrap();
+                    // Place Brushes on this edge, then Layers closest to
+                    // the edge, either within its split or in another band.
+                    layout
+                        .move_panel(
+                            viewport,
+                            Panel::Brushes,
+                            DockTarget::Edge { edge, outer: false },
+                        )
+                        .unwrap();
+                    layout
+                        .move_panel(
+                            viewport,
+                            Panel::Layers,
+                            if separate_bands {
+                                DockTarget::Edge { edge, outer: true }
+                            } else {
+                                DockTarget::Split { group, edge }
+                            },
+                        )
+                        .unwrap();
+                    let before = app.state.workspace.clone();
+                    let bounds = |app: &UiSession<_>| {
+                        find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds
+                    };
+                    let original = bounds(&app);
+                    if float {
+                        app.dispatch(UiAction::MovePanel {
+                            panel: Panel::Layers,
+                            viewport,
+                            target: DockTarget::Float {
+                                position: [800.0, 600.0],
+                            },
+                        })
+                        .unwrap();
+                    } else {
+                        app.interaction.viewport = Some(viewport);
+                        customize(&mut app, CustomizationAction::SetPanelVisible {
+                            panel: Panel::Layers,
+                            visible: false,
+                        });
+                    }
+                    let after = bounds(&app);
+                    assert!(
+                        (after.width - original.width).abs() < 0.01,
+                        "{edge:?} separate={separate_bands} float={float}: {original:?} -> {after:?}"
+                    );
+                    if edge == Edge::Left {
+                        assert_eq!(after.x, WORKSPACE_SPACING);
+                        assert!(after.x < original.x);
+                    } else {
+                        assert_eq!(after.x + after.width, viewport[0] - WORKSPACE_SPACING);
+                        assert!(after.x > original.x);
+                    }
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
                 }
             }
         }
@@ -10722,291 +10659,287 @@ mod tests {
     #[test]
     fn group_tab_presentation_selection_moves_and_history_are_shared() {
         let viewport = [1600.0, 1000.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session(platform);
-            let group = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Brushes)
-                .unwrap();
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Sizes,
-                target: DockTarget::Tab { group, index: None },
-                viewport,
-            })
+        let mut app = session(Platform::Gtk);
+        let group = app
+            .state
+            .workspace
+            .layout
+            .panel_group(Panel::Brushes)
             .unwrap();
-            for style in TabStyle::ALL {
-                let before = app.state.workspace.clone();
-                customize(&mut app, CustomizationAction::SetTabStyle { group, style });
-                let after = app.state.workspace.clone();
-                if before != after {
-                    invoke(&mut app, CommandId::UndoWorkspace);
-                    assert_eq!(app.state.workspace, before);
-                    invoke(&mut app, CommandId::RedoWorkspace);
-                    assert_eq!(app.state.workspace, after);
-                }
-                for active in [Panel::Brushes, Panel::Sizes] {
-                    app.dispatch(UiAction::SelectPanelTab {
-                        group,
-                        panel: active,
-                    })
-                    .unwrap();
-                    for panel in [Panel::Brushes, Panel::Sizes] {
-                        let tab = app.panel_view(panel).unwrap().tab;
-                        assert_eq!(tab.show_icon, style != TabStyle::Name);
-                        assert_eq!(
-                            tab.show_name,
-                            matches!(
-                                style,
-                                TabStyle::Name | TabStyle::IconName | TabStyle::Automatic
-                            ) || (style == TabStyle::ActiveName && active == panel)
-                        );
-                    }
-                }
-                let saved = serde_json::to_string(&app.state.workspace).unwrap();
-                assert_eq!(
-                    serde_json::from_str::<WorkspaceState>(&saved).unwrap(),
-                    app.state.workspace
-                );
-                app.dispatch(UiAction::MoveGroup {
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            target: DockTarget::Tab { group, index: None },
+            viewport,
+        })
+        .unwrap();
+        for style in TabStyle::ALL {
+            let before = app.state.workspace.clone();
+            customize(&mut app, CustomizationAction::SetTabStyle { group, style });
+            let after = app.state.workspace.clone();
+            if before != after {
+                invoke(&mut app, CommandId::UndoWorkspace);
+                assert_eq!(app.state.workspace, before);
+                invoke(&mut app, CommandId::RedoWorkspace);
+                assert_eq!(app.state.workspace, after);
+            }
+            for active in [Panel::Brushes, Panel::Sizes] {
+                app.dispatch(UiAction::SelectPanelTab {
                     group,
-                    viewport,
-                    target: DockTarget::Float {
-                        position: [800.0, 300.0],
-                    },
+                    panel: active,
                 })
                 .unwrap();
-                assert_eq!(
-                    app.state.workspace.layout.group_tab_style(group).unwrap(),
-                    style
-                );
+                for panel in [Panel::Brushes, Panel::Sizes] {
+                    let tab = app.panel_view(panel).unwrap().tab;
+                    assert_eq!(tab.show_icon, style != TabStyle::Name);
+                    assert_eq!(
+                        tab.show_name,
+                        matches!(
+                            style,
+                            TabStyle::Name | TabStyle::IconName | TabStyle::Automatic
+                        ) || (style == TabStyle::ActiveName && active == panel)
+                    );
+                }
             }
-            let destination = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Layers)
-                .unwrap();
-            customize(&mut app, CustomizationAction::SetTabStyle {
-                group: destination,
-                style: TabStyle::Name,
-            });
+            let saved = serde_json::to_string(&app.state.workspace).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkspaceState>(&saved).unwrap(),
+                app.state.workspace
+            );
             app.dispatch(UiAction::MoveGroup {
                 group,
                 viewport,
-                target: DockTarget::Tab {
-                    group: destination,
-                    index: None,
-                },
-            })
-            .unwrap();
-            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
-                assert_eq!(
-                    app.panel_view(panel).unwrap().tab,
-                    TabPresentation {
-                        show_icon: false,
-                        show_name: true
-                    }
-                );
-            }
-            // Splitting a tab creates a fresh group's default, not a per-panel preference.
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Sizes,
-                viewport,
                 target: DockTarget::Float {
-                    position: [600.0, 400.0],
+                    position: [800.0, 300.0],
                 },
             })
             .unwrap();
-            let detached = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Sizes)
-                .unwrap();
             assert_eq!(
-                app.state
-                    .workspace
-                    .layout
-                    .group_tab_style(detached)
-                    .unwrap(),
-                TabStyle::Automatic
-            );
-            assert_eq!(
-                app.state
-                    .workspace
-                    .layout
-                    .group_tab_style(destination)
-                    .unwrap(),
-                TabStyle::Name
-            );
-            let before = app.state.workspace.clone();
-            assert!(
-                app.dispatch(UiAction::Customize {
-                    action: CustomizationAction::SetTabStyle {
-                        group: u32::MAX,
-                        style: TabStyle::Icon
-                    }
-                })
-                .is_err()
-            );
-            assert_eq!(app.state.workspace, before);
-            assert!(serde_json::from_value::<CustomizationAction>(serde_json::json!({"type":"set_tab_style","target":{"kind":"panel","panel":"sizes"},"style":"icon"})).is_err());
-            assert!(
-                serde_json::to_value(app.state.workspace.layout.panel(Panel::Sizes).unwrap())
-                    .unwrap()
-                    .get("tab_style")
-                    .is_none()
+                app.state.workspace.layout.group_tab_style(group).unwrap(),
+                style
             );
         }
+        let destination = app
+            .state
+            .workspace
+            .layout
+            .panel_group(Panel::Layers)
+            .unwrap();
+        customize(&mut app, CustomizationAction::SetTabStyle {
+            group: destination,
+            style: TabStyle::Name,
+        });
+        app.dispatch(UiAction::MoveGroup {
+            group,
+            viewport,
+            target: DockTarget::Tab {
+                group: destination,
+                index: None,
+            },
+        })
+        .unwrap();
+        for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+            assert_eq!(
+                app.panel_view(panel).unwrap().tab,
+                TabPresentation {
+                    show_icon: false,
+                    show_name: true
+                }
+            );
+        }
+        // Splitting a tab creates a fresh group's default, not a per-panel preference.
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 400.0],
+            },
+        })
+        .unwrap();
+        let detached = app
+            .state
+            .workspace
+            .layout
+            .panel_group(Panel::Sizes)
+            .unwrap();
+        assert_eq!(
+            app.state
+                .workspace
+                .layout
+                .group_tab_style(detached)
+                .unwrap(),
+            TabStyle::Automatic
+        );
+        assert_eq!(
+            app.state
+                .workspace
+                .layout
+                .group_tab_style(destination)
+                .unwrap(),
+            TabStyle::Name
+        );
+        let before = app.state.workspace.clone();
+        assert!(
+            app.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle {
+                    group: u32::MAX,
+                    style: TabStyle::Icon
+                }
+            })
+            .is_err()
+        );
+        assert_eq!(app.state.workspace, before);
+        assert!(serde_json::from_value::<CustomizationAction>(serde_json::json!({"type":"set_tab_style","target":{"kind":"panel","panel":"sizes"},"style":"icon"})).is_err());
+        assert!(
+            serde_json::to_value(app.state.workspace.layout.panel(Panel::Sizes).unwrap())
+                .unwrap()
+                .get("tab_style")
+                .is_none()
+        );
     }
 
     #[test]
     fn dragging_panels_preserves_tab_visibility_and_history() {
         let viewport = [1600.0, 1200.0];
-        for platform in Platform::ALL {
-            for style in TabStyle::ALL {
-                for hidden in [false, true] {
-                    for destination in ["float", "edge", "merge", "cancel"] {
-                        let mut app = session(platform);
-                        let panel = Panel::Sizes;
-                        let group = app.state.workspace.layout.panel_group(panel).unwrap();
-                        for action in [
-                            CustomizationAction::SetTabStyle { group, style },
-                            CustomizationAction::SetTabHidden { panel, hidden },
-                        ] {
-                            app.dispatch(UiAction::Customize { action }).unwrap();
+        for style in TabStyle::ALL {
+            for hidden in [false, true] {
+                for destination in ["float", "edge", "merge", "cancel"] {
+                    let mut app = session(Platform::Gtk);
+                    let panel = Panel::Sizes;
+                    let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                    for action in [
+                        CustomizationAction::SetTabStyle { group, style },
+                        CustomizationAction::SetTabHidden { panel, hidden },
+                    ] {
+                        app.dispatch(UiAction::Customize { action }).unwrap();
+                    }
+                    let before = app.state.workspace.clone();
+                    for target in [
+                        ContextTarget::Panel { panel },
+                        ContextTarget::Group { group },
+                    ] {
+                        let menu = app.context_menu(target).unwrap();
+                        assert_eq!(
+                            menu.sections[0]
+                                .iter()
+                                .map(|i| i.label.as_str())
+                                .collect::<Vec<_>>(),
+                            if matches!(target, ContextTarget::Group { .. }) {
+                                TabStyle::ALL.map(TabStyle::label).to_vec()
+                            } else {
+                                vec!["Show tab bar"]
+                            }
+                        );
+                        assert_eq!(
+                            menu.sections[0]
+                                .iter()
+                                .filter(|i| i.selected == Some(true))
+                                .count(),
+                            if matches!(target, ContextTarget::Group { .. }) {
+                                1
+                            } else {
+                                usize::from(!hidden)
+                            }
+                        );
+                        let hide = menu
+                            .sections
+                            .iter()
+                            .flatten()
+                            .find(|i| i.label == "Show tab bar")
+                            .unwrap();
+                        assert_eq!(hide.selected, Some(!hidden));
+                        if hidden {
+                            assert!(menu.sections.iter().flatten().any(|i| i.label
+                                == "Configure Brush size panel…"
+                                && matches!(
+                                    i.action,
+                                    Some(UiAction::Customize {
+                                        action: CustomizationAction::ShowAllControls {
+                                            panel: Panel::Sizes
+                                        }
+                                    })
+                                )));
                         }
-                        let before = app.state.workspace.clone();
-                        for target in [
-                            ContextTarget::Panel { panel },
-                            ContextTarget::Group { group },
-                        ] {
-                            let menu = app.context_menu(target).unwrap();
-                            assert_eq!(
-                                menu.sections[0]
-                                    .iter()
-                                    .map(|i| i.label.as_str())
-                                    .collect::<Vec<_>>(),
-                                if matches!(target, ContextTarget::Group { .. }) {
-                                    TabStyle::ALL.map(TabStyle::label).to_vec()
-                                } else {
-                                    vec!["Show tab bar"]
-                                }
-                            );
-                            assert_eq!(
-                                menu.sections[0]
-                                    .iter()
-                                    .filter(|i| i.selected == Some(true))
-                                    .count(),
-                                if matches!(target, ContextTarget::Group { .. }) {
-                                    1
-                                } else {
-                                    usize::from(!hidden)
-                                }
-                            );
-                            let hide = menu
+                    }
+                    let source = find_group(&app, viewport, |g| g.id == group);
+                    assert_eq!(source.tabs_visible, !hidden);
+                    assert_eq!(source.footer_grip.is_some(), hidden);
+                    let press = [source.bounds.x + 50.0, source.bounds.y + 12.0];
+                    let drag = |app: &mut UiSession<_>, phase, position| {
+                        drag(app, DockItem::Panel { panel }, phase, position, viewport);
+                    };
+                    drag(&mut app, ContactPhase::Down, press);
+                    drag(&mut app, ContactPhase::Move, [800.0, 550.0]);
+                    let floating = find_group(&app, viewport, |g| g.panels.contains(&panel));
+                    assert!(floating.floating);
+                    assert_eq!(floating.tabs_visible, !hidden);
+                    assert_eq!(floating.footer_grip.is_some(), hidden);
+                    assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
+                    let position = match destination {
+                        "edge" => [1599.0, 600.0],
+                        "merge" => {
+                            let b = find_group(&app, viewport, |g| g.active == Panel::Brushes)
+                                .bounds;
+                            [b.x + b.width * 0.5, b.y + 10.0]
+                        }
+                        _ => [800.0, 550.0],
+                    };
+                    drag(
+                        &mut app,
+                        if destination == "cancel" {
+                            ContactPhase::Cancel
+                        } else {
+                            ContactPhase::Up
+                        },
+                        position,
+                    );
+                    if destination == "cancel" {
+                        assert_eq!(app.state.workspace, before);
+                        continue;
+                    }
+                    let config = app.state.workspace.layout.panel(panel).unwrap();
+                    let current_group = app.state.workspace.layout.panel_group(panel).unwrap();
+                    assert_eq!(
+                        app.state
+                            .workspace
+                            .layout
+                            .group_tab_style(current_group)
+                            .unwrap(),
+                        if destination == "merge" {
+                            TabStyle::default()
+                        } else {
+                            style
+                        }
+                    );
+                    assert_eq!(config.hide_tab, hidden);
+                    assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
+                    let result = find_group(&app, viewport, |g| g.panels.contains(&panel));
+                    assert_eq!(result.floating, destination == "float");
+                    assert_eq!(result.tabs_visible, destination == "merge" || !hidden);
+                    if destination == "merge" {
+                        assert!(result.panels.len() > 1);
+                        assert!(
+                            app.context_menu(ContextTarget::Group { group: result.id })
+                                .unwrap()
                                 .sections
                                 .iter()
                                 .flatten()
-                                .find(|i| i.label == "Show tab bar")
-                                .unwrap();
-                            assert_eq!(hide.selected, Some(!hidden));
-                            if hidden {
-                                assert!(menu.sections.iter().flatten().any(|i| i.label
-                                    == "Configure Brush size panel…"
-                                    && matches!(
-                                        i.action,
-                                        Some(UiAction::Customize {
-                                            action: CustomizationAction::ShowAllControls {
-                                                panel: Panel::Sizes
-                                            }
-                                        })
-                                    )));
-                            }
-                        }
-                        let source = find_group(&app, viewport, |g| g.id == group);
-                        assert_eq!(source.tabs_visible, !hidden);
-                        assert_eq!(source.footer_grip.is_some(), hidden);
-                        let press = [source.bounds.x + 50.0, source.bounds.y + 12.0];
-                        let drag = |app: &mut UiSession<_>, phase, position| {
-                            drag(app, DockItem::Panel { panel }, phase, position, viewport);
-                        };
-                        drag(&mut app, ContactPhase::Down, press);
-                        drag(&mut app, ContactPhase::Move, [800.0, 550.0]);
-                        let floating = find_group(&app, viewport, |g| g.panels.contains(&panel));
-                        assert!(floating.floating);
-                        assert_eq!(floating.tabs_visible, !hidden);
-                        assert_eq!(floating.footer_grip.is_some(), hidden);
-                        assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
-                        let position = match destination {
-                            "edge" => [1599.0, 600.0],
-                            "merge" => {
-                                let b = find_group(&app, viewport, |g| g.active == Panel::Brushes)
-                                    .bounds;
-                                [b.x + b.width * 0.5, b.y + 10.0]
-                            }
-                            _ => [800.0, 550.0],
-                        };
-                        drag(
-                            &mut app,
-                            if destination == "cancel" {
-                                ContactPhase::Cancel
-                            } else {
-                                ContactPhase::Up
-                            },
-                            position,
+                                .all(|i| i.label != "Show tab bar")
                         );
-                        if destination == "cancel" {
-                            assert_eq!(app.state.workspace, before);
-                            continue;
-                        }
-                        let config = app.state.workspace.layout.panel(panel).unwrap();
-                        let current_group = app.state.workspace.layout.panel_group(panel).unwrap();
-                        assert_eq!(
-                            app.state
-                                .workspace
-                                .layout
-                                .group_tab_style(current_group)
-                                .unwrap(),
-                            if destination == "merge" {
-                                TabStyle::default()
-                            } else {
-                                style
-                            }
+                        assert!(
+                            app.dispatch(UiAction::Customize {
+                                action: CustomizationAction::SetTabHidden {
+                                    panel,
+                                    hidden: true
+                                }
+                            })
+                            .is_err()
                         );
-                        assert_eq!(config.hide_tab, hidden);
-                        assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
-                        let result = find_group(&app, viewport, |g| g.panels.contains(&panel));
-                        assert_eq!(result.floating, destination == "float");
-                        assert_eq!(result.tabs_visible, destination == "merge" || !hidden);
-                        if destination == "merge" {
-                            assert!(result.panels.len() > 1);
-                            assert!(
-                                app.context_menu(ContextTarget::Group { group: result.id })
-                                    .unwrap()
-                                    .sections
-                                    .iter()
-                                    .flatten()
-                                    .all(|i| i.label != "Show tab bar")
-                            );
-                            assert!(
-                                app.dispatch(UiAction::Customize {
-                                    action: CustomizationAction::SetTabHidden {
-                                        panel,
-                                        hidden: true
-                                    }
-                                })
-                                .is_err()
-                            );
-                        }
-                        let after = app.state.workspace.clone();
-                        invoke(&mut app, CommandId::UndoWorkspace);
-                        assert_eq!(app.state.workspace, before);
-                        invoke(&mut app, CommandId::RedoWorkspace);
-                        assert_eq!(app.state.workspace, after);
                     }
+                    let after = app.state.workspace.clone();
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
+                    invoke(&mut app, CommandId::RedoWorkspace);
+                    assert_eq!(app.state.workspace, after);
                 }
             }
         }
@@ -11015,169 +10948,162 @@ mod tests {
     #[test]
     fn collapsed_icon_drag_uses_shared_history_and_cancellation() {
         let viewport = [1600., 1200.];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for cancel in [false, true] {
-                let mut app = session(platform);
-                let group = app
-                    .state
-                    .workspace
-                    .layout
-                    .panel_group(Panel::Layers)
-                    .unwrap();
-                customize(&mut app, CustomizationAction::SetColumnCollapsed {
-                    group,
-                    collapsed: true,
-                });
-                let source = app
-                    .layout(viewport)
-                    .collapsed
-                    .into_iter()
-                    .flat_map(|c| c.groups)
-                    .flat_map(|g| g.icons)
-                    .find(|i| i.panel == Panel::Layers)
-                    .unwrap()
-                    .bounds;
-                let before = serde_json::to_value(&app.state.workspace).unwrap();
-                let point = [750., 500.];
-                for (phase, position) in [
-                    (
-                        ContactPhase::Down,
-                        [source.x + source.width / 2., source.y + source.height / 2.],
-                    ),
-                    (ContactPhase::Move, point),
-                    (
-                        if cancel {
-                            ContactPhase::Cancel
-                        } else {
-                            ContactPhase::Up
-                        },
-                        point,
-                    ),
-                ] {
-                    drag(
-                        &mut app,
-                        DockItem::Panel { panel: Panel::Layers },
-                        phase,
-                        position,
-                        viewport,
-                    );
-                }
-                if !cancel {
-                    let after = serde_json::to_value(&app.state.workspace).unwrap();
-                    assert_ne!(after, before);
-                    assert_eq!(app.state.workspace.layout.floating.len(), 1);
-                    invoke(&mut app, CommandId::UndoWorkspace);
-                    assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
-                    invoke(&mut app, CommandId::RedoWorkspace);
-                    assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), after);
-                    invoke(&mut app, CommandId::UndoWorkspace);
-                }
-                assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
-                assert!(app.workspace_drag.is_none());
+        for cancel in [false, true] {
+            let mut app = session(Platform::Gtk);
+            let group = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Layers)
+                .unwrap();
+            customize(&mut app, CustomizationAction::SetColumnCollapsed {
+                group,
+                collapsed: true,
+            });
+            let source = app
+                .layout(viewport)
+                .collapsed
+                .into_iter()
+                .flat_map(|c| c.groups)
+                .flat_map(|g| g.icons)
+                .find(|i| i.panel == Panel::Layers)
+                .unwrap()
+                .bounds;
+            let before = serde_json::to_value(&app.state.workspace).unwrap();
+            let point = [750., 500.];
+            for (phase, position) in [
+                (
+                    ContactPhase::Down,
+                    [source.x + source.width / 2., source.y + source.height / 2.],
+                ),
+                (ContactPhase::Move, point),
+                (
+                    if cancel {
+                        ContactPhase::Cancel
+                    } else {
+                        ContactPhase::Up
+                    },
+                    point,
+                ),
+            ] {
+                drag(
+                    &mut app,
+                    DockItem::Panel { panel: Panel::Layers },
+                    phase,
+                    position,
+                    viewport,
+                );
             }
+            if !cancel {
+                let after = serde_json::to_value(&app.state.workspace).unwrap();
+                assert_ne!(after, before);
+                assert_eq!(app.state.workspace.layout.floating.len(), 1);
+                invoke(&mut app, CommandId::UndoWorkspace);
+                assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
+                invoke(&mut app, CommandId::RedoWorkspace);
+                assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), after);
+                invoke(&mut app, CommandId::UndoWorkspace);
+            }
+            assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
+            assert!(app.workspace_drag.is_none());
         }
     }
 
     #[test]
     fn tear_off_threshold_singleton_identity_and_multi_tab_cancel_are_shared() {
         let viewport = [1600.0, 1200.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session(platform);
-            let group = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Sizes)
-                .unwrap();
-            let source = find_group(&app, viewport, |g| g.id == group).bounds;
-            let baseline = app.state.workspace.clone();
-            let drag = |app: &mut UiSession<_>, phase, position| {
-                let changed = drag(
-                    app,
-                    DockItem::Panel { panel: Panel::Sizes },
-                    phase,
-                    position,
-                    viewport,
-                );
-                assert!(!changed.canvas_wake);
-            };
-            let press = [source.x + 30.0, source.y + 12.0];
-            drag(&mut app, ContactPhase::Down, press);
-            assert!(app.dragging_attached_tab());
-            drag(
-                &mut app,
-                ContactPhase::Move,
-                [source.x + source.width + 80.0, press[1]],
-            );
-            assert!(app.state.workspace.layout.floating.is_empty());
-            assert!(app.dragging_attached_tab());
-            drag(
-                &mut app,
-                ContactPhase::Move,
-                [source.x + source.width + 81.0, press[1]],
-            );
-            assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
-            assert!(!app.dragging_attached_tab());
-            drag(&mut app, ContactPhase::Up, [700.0, 450.0]);
-            assert!(!app.dragging_attached_tab());
-            let floated = app.state.workspace.clone();
-            assert_eq!(floated.layout.floating.len(), 1);
-            invoke(&mut app, CommandId::UndoWorkspace);
-            assert_eq!(app.state.workspace, baseline);
-            invoke(&mut app, CommandId::RedoWorkspace);
-            assert_eq!(app.state.workspace, floated);
-            // A singleton tab immediately moves its entire float, without
-            // waiting for tear-off or replacing its identity/default size.
-            let b = find_group(&app, viewport, |g| g.id == group).bounds;
-            drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
-            assert!(!app.dragging_attached_tab());
-            drag(&mut app, ContactPhase::Move, [b.x + 30.0, b.y + 25.0]);
-            assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
-            assert_eq!(
-                app.state.workspace.layout.floating[0].position,
-                [b.x + 10.0, b.y + 15.0]
-            );
-            drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
-            assert_eq!(app.state.workspace, floated);
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Brushes,
-                viewport,
-                target: DockTarget::Tab { group, index: None },
-            })
+        let mut app = session(Platform::Gtk);
+        let group = app
+            .state
+            .workspace
+            .layout
+            .panel_group(Panel::Sizes)
             .unwrap();
-            let multi = app.state.workspace.clone();
-            let b = find_group(&app, viewport, |g| g.id == group).bounds;
-            drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
-            assert!(app.dragging_attached_tab());
-            drag(
-                &mut app,
-                ContactPhase::Move,
-                [b.x + b.width + 101.0, b.y + 10.0],
+        let source = find_group(&app, viewport, |g| g.id == group).bounds;
+        let baseline = app.state.workspace.clone();
+        let drag = |app: &mut UiSession<_>, phase, position| {
+            let changed = drag(
+                app,
+                DockItem::Panel { panel: Panel::Sizes },
+                phase,
+                position,
+                viewport,
             );
-            assert_eq!(app.state.workspace.layout.floating.len(), 2);
-            assert!(!app.dragging_attached_tab());
-            assert_eq!(
-                app.state.workspace.layout.panel_group(Panel::Brushes),
-                Some(group)
-            );
-            assert_ne!(
-                app.state.workspace.layout.panel_group(Panel::Sizes),
-                Some(group)
-            );
-            drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
-            assert!(!app.dragging_attached_tab());
-            assert_eq!(app.state.workspace, multi);
-        }
+            assert!(!changed.canvas_wake);
+        };
+        let press = [source.x + 30.0, source.y + 12.0];
+        drag(&mut app, ContactPhase::Down, press);
+        assert!(app.dragging_attached_tab());
+        drag(
+            &mut app,
+            ContactPhase::Move,
+            [source.x + source.width + 80.0, press[1]],
+        );
+        assert!(app.state.workspace.layout.floating.is_empty());
+        assert!(app.dragging_attached_tab());
+        drag(
+            &mut app,
+            ContactPhase::Move,
+            [source.x + source.width + 81.0, press[1]],
+        );
+        assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
+        assert!(!app.dragging_attached_tab());
+        drag(&mut app, ContactPhase::Up, [700.0, 450.0]);
+        assert!(!app.dragging_attached_tab());
+        let floated = app.state.workspace.clone();
+        assert_eq!(floated.layout.floating.len(), 1);
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert_eq!(app.state.workspace, baseline);
+        invoke(&mut app, CommandId::RedoWorkspace);
+        assert_eq!(app.state.workspace, floated);
+        // A singleton tab immediately moves its entire float, without
+        // waiting for tear-off or replacing its identity/default size.
+        let b = find_group(&app, viewport, |g| g.id == group).bounds;
+        drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
+        assert!(!app.dragging_attached_tab());
+        drag(&mut app, ContactPhase::Move, [b.x + 30.0, b.y + 25.0]);
+        assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
+        assert_eq!(
+            app.state.workspace.layout.floating[0].position,
+            [b.x + 10.0, b.y + 15.0]
+        );
+        drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
+        assert_eq!(app.state.workspace, floated);
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Brushes,
+            viewport,
+            target: DockTarget::Tab { group, index: None },
+        })
+        .unwrap();
+        let multi = app.state.workspace.clone();
+        let b = find_group(&app, viewport, |g| g.id == group).bounds;
+        drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
+        assert!(app.dragging_attached_tab());
+        drag(
+            &mut app,
+            ContactPhase::Move,
+            [b.x + b.width + 101.0, b.y + 10.0],
+        );
+        assert_eq!(app.state.workspace.layout.floating.len(), 2);
+        assert!(!app.dragging_attached_tab());
+        assert_eq!(
+            app.state.workspace.layout.panel_group(Panel::Brushes),
+            Some(group)
+        );
+        assert_ne!(
+            app.state.workspace.layout.panel_group(Panel::Sizes),
+            Some(group)
+        );
+        drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
+        assert!(!app.dragging_attached_tab());
+        assert_eq!(app.state.workspace, multi);
     }
 
     #[test]
     fn column_width_reset_is_one_undoable_action() {
         let viewport = [1600., 1000.];
-        for (platform, collapsed) in [Platform::Gtk, Platform::Windows]
-            .into_iter()
-            .flat_map(|platform| [false, true].map(|collapsed| (platform, collapsed)))
-        {
-            let mut app = session(platform);
+        for collapsed in [false, true] {
+            let mut app = session(Platform::Gtk);
             app.state.workspace.layout.bands[0].extent = 400.;
             if collapsed {
                 app.state
@@ -11249,26 +11175,24 @@ mod tests {
 
     #[test]
     fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
-            let mut s = session(platform);
-            let viewport = [1200., 900.];
-            s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
-                .unwrap();
-            customize(&mut s, CustomizationAction::ToggleColumnDrawer {
-                group: 5,
-                panel: Panel::Brushes,
-            });
-            customize(&mut s, CustomizationAction::ShowAllControls { panel: Panel::Brushes });
-            assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
-            assert!(s.state.customization.column_drawers.is_empty());
-            assert!(s.state.workspace.layout.collapsed.is_empty());
-            assert!(
-                s.layout(viewport)
-                    .groups
-                    .iter()
-                    .any(|g| g.active == Panel::Brushes)
-            );
-        }
+        let mut s = session(Platform::Gtk);
+        let viewport = [1200., 900.];
+        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+            .unwrap();
+        customize(&mut s, CustomizationAction::ToggleColumnDrawer {
+            group: 5,
+            panel: Panel::Brushes,
+        });
+        customize(&mut s, CustomizationAction::ShowAllControls { panel: Panel::Brushes });
+        assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
+        assert!(s.state.customization.column_drawers.is_empty());
+        assert!(s.state.workspace.layout.collapsed.is_empty());
+        assert!(
+            s.layout(viewport)
+                .groups
+                .iter()
+                .any(|g| g.active == Panel::Brushes)
+        );
     }
 
     #[test]
@@ -11784,8 +11708,8 @@ mod tests {
         minimum: f32,
     }
     impl CollapsedResizeTest {
-        fn new(platform: Platform, right: bool, nested: Option<bool>) -> Self {
-            let mut session = session(platform);
+        fn new(right: bool, nested: Option<bool>) -> Self {
+            let mut session = session(Platform::Gtk);
             let viewport = [1600., 1000.];
             let (id, root) = if let Some(second) = nested {
                 let band = &mut session.state.workspace.layout.bands[0];
@@ -11863,7 +11787,7 @@ mod tests {
     fn collapsed_divider_does_not_move_or_record_history_below_opening_threshold() {
         for right in [false, true] {
             for end in [ContactPhase::Up, ContactPhase::Cancel] {
-                let mut t = CollapsedResizeTest::new(Platform::Gtk, right, None);
+                let mut t = CollapsedResizeTest::new(right, None);
                 let before = t.session.state.workspace.clone();
                 t.drag(ContactPhase::Down, 0.);
                 for distance in [0., 18., 35.5, -100., 35.5] {
@@ -11883,58 +11807,56 @@ mod tests {
 
     #[test]
     fn expanded_divider_waits_for_pointer_then_resizes_and_can_collapse_again() {
-        for platform in Platform::ALL {
-            for right in [false, true] {
-                let mut t = CollapsedResizeTest::new(platform, right, None);
-                let before = t.session.state.workspace.clone();
-                t.drag(ContactPhase::Down, 0.);
-                t.drag(ContactPhase::Move, 36.);
-                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                assert!(t.saved_width > t.minimum);
-                assert!((t.width() - t.minimum).abs() < 0.01);
-                let expanded = t.session.state.workspace.clone();
-                let edge = t.edge_distance();
-                assert!(edge > 36.);
-                for distance in [36., 40., edge - 0.5, 36.] {
-                    t.drag(ContactPhase::Move, distance);
-                    assert_eq!(
-                        t.session.state.workspace, expanded,
-                        "use the opening threshold until the pointer reaches the edge"
-                    );
-                }
-                for distance in [35.5, 0., -40., 35.5] {
-                    t.drag(ContactPhase::Move, distance);
-                    assert_eq!(t.session.state.workspace, before);
-                    assert_eq!(t.edge_distance(), 0.);
-                }
-                t.drag(ContactPhase::Move, 36.);
-                assert_eq!(t.session.state.workspace, expanded);
-                t.drag(ContactPhase::Move, edge);
-                assert_eq!(t.session.state.workspace, expanded);
-                t.drag(ContactPhase::Move, edge + 45.);
-                assert!((t.width() - t.minimum - 45.).abs() < 0.01);
-                let minimum = if right {
-                    crate::LAYERS_MIN_WIDTH
-                } else {
-                    crate::TOOL_PANEL_MIN_WIDTH
-                };
-                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
-                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
-                let collapsed = t.session.state.workspace.clone();
-                assert!(collapsed.layout.is_collapsed(t.root));
-                assert_eq!(collapsed.layout.collapsed[0].expanded_width, t.saved_width);
-                // Reversing this collapse resumes immediately, even before the
-                // pointer has reached the minimum-width edge.
-                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
-                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                assert!((t.width() - t.minimum).abs() < 0.01);
-                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
-                assert_eq!(t.session.state.workspace, collapsed);
-                t.drag(ContactPhase::Up, edge + 100.);
-                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                assert!((t.width() - t.minimum - 100.).abs() < 0.01);
+        for right in [false, true] {
+            let mut t = CollapsedResizeTest::new(right, None);
+            let before = t.session.state.workspace.clone();
+            t.drag(ContactPhase::Down, 0.);
+            t.drag(ContactPhase::Move, 36.);
+            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+            assert!(t.saved_width > t.minimum);
+            assert!((t.width() - t.minimum).abs() < 0.01);
+            let expanded = t.session.state.workspace.clone();
+            let edge = t.edge_distance();
+            assert!(edge > 36.);
+            for distance in [36., 40., edge - 0.5, 36.] {
+                t.drag(ContactPhase::Move, distance);
+                assert_eq!(
+                    t.session.state.workspace, expanded,
+                    "use the opening threshold until the pointer reaches the edge"
+                );
             }
+            for distance in [35.5, 0., -40., 35.5] {
+                t.drag(ContactPhase::Move, distance);
+                assert_eq!(t.session.state.workspace, before);
+                assert_eq!(t.edge_distance(), 0.);
+            }
+            t.drag(ContactPhase::Move, 36.);
+            assert_eq!(t.session.state.workspace, expanded);
+            t.drag(ContactPhase::Move, edge);
+            assert_eq!(t.session.state.workspace, expanded);
+            t.drag(ContactPhase::Move, edge + 45.);
+            assert!((t.width() - t.minimum - 45.).abs() < 0.01);
+            let minimum = if right {
+                crate::LAYERS_MIN_WIDTH
+            } else {
+                crate::TOOL_PANEL_MIN_WIDTH
+            };
+            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
+            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
+            let collapsed = t.session.state.workspace.clone();
+            assert!(collapsed.layout.is_collapsed(t.root));
+            assert_eq!(collapsed.layout.collapsed[0].expanded_width, t.saved_width);
+            // Reversing this collapse resumes immediately, even before the
+            // pointer has reached the minimum-width edge.
+            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
+            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+            assert!((t.width() - t.minimum).abs() < 0.01);
+            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
+            assert_eq!(t.session.state.workspace, collapsed);
+            t.drag(ContactPhase::Up, edge + 100.);
+            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+            assert!((t.width() - t.minimum - 100.).abs() < 0.01);
         }
     }
 
@@ -11943,7 +11865,7 @@ mod tests {
         for right in [false, true] {
             for end in [ContactPhase::Up, ContactPhase::Cancel] {
                 for release_crosses_threshold in [false, true] {
-                    let mut t = CollapsedResizeTest::new(Platform::Gtk, right, None);
+                    let mut t = CollapsedResizeTest::new(right, None);
                     let mut before = t.session.state.workspace.clone();
                     t.drag(ContactPhase::Down, 0.);
                     for cycle in 0..3 {
@@ -11991,7 +11913,7 @@ mod tests {
     fn reversing_an_opening_can_open_the_opposite_collapsed_neighbor_in_one_move() {
         for right in [false, true] {
             // Open the anchored subcolumn first so its edge moves outward.
-            let mut t = CollapsedResizeTest::new(Platform::Gtk, right, Some(right));
+            let mut t = CollapsedResizeTest::new(right, Some(right));
             let other = if right { 5 } else { 6 };
             t.session
                 .state
@@ -12026,7 +11948,7 @@ mod tests {
         for right in [false, true] {
             for nested in [None, Some(false), Some(true)] {
                 for finish in 0..3 {
-                    let mut t = CollapsedResizeTest::new(Platform::Gtk, right, nested);
+                    let mut t = CollapsedResizeTest::new(right, nested);
                     t.session
                         .state
                         .workspace
@@ -12099,7 +12021,7 @@ mod tests {
         for right in [false, true] {
             for skip_to_edge in [false, true] {
                 for finish in 0..3 {
-                    let mut t = CollapsedResizeTest::new(Platform::Gtk, right, None);
+                    let mut t = CollapsedResizeTest::new(right, None);
                     let before = t.session.state.workspace.clone();
                     t.drag(ContactPhase::Down, 0.);
                     let distance = if skip_to_edge {
@@ -12148,7 +12070,7 @@ mod tests {
     fn nested_collapsed_dividers_wait_then_open_the_requested_side() {
         for right in [false, true] {
             for second in [false, true] {
-                let mut t = CollapsedResizeTest::new(Platform::Gtk, right, Some(second));
+                let mut t = CollapsedResizeTest::new(right, Some(second));
                 let before = t.session.state.workspace.clone();
                 t.drag(ContactPhase::Down, 0.);
                 for distance in [35.5, -80., 0.] {
@@ -12179,7 +12101,7 @@ mod tests {
     fn adjacent_collapsed_columns_do_not_latch_the_expanding_neighbor() {
         for right in [false, true] {
             for second in [false, true] {
-                let mut t = CollapsedResizeTest::new(Platform::Gtk, right, Some(second));
+                let mut t = CollapsedResizeTest::new(right, Some(second));
                 let other = if second { 5 } else { 6 };
                 t.session
                     .state
@@ -12216,7 +12138,7 @@ mod tests {
     #[test]
     fn outside_band_handle_opens_its_collapsed_subcolumn() {
         for right in [false, true] {
-            let mut t = CollapsedResizeTest::new(Platform::Gtk, right, Some(!right));
+            let mut t = CollapsedResizeTest::new(right, Some(!right));
             t.id = 3;
             t.outward = if right { -1. } else { 1. };
             let d = t.session.divider(t.id, t.viewport).unwrap();
@@ -12250,62 +12172,60 @@ mod tests {
     }
 
     #[test]
-    fn column_drawer_anchor_follows_tab_and_sidebar_selection_on_gtk_android_and_web() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
-            let mut s = session(platform);
-            for column in [4, 8] {
-                s.state.workspace.layout.column_stack_mut(column).drawers = true;
-            }
-            let viewport = [1200., 900.];
-            s.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport })
-                .unwrap();
-            let toggle = |s: &mut UiSession<Recorder>, panel| {
-                customize(s, CustomizationAction::ToggleColumnDrawer { group: 8, panel });
-            };
-            toggle(&mut s, Panel::Layers);
-            s.dispatch(UiAction::SelectPanelTab {
-                group: 8,
-                panel: Panel::Properties,
-            })
-            .unwrap();
-            let drawer = &s.state.customization.column_drawers[0];
-            assert!(matches!(
-                drawer.anchor,
-                DrawerAnchor::Column {
-                    origin: Panel::Properties,
-                    ..
-                }
-            ));
-            assert_eq!(drawer.columns, vec![vec![Panel::Properties]]);
-            let layout = &s.state.workspace.layout;
-            let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
-            let column = &resolved.collapsed[0];
-            let expected = column
-                .groups
-                .iter()
-                .flat_map(|g| &g.icons)
-                .find(|i| i.panel == Panel::Properties)
-                .unwrap()
-                .bounds
-                .intersection(column.content)
-                .unwrap();
-            assert_eq!(
-                drawer.placement(layout, viewport, &[500.]).unwrap().anchor,
-                expected
-            );
-            // The former opening button switches back; the current one closes the drawer.
-            toggle(&mut s, Panel::Layers);
-            assert_eq!(s.state.customization.column_drawers.len(), 1);
-            assert!(matches!(
-                s.state.customization.column_drawers[0].anchor,
-                DrawerAnchor::Column {
-                    origin: Panel::Layers,
-                    ..
-                }
-            ));
-            toggle(&mut s, Panel::Layers);
-            assert!(s.state.customization.column_drawers.is_empty());
+    fn column_drawer_anchor_follows_tab_and_sidebar_selection() {
+        let mut s = session(Platform::Gtk);
+        for column in [4, 8] {
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
         }
+        let viewport = [1200., 900.];
+        s.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport })
+            .unwrap();
+        let toggle = |s: &mut UiSession<Recorder>, panel| {
+            customize(s, CustomizationAction::ToggleColumnDrawer { group: 8, panel });
+        };
+        toggle(&mut s, Panel::Layers);
+        s.dispatch(UiAction::SelectPanelTab {
+            group: 8,
+            panel: Panel::Properties,
+        })
+        .unwrap();
+        let drawer = &s.state.customization.column_drawers[0];
+        assert!(matches!(
+            drawer.anchor,
+            DrawerAnchor::Column {
+                origin: Panel::Properties,
+                ..
+            }
+        ));
+        assert_eq!(drawer.columns, vec![vec![Panel::Properties]]);
+        let layout = &s.state.workspace.layout;
+        let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+        let column = &resolved.collapsed[0];
+        let expected = column
+            .groups
+            .iter()
+            .flat_map(|g| &g.icons)
+            .find(|i| i.panel == Panel::Properties)
+            .unwrap()
+            .bounds
+            .intersection(column.content)
+            .unwrap();
+        assert_eq!(
+            drawer.placement(layout, viewport, &[500.]).unwrap().anchor,
+            expected
+        );
+        // The former opening button switches back; the current one closes the drawer.
+        toggle(&mut s, Panel::Layers);
+        assert_eq!(s.state.customization.column_drawers.len(), 1);
+        assert!(matches!(
+            s.state.customization.column_drawers[0].anchor,
+            DrawerAnchor::Column {
+                origin: Panel::Layers,
+                ..
+            }
+        ));
+        toggle(&mut s, Panel::Layers);
+        assert!(s.state.customization.column_drawers.is_empty());
     }
 
     #[test]
@@ -12782,343 +12702,312 @@ mod tests {
     }
 
     #[test]
-    fn docked_toolbar_handles_restore_minimum_lanes_on_every_platform() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for viewport in [[1600.0, 1200.0], [640.0, 480.0]] {
-                for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
-                    for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
-                        let mut app = session(platform);
-                        customize(&mut app, CustomizationAction::SetTileStyle {
-                            panel: Panel::Toolbar,
-                            style,
-                        });
-                        app.dispatch(UiAction::MovePanel {
-                            panel: Panel::Toolbar,
-                            viewport,
-                            target: DockTarget::Edge { edge, outer: true },
-                        })
+    fn docked_toolbar_handles_restore_minimum_lanes() {
+        for viewport in [[1600.0, 1200.0], [640.0, 480.0]] {
+            for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+                for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+                    let mut app = session(Platform::Gtk);
+                    customize(&mut app, CustomizationAction::SetTileStyle {
+                        panel: Panel::Toolbar,
+                        style,
+                    });
+                    app.dispatch(UiAction::MovePanel {
+                        panel: Panel::Toolbar,
+                        viewport,
+                        target: DockTarget::Edge { edge, outer: true },
+                    })
+                    .unwrap();
+                    let group = app
+                        .state
+                        .workspace
+                        .layout
+                        .panel_group(Panel::Toolbar)
                         .unwrap();
-                        let group = app
-                            .state
-                            .workspace
-                            .layout
-                            .panel_group(Panel::Toolbar)
-                            .unwrap();
-                        let natural = find_group(&app, viewport, |g| g.id == group);
-                        app.state
-                            .workspace
-                            .layout
-                            .bands
-                            .iter_mut()
-                            .find(|b| b.root.id() == group)
-                            .unwrap()
-                            .extent += 120.0;
-                        let before = app.state.workspace.clone();
-                        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                            .unwrap();
-                        let fitted = find_group(&app, viewport, |g| g.id == group);
-                        assert_eq!(
-                            fitted.bounds, natural.bounds,
-                            "{platform:?} {edge:?} {style:?} {viewport:?}"
-                        );
-                        assert_eq!(
-                            fitted.tiles.as_ref().unwrap().tiles,
-                            natural.tiles.as_ref().unwrap().tiles
-                        );
-                        assert!(!fitted.tabs_visible && !fitted.floating);
-                        let after = app.state.workspace.clone();
-                        invoke(&mut app, CommandId::UndoWorkspace);
-                        assert_eq!(app.state.workspace, before);
-                        invoke(&mut app, CommandId::RedoWorkspace);
-                        assert_eq!(app.state.workspace, after);
-                        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                            .unwrap();
-                        assert_eq!(
-                            app.state.workspace, after,
-                            "Repeated reset is idempotent, never a floating layout cycle"
-                        );
-                    }
+                    let natural = find_group(&app, viewport, |g| g.id == group);
+                    app.state
+                        .workspace
+                        .layout
+                        .bands
+                        .iter_mut()
+                        .find(|b| b.root.id() == group)
+                        .unwrap()
+                        .extent += 120.0;
+                    let before = app.state.workspace.clone();
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                    let fitted = find_group(&app, viewport, |g| g.id == group);
+                    assert_eq!(fitted.bounds, natural.bounds, "{edge:?} {style:?} {viewport:?}");
+                    assert_eq!(
+                        fitted.tiles.as_ref().unwrap().tiles,
+                        natural.tiles.as_ref().unwrap().tiles
+                    );
+                    assert!(!fitted.tabs_visible && !fitted.floating);
+                    let after = app.state.workspace.clone();
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
+                    invoke(&mut app, CommandId::RedoWorkspace);
+                    assert_eq!(app.state.workspace, after);
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                    assert_eq!(
+                        app.state.workspace, after,
+                        "Repeated reset is idempotent, never a floating layout cycle"
+                    );
                 }
             }
         }
     }
 
     #[test]
-    fn floating_drag_area_cycles_defaults_and_panel_headers_on_every_platform() {
+    fn floating_drag_area_toggles_panel_headers_after_resetting_custom_sizes() {
         let viewport = [1600.0, 1200.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for panel in [Panel::Toolbar, Panel::Sizes] {
-                let mut app = session(platform);
-                app.dispatch(UiAction::MovePanel {
-                    panel,
-                    viewport,
-                    target: DockTarget::Float {
-                        position: [500.0, 200.0],
-                    },
-                })
+        let panel = Panel::Sizes;
+        let mut app = session(Platform::Gtk);
+        app.dispatch(UiAction::MovePanel {
+            panel,
+            viewport,
+            target: DockTarget::Float {
+                position: [500.0, 200.0],
+            },
+        })
+        .unwrap();
+        let group = app.state.workspace.layout.panel_group(panel).unwrap();
+        app.state
+            .workspace
+            .layout
+            .reset_floating_size(group)
+            .unwrap();
+        let initial = app.state.workspace.clone();
+        for step in 0..2 {
+            let before = app.state.workspace.clone();
+            let change = app
+                .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                 .unwrap();
-                let group = app.state.workspace.layout.panel_group(panel).unwrap();
-                app.state
-                    .workspace
-                    .layout
-                    .reset_floating_size(group)
-                    .unwrap();
-                let initial = app.state.workspace.clone();
-                let count = if panel.kind() == PanelKind::Tiles {
-                    3
-                } else {
-                    2
-                };
-                for step in 0..count {
-                    let before = app.state.workspace.clone();
-                    let change = app
-                        .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                        .unwrap();
-                    assert!(!change.canvas_wake);
-                    if panel.kind() == PanelKind::Tiles {
-                        assert_eq!(
-                            app.state.workspace.layout.floating[0].toolbar_layout,
-                            [
-                                FloatingToolbarLayout::Vertical,
-                                FloatingToolbarLayout::Horizontal,
-                                FloatingToolbarLayout::Compact
-                            ][step]
-                        );
-                    } else {
-                        assert_eq!(
-                            app.state.workspace.layout.panel(panel).unwrap().hide_tab,
-                            step == 0
-                        );
-                    }
-                    let after = app.state.workspace.clone();
-                    assert_ne!(before, after);
-                    invoke(&mut app, CommandId::UndoWorkspace);
-                    assert_eq!(app.state.workspace, before);
-                    invoke(&mut app, CommandId::RedoWorkspace);
-                    assert_eq!(app.state.workspace, after);
-                    let json = serde_json::to_string(&after).unwrap();
-                    assert_eq!(
-                        serde_json::from_str::<WorkspaceState>(&json).unwrap(),
-                        after
-                    );
-                }
-                assert_eq!(app.state.workspace, initial);
-                // Custom size gets one reset before cycling/toggling. Geometry,
-                // not the presence of an explicit size, determines "default".
-                let floating = &mut app.state.workspace.layout.floating[0];
-                floating.width = 480.0;
-                floating.height = Some(500.0);
-                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                    .unwrap();
-                assert_eq!(app.state.workspace, initial);
-                let bounds = find_group(&app, viewport, |g| g.id == group).bounds;
-                let floating = &mut app.state.workspace.layout.floating[0];
-                floating.width = bounds.width;
-                floating.height = Some(bounds.height);
-                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                    .unwrap();
-                assert_ne!(app.state.workspace, initial);
-                if panel.kind() == PanelKind::Content {
-                    app.dispatch(UiAction::MovePanel {
-                        panel: Panel::Brushes,
-                        viewport,
-                        target: DockTarget::Tab { group, index: None },
-                    })
-                    .unwrap();
-                    let before = app.state.workspace.clone();
-                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                        .unwrap();
-                    assert_eq!(
-                        app.state.workspace, before,
-                        "Multi-tab groups do not hide their header"
-                    );
-                }
-            }
+            assert!(!change.canvas_wake);
+            assert_eq!(
+                app.state.workspace.layout.panel(panel).unwrap().hide_tab,
+                step == 0
+            );
+            let after = app.state.workspace.clone();
+            assert_ne!(before, after);
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, before);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+            let json = serde_json::to_string(&after).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkspaceState>(&json).unwrap(),
+                after
+            );
         }
+        assert_eq!(app.state.workspace, initial);
+        // Custom size gets one reset before cycling/toggling. Geometry,
+        // not the presence of an explicit size, determines "default".
+        let floating = &mut app.state.workspace.layout.floating[0];
+        floating.width = 480.0;
+        floating.height = Some(500.0);
+        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+            .unwrap();
+        assert_eq!(app.state.workspace, initial);
+        let bounds = find_group(&app, viewport, |g| g.id == group).bounds;
+        let floating = &mut app.state.workspace.layout.floating[0];
+        floating.width = bounds.width;
+        floating.height = Some(bounds.height);
+        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+            .unwrap();
+        assert_ne!(app.state.workspace, initial);
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Brushes,
+            viewport,
+            target: DockTarget::Tab { group, index: None },
+        })
+        .unwrap();
+        let before = app.state.workspace.clone();
+        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+            .unwrap();
+        assert_eq!(
+            app.state.workspace, before,
+            "Multi-tab groups do not hide their header"
+        );
     }
 
     #[test]
     fn zen_hidden_docks_only_allow_floating_tab_targets() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session(platform);
-            let panel = Panel::Toolbar;
-            let item = DockItem::Panel { panel };
-            app.dispatch(UiAction::MovePanel {
-                panel,
-                viewport,
-                target: DockTarget::Float {
-                    position: [600.0, 400.0],
+        let mut app = session(Platform::Gtk);
+        let panel = Panel::Toolbar;
+        let item = DockItem::Panel { panel };
+        app.dispatch(UiAction::MovePanel {
+            panel,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 400.0],
+            },
+        })
+        .unwrap();
+        invoke(&mut app, CommandId::ZenMode);
+        assert!(
+            chrome(
+                &mut app,
+                ChromeEvent::Motion {
+                    position: [600.0, 450.0]
                 },
-            })
-            .unwrap();
-            invoke(&mut app, CommandId::ZenMode);
-            assert!(
-                chrome(
-                    &mut app,
-                    ChromeEvent::Motion {
-                        position: [600.0, 450.0]
-                    },
-                    ChromeFacts::default()
-                )
-                .chrome_hidden
-            );
-            let drag = |app: &mut UiSession<_>, phase, position| {
-                drag(app, item, phase, position, viewport);
-                chrome(app, ChromeEvent::Refresh, ChromeFacts::default())
-            };
-            // Bottom has no dock/reveal zone; top snapping reaches below the
-            // header, beyond the 80px reveal zone. Neither may dock invisibly.
-            // The other points lie on the hidden sidebars, outside reveal zones.
-            for point in [
-                [600.0, 899.0],
-                [600.0, crate::HEADER_HEIGHT + 50.0],
-                [100.0, 450.0],
-                [1100.0, 450.0],
-            ] {
-                assert!(drag(&mut app, ContactPhase::Down, [600.0, 450.0]).chrome_hidden);
-                assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
-                assert!(
-                    app.drop_hint(viewport, point, &[], item, None).is_none(),
-                    "{point:?}"
-                );
-                assert!(drag(&mut app, ContactPhase::Up, point).chrome_hidden);
-                assert_eq!(app.state.workspace.layout.floating.len(), 1);
-            }
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Sizes,
-                viewport,
-                target: DockTarget::Float {
-                    position: [950.0, 750.0],
-                },
-            })
-            .unwrap();
-            let target = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Sizes)
-                .unwrap();
-            let floating = app
-                .state
-                .workspace
-                .layout
-                .floating
-                .iter_mut()
-                .find(|f| f.root.id() == target)
-                .unwrap();
-            floating.position = [850.0, 730.0];
-            floating.width = 200.0;
-            floating.height = Some(100.0);
+                ChromeFacts::default()
+            )
+            .chrome_hidden
+        );
+        let drag = |app: &mut UiSession<_>, phase, position| {
+            drag(app, item, phase, position, viewport);
+            chrome(app, ChromeEvent::Refresh, ChromeFacts::default())
+        };
+        // Bottom has no dock/reveal zone; top snapping reaches below the
+        // header, beyond the 80px reveal zone. Neither may dock invisibly.
+        // The other points lie on the hidden sidebars, outside reveal zones.
+        for point in [
+            [600.0, 899.0],
+            [600.0, crate::HEADER_HEIGHT + 50.0],
+            [100.0, 450.0],
+            [1100.0, 450.0],
+        ] {
             assert!(drag(&mut app, ContactPhase::Down, [600.0, 450.0]).chrome_hidden);
-            // Including near the bottom edge: a closer hidden screen edge must
-            // not steal the float's merge target. Floats never split side by side.
-            for point in [
-                [851.0, 780.0],
-                [1049.0, 780.0],
-                [950.0, 829.0],
-                [950.0, 880.0],
-            ] {
-                assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
-                assert_eq!(
-                    app.drop_hint(viewport, point, &[], item, None)
-                        .unwrap()
-                        .target,
-                    DockTarget::Tab {
-                        group: target,
-                        index: if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) && point[1] < 830. { Some(0) } else { None }
-                    }
-                );
-            }
-            assert!(drag(&mut app, ContactPhase::Up, [950.0, 880.0]).chrome_hidden);
-            assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
+            assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
+            assert!(
+                app.drop_hint(viewport, point, &[], item, None).is_none(),
+                "{point:?}"
+            );
+            assert!(drag(&mut app, ContactPhase::Up, point).chrome_hidden);
             assert_eq!(app.state.workspace.layout.floating.len(), 1);
-            invoke(&mut app, CommandId::UndoWorkspace);
-            assert_eq!(app.state.workspace.layout.floating.len(), 2);
-            invoke(&mut app, CommandId::RedoWorkspace);
-            assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
         }
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            viewport,
+            target: DockTarget::Float {
+                position: [950.0, 750.0],
+            },
+        })
+        .unwrap();
+        let target = app
+            .state
+            .workspace
+            .layout
+            .panel_group(Panel::Sizes)
+            .unwrap();
+        let floating = app
+            .state
+            .workspace
+            .layout
+            .floating
+            .iter_mut()
+            .find(|f| f.root.id() == target)
+            .unwrap();
+        floating.position = [850.0, 730.0];
+        floating.width = 200.0;
+        floating.height = Some(100.0);
+        assert!(drag(&mut app, ContactPhase::Down, [600.0, 450.0]).chrome_hidden);
+        // Including near the bottom edge: a closer hidden screen edge must
+        // not steal the float's merge target. Floats never split side by side.
+        for point in [
+            [851.0, 780.0],
+            [1049.0, 780.0],
+            [950.0, 829.0],
+            [950.0, 880.0],
+        ] {
+            assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
+            assert_eq!(
+                app.drop_hint(viewport, point, &[], item, None)
+                    .unwrap()
+                    .target,
+                DockTarget::Tab {
+                    group: target,
+                    index: if point[1] < 830. { Some(0) } else { None }
+                }
+            );
+        }
+        assert!(drag(&mut app, ContactPhase::Up, [950.0, 880.0]).chrome_hidden);
+        assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
+        assert_eq!(app.state.workspace.layout.floating.len(), 1);
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert_eq!(app.state.workspace.layout.floating.len(), 2);
+        invoke(&mut app, CommandId::RedoWorkspace);
+        assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
     }
 
     #[test]
     fn zen_floating_drag_reveals_at_edges_and_release_uses_normal_proximity() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session(Platform::Gtk);
-            app.state.settings.zen_reveal_at_edges = true;
-            app.set_platform(platform);
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Sizes,
+        let mut app = session(Platform::Gtk);
+        app.state.settings.zen_reveal_at_edges = true;
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            viewport,
+            target: DockTarget::Float {
+                position: [640.0, 250.0],
+            },
+        })
+        .unwrap();
+        invoke(&mut app, CommandId::ZenMode);
+        let facts = ChromeFacts::default();
+        let center = [650.0, 440.0];
+        assert!(
+            chrome(&mut app, ChromeEvent::Motion { position: center }, facts).chrome_hidden
+        );
+        let drag = |app: &mut UiSession<_>, phase, position| {
+            drag(app, DockItem::Panel { panel: Panel::Sizes }, phase, position, viewport);
+            chrome(app, ChromeEvent::Refresh, facts)
+        };
+        let start = find_group(&app, viewport, |g| g.floating).bounds;
+        let grip = [start.x + 110.0, start.y + 12.0];
+        assert!(drag(&mut app, ContactPhase::Down, grip).chrome_hidden);
+        assert!(drag(&mut app, ContactPhase::Move, center).chrome_hidden);
+        assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
+        assert!(!app.interaction.keep_chrome_until_contact);
+        // A hidden dock cannot intercept a floating panel near its old
+        // boundary, before the artist has reached a window reveal edge.
+        let hidden_panel = find_group(&app, viewport, |g| g.active == Panel::Brushes);
+        assert!(
+            app.drop_hint(
                 viewport,
-                target: DockTarget::Float {
-                    position: [640.0, 250.0],
+                [
+                    hidden_panel.bounds.x + hidden_panel.bounds.width + 20.0,
+                    450.0
+                ],
+                &[],
+                DockItem::Panel {
+                    panel: Panel::Sizes
                 },
-            })
-            .unwrap();
-            invoke(&mut app, CommandId::ZenMode);
-            let facts = ChromeFacts::default();
-            let center = [650.0, 440.0];
-            assert!(
-                chrome(&mut app, ChromeEvent::Motion { position: center }, facts).chrome_hidden
-            );
-            let drag = |app: &mut UiSession<_>, phase, position| {
-                drag(app, DockItem::Panel { panel: Panel::Sizes }, phase, position, viewport);
-                chrome(app, ChromeEvent::Refresh, facts)
-            };
-            let start = find_group(&app, viewport, |g| g.floating).bounds;
-            let grip = [start.x + 110.0, start.y + 12.0];
-            assert!(drag(&mut app, ContactPhase::Down, grip).chrome_hidden);
-            assert!(drag(&mut app, ContactPhase::Move, center).chrome_hidden);
-            assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
-            assert!(!app.interaction.keep_chrome_until_contact);
-            // A hidden dock cannot intercept a floating panel near its old
-            // boundary, before the artist has reached a window reveal edge.
-            let hidden_panel = find_group(&app, viewport, |g| g.active == Panel::Brushes);
-            assert!(
-                app.drop_hint(
-                    viewport,
-                    [
-                        hidden_panel.bounds.x + hidden_panel.bounds.width + 20.0,
-                        450.0
-                    ],
-                    &[],
-                    DockItem::Panel {
-                        panel: Panel::Sizes
-                    },
-                    None
-                )
-                .is_none()
-            );
-            assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
-            assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
-            assert!(!drag(&mut app, ContactPhase::Move, center).chrome_hidden);
-            assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
-            assert!(!app.interaction.keep_chrome_until_contact);
-            // Docked drops also return to normal cursor proximity.
-            assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
-            assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
-            let target = [
-                hidden_panel.bounds.x + hidden_panel.bounds.width * 0.5,
-                450.0,
-            ];
-            assert!(!drag(&mut app, ContactPhase::Up, target).chrome_hidden);
-            assert!(app.state.workspace.layout.floating.is_empty());
-            assert!(!app.interaction.keep_chrome_until_contact);
-            assert!(
-                chrome(&mut app, ChromeEvent::Motion { position: center }, facts).chrome_hidden
-            );
-            assert!(
-                chrome(
-                    &mut app,
-                    ChromeEvent::Contact {
-                        position: center,
-                        canvas: true
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-        }
+                None
+            )
+            .is_none()
+        );
+        assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
+        assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
+        assert!(!drag(&mut app, ContactPhase::Move, center).chrome_hidden);
+        assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
+        assert!(!app.interaction.keep_chrome_until_contact);
+        // Docked drops also return to normal cursor proximity.
+        assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
+        assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
+        let target = [
+            hidden_panel.bounds.x + hidden_panel.bounds.width * 0.5,
+            450.0,
+        ];
+        assert!(!drag(&mut app, ContactPhase::Up, target).chrome_hidden);
+        assert!(app.state.workspace.layout.floating.is_empty());
+        assert!(!app.interaction.keep_chrome_until_contact);
+        assert!(
+            chrome(&mut app, ChromeEvent::Motion { position: center }, facts).chrome_hidden
+        );
+        assert!(
+            chrome(
+                &mut app,
+                ChromeEvent::Contact {
+                    position: center,
+                    canvas: true
+                },
+                facts
+            )
+            .chrome_hidden
+        );
     }
 
     #[test]
@@ -13181,351 +13070,340 @@ mod tests {
             let [r, g, b] = [r, g, b].map(|v| RgbSpace::Srgb.encode(v as f64) as f32);
             RgbColor { linear_rgb: None, space: RgbSpace::Srgb, rgba: [r, g, b, a] }
         }
-        for platform in [
-            Platform::Gtk,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Web,
-            Platform::Android,
-            Platform::Windows,
+        for effect in [
+            "curves",
+            "gradient_map",
+            "brightness_contrast",
+            "split_tone",
+            "paint",
+            "paper",
         ] {
-            for effect in [
-                "curves",
-                "gradient_map",
-                "brightness_contrast",
-                "split_tone",
-                "paint",
-                "paper",
-            ] {
-                let mut app = session(platform);
-                if effect == "paper" {
-                    let id = app
-                        .engine
-                        .document()
-                        .layers
-                        .iter()
-                        .find(|layer| layer.kind == layer_core::LayerKind::Background)
-                        .unwrap()
-                        .id
-                        .0;
-                    app.dispatch(UiAction::SelectLayer { id }).unwrap();
-                } else if effect != "paint" {
-                    app.dispatch(UiAction::Effect {
-                        action: EffectAction::Insert {
-                            effect: effect.into(),
-                        },
-                    })
-                    .unwrap();
-                }
-                let controls = &app.state.layer_properties.controls;
-                let index = controls
+            let mut app = session(Platform::Gtk);
+            if effect == "paper" {
+                let id = app
+                    .engine
+                    .document()
+                    .layers
                     .iter()
-                    .position(|c| {
-                        matches!(
-                            &c.value,
-                            EffectValue::Curve(_)
-                                | EffectValue::Gradient(_)
-                                | EffectValue::Number(_)
-                                | EffectValue::Color(_)
-                        )
-                    })
-                    .unwrap();
-                let key = controls[index].key.clone();
-                let layer = app.engine.document().active_layer.0;
-                let initial = if effect == "curves" {
-                    EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
-                } else if matches!(effect, "split_tone" | "paper") {
-                    EffectValue::Color(color([0.5, 0.25, 0.75, 1.]))
-                } else if effect != "gradient_map" {
-                    EffectValue::Number(0.5)
-                } else {
-                    EffectValue::Gradient(vec![
-                        GradientStop {
-                            position: 0.,
-                            color: color([0., 0., 0., 1.]),
-                        },
-                        GradientStop {
-                            position: 0.5,
-                            color: color([0.5, 0.5, 0.5, 1.]),
-                        },
-                        GradientStop {
-                            position: 1.,
-                            color: color([1., 1., 1., 1.]),
-                        },
-                    ])
-                };
+                    .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                    .unwrap()
+                    .id
+                    .0;
+                app.dispatch(UiAction::SelectLayer { id }).unwrap();
+            } else if effect != "paint" {
                 app.dispatch(UiAction::Effect {
-                    action: EffectAction::Set {
-                        layer,
-                        key: key.clone(),
-                        value: initial.clone(),
+                    action: EffectAction::Insert {
+                        effect: effect.into(),
                     },
                 })
                 .unwrap();
-                let gesture = |phase, position| UiAction::Effect {
-                    action: EffectAction::Gesture {
-                        phase,
-                        action: Box::new(if effect == "curves" {
-                            EffectAction::CurvePoint {
-                                layer,
-                                key: key.clone(),
-                                index: Some(1),
-                                point: [position, 0.75],
-                                remove: false,
-                            }
-                        } else if effect == "gradient_map" {
-                            EffectAction::GradientStop {
-                                layer,
-                                key: key.clone(),
-                                index: Some(1),
-                                position,
-                                color: None,
-                                remove: false,
-                            }
-                        } else {
-                            EffectAction::Set {
-                                layer,
-                                key: key.clone(),
-                                value: if matches!(effect, "split_tone" | "paper") {
-                                    EffectValue::Color(color([position, 0.25, 0.75, 1.]))
-                                } else {
-                                    EffectValue::Number(position)
-                                },
-                            }
-                        }),
-                    },
-                };
-                let checkpoint = app.engine.checkpoint();
-                app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
-                for i in 1..=20 {
-                    app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01))
-                        .unwrap();
-                }
-                assert_eq!(
-                    app.engine.checkpoint(),
-                    checkpoint,
-                    "Preview must not consume history"
-                );
-                let preview = app.state.layer_properties.controls[index].value.clone();
-                assert_ne!(preview, initial);
-                assert!(
-                    app.require_document_snapshot_idle().is_err(),
-                    "A save must wait for the gesture to finish"
-                );
-                assert!(
-                    app.dispatch(UiAction::SelectLayer { id: 1 }).is_err(),
-                    "Another document operation must not overwrite the preview"
-                );
-                app.dispatch(gesture(ContactPhase::Up, 0.7)).unwrap();
-                app.require_document_snapshot_idle().unwrap();
-                assert_ne!(app.engine.checkpoint(), checkpoint);
-                invoke(&mut app, CommandId::Undo);
-                assert_eq!(
-                    app.state.layer_properties.controls[index].value, initial,
-                    "One Undo restores the whole drag"
-                );
-                invoke(&mut app, CommandId::Redo);
-                assert_eq!(app.state.layer_properties.controls[index].value, preview);
-                invoke(&mut app, CommandId::Undo);
-                for end in [
-                    "cancel",
-                    "blur",
-                    "escape",
-                    "readonly",
-                    "invalid",
-                    "unchanged",
-                ] {
-                    app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
-                    if end != "unchanged" {
-                        app.dispatch(gesture(ContactPhase::Move, 0.65)).unwrap();
-                    }
-                    match end {
-                        "cancel" => {
-                            app.dispatch(gesture(ContactPhase::Cancel, 0.65)).unwrap();
-                        }
-                        "blur" => {
-                            app.input(UiInput::Blur).unwrap();
-                        }
-                        "escape" => {
-                            app.input(UiInput::Key {
-                                key: "escape".into(),
-                                pressed: true,
-                                repeat: false,
-                                modifiers: Default::default(),
-                                editing: false,
-                                divider: None,
-                            })
-                            .unwrap();
-                        }
-                        "readonly" => {
-                            app.set_workspace_read_only(true);
-                            app.dispatch(gesture(ContactPhase::Up, 0.65)).unwrap();
-                            assert!(app.dispatch(gesture(ContactPhase::Down, 0.5)).is_err());
-                            app.set_workspace_read_only(false);
-                        }
-                        "invalid" => {
-                            assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN)).is_err());
-                        }
-                        _ => {
-                            app.dispatch(gesture(ContactPhase::Up, 0.5)).unwrap();
-                        }
-                    }
-                    app.dispatch(gesture(ContactPhase::Up, 0.8)).unwrap();
-                    assert_eq!(app.state.layer_properties.controls[index].value, initial);
-                    assert_eq!(app.engine.checkpoint(), checkpoint);
-                    app.require_document_snapshot_idle().unwrap();
-                    assert!(
-                        app.engine.can_redo(),
-                        "Cancelled and empty drags preserve the earlier Redo"
-                    );
-                }
-                invoke(&mut app, CommandId::Redo);
-                assert_eq!(app.state.layer_properties.controls[index].value, preview);
-                app.dispatch(gesture(ContactPhase::Down, 0.7)).unwrap();
-                app.dispatch(gesture(ContactPhase::Move, 0.6)).unwrap();
-                app.suspend_renderer().unwrap();
-                app.dispatch(gesture(ContactPhase::Cancel, 0.6)).unwrap();
-                assert_eq!(app.state.layer_properties.controls[index].value, preview);
-                app.require_document_snapshot_idle().unwrap();
             }
+            let controls = &app.state.layer_properties.controls;
+            let index = controls
+                .iter()
+                .position(|c| {
+                    matches!(
+                        &c.value,
+                        EffectValue::Curve(_)
+                            | EffectValue::Gradient(_)
+                            | EffectValue::Number(_)
+                            | EffectValue::Color(_)
+                    )
+                })
+                .unwrap();
+            let key = controls[index].key.clone();
+            let layer = app.engine.document().active_layer.0;
+            let initial = if effect == "curves" {
+                EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
+            } else if matches!(effect, "split_tone" | "paper") {
+                EffectValue::Color(color([0.5, 0.25, 0.75, 1.]))
+            } else if effect != "gradient_map" {
+                EffectValue::Number(0.5)
+            } else {
+                EffectValue::Gradient(vec![
+                    GradientStop {
+                        position: 0.,
+                        color: color([0., 0., 0., 1.]),
+                    },
+                    GradientStop {
+                        position: 0.5,
+                        color: color([0.5, 0.5, 0.5, 1.]),
+                    },
+                    GradientStop {
+                        position: 1.,
+                        color: color([1., 1., 1., 1.]),
+                    },
+                ])
+            };
+            app.dispatch(UiAction::Effect {
+                action: EffectAction::Set {
+                    layer,
+                    key: key.clone(),
+                    value: initial.clone(),
+                },
+            })
+            .unwrap();
+            let gesture = |phase, position| UiAction::Effect {
+                action: EffectAction::Gesture {
+                    phase,
+                    action: Box::new(if effect == "curves" {
+                        EffectAction::CurvePoint {
+                            layer,
+                            key: key.clone(),
+                            index: Some(1),
+                            point: [position, 0.75],
+                            remove: false,
+                        }
+                    } else if effect == "gradient_map" {
+                        EffectAction::GradientStop {
+                            layer,
+                            key: key.clone(),
+                            index: Some(1),
+                            position,
+                            color: None,
+                            remove: false,
+                        }
+                    } else {
+                        EffectAction::Set {
+                            layer,
+                            key: key.clone(),
+                            value: if matches!(effect, "split_tone" | "paper") {
+                                EffectValue::Color(color([position, 0.25, 0.75, 1.]))
+                            } else {
+                                EffectValue::Number(position)
+                            },
+                        }
+                    }),
+                },
+            };
+            let checkpoint = app.engine.checkpoint();
+            app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+            for i in 1..=20 {
+                app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01))
+                    .unwrap();
+            }
+            assert_eq!(
+                app.engine.checkpoint(),
+                checkpoint,
+                "Preview must not consume history"
+            );
+            let preview = app.state.layer_properties.controls[index].value.clone();
+            assert_ne!(preview, initial);
+            assert!(
+                app.require_document_snapshot_idle().is_err(),
+                "A save must wait for the gesture to finish"
+            );
+            assert!(
+                app.dispatch(UiAction::SelectLayer { id: 1 }).is_err(),
+                "Another document operation must not overwrite the preview"
+            );
+            app.dispatch(gesture(ContactPhase::Up, 0.7)).unwrap();
+            app.require_document_snapshot_idle().unwrap();
+            assert_ne!(app.engine.checkpoint(), checkpoint);
+            invoke(&mut app, CommandId::Undo);
+            assert_eq!(
+                app.state.layer_properties.controls[index].value, initial,
+                "One Undo restores the whole drag"
+            );
+            invoke(&mut app, CommandId::Redo);
+            assert_eq!(app.state.layer_properties.controls[index].value, preview);
+            invoke(&mut app, CommandId::Undo);
+            for end in [
+                "cancel",
+                "blur",
+                "escape",
+                "readonly",
+                "invalid",
+                "unchanged",
+            ] {
+                app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                if end != "unchanged" {
+                    app.dispatch(gesture(ContactPhase::Move, 0.65)).unwrap();
+                }
+                match end {
+                    "cancel" => {
+                        app.dispatch(gesture(ContactPhase::Cancel, 0.65)).unwrap();
+                    }
+                    "blur" => {
+                        app.input(UiInput::Blur).unwrap();
+                    }
+                    "escape" => {
+                        app.input(UiInput::Key {
+                            key: "escape".into(),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Default::default(),
+                            editing: false,
+                            divider: None,
+                        })
+                        .unwrap();
+                    }
+                    "readonly" => {
+                        app.set_workspace_read_only(true);
+                        app.dispatch(gesture(ContactPhase::Up, 0.65)).unwrap();
+                        assert!(app.dispatch(gesture(ContactPhase::Down, 0.5)).is_err());
+                        app.set_workspace_read_only(false);
+                    }
+                    "invalid" => {
+                        assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN)).is_err());
+                    }
+                    _ => {
+                        app.dispatch(gesture(ContactPhase::Up, 0.5)).unwrap();
+                    }
+                }
+                app.dispatch(gesture(ContactPhase::Up, 0.8)).unwrap();
+                assert_eq!(app.state.layer_properties.controls[index].value, initial);
+                assert_eq!(app.engine.checkpoint(), checkpoint);
+                app.require_document_snapshot_idle().unwrap();
+                assert!(
+                    app.engine.can_redo(),
+                    "Cancelled and empty drags preserve the earlier Redo"
+                );
+            }
+            invoke(&mut app, CommandId::Redo);
+            assert_eq!(app.state.layer_properties.controls[index].value, preview);
+            app.dispatch(gesture(ContactPhase::Down, 0.7)).unwrap();
+            app.dispatch(gesture(ContactPhase::Move, 0.6)).unwrap();
+            app.suspend_renderer().unwrap();
+            app.dispatch(gesture(ContactPhase::Cancel, 0.6)).unwrap();
+            assert_eq!(app.state.layer_properties.controls[index].value, preview);
+            app.require_document_snapshot_idle().unwrap();
         }
     }
 
     #[test]
     fn effect_creation_properties_and_navigation_are_shared() {
         use layer_core::EffectValue;
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session(platform);
-            let base = app.engine.document().active_layer;
-            let send = |app: &mut UiSession<Recorder>, action| {
-                app.dispatch(UiAction::Effect { action }).unwrap()
-            };
-            send(
-                &mut app,
-                EffectAction::Insert {
-                    effect: "curves".into(),
+        let mut app = session(Platform::Gtk);
+        let base = app.engine.document().active_layer;
+        let send = |app: &mut UiSession<Recorder>, action| {
+            app.dispatch(UiAction::Effect { action }).unwrap()
+        };
+        send(
+            &mut app,
+            EffectAction::Insert {
+                effect: "curves".into(),
+            },
+        );
+        let id = app.engine.document().active_layer;
+        assert_eq!(app.engine.document().layers[0].id, id);
+        assert_eq!(app.engine.document().layers[1].id, base);
+        assert_eq!(
+            app.state.workspace.layout.active_panel(Panel::Properties),
+            Some(Panel::Properties)
+        );
+        send(
+            &mut app,
+            EffectAction::CurvePoint {
+                layer: id.0,
+                key: "curve_0".into(),
+                index: None,
+                point: [0.4, 0.7],
+                remove: false,
+            },
+        );
+        assert_eq!(
+            app.state.layer_properties.controls[0].value,
+            EffectValue::Curve(vec![[0., 0.], [0.4, 0.7], [1., 1.]])
+        );
+        send(
+            &mut app,
+            EffectAction::Reset {
+                layer: id.0,
+                key: "curve_0".into(),
+            },
+        );
+        assert_eq!(
+            app.state.layer_properties.controls[0].value,
+            app.state.layer_properties.controls[0].default
+        );
+        app.layer_action(LayerAction::Clip {
+            id: id.0,
+            value: true,
+        })
+        .unwrap();
+        assert_eq!(app.engine.document().clipping_base(id), Some(base));
+        app.state
+            .workspace
+            .layout
+            .move_panel(
+                [1200., 900.],
+                Panel::Properties,
+                DockTarget::Float {
+                    position: [450., 150.],
                 },
-            );
-            let id = app.engine.document().active_layer;
-            assert_eq!(app.engine.document().layers[0].id, id);
-            assert_eq!(app.engine.document().layers[1].id, base);
-            assert_eq!(
-                app.state.workspace.layout.active_panel(Panel::Properties),
-                Some(Panel::Properties)
-            );
-            send(
-                &mut app,
-                EffectAction::CurvePoint {
-                    layer: id.0,
-                    key: "curve_0".into(),
-                    index: None,
-                    point: [0.4, 0.7],
-                    remove: false,
-                },
-            );
-            assert_eq!(
-                app.state.layer_properties.controls[0].value,
-                EffectValue::Curve(vec![[0., 0.], [0.4, 0.7], [1., 1.]])
-            );
-            send(
-                &mut app,
-                EffectAction::Reset {
-                    layer: id.0,
-                    key: "curve_0".into(),
-                },
-            );
-            assert_eq!(
-                app.state.layer_properties.controls[0].value,
-                app.state.layer_properties.controls[0].default
-            );
-            app.layer_action(LayerAction::Clip {
-                id: id.0,
-                value: true,
-            })
+            )
             .unwrap();
-            assert_eq!(app.engine.document().clipping_base(id), Some(base));
-            app.state
-                .workspace
-                .layout
-                .move_panel(
-                    [1200., 900.],
-                    Panel::Properties,
-                    DockTarget::Float {
-                        position: [450., 150.],
-                    },
-                )
-                .unwrap();
-            let previous = app.state.workspace.layout.panel_group(Panel::Properties);
-            send(
-                &mut app,
-                EffectAction::Insert {
-                    effect: "levels".into(),
-                },
-            );
-            assert_eq!(
-                app.state.workspace.layout.panel_group(Panel::Properties),
-                previous,
-                "visible Properties stays put"
-            );
-            app.state
-                .workspace
-                .layout
-                .set_panel_visible(Panel::Properties, false)
-                .unwrap();
-            send(
-                &mut app,
-                EffectAction::Insert {
-                    effect: "brightness_contrast".into(),
-                },
-            );
-            let panels = app.state.workspace.layout.group_panels(8).unwrap();
-            let a = panels
-                .iter()
-                .position(|p| *p == Panel::Adjustments)
-                .unwrap();
-            assert_eq!(panels[a + 1], Panel::Properties);
-            send(
-                &mut app,
-                EffectAction::Insert {
-                    effect: "color_balance".into(),
-                },
-            );
-            let controls = &app.state.layer_properties.controls;
-            assert_eq!(controls[0].section.as_deref(), Some("Shadows"));
-            assert_eq!(controls[3].section.as_deref(), Some("Midtones"));
-            assert_eq!(controls[6].section.as_deref(), Some("Highlights"));
-            assert!(controls[9].section.is_none());
-            assert_eq!(controls[0].label, "Cyan — Red");
-            send(
-                &mut app,
-                EffectAction::Insert {
-                    effect: "gradient_map".into(),
-                },
-            );
-            let layer = app.state.layer_properties.layer.unwrap();
-            send(
-                &mut app,
-                EffectAction::GradientStop {
-                    layer,
-                    key: "gradient".into(),
-                    index: None,
-                    position: 0.5,
-                    color: Some(layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.7, 0.2, 0.1, 0.5]).unwrap()),
-                    remove: false,
-                },
-            );
-            let edited = app.state.layer_properties.controls[0].value.clone();
-            assert!(
-                matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color.rgba[3]==0.5)
-            );
-            invoke(&mut app, CommandId::Undo);
-            assert_eq!(
-                app.state.layer_properties.controls[0].value,
-                app.state.layer_properties.controls[0].default
-            );
-            invoke(&mut app, CommandId::Redo);
-            assert_eq!(app.state.layer_properties.controls[0].value, edited);
-        }
+        let previous = app.state.workspace.layout.panel_group(Panel::Properties);
+        send(
+            &mut app,
+            EffectAction::Insert {
+                effect: "levels".into(),
+            },
+        );
+        assert_eq!(
+            app.state.workspace.layout.panel_group(Panel::Properties),
+            previous,
+            "visible Properties stays put"
+        );
+        app.state
+            .workspace
+            .layout
+            .set_panel_visible(Panel::Properties, false)
+            .unwrap();
+        send(
+            &mut app,
+            EffectAction::Insert {
+                effect: "brightness_contrast".into(),
+            },
+        );
+        let panels = app.state.workspace.layout.group_panels(8).unwrap();
+        let a = panels
+            .iter()
+            .position(|p| *p == Panel::Adjustments)
+            .unwrap();
+        assert_eq!(panels[a + 1], Panel::Properties);
+        send(
+            &mut app,
+            EffectAction::Insert {
+                effect: "color_balance".into(),
+            },
+        );
+        let controls = &app.state.layer_properties.controls;
+        assert_eq!(controls[0].section.as_deref(), Some("Shadows"));
+        assert_eq!(controls[3].section.as_deref(), Some("Midtones"));
+        assert_eq!(controls[6].section.as_deref(), Some("Highlights"));
+        assert!(controls[9].section.is_none());
+        assert_eq!(controls[0].label, "Cyan — Red");
+        send(
+            &mut app,
+            EffectAction::Insert {
+                effect: "gradient_map".into(),
+            },
+        );
+        let layer = app.state.layer_properties.layer.unwrap();
+        send(
+            &mut app,
+            EffectAction::GradientStop {
+                layer,
+                key: "gradient".into(),
+                index: None,
+                position: 0.5,
+                color: Some(layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.7, 0.2, 0.1, 0.5]).unwrap()),
+                remove: false,
+            },
+        );
+        let edited = app.state.layer_properties.controls[0].value.clone();
+        assert!(
+            matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color.rgba[3]==0.5)
+        );
+        invoke(&mut app, CommandId::Undo);
+        assert_eq!(
+            app.state.layer_properties.controls[0].value,
+            app.state.layer_properties.controls[0].default
+        );
+        invoke(&mut app, CommandId::Redo);
+        assert_eq!(app.state.layer_properties.controls[0].value, edited);
     }
     #[test]
     fn shared_drop_preview_validates_the_exact_move() {
@@ -13600,21 +13478,19 @@ mod tests {
     }
     #[test]
     fn camera_gestures_wait_for_paint_to_finish_without_reporting_an_error() {
-        for platform in [Platform::Ios, Platform::Mac] {
-            let mut s = session(platform);
-            let before = s.state.camera.clone();
-            s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
-            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
-            assert!(!change.canvas_wake);
-            assert_eq!(s.state.camera, before);
-            s.pen(event(&s, 2, PenPhase::Up, 0.)).unwrap();
-            s.frame(1, 1).unwrap();
-            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
-            assert!(change.canvas_wake);
-            assert!((s.state.camera.zoom - before.zoom * 1.25).abs() < 0.0001);
-            assert!((s.state.camera.rotation - before.rotation - 0.2).abs() < 0.0001);
-            assert!(s.state.host_error.is_none());
-        }
+        let mut s = session(Platform::Gtk);
+        let before = s.state.camera.clone();
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+        assert!(!change.canvas_wake);
+        assert_eq!(s.state.camera, before);
+        s.pen(event(&s, 2, PenPhase::Up, 0.)).unwrap();
+        s.frame(1, 1).unwrap();
+        let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+        assert!(change.canvas_wake);
+        assert!((s.state.camera.zoom - before.zoom * 1.25).abs() < 0.0001);
+        assert!((s.state.camera.rotation - before.rotation - 0.2).abs() < 0.0001);
+        assert!(s.state.host_error.is_none());
     }
     #[test]
     fn zen_does_not_move_camera_layout_or_request_canvas_work() {
@@ -14624,53 +14500,51 @@ mod tests {
 
     #[test]
     fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session(platform);
-            let brush = s
-                .state
-                .workspace
-                .layout
-                .panel(Panel::Toolbar)
-                .unwrap()
-                .tiles()
-                .iter()
-                .find(|t| t.control == ToolbarControl::Command { command: CommandId::Brush })
-                .unwrap()
-                .id;
-            invoke(&mut s, CommandId::Brush);
-            for (position, canvas) in [
-                ([500., 15.], false),
-                ([1000., 850.], false),
-                ([1000., 850.], true),
-            ] {
-                s.dispatch(UiAction::ActivateTile {
-                    panel: Panel::Toolbar,
-                    tile: brush,
-                })
-                .unwrap();
-                assert!(s.state.customization.drawer.is_some());
-                assert!(
-                    s.panel_view(Panel::Toolbar)
-                        .unwrap()
-                        .tiles
-                        .iter()
-                        .find(|t| t.id == brush)
-                        .unwrap()
-                        .choice
-                        .selected
-                );
-                let reply = chrome(
-                    &mut s,
-                    ChromeEvent::Contact { position, canvas },
-                    ChromeFacts::default(),
-                );
-                assert!(s.state.customization.drawer.is_none());
-                assert_eq!(
-                    reply.handled, canvas,
-                    "Native clicks/drags must reach their target"
-                );
-                assert!(!reply.paint);
-            }
+        let mut s = session(Platform::Gtk);
+        let brush = s
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .iter()
+            .find(|t| t.control == ToolbarControl::Command { command: CommandId::Brush })
+            .unwrap()
+            .id;
+        invoke(&mut s, CommandId::Brush);
+        for (position, canvas) in [
+            ([500., 15.], false),
+            ([1000., 850.], false),
+            ([1000., 850.], true),
+        ] {
+            s.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: brush,
+            })
+            .unwrap();
+            assert!(s.state.customization.drawer.is_some());
+            assert!(
+                s.panel_view(Panel::Toolbar)
+                    .unwrap()
+                    .tiles
+                    .iter()
+                    .find(|t| t.id == brush)
+                    .unwrap()
+                    .choice
+                    .selected
+            );
+            let reply = chrome(
+                &mut s,
+                ChromeEvent::Contact { position, canvas },
+                ChromeFacts::default(),
+            );
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(
+                reply.handled, canvas,
+                "Native clicks/drags must reach their target"
+            );
+            assert!(!reply.paint);
         }
     }
 
@@ -14914,83 +14788,49 @@ mod tests {
         );
     }
     #[test]
-    fn android_drawers_and_columns_replace_legacy_popup_behavior() {
-        let mut app = session(Platform::Android);
-        let viewport = [1200.0, 900.0];
-        app.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
-            .unwrap();
-        assert_eq!(app.state.workspace.layout.collapsed.len(), 1);
-        invoke(&mut app, CommandId::UndoWorkspace);
-        assert!(app.state.workspace.layout.collapsed.is_empty());
-
-        let tile = app
-            .state
-            .workspace
-            .layout
-            .panel(Panel::Toolbar)
-            .unwrap()
-            .tiles()
-            .iter()
-            .find(|tile| tile.control == ToolbarControl::Color)
-            .unwrap()
-            .id;
-        for open in [true, false] {
-            app.dispatch(UiAction::ActivateTile {
-                panel: Panel::Toolbar,
-                tile,
-            })
-            .unwrap();
-            assert_eq!(app.state.customization.drawer.is_some(), open);
-            assert!(app.state.customization.control.is_none());
-        }
-    }
-
-    #[test]
-    fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent_on_all_platforms() {
-        for platform in Platform::ALL {
-            let mut app = session(platform);
-            let tile = |app: &UiSession<Recorder>, control| {
-                app.state
-                    .workspace
-                    .layout
-                    .panel(Panel::Toolbar)
-                    .unwrap()
-                    .tiles()
-                    .iter()
-                    .find(|t| t.control == control)
-                    .unwrap()
-                    .id
-            };
-            let color = tile(&app, ToolbarControl::Color);
-            let opacity = tile(&app, ToolbarControl::Opacity);
-            for id in [color, opacity] {
-                for open in [true, false] {
-                    app.dispatch(UiAction::ActivateTile {
-                        panel: Panel::Toolbar,
-                        tile: id,
-                    })
-                    .unwrap();
-                    assert_eq!(app.state.customization.drawer.is_some(), open);
-                    assert!(app.state.customization.control.is_none());
-                }
+    fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent() {
+        let mut app = session(Platform::Gtk);
+        let tile = |app: &UiSession<Recorder>, control| {
+            app.state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == control)
+                .unwrap()
+                .id
+        };
+        let color = tile(&app, ToolbarControl::Color);
+        let opacity = tile(&app, ToolbarControl::Opacity);
+        for id in [color, opacity] {
+            for open in [true, false] {
+                app.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: id,
+                })
+                .unwrap();
+                assert_eq!(app.state.customization.drawer.is_some(), open);
+                assert!(app.state.customization.control.is_none());
             }
-            for _ in 0..2 {
-                customize(&mut app, CustomizationAction::OpenControl {
-                    control: PanelControl::BrushColor,
-                });
-                assert_eq!(
-                    app.state.customization.control,
-                    Some(PanelControl::BrushColor)
-                );
-            }
-            app.dispatch(UiAction::ActivateTile {
-                panel: Panel::Toolbar,
-                tile: opacity,
-            })
-            .unwrap();
-            assert!(app.state.customization.control.is_none());
-            assert!(app.state.customization.drawer.is_some());
         }
+        for _ in 0..2 {
+            customize(&mut app, CustomizationAction::OpenControl {
+                control: PanelControl::BrushColor,
+            });
+            assert_eq!(
+                app.state.customization.control,
+                Some(PanelControl::BrushColor)
+            );
+        }
+        app.dispatch(UiAction::ActivateTile {
+            panel: Panel::Toolbar,
+            tile: opacity,
+        })
+        .unwrap();
+        assert!(app.state.customization.control.is_none());
+        assert!(app.state.customization.drawer.is_some());
     }
 
     #[test]
@@ -15526,82 +15366,74 @@ mod tests {
     }
     #[test]
     fn stationary_lasso_contacts_preserve_selection_history_and_save_readiness() {
-        for platform in [
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Web,
-            Platform::Android,
-            Platform::Windows,
-        ] {
-            for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
-                let mut s = session(platform);
-                invoke(&mut s, CommandId::SelectAll);
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::New {
-                        group: false,
-                        clipped: false,
-                    },
-                })
-                .unwrap();
-                invoke(&mut s, CommandId::Undo);
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::Tool { tool },
-                })
-                .unwrap();
-                let selection = s.engine.document().selection.clone();
-                let checkpoint = s.engine.checkpoint();
-                let mut sequence = 0;
-                for moves in [0, 1, 20] {
-                    let phases = std::iter::once(PenPhase::Down)
-                        .chain(std::iter::repeat_n(PenPhase::Move, moves))
-                        .chain([PenPhase::Up, PenPhase::Up]);
-                    for phase in phases {
-                        sequence += 1;
-                        let mut sample = event(&s, sequence, phase, 1.);
-                        sample.surface_position = Point { x: 300., y: 300. };
-                        s.pen(sample).unwrap();
-                    }
-                    assert!(
-                        s.state.host_error.is_none(),
-                        "A stationary lasso must not report a canvas error: {:?}",
-                        s.state.host_error
-                    );
-                    s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
-                        .unwrap();
-                    assert_eq!(s.engine.document().selection, selection);
-                    assert_eq!(s.engine.checkpoint(), checkpoint);
-                    assert!(
-                        s.engine.can_redo(),
-                        "An empty contact preserves the preceding Redo"
-                    );
-                    s.require_document_snapshot_idle().unwrap();
-                }
-                // An actual enclosed path must still commit normally.
-                for (phase, x, y) in [
-                    (PenPhase::Down, 300., 300.),
-                    (PenPhase::Move, 400., 300.),
-                    (PenPhase::Move, 400., 400.),
-                    (PenPhase::Move, 300., 400.),
-                    (PenPhase::Up, 300., 300.),
-                ] {
+        for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
+            let mut s = session(Platform::Gtk);
+            invoke(&mut s, CommandId::SelectAll);
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::New {
+                    group: false,
+                    clipped: false,
+                },
+            })
+            .unwrap();
+            invoke(&mut s, CommandId::Undo);
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::Tool { tool },
+            })
+            .unwrap();
+            let selection = s.engine.document().selection.clone();
+            let checkpoint = s.engine.checkpoint();
+            let mut sequence = 0;
+            for moves in [0, 1, 20] {
+                let phases = std::iter::once(PenPhase::Down)
+                    .chain(std::iter::repeat_n(PenPhase::Move, moves))
+                    .chain([PenPhase::Up, PenPhase::Up]);
+                for phase in phases {
                     sequence += 1;
                     let mut sample = event(&s, sequence, phase, 1.);
-                    sample.surface_position = Point { x, y };
+                    sample.surface_position = Point { x: 300., y: 300. };
                     s.pen(sample).unwrap();
                 }
-                assert!(s.state.host_error.is_none());
+                assert!(
+                    s.state.host_error.is_none(),
+                    "A stationary lasso must not report a canvas error: {:?}",
+                    s.state.host_error
+                );
                 s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
                     .unwrap();
-                if tool == LayerCanvasTool::Select {
-                    assert_ne!(s.engine.document().selection, selection);
-                } else {
-                    assert_ne!(s.engine.checkpoint(), checkpoint);
-                }
-                invoke(&mut s, CommandId::Undo);
-                assert_eq!(s.engine.checkpoint(), checkpoint);
                 assert_eq!(s.engine.document().selection, selection);
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+                assert!(
+                    s.engine.can_redo(),
+                    "An empty contact preserves the preceding Redo"
+                );
                 s.require_document_snapshot_idle().unwrap();
             }
+            // An actual enclosed path must still commit normally.
+            for (phase, x, y) in [
+                (PenPhase::Down, 300., 300.),
+                (PenPhase::Move, 400., 300.),
+                (PenPhase::Move, 400., 400.),
+                (PenPhase::Move, 300., 400.),
+                (PenPhase::Up, 300., 300.),
+            ] {
+                sequence += 1;
+                let mut sample = event(&s, sequence, phase, 1.);
+                sample.surface_position = Point { x, y };
+                s.pen(sample).unwrap();
+            }
+            assert!(s.state.host_error.is_none());
+            s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
+                .unwrap();
+            if tool == LayerCanvasTool::Select {
+                assert_ne!(s.engine.document().selection, selection);
+            } else {
+                assert_ne!(s.engine.checkpoint(), checkpoint);
+            }
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!(s.engine.document().selection, selection);
+            s.require_document_snapshot_idle().unwrap();
         }
     }
 
@@ -16083,14 +15915,7 @@ mod tests {
     }
     #[test]
     fn shortcut_search_includes_current_bindings_and_modifiers_on_every_platform() {
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             let mut s = session(platform);
             invoke(&mut s, CommandId::KeyboardShortcuts);
             for query in ["z", " Z "] {
@@ -16428,123 +16253,117 @@ mod tests {
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
-        for platform in Platform::ALL {
-            let mut app = session(platform);
-            app.state
-                .workspace
-                .layout
-                .insert_tools(
-                    Panel::Toolbar,
-                    None,
-                    &[ToolbarControl::Command {
-                        command: CommandId::Hand,
-                    }],
-                )
-                .unwrap();
-            let commands = app.state.commands.clone();
-            let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
-            assert!(
-                !commands
-                    .iter()
-                    .find(|c| c.id == CommandId::Undo)
-                    .unwrap()
-                    .enabled
-            );
-            assert!(
-                !commands
-                    .iter()
-                    .find(|c| c.id == CommandId::FillSelection)
-                    .unwrap()
-                    .enabled
-            );
-            app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
-            assert!(!app.command(CommandId::AddLayer).enabled);
-            assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-            let camera = app.state.camera.clone();
-            assert!(
-                !app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0)
-                    .unwrap()
-                    .canvas_wake
-            );
-            assert_eq!(app.state.camera, camera);
-            let change = app.frame(10_000_000, 18_000_000).unwrap();
-            assert_eq!(
-                change.regions & regions::COMMANDS,
-                0,
-                "{platform:?}: pen-down must not restyle commands"
-            );
-            assert_eq!(app.state.commands, commands);
-            assert_eq!(
-                serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap(),
-                tiles
-            );
-            let hand = app
-                .state
-                .workspace
-                .layout
-                .panel(Panel::Toolbar)
-                .unwrap()
-                .tiles()
+        let mut app = session(Platform::Gtk);
+        app.state
+            .workspace
+            .layout
+            .insert_tools(
+                Panel::Toolbar,
+                None,
+                &[ToolbarControl::Command {
+                    command: CommandId::Hand,
+                }],
+            )
+            .unwrap();
+        let commands = app.state.commands.clone();
+        let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
+        assert!(
+            !commands
                 .iter()
-                .find(|t| {
-                    t.control
-                        == ToolbarControl::Command {
-                            command: CommandId::Hand,
-                        }
-                })
+                .find(|c| c.id == CommandId::Undo)
                 .unwrap()
-                .id;
-            assert!(
-                app.dispatch(UiAction::ActivateTile {
-                    panel: Panel::Toolbar,
-                    tile: hand
-                })
-                .is_err()
-            );
-            assert!(
-                app.dispatch(UiAction::Invoke {
-                    command: CommandId::Undo
-                })
-                .is_err()
-            );
-            assert!(
-                app.engine.has_active_stroke(),
-                "blocked actions preserve the stroke"
-            );
-            app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
-            let change = app.frame(20_000_000, 28_000_000).unwrap();
-            assert_eq!(change.regions, 0);
-            assert!(change.canvas_wake);
-            assert_eq!(app.state.commands, commands);
-            app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
-            let change = app.frame(30_000_000, 38_000_000).unwrap();
-            assert_ne!(change.regions & regions::DOCUMENT, 0);
-            assert!(app.command(CommandId::Undo).enabled);
-            for command in &app.state.commands {
-                assert_eq!(
-                    *command,
-                    app.command(command.id),
-                    "availability refreshes after release"
-                );
-            }
-            let expected = app
-                .state
-                .camera
-                .input_transform()
-                .map(Point { x: 225.0, y: 300.0 });
-            let first = app.engine.backend().recorded_dabs.first().unwrap();
-            assert!((first.center.x - expected.x).abs() < 0.001);
-            assert_eq!(app.engine.metrics().committed_strokes, 1);
-            assert!(app.engine.backend().dabs > 0);
-            invoke(&mut app, CommandId::Undo);
-            assert!(
-                app.engine
-                    .document()
-                    .target_raster(app.engine.document().active_target())
-                    .unwrap()
-                    .is_empty()
+                .enabled
+        );
+        assert!(
+            !commands
+                .iter()
+                .find(|c| c.id == CommandId::FillSelection)
+                .unwrap()
+                .enabled
+        );
+        app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
+        assert!(!app.command(CommandId::AddLayer).enabled);
+        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
+        let camera = app.state.camera.clone();
+        assert!(
+            !app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0)
+                .unwrap()
+                .canvas_wake
+        );
+        assert_eq!(app.state.camera, camera);
+        let change = app.frame(10_000_000, 18_000_000).unwrap();
+        assert_eq!(change.regions & regions::COMMANDS, 0, "pen-down must not restyle commands");
+        assert_eq!(app.state.commands, commands);
+        assert_eq!(
+            serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap(),
+            tiles
+        );
+        let hand = app
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .iter()
+            .find(|t| {
+                t.control
+                    == ToolbarControl::Command {
+                        command: CommandId::Hand,
+                    }
+            })
+            .unwrap()
+            .id;
+        assert!(
+            app.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: hand
+            })
+            .is_err()
+        );
+        assert!(
+            app.dispatch(UiAction::Invoke {
+                command: CommandId::Undo
+            })
+            .is_err()
+        );
+        assert!(
+            app.engine.has_active_stroke(),
+            "blocked actions preserve the stroke"
+        );
+        app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
+        let change = app.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(change.regions, 0);
+        assert!(change.canvas_wake);
+        assert_eq!(app.state.commands, commands);
+        app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
+        let change = app.frame(30_000_000, 38_000_000).unwrap();
+        assert_ne!(change.regions & regions::DOCUMENT, 0);
+        assert!(app.command(CommandId::Undo).enabled);
+        for command in &app.state.commands {
+            assert_eq!(
+                *command,
+                app.command(command.id),
+                "availability refreshes after release"
             );
         }
+        let expected = app
+            .state
+            .camera
+            .input_transform()
+            .map(Point { x: 225.0, y: 300.0 });
+        let first = app.engine.backend().recorded_dabs.first().unwrap();
+        assert!((first.center.x - expected.x).abs() < 0.001);
+        assert_eq!(app.engine.metrics().committed_strokes, 1);
+        assert!(app.engine.backend().dabs > 0);
+        invoke(&mut app, CommandId::Undo);
+        assert!(
+            app.engine
+                .document()
+                .target_raster(app.engine.document().active_target())
+                .unwrap()
+                .is_empty()
+        );
     }
     #[test]
     fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {

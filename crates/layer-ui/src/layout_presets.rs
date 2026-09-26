@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn tool_class_panels_are_independent_and_available_on_supported_hosts() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+        for platform in Platform::ALL {
             let layout = WorkspacePreset::Painter.layout(platform);
             for panel in [Panel::BrushSets, Panel::SculptSets, Panel::Tools, Panel::FilterTypes] {
                 assert!(layout.panel(panel).is_ok());
@@ -504,14 +504,7 @@ mod tests {
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
         assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
         assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
                 let items: Vec<_> = layout.header.entries().map(|e| e.item).collect();
@@ -769,7 +762,7 @@ mod tests {
         let bounds = |layout: &DockLayout, height, panel| {
             layout.resolve(1400., height).groups.into_iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
         };
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+        for platform in Platform::ALL {
             let mut layout = WorkspacePreset::Illustrator.without_palettes_layout(platform);
             assert_eq!(layout.fit_height_groups, [10, 14]);
             for invalid in [vec![10, 10], vec![10, 999]] {

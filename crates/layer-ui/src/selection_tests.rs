@@ -37,7 +37,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn geometric_selection_constraints_history_cancel_and_workspace_memory() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for platform in Platform::ALL {
             for command in [CommandId::RectangleSelect, CommandId::EllipseSelect] {
                 let mut s = session(platform);
                 invoke(&mut s, command);
@@ -274,7 +274,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn sampling_sources_require_a_selection_tool() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for platform in Platform::ALL {
             let mut s = session(platform);
             for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
                 assert!(!s.command(command).enabled);
@@ -289,14 +289,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn selection_defaults_and_tools_follow_platform_rollout() {
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.header.entries().any(|e| e.item
                 == HeaderItem::Tool {

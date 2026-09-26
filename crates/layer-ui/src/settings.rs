@@ -1801,14 +1801,7 @@ mod copy_tests {
 
     #[test]
     fn pointer_preferences_belong_to_input_on_every_platform() {
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             let mut settings = Settings::default();
             assert!(settings.hide_cursor_while_drawing);
             for page in settings.pages(platform) {
