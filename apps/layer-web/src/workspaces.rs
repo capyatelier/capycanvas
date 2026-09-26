@@ -82,7 +82,7 @@ pub fn workspace_database(
         let read_only = !pending && matches!(&request,
             StoreRequest::List | StoreRequest::Load { .. } | StoreRequest::Raw { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
-            | StoreRequest::LegacyImport { .. } | StoreRequest::Pending
+            | StoreRequest::Pending
             | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder
             | StoreRequest::Maintenance { apply: false, .. });
         let listing = !pending && matches!(&request, StoreRequest::List);
@@ -127,28 +127,17 @@ impl WebApp {
         &mut self,
         execute: js_sys::Function,
         owner: String,
-        has_legacy: bool,
-        legacy_error: Option<String>,
     ) -> Result<(), JsValue> {
         if self.workspaces.is_some() {
             return Ok(());
         }
-        let capture = self.session.capture_workspace().map_err(js)?;
         self.session.set_workspace_read_only(true);
         self.workspaces = Some(WorkspaceController::new_owned(
             BrowserStore(execute),
             layer_ui::Platform::Web,
-            "web:layer.workspace.v1".into(),
-            has_legacy.then_some(capture),
             serde_json::from_str(&owner).map_err(js)?,
             js_sys::Date::now() as u64,
         ));
-        if let Some(error) = legacy_error {
-            self.workspaces
-                .as_mut()
-                .unwrap()
-                .legacy_error(error, js_sys::Date::now() as u64);
-        }
         Ok(())
     }
     pub fn workspace_observe(&mut self) {

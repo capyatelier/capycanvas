@@ -3,7 +3,7 @@
 //! session and preview replies are fenced by a selection/lifetime generation.
 use crate::*;
 use layer_render::CanvasRenderer;
-use layer_ui::{DockLayout, Platform, PreparedWorkspace, UiChange, UiSession, WorkspaceCapture};
+use layer_ui::{DockLayout, Platform, PreparedWorkspace, UiChange, UiSession};
 use serde::{Deserialize, Serialize};
 use std::{
     future::Future,
@@ -165,30 +165,14 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     transition: bool,
     suspended: bool,
     close_after_task: bool,
-    legacy: Option<WorkspaceCapture>,
-    source: String,
-    legacy_error: Option<String>,
     binding_key: Option<String>,
     pending_binding: Option<layer_ui::ManagedWorkspace>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
-    pub fn new(
-        store: S,
-        platform: Platform,
-        source: String,
-        legacy: Option<WorkspaceCapture>,
-        now: u64,
-    ) -> Self {
-        Self::new_owned(store, platform, source, legacy, Owner::fresh(), now)
+    pub fn new(store: S, platform: Platform, now: u64) -> Self {
+        Self::new_owned(store, platform, Owner::fresh(), now)
     }
-    pub fn new_owned(
-        store: S,
-        platform: Platform,
-        source: String,
-        legacy: Option<WorkspaceCapture>,
-        owner: Owner,
-        now: u64,
-    ) -> Self {
+    pub fn new_owned(store: S, platform: Platform, owner: Owner, now: u64) -> Self {
         let mut manager = WorkspaceManager::new(store, platform);
         manager.owner = owner;
         let mut c = Self {
@@ -214,9 +198,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             transition: false,
             suspended: false,
             close_after_task: false,
-            legacy,
-            source,
-            legacy_error: None,
             binding_key: None,
             pending_binding: None,
         };
@@ -225,26 +206,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     }
     fn initialize(&mut self, now: u64) {
         let m = self.manager.clone();
-        let legacy = self.legacy.clone();
-        let source = self.source.clone();
-        let legacy_error = self.legacy_error.clone();
         self.task = Some(Task::new(async move {
             m.store.execute(StoreRequest::Reopen).await?;
-            if let Some(error) = legacy_error
-                && !matches!(
-                    m.store
-                        .execute(StoreRequest::LegacyImport {
-                            source: source.clone()
-                        })
-                        .await?,
-                    StoreResponse::Binding(Some(_))
-                )
-            {
-                return Err(StoreError::invalid(error));
-            }
-            if let Some(legacy) = legacy {
-                m.migrate_legacy_capture(&source, legacy, now).await?;
-            }
             m.initialize_catalog(now).await?;
             m.refresh_switcher().await?;
             let resume = m
@@ -279,10 +242,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.last_edit = now;
         }
-    }
-    pub fn legacy_error(&mut self, error: String, now: u64) {
-        self.legacy_error = Some(error);
-        self.initialize(now);
     }
     fn stop_preview<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) -> UiChange {
         self.selection_generation = self.selection_generation.wrapping_add(1);

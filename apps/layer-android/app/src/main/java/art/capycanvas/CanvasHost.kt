@@ -249,11 +249,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
                 }
                 attempt(canvas = false) {
-                    val legacyError = runCatching {
-                        saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
-                    }.exceptionOrNull()?.message
                     val directory = workspaceDirectoryForTest ?: java.io.File(application.filesDir, "workspaces").absolutePath
-                    updateWorkspaceManager(obj("type" to "start", "directory" to directory, "legacy" to saved.contains("workspace"), "legacy_error" to legacyError))
+                    updateWorkspaceManager(obj("type" to "start", "directory" to directory))
                     worker.post(workspaceTick)
                 }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))

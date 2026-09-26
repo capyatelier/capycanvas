@@ -213,10 +213,6 @@ fn browser_transactions_match_sqlite_contract() {
     batch
         .bindings
         .push(("last_workspace".into(), Some(first.id.clone())));
-    batch
-        .legacy_imports
-        .push(("legacy:first".into(), first.id.clone()));
-    let original = batch.clone();
     execute(
         StoreRequest::Commit {
             batch: batch.clone(),
@@ -340,13 +336,7 @@ fn browser_transactions_match_sqlite_contract() {
         },
         1001,
     );
-    execute(
-        StoreRequest::LegacyImport {
-            source: "legacy:first".into(),
-        },
-        1001,
-    );
-    // Operation identity binds immutable content, including bindings/imports.
+    // Operation identity binds immutable content, including bindings.
     batch.bindings.clear();
     execute(StoreRequest::Commit { batch }, 1002);
     execute(
@@ -425,12 +415,6 @@ fn browser_transactions_match_sqlite_contract() {
         1004,
     );
     execute(StoreRequest::Pending, 1004);
-    // Concurrent migration cannot insert an independent copy of the same source.
-    let mut duplicate =
-        CommitBatch::prepare(other.clone(), vec![create(fresh.clone(), false)]).unwrap();
-    duplicate.legacy_imports = original.legacy_imports;
-    // SQLite reports constraint errors with backend-specific kinds; test atomic
-    // import rejection separately below instead of comparing error wording/kind.
     // A live native OS lock never expires. Exercise common release/takeover
     // here; browser-only timeout behavior has its own regression below.
     execute(
@@ -535,13 +519,6 @@ fn browser_transactions_match_sqlite_contract() {
     if let Ok(path) = std::env::var("CAPY_STORE_CONTRACT_FIXTURE") {
         std::fs::write(path, serde_json::to_string(&fixture).unwrap()).unwrap();
     }
-    let before = browser.encoded().unwrap();
-    assert!(
-        browser
-            .execute(StoreRequest::Commit { batch: duplicate }, 32002)
-            .is_err()
-    );
-    assert_eq!(browser.encoded().unwrap(), before);
     drop(sqlite);
     std::fs::remove_dir_all(directory).unwrap();
 }

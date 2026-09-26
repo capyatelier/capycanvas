@@ -99,7 +99,6 @@ pub struct CommitBatch {
     pub(crate) writes: Vec<PreparedWrite>,
     pub(crate) components: BTreeMap<String, Vec<u8>>,
     pub bindings: Vec<(String, Option<String>)>,
-    pub legacy_imports: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub abandon_operations: Vec<String>,
     /// Pin these newly created workspaces in the same transaction as their content.
@@ -114,7 +113,6 @@ impl CommitBatch {
             writes: Vec::new(),
             components: BTreeMap::new(),
             bindings: Vec::new(),
-            legacy_imports: Vec::new(),
             abandon_operations: Vec::new(),
             pin_workspaces: Vec::new(),
         };
@@ -370,9 +368,6 @@ pub enum StoreRequest {
     },
     Binding {
         key: String,
-    },
-    LegacyImport {
-        source: String,
     },
     Pending,
     Raw {

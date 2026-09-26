@@ -19,7 +19,6 @@ pub struct BrowserDatabase {
     acknowledged: Vec<String>,
     pending: BTreeMap<String, CommitBatch>,
     bindings: BTreeMap<String, String>,
-    legacy_imports: BTreeMap<String, String>,
     tombstones: BTreeSet<String>,
     cancelled: BTreeSet<String>,
     #[serde(default)]
@@ -66,7 +65,6 @@ impl Default for BrowserDatabase {
             acknowledged: Vec::new(),
             pending: Default::default(),
             bindings: Default::default(),
-            legacy_imports: Default::default(),
             tombstones: Default::default(),
             cancelled: Default::default(),
             switcher: None,
@@ -429,9 +427,6 @@ impl BrowserDatabase {
                 StoreResponse::Done
             }
             Binding { key } => StoreResponse::Binding(self.bindings.get(&key).cloned()),
-            LegacyImport { source } => {
-                StoreResponse::Binding(self.legacy_imports.get(&source).cloned())
-            }
             Pending => StoreResponse::Pending(self.pending.values().cloned().collect()),
             Reopen => StoreResponse::Done,
             DeletePermanently { id, owner, fence } => {
@@ -690,16 +685,6 @@ impl BrowserDatabase {
                 self.bindings.insert(key.clone(), id.clone());
             } else {
                 self.bindings.remove(key);
-            }
-        }
-        for (source, id) in &batch.legacy_imports {
-            self.item(id)?;
-            if self
-                .legacy_imports
-                .insert(source.clone(), id.clone())
-                .is_some()
-            {
-                return Err(StoreError::conflict());
             }
         }
         self.components.extend(batch.components);

@@ -16169,7 +16169,13 @@ mod tests {
         // Model a saved workspace made before automatic divider cleanup.
         tiles.remove(tiles.len() - 2);
         workspace.validate().unwrap();
-        let capture = WorkspaceCapture::from_legacy(workspace.clone()).unwrap();
+        let capture = WorkspaceCapture {
+            history: LayoutHistory::new(&workspace.layout),
+            working: WorkspaceWorkingState {
+                zen_mode: workspace.zen_mode,
+                ..Default::default()
+            },
+        };
         let mut app = session();
         app.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(workspace.clone()),

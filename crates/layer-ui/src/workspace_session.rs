@@ -25,16 +25,6 @@ impl Default for WorkspaceWorkingState {
     }
 }
 impl WorkspaceCapture {
-    pub fn from_legacy(workspace: WorkspaceState) -> Result<Self, String> {
-        workspace.validate()?;
-        Ok(Self {
-            history: LayoutHistory::new(&workspace.layout),
-            working: WorkspaceWorkingState {
-                zen_mode: workspace.zen_mode,
-                ..Default::default()
-            },
-        })
-    }
     pub fn from_template(layout: &DockLayout) -> Result<Self, String> {
         layout.validate()?;
         Ok(Self {

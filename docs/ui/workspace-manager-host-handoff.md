@@ -123,10 +123,10 @@ window focus. Keep workspace decisions in shared Rust. In particular:
 
 | Host | Integration responsibilities |
 | --- | --- |
-| Web (`apps/layer-web`) | IndexedDB implementation of the shared store protocol; Wasm async transport, DOM dialogs, tab ownership, visibility/page lifecycle, legacy localStorage migration |
-| Android (`apps/layer-android`) | Shared native worker/manager bridge, app-private directory, Compose dialogs, activity/suspend/recreate lifecycle, legacy state migration |
-| Apple (`apps/layer-apple`) | Shared native worker/manager bridge, persistent app directory, native macOS/iOS dialogs, independent scene ownership, scene persistence migration and lifecycle |
-| Windows (`apps/layer-windows`) | Shared native worker/manager bridge, app-data directory, WinUI dialogs, independent windows, lifecycle and existing-state migration |
+| Web (`apps/layer-web`) | IndexedDB implementation of the shared store protocol; Wasm async transport, DOM dialogs, tab ownership, visibility/page lifecycle |
+| Android (`apps/layer-android`) | Shared native worker/manager bridge, app-private directory, Compose dialogs, activity/suspend/recreate lifecycle |
+| Apple (`apps/layer-apple`) | Shared native worker/manager bridge, persistent app directory, native macOS/iOS dialogs, independent scene ownership and lifecycle |
+| Windows (`apps/layer-windows`) | Shared native worker/manager bridge, app-data directory, WinUI dialogs, independent windows and lifecycle |
 
 Native hosts use `layer-workspace` with its `native` feature and one
 `StoreWorker::shared` service per installation directory. Keep disk work off the
@@ -136,10 +136,9 @@ not mean web storage already exists. IndexedDB must validate generations/ownersh
 and atomically publish the complete prepared batch, acknowledging transaction
 completion rather than individual request success.
 
-Implement idempotent migration of each host's existing state, with stable source
-mapping/import markers committed atomically. Preserve multiple Apple scenes and
-unreadable/newer legacy data; do not replace existing user state with defaults.
-See the proposal's storage/migration contract and current Rust protocol for detail.
+Hosts do not import workspace state saved before the shared store; a new store
+starts from the included workspaces. Preserve unreadable or newer store data; do
+not replace existing user state with defaults.
 
 Before parallel host changes touch `crates/layer-host`, shared command transport,
 or common store types, agree on one owner for each additive bridge change. Keep
@@ -165,8 +164,7 @@ refactor is a prerequisite to starting the host work.
    Default workspaces reject deletion through both UI and storage.
 4. Restart preserves active workspaces, settings, layout history, and undo/redo.
    Live tool changes do not create layout history; gestures create one event.
-5. Existing legacy state migrates once, including interrupted/concurrent startup.
-   Multiple windows/tabs/scenes remain independent; takeover blocks stale writes.
+5. Multiple windows/tabs/scenes remain independent; takeover blocks stale writes.
 6. Save/load failures, unavailable/full storage, lost acknowledgements, and
    lifecycle interruption preserve user state and expose usable recovery. Web
    additionally covers IndexedDB aborts/upgrades/quota and storage availability.

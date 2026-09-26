@@ -106,8 +106,7 @@ value. Transient menus, native widgets and unfinished gestures are not serialize
 GTK now uses `layer-workspace` for named workspaces, automatic saving, and durable
 layout history. Workspaces include tool settings and the arrangement of tools and
 panels. Reset All Brushes restores brush defaults within the current workspace;
-there is no separate saved-layout library. Other hosts' legacy workspace
-persistence remains the migration source as they adopt the
+there is no separate saved-layout library. Other hosts follow the
 [approved workspace-manager design and handoff](workspace-manager-host-handoff.md).
 Layout undo is separate from document undo. A drag is treated as one layout
 change, and cancelling it restores the original arrangement.

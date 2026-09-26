@@ -125,7 +125,6 @@ impl SqliteStore {
                     owner TEXT NOT NULL, epoch TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE pending (id TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE bindings (key TEXT PRIMARY KEY, item_id TEXT NOT NULL);
-                CREATE TABLE legacy_imports (source TEXT PRIMARY KEY, item_id TEXT NOT NULL);
                 CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);")?;
         }
         if version < 2 {
@@ -223,15 +222,6 @@ impl SqliteStore {
                     .query_row("SELECT item_id FROM bindings WHERE key=?1", [key], |r| {
                         r.get(0)
                     })
-                    .optional()?,
-            )),
-            StoreRequest::LegacyImport { source } => Ok(StoreResponse::Binding(
-                self.connection
-                    .query_row(
-                        "SELECT item_id FROM legacy_imports WHERE source=?1",
-                        [source],
-                        |r| r.get(0),
-                    )
                     .optional()?,
             )),
             StoreRequest::Pending => {
@@ -670,13 +660,6 @@ impl SqliteStore {
             } else {
                 tx.execute("DELETE FROM bindings WHERE key=?1", [key])?;
             }
-        }
-        for (source, id) in &batch.legacy_imports {
-            header(&tx, id)?;
-            tx.execute(
-                "INSERT INTO legacy_imports(source,item_id) VALUES(?1,?2)",
-                params![source, id],
-            )?;
         }
         tx.execute(
             "INSERT INTO receipts(id,hash,receipt,owner,epoch) VALUES(?1,?2,?3,?4,?5)",

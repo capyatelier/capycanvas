@@ -60,13 +60,19 @@ impl Fixture {
         backend.now.set(1000);
         let mut host = layer_host::NativeHost::new(Platform::Web).unwrap();
         let capture = host.session.capture_workspace().unwrap();
-        let controller = WorkspaceController::new(
-            Store(backend.clone()),
-            Platform::Web,
-            "legacy:test".into(),
-            Some(capture),
-            1000,
-        );
+        let baseline = capture.history.layout().clone();
+        let entity = Entity::workspace("My Workspace", capture, baseline, None, 1000);
+        let batch = CommitBatch::prepare(
+            Owner::fresh(),
+            vec![Mutation::Create {
+                entity,
+                claim: false,
+                name_policy: NamePolicy::Unique,
+            }],
+        )
+        .unwrap();
+        pollster::block_on(Store(backend.clone()).execute(StoreRequest::Commit { batch })).unwrap();
+        let controller = WorkspaceController::new(Store(backend.clone()), Platform::Web, 1000);
         let mut f = Self {
             backend,
             controller,
@@ -117,9 +123,8 @@ fn restoring_a_bound_window_claims_without_republishing_its_selection() {
     other.activate(selected);
     let deliveries = f.backend.deliveries.borrow().len();
     f.backend.now.set(2000);
-    f.controller = WorkspaceController::new_owned(
-        Store(f.backend.clone()), Platform::Web, "legacy:test".into(), None, owner.clone(), 2000,
-    );
+    f.controller =
+        WorkspaceController::new_owned(Store(f.backend.clone()), Platform::Web, owner.clone(), 2000);
     f.pump();
     assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
     assert_eq!(f.controller.view.id.as_deref(), Some(id.as_str()));
@@ -150,14 +155,8 @@ fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
     let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
     let claimed = pollster::block_on(other.prepare_switch(&original, 1_000)).unwrap();
     other.activate(claimed);
-    f.controller = WorkspaceController::new_owned(
-        Store(f.backend.clone()),
-        Platform::Web,
-        "legacy:test".into(),
-        None,
-        owner,
-        1_000,
-    );
+    f.controller =
+        WorkspaceController::new_owned(Store(f.backend.clone()), Platform::Web, owner, 1_000);
     f.pump();
     assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
     assert_eq!(
@@ -754,86 +753,10 @@ fn new_workspaces_are_pinned_without_repinning_hidden_workspaces() {
 }
 
 #[test]
-fn interrupted_capture_migration_retries_the_same_operation_once() {
-    let backend = Rc::new(Backend::default());
-    backend.now.set(1000);
-    let store = Store(backend.clone());
-    let manager = WorkspaceManager::new(store.clone(), Platform::Web);
-    let mut host = layer_host::NativeHost::new(Platform::Web).unwrap();
-    host.dispatch(
-        serde_json::from_value(serde_json::json!({"type":"set_brush_size","value":73.0})).unwrap(),
-    )
-    .unwrap();
-    let capture = host.session.capture_workspace().unwrap();
-    backend.fail.set(true);
-    assert!(
-        pollster::block_on(manager.migrate_legacy_capture("interrupted", capture.clone(), 1000))
-            .is_err()
-    );
-    backend.fail.set(false);
-    // A new process discovers the durable pending delivery rather than creating
-    // a second batch/import/history from whatever defaults it loaded this time.
-    let restarted = WorkspaceManager::new(store, Platform::Web);
-    pollster::block_on(restarted.migrate_legacy_capture("interrupted", capture.clone(), 1001))
-        .unwrap();
-    pollster::block_on(manager.migrate_legacy_capture("interrupted", capture.clone(), 1002))
-        .unwrap();
-    let deliveries = backend.deliveries.borrow();
-    assert_eq!(deliveries.len(), 2);
-    assert_eq!(deliveries[0], deliveries[1]);
-    let StoreResponse::Binding(Some(id)) = backend
-        .database
-        .borrow_mut()
-        .execute(
-            StoreRequest::LegacyImport {
-                source: "interrupted".into(),
-            },
-            1002,
-        )
-        .unwrap()
-    else {
-        panic!()
-    };
-    let stored = pollster::block_on(manager.load(&id)).unwrap();
-    let mut expected = capture;
-    for revision in expected.history.revisions.values_mut() {
-        revision.timestamp_ms = 1000;
-    }
-    assert_eq!(stored.entity.capture().unwrap(), expected);
-    drop(deliveries);
-    pollster::block_on(async {
-        manager.delete_item(&id, None, 1_003).await.unwrap();
-        restarted
-            .migrate_legacy_capture("interrupted", expected, 1_004)
-            .await
-            .unwrap();
-        restarted.refresh().await.unwrap();
-        assert_eq!(restarted.items().len(), 1);
-        assert!(
-            restarted
-                .load(&id)
-                .await
-                .unwrap()
-                .entity
-                .metadata
-                .deleted_at_ms
-                .is_some(),
-            "Deleted legacy workspaces must not be imported again"
-        );
-    });
-}
-
-#[test]
-fn closing_before_adoption_drains_claims_and_unreadable_legacy_stays_intact() {
+fn closing_before_adoption_drains_claims() {
     let mut f = Fixture::new();
     f.input(serde_json::json!({"type":"suspend"}));
-    let mut closing = WorkspaceController::new(
-        Store(f.backend.clone()),
-        Platform::Web,
-        "legacy:test".into(),
-        None,
-        1000,
-    );
+    let mut closing = WorkspaceController::new(Store(f.backend.clone()), Platform::Web, 1000);
     closing
         .input(&mut f.host.session, WorkspaceInput::Close, 1000)
         .unwrap();
@@ -846,40 +769,6 @@ fn closing_before_adoption_drains_claims_and_unreadable_legacy_stays_intact() {
         "A closing host must not wait for a canvas adoption"
     );
     assert!(closing.view.error.is_none());
-    let backend = Rc::new(Backend::default());
-    backend.now.set(1000);
-    let mut broken = WorkspaceController::new(
-        Store(backend.clone()),
-        Platform::Web,
-        "unreadable".into(),
-        None,
-        1000,
-    );
-    broken.legacy_error("Unsupported legacy version".into(), 1000);
-    for _ in 0..20 {
-        broken.tick(&mut f.host.session, 1000);
-    }
-    assert!(!broken.view.ready);
-    assert!(
-        broken
-            .view
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Unsupported legacy version")
-    );
-    let StoreResponse::List(rows) = backend
-        .database
-        .borrow_mut()
-        .execute(StoreRequest::List, 1000)
-        .unwrap()
-    else {
-        panic!()
-    };
-    assert!(
-        rows.is_empty(),
-        "Unrecognized legacy data must not be replaced with defaults"
-    );
 }
 
 #[test]

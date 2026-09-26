@@ -129,8 +129,6 @@ Restore Starting Layout. Windows keeps the proportional columns. Check with
   existing user workspace. Only when every workspace is in use does another
   window create a copy, named after its source. Deleting the active workspace
   also reuses an available built-in; it never creates a replacement workspace.
-  Legacy imports preserve existing settings once, including a previously saved
-  "My Workspace". Deleting an imported workspace does not import it again.
 - All three save tool and layout edits normally. They cannot be renamed or deleted.
   The header initially shows these three, follows workspace identities, and
   displays their current names. Its entries can be changed in Manage Workspaces.

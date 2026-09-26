@@ -862,46 +862,6 @@ fn undo_revisits_content_but_never_reuses_a_write_generation() {
     );
 }
 #[test]
-fn migration_source_mapping_and_import_publish_once() {
-    let mut f = Fixture::new();
-    let entity = workspace("My Workspace");
-    let id = entity.id.clone();
-    let mut batch = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Unique,
-        }],
-    )
-    .unwrap();
-    batch
-        .legacy_imports
-        .push(("apple:scene:one".into(), id.clone()));
-    f.store.commit(batch.clone()).unwrap();
-    f.store.commit(batch).unwrap();
-    let another = workspace("My Workspace");
-    let another_id = another.id.clone();
-    let mut duplicate = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity: another,
-            claim: true,
-            name_policy: NamePolicy::Unique,
-        }],
-    )
-    .unwrap();
-    duplicate
-        .legacy_imports
-        .push(("apple:scene:one".into(), another_id.clone()));
-    assert!(f.store.commit(duplicate).is_err());
-    assert!(f.store.load(&another_id).is_err());
-    assert!(
-        matches!(f.store.handle(StoreRequest::LegacyImport { source: "apple:scene:one".into() }).unwrap(), StoreResponse::Binding(Some(found)) if found == id)
-    );
-    assert_eq!(f.store.list().unwrap().len(), 1);
-}
-#[test]
 fn newer_schemas_and_corrupt_items_are_preserved() {
     let mut f = Fixture::new();
     let good = f.create("Good");

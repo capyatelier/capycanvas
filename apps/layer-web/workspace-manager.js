@@ -1,5 +1,5 @@
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
-export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message, dispatch, hasLegacy, legacyError }) {
+export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message, dispatch }) {
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
   heading.id = "workspace-manager-title"; dialog.setAttribute("aria-labelledby", heading.id);
@@ -146,7 +146,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   if (!owner?.id || !owner?.epoch) owner = {id:crypto.randomUUID(),epoch:crypto.randomUUID()};
   try { sessionStorage.setItem("capy.workspace.owner",JSON.stringify(owner)); } catch {}
   store.holdOwner(owner.id);
-  app.workspace_start(store.execute, JSON.stringify(owner), hasLegacy, legacyError);
+  app.workspace_start(store.execute, JSON.stringify(owner));
   timer = setInterval(tick, 100); tick();
   document.addEventListener("visibilitychange", () => send({ type: document.hidden ? "suspend" : "resume" }));
   window.addEventListener("focus", () => send({type:"refresh_switcher"}));

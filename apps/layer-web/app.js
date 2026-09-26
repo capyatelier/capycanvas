@@ -63,8 +63,7 @@ installPenScrolling();
 let startupNotice;
 let firstCanvasRendered = false;
 let servicingRequests = false;
-const settingsKey = "layer.preferences.v1", workspaceKey = "layer.workspace.v1";
-let savedWorkspace = "";
+const settingsKey = "layer.preferences.v1";
 let workspaceManager;
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
@@ -1619,15 +1618,11 @@ try {
   canvas.height = 600;
   app = WebApp.create(canvas);
   app.prediction_availability(typeof globalThis.PointerEvent?.prototype.getPredictedEvents === "function");
-  let restoreError, workspaceRestoreError;
+  let restoreError;
   try {
     const saved = localStorage.getItem(settingsKey);
     if (saved) app.dispatch({ type: "restore_settings", settings: JSON.parse(saved) });
   } catch (error) { restoreError = `Cannot restore preferences: ${error}`; }
-  try {
-    const saved = localStorage.getItem(workspaceKey);
-    if(saved) { app.dispatch({type:"restore_workspace", workspace:JSON.parse(saved)}); savedWorkspace=saved; }
-  } catch(error) { restoreError = workspaceRestoreError = `Cannot restore workspace: ${error}`; }
   const themeAction = () => ({
     type: "system_theme_changed",
     theme: systemTheme.matches ? "dark" : "light",
@@ -1649,7 +1644,7 @@ try {
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
-  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
+  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,

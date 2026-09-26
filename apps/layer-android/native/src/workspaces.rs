@@ -19,24 +19,12 @@ impl App {
                     .ok_or("Workspace storage directory is missing")?;
                 let store =
                     StoreWorker::shared(std::path::Path::new(path)).map_err(|e| e.to_string())?;
-                let capture = self.host.session.capture_workspace()?;
                 self.host.session.set_workspace_read_only(true);
                 self.workspaces = Some(WorkspaceController::new(
                     store,
                     layer_ui::Platform::Android,
-                    "android:capy-canvas:workspace:v1".into(),
-                    request["legacy"]
-                        .as_bool()
-                        .unwrap_or(false)
-                        .then_some(capture),
                     time,
                 ));
-                if let Some(error) = request["legacy_error"].as_str() {
-                    self.workspaces
-                        .as_mut()
-                        .unwrap()
-                        .legacy_error(error.into(), time);
-                }
             }
         }
         let Some(c) = &mut self.workspaces else {
