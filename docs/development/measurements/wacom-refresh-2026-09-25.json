@@ -1,0 +1,449 @@
+{
+  "date": "2026-09-25",
+  "source_revision": "367cff577e927183f58781d7a9ba1f60aaa1d9e5",
+  "wasm_sha256": "2150997097d739529b8d795626586150ac136a9f0d2ceab6f0ab9efee538598a",
+  "build": "dev-perf optimized; local development server; startup/recovery JS compared with deployed editor",
+  "device": "Wacom MovinkPad 14 DTHA140, Android 15, Chrome 153.0.8010.52",
+  "origin": "http://127.0.0.1:4197/",
+  "cache": "Normal HTTP/browser caches retained; untimed warmup; not cold-driver or production-network measurements",
+  "thermal_status_observed": [
+    0,
+    0
+  ],
+  "fixture": {
+    "width": 2048,
+    "height": 1536,
+    "png_bytes": 2818792,
+    "content": "Generated gradient and checker pattern; no effects"
+  },
+  "passive": [
+    {
+      "file": "artifacts/web-refresh/wacom/passive/refresh-0.json",
+      "marks_ms": {
+        "capy.startup.module": 154.5,
+        "capy.startup.wasm": 240.3,
+        "capy.startup.model": 249.2,
+        "capy.startup.controls": 267.1,
+        "capy.startup.ui": 298.6,
+        "capy.startup.workspace": 407.3,
+        "capy.startup.gpu": 407.3,
+        "capy.startup.canvas": 849.1,
+        "capy.startup.document": 1223.7,
+        "capy.startup.brush": 2599.1,
+        "capy.startup.complete": 19704.5
+      },
+      "pipeline_calls": 201,
+      "warming_frame_interval_p95_ms": 8.4,
+      "warming_frame_interval_max_ms": 58.30000000000109,
+      "errors": []
+    },
+    {
+      "file": "artifacts/web-refresh/wacom/passive/refresh-1.json",
+      "marks_ms": {
+        "capy.startup.module": 164.4,
+        "capy.startup.wasm": 250,
+        "capy.startup.model": 259.8,
+        "capy.startup.controls": 276.4,
+        "capy.startup.ui": 307.7,
+        "capy.startup.workspace": 441.1,
+        "capy.startup.gpu": 441.1,
+        "capy.startup.canvas": 922.3,
+        "capy.startup.document": 1338.6,
+        "capy.startup.brush": 2751.2,
+        "capy.startup.complete": 20276.5
+      },
+      "pipeline_calls": 201,
+      "warming_frame_interval_p95_ms": 8.4,
+      "warming_frame_interval_max_ms": 58.39999999999782,
+      "errors": []
+    }
+  ],
+  "recovery": [
+    {
+      "run": "recovery-baseline",
+      "dialogs": [
+        {
+          "start": 20056.80000000447,
+          "title": "Recover drawing?"
+        }
+      ],
+      "marks": [
+        {
+          "name": "capy.startup.module",
+          "start": 174.20000000298023
+        },
+        {
+          "name": "capy.startup.wasm",
+          "start": 257.30000000447035
+        },
+        {
+          "name": "capy.startup.model",
+          "start": 265.70000000298023
+        },
+        {
+          "name": "capy.startup.controls",
+          "start": 281.70000000298023
+        },
+        {
+          "name": "capy.startup.ui",
+          "start": 312
+        },
+        {
+          "name": "capy.startup.workspace",
+          "start": 404.3999999985099
+        },
+        {
+          "name": "capy.startup.gpu",
+          "start": 404.3999999985099
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 854.2000000029802
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 1255.3000000044703
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 2616.60000000149
+        },
+        {
+          "name": "capy.startup.complete",
+          "start": 20001.60000000149
+        }
+      ],
+      "pipeline_calls": 201,
+      "errors": [],
+      "disabled_commands_observed": true
+    },
+    {
+      "run": "recovery-skip-catalog",
+      "dialogs": [
+        {
+          "start": 15414.69999999553,
+          "title": "Recover drawing?"
+        }
+      ],
+      "marks": [
+        {
+          "name": "capy.startup.module",
+          "start": 171.89999999850988
+        },
+        {
+          "name": "capy.startup.wasm",
+          "start": 263.29999999701977
+        },
+        {
+          "name": "capy.startup.model",
+          "start": 272.3999999985099
+        },
+        {
+          "name": "capy.startup.controls",
+          "start": 291.5
+        },
+        {
+          "name": "capy.startup.ui",
+          "start": 323.29999999701977
+        },
+        {
+          "name": "capy.startup.workspace",
+          "start": 424
+        },
+        {
+          "name": "capy.startup.gpu",
+          "start": 424.09999999403954
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 902.2999999970198
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 1313
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 2781.7999999970198
+        },
+        {
+          "name": "capy.startup.complete",
+          "start": 11503.59999999404
+        }
+      ],
+      "pipeline_calls": 111,
+      "errors": [],
+      "disabled_commands_observed": false
+    },
+    {
+      "run": "recovery-early",
+      "dialogs": [
+        {
+          "start": 1271.3000000044703,
+          "title": "Recover drawing?"
+        }
+      ],
+      "marks": [
+        {
+          "name": "capy.startup.module",
+          "start": 135.20000000298023
+        },
+        {
+          "name": "capy.startup.wasm",
+          "start": 228.20000000298023
+        },
+        {
+          "name": "capy.startup.model",
+          "start": 236.70000000298023
+        },
+        {
+          "name": "capy.startup.controls",
+          "start": 253.40000000596046
+        },
+        {
+          "name": "capy.startup.ui",
+          "start": 283.80000000447035
+        },
+        {
+          "name": "capy.startup.workspace",
+          "start": 391.40000000596046
+        },
+        {
+          "name": "capy.startup.gpu",
+          "start": 391.5
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 851.3000000044703
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 1246.5
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 2629.9000000059605
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 4527.30000000447
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 4527.4000000059605
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 4527.4000000059605
+        },
+        {
+          "name": "capy.startup.complete",
+          "start": 11531.10000000149
+        }
+      ],
+      "pipeline_calls": 168,
+      "errors": [],
+      "disabled_commands_observed": false,
+      "accepted_ms": 3988.10000000149,
+      "accepted_to_gpu_completion_ms": 668.3000000044703,
+      "restored_size": [
+        2048,
+        1536
+      ]
+    },
+    {
+      "run": "recovery-restore-baseline",
+      "dialogs": [
+        {
+          "start": 19893.10000000149,
+          "title": "Recover drawing?"
+        }
+      ],
+      "marks": [
+        {
+          "name": "capy.startup.module",
+          "start": 148.39999999850988
+        },
+        {
+          "name": "capy.startup.wasm",
+          "start": 235.5
+        },
+        {
+          "name": "capy.startup.model",
+          "start": 244.70000000298023
+        },
+        {
+          "name": "capy.startup.controls",
+          "start": 261.3999999985099
+        },
+        {
+          "name": "capy.startup.ui",
+          "start": 290.5
+        },
+        {
+          "name": "capy.startup.workspace",
+          "start": 381
+        },
+        {
+          "name": "capy.startup.gpu",
+          "start": 381
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 841.2999999970198
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 1231.6000000014901
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 2563.7000000029802
+        },
+        {
+          "name": "capy.startup.complete",
+          "start": 19837.10000000149
+        },
+        {
+          "name": "capy.startup.canvas",
+          "start": 20306
+        },
+        {
+          "name": "capy.startup.document",
+          "start": 20306
+        },
+        {
+          "name": "capy.startup.brush",
+          "start": 20306
+        },
+        {
+          "name": "capy.startup.complete",
+          "start": 20744.79999999702
+        }
+      ],
+      "pipeline_calls": 313,
+      "errors": [],
+      "disabled_commands_observed": true,
+      "accepted_ms": 19916.10000000149,
+      "accepted_to_gpu_completion_ms": 476.3999999985099,
+      "restored_size": [
+        2048,
+        1536
+      ]
+    }
+  ],
+  "strokes": [
+    {
+      "run": "stroke-baseline",
+      "phase": "during-startup",
+      "start_ms": 4266.10000000149,
+      "pointerup_ms": 11280.79999999702,
+      "sent": 577,
+      "delivered_moves_per_second": 82.26,
+      "frame_cpu_p95_ms": 3.6,
+      "latest_sample_age_at_cpu_submission_p95_ms": 24.5,
+      "new_pipeline_calls_during_contact": 20,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-baseline",
+      "phase": "after-startup",
+      "start_ms": 21574.29999999702,
+      "pointerup_ms": 26578.29999999702,
+      "sent": 587,
+      "delivered_moves_per_second": 117.31,
+      "frame_cpu_p95_ms": 1.2,
+      "latest_sample_age_at_cpu_submission_p95_ms": 7.1,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-quiet",
+      "phase": "during-startup",
+      "start_ms": 4442.10000000149,
+      "pointerup_ms": 11444.70000000298,
+      "sent": 835,
+      "delivered_moves_per_second": 119.24,
+      "frame_cpu_p95_ms": 1.2,
+      "latest_sample_age_at_cpu_submission_p95_ms": 7.1,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-quiet",
+      "phase": "after-startup",
+      "start_ms": 29050.80000000447,
+      "pointerup_ms": 34062,
+      "sent": 590,
+      "delivered_moves_per_second": 117.74,
+      "frame_cpu_p95_ms": 0.8,
+      "latest_sample_age_at_cpu_submission_p95_ms": 6.7,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-baseline-2",
+      "phase": "during-startup",
+      "start_ms": 3559.7000000029802,
+      "pointerup_ms": 10582,
+      "sent": 607,
+      "delivered_moves_per_second": 86.44,
+      "frame_cpu_p95_ms": 3.0,
+      "latest_sample_age_at_cpu_submission_p95_ms": 21.1,
+      "new_pipeline_calls_during_contact": 24,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-baseline-2",
+      "phase": "after-startup",
+      "start_ms": 21691.10000000149,
+      "pointerup_ms": 26702.70000000298,
+      "sent": 589,
+      "delivered_moves_per_second": 117.53,
+      "frame_cpu_p95_ms": 1.4,
+      "latest_sample_age_at_cpu_submission_p95_ms": 7.1,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-quiet-2",
+      "phase": "during-startup",
+      "start_ms": 2675,
+      "pointerup_ms": 9681.19999999553,
+      "sent": 831,
+      "delivered_moves_per_second": 118.61,
+      "frame_cpu_p95_ms": 0.7,
+      "latest_sample_age_at_cpu_submission_p95_ms": 6.9,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "stroke-quiet-2",
+      "phase": "after-startup",
+      "start_ms": 28643.19999999553,
+      "pointerup_ms": 33649.39999999851,
+      "sent": 580,
+      "delivered_moves_per_second": 115.86,
+      "frame_cpu_p95_ms": 0.9,
+      "latest_sample_age_at_cpu_submission_p95_ms": 7.1,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    }
+  ],
+  "menus": {
+    "count": 59,
+    "opened": 59,
+    "two_raf_p50_ms": 12.2,
+    "two_raf_p95_ms": 16.8,
+    "two_raf_max_ms": 25.700000002980232
+  },
+  "stroke_measurement": "CDP pen replay, nominal 120 Hz, 7 s startup / 5 s steady, current preset 1 (G Pen), 18 px; clips statistics to pointer-up and excludes samples before contact. CPU submission age is not physical pen-to-photon latency. Second deferred run uses the integrated --strokes option; start times are retained."
+}
