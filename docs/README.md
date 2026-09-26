@@ -45,7 +45,7 @@ These documents assume familiarity with the concept guides above.
 | Brushes | [Dab layout and raster rules](brush-renderer.md), [GPU brush stages](reference/gpu-brush-engine.md), [painterly paint state](reference/painterly-paint-state.md). |
 | Input | [Stroke feedback and platform mapping](reference/instant-stroke-feedback.md). |
 | UI | [Shared UI contract](ui/shared-ui.md), [panel customization](ui/panel-customization.md), [numeric controls](ui/numeric-controls.md), [theme colors](ui/theme-colors.md). |
-| Extensions | [Runtime filters](reference/runtime-filters.md), [C interface](reference/canvas-ffi.md). |
+| Extensions | [Runtime filters](reference/runtime-filters.md). |
 | Distribution and performance | [Web/PWA packaging](development/web-packaging.md), [GPU benchmark workloads](development/gpu-raster-benchmarks.md). |
 
 ## Design and validation history

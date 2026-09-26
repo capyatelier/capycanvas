@@ -2,11 +2,14 @@
 name = "layer-bench"
 version = "0.1.0"
 edition = "2024"
-description = "Completed-work wgpu canvas benchmark harness"
+description = "Completed-work wgpu canvas benchmark and brush-preview generator"
 license.workspace = true
 
 [dependencies]
-layer-ffi = { path = "../layer-ffi" }
+layer-core = { path = "../layer-core" }
+layer-engine = { path = "../layer-engine" }
+layer-render = { path = "../layer-render" }
+layer-render-wgpu = { path = "../layer-render-wgpu" }
 layer-ui = { path = "../layer-ui" }
 png = "0.17.16"
 

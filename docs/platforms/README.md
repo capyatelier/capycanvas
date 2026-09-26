@@ -37,8 +37,7 @@ other OS integration still need tests on the actual host.
 
 GTK and web use `UiSession` directly. Android, Apple and Windows share additional
 session and renderer integration through `layer-host`, with JNI or C bindings in
-their app directories. `layer-ffi` is a separate C interface used by the headless
-harness and available for embedding; it is not the common bridge for all clients.
+their app directories.
 
 ## Input and UI ownership
 

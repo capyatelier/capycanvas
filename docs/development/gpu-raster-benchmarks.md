@@ -16,7 +16,7 @@ on-device copy-bandwidth calibration, large-brush controls and CPU costs.
 ## What is measured
 
 `layer-bench` submits 15 legacy and 10 painter-focused 4096×4096 workloads
-through the public C ABI. Every scenario has at least 32 visible paint layers
+through `CanvasEngine`. Every scenario has at least 32 visible paint layers
 and every frame contains eight simulated coalesced pen samples.
 
 The current diagnostic factory uses GTK's native integer-backed SDR renderer
@@ -28,7 +28,7 @@ records comparison arms and declared budgets.
 
 It reports two time boundaries:
 
-- **submit**: event validation, queueing, shared brush dynamics/contact
+- **submit**: event queueing, shared brush dynamics/contact
   generation, wgpu command encoding, uploads, and queue submission. Call-return
   time includes any internal capacity/dependency wait; it is not necessarily
   nonblocking. Thread CPU time, where recorded, distinguishes computation from
@@ -258,39 +258,6 @@ cargo run --release -p layer-bench -- \
 The first command writes ten explicit-export PNGs and a labeled HTML gallery.
 The generated contact sheet provides a compact montage. Use
 `--scenario all` for all 25 workloads or a scenario name to isolate one brush.
-
-Functional brush review is intentionally separate from the performance
-composition. The first command below renders three isolated marks over an
-untouched canvas; the second renders two crossings over separated one-contact
-opaque color wells for pickup, mixing, and smudge inspection, plus push/twirl
-deformation over a fine grid:
-
-```bash
-cargo run --release -p layer-bench -- \
-  --brush-validation blank \
-  --output-dir artifacts/brush-validation/blank
-
-cargo run --release -p layer-bench -- \
-  --brush-validation destination \
-  --output-dir artifacts/brush-validation/destination
-
-cargo run --release -p layer-bench -- \
-  --brush-validation watercolor \
-  --output-dir artifacts/brush-validation/watercolor-v4-capillary-relaxation
-
-cargo run --release -p layer-bench -- \
-  --brush-validation transport \
-  --output-dir artifacts/brush-validation/watercolor-transport-v3-relaxation
-```
-
-The watercolor command writes twelve controlled settings and interaction cases.
-The transport command writes a 4-field × 3-rate/distance matrix covering long
-and short, broad and narrow conductance, 16–88 px effect radii, wet mixing, and
-dry bleed. Each visible update uses three bounded coarse-to-fine GPU stages; it
-does not jump pigment directly across the configured radius.
-Generated review outputs stay under the requested ignored artifact directory.
-The [paint-state reference](../reference/painterly-paint-state.md) describes the
-behavior these cases exercise.
 
 ### GTK native pen-up and following strokes
 

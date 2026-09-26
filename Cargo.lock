@@ -1286,7 +1286,10 @@ dependencies = [
 name = "layer-bench"
 version = "0.1.0"
 dependencies = [
- "layer-ffi",
+ "layer-core",
+ "layer-engine",
+ "layer-render",
+ "layer-render-wgpu",
  "layer-ui",
  "png 0.17.16",
 ]
@@ -1337,16 +1340,6 @@ dependencies = [
  "serde",
  "serde_json",
  "web-time",
-]
-
-[[package]]
-name = "layer-ffi"
-version = "0.1.0"
-dependencies = [
- "layer-core",
- "layer-engine",
- "layer-render",
- "layer-render-wgpu",
 ]
 
 [[package]]

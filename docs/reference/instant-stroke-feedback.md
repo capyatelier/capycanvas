@@ -140,11 +140,10 @@ is not saved into a brush or document. The C ABI exposes the same fields through
 | minimum prediction speed | 12 physical px/s | Suppresses stationary noise |
 | corner suppression | 1.0 | Stops extrapolation at right-angle turns and reversals |
 
-`layer_canvas_draw_frame_for(now, presentation)` is preferred when a platform
+`CanvasEngine::render_frame_for(now, presentation)` is preferred when a platform
 knows its expected presentation timestamp. Both values share the pen-event
 monotonic timebase. `now` alone advances time-driven paint; `presentation`
-selects the speculative endpoint. The older timed entry point uses the
-configured horizon.
+selects the speculative endpoint. `render_frame_at` uses the configured horizon.
 
 The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
 existing saved values are preserved.
@@ -245,14 +244,6 @@ amending an unfinalized sample can be added without changing prediction flags
 or committed document semantics.
 
 ## Latency gate and lower bound
-
-The reproducible on/off harness is:
-
-```bash
-cargo run --release -p layer-bench -- \
-  --feedback-comparison --scenario all \
-  --report artifacts/benchmarks/instant-feedback.md
-```
 
 The disabled branch performs no tail scan, prediction, contact replay, preview
 allocation, or extra GPU command. Enabled prediction necessarily evaluates and

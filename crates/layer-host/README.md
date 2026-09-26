@@ -33,5 +33,4 @@ file access remain platform responsibilities.
   [Windows bridge](../../apps/layer-windows/native) show how hosts use this crate.
 
 Read [platform integration](../../docs/platforms/README.md) for the shared/native
-boundary. This is a Rust integration layer; the separate
-[`layer-ffi`](../layer-ffi/README.md) package supplies the headless C interface.
+boundary. This is a Rust integration layer.

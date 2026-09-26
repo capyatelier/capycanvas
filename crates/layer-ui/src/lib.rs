@@ -55,10 +55,9 @@ pub use color::{
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
 };
 pub use tool_settings::{ToolActionGroup, ToolSetting, ToolSettingAction};
-use tools::preset;
 pub use tools::{
     Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
-    brush_categories,
+    brush_categories, preset,
 };
 mod cursor;
 mod customization;

@@ -25,8 +25,8 @@ Most renderer tests create and destroy their own device. The workspace
 threads unless `RUST_TEST_THREADS` or `--test-threads` is set. NVIDIA's 610.57
 Linux driver allows 63 live Vulkan devices per process; later requests fail with
 device loss or crash inside the driver. Its `vkDestroyDevice` can also deadlock
-while other threads wait for the driver: `layer-ffi` hung in 3 of 20 runs with
-eight threads and in none of 45 runs with four.
+while other threads wait for the driver: a device-heavy test suite hung in 3 of
+20 runs with eight threads and in none of 45 runs with four.
 
 Headless renderers keep one wgpu instance for the process lifetime so the driver
 stays loaded: each reload consumes glibc static TLS, and the 19th load fails.

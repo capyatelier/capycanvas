@@ -1,18 +1,19 @@
-use layer_ffi::{
-    LayerBrushSettings, LayerCanvas, LayerCanvasConfig, LayerCanvasMetrics, LayerGpuInfo,
-    LayerInstantFeedbackSettings, LayerPenEvent, LayerStatus, layer_canvas_add_paint_layer,
-    layer_canvas_copy_rgba8_srgb, layer_canvas_create, layer_canvas_destroy,
-    layer_canvas_draw_frame, layer_canvas_draw_frame_for, layer_canvas_get_gpu_info,
-    layer_canvas_get_metrics, layer_canvas_set_active_layer, layer_canvas_set_brush,
-    layer_canvas_set_instant_feedback, layer_canvas_set_layer_opacity,
-    layer_canvas_submit_pen_events, layer_canvas_undo, layer_canvas_wait_idle,
+use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
+use layer_core::{
+    BrushStabilization, DefaultBrushPreset as Preset, Document, Edit, Layer, LayerId, Point,
+    StrokeTool, default_brush,
 };
+use layer_engine::{
+    CanvasEngine, InputProducer, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ToolKind,
+    ViewTransform, input_queue,
+};
+use layer_render::ViewState;
+use layer_render_wgpu::{GpuRasterMetrics, WgpuRasterizer};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::ptr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod previews;
 
@@ -21,14 +22,31 @@ const HEIGHT: u32 = 4096;
 const EVENTS_PER_FRAME: usize = 8;
 const FRAME_BUDGET_MICROS: u64 = 8_333;
 
-// One explicit mode for every canvas in this process, including warm-up,
-// feedback comparisons and report probes. Initialized once before GPU work.
+// One explicit mode for every canvas in this process, including warm-up and
+// report probes. Initialized once before GPU work.
 static DOCUMENT_COLOR: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
 
 fn document_mode() -> String {
     let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
     format!("{} integer{depth}; native integer backing, Float32 working tiles",
         ["sRGB", "Display P3", "Adobe RGB", "ProPhoto RGB"][space as usize])
+}
+
+fn document_color() -> DocumentColor {
+    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
+    DocumentColor {
+        space: [
+            RgbSpace::Srgb,
+            RgbSpace::DisplayP3,
+            RgbSpace::AdobeRgb,
+            RgbSpace::ProPhoto,
+        ][space as usize],
+        depth: if depth == 16 {
+            SampleDepth::U16
+        } else {
+            SampleDepth::U8
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,18 +107,6 @@ impl ScenarioKind {
         Self::LoadedOil,
         Self::PaletteKnife,
         Self::NaturalBlender,
-    ];
-    const INTERACTION: [Self; 10] = [
-        Self::Smudge,
-        Self::WetRound,
-        Self::OpaqueGouache,
-        Self::WatercolorWash,
-        Self::WetWatercolor,
-        Self::LoadedOil,
-        Self::PaletteKnife,
-        Self::NaturalBlender,
-        Self::LiquifyPush,
-        Self::LiquifyTwirl,
     ];
 
     fn name(self) -> &'static str {
@@ -165,17 +171,7 @@ struct Options {
     scenarios: Vec<ScenarioKind>,
     output_dir: PathBuf,
     report_path: PathBuf,
-    feedback_comparison: bool,
-    brush_validation: Option<BrushValidation>,
     repeats: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BrushValidation {
-    Blank,
-    Destination,
-    Watercolor,
-    Transport,
 }
 
 #[derive(Clone, Copy)]
@@ -185,9 +181,17 @@ struct Sample {
     pressure: f32,
 }
 
+#[derive(Clone, Copy)]
+struct Brush {
+    preset: Preset,
+    diameter: f32,
+    opacity: f32,
+    color: [f32; 4],
+}
+
 struct StrokeSpec {
     layer: u64,
-    brush: LayerBrushSettings,
+    brush: Brush,
     samples: Vec<Sample>,
 }
 
@@ -197,8 +201,6 @@ struct FrameMeasurement {
     submit_micros: u64,
     completed_micros: u64,
     commit: bool,
-    tip_gap_px: f32,
-    correction_px: f32,
 }
 
 struct BenchResult {
@@ -228,20 +230,9 @@ struct BenchResult {
     commit_p99_micros: u64,
 }
 
-struct FeedbackBenchResult {
-    name: &'static str,
-    off: BenchResult,
-    on: BenchResult,
-    tip_gap_p95_px: f32,
-    tip_gap_p99_px: f32,
-    correction_p95_px: f32,
-    correction_p99_px: f32,
-    preview_dabs: u64,
-}
-
 struct Canvas {
-    raw: *mut LayerCanvas,
-    extent: [u32; 2],
+    producer: InputProducer<PenEvent>,
+    engine: CanvasEngine<WgpuRasterizer>,
     sequence: u64,
     real_timestamp_ns: u64,
     submitted_events: u64,
@@ -249,35 +240,33 @@ struct Canvas {
 
 impl Canvas {
     fn new() -> Result<Self, String> {
-        Self::with_stroke_capacity(65_536)
+        Self::configured([WIDTH, HEIGHT], [0.93, 0.92, 0.88, 1.0])
     }
 
-    fn with_stroke_capacity(stroke_point_capacity: u32) -> Result<Self, String> {
-        let config = LayerCanvasConfig {
-            document_width: WIDTH,
-            document_height: HEIGHT,
-            surface_width: WIDTH,
-            surface_height: HEIGHT,
-            input_capacity: 16_384,
-            stroke_point_capacity,
-            dab_capacity: 65_536,
-            batch_capacity: 64,
-            background_rgba_linear: [0.93, 0.92, 0.88, 1.0],
-            ..LayerCanvasConfig::default()
+    fn configured(extent: [u32; 2], background_rgba_linear: [f32; 4]) -> Result<Self, String> {
+        let color = document_color();
+        let mut document = Document::new("untitled", extent[0], extent[1]);
+        document.color = color;
+        let (producer, consumer) = input_queue(16_384);
+        let view = ViewState {
+            width_px: extent[0],
+            height_px: extent[1],
+            document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            background_rgba_linear,
         };
-        Self::configured(config)
-    }
-
-    fn configured(mut config: LayerCanvasConfig) -> Result<Self, String> {
-        (config.color_space, config.integer_depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
-        let mut raw = ptr::null_mut();
-        check(
-            unsafe { layer_canvas_create(&config, &mut raw) },
-            "create canvas",
-        )?;
+        let backend = WgpuRasterizer::new_native_headless(color).map_err(|e| e.to_string())?;
+        let mut engine =
+            CanvasEngine::new(backend, document, consumer, view, ViewTransform::IDENTITY)
+                .map_err(|e| e.to_string())?;
+        engine
+            .set_instant_feedback(InstantFeedbackConfig {
+                enabled: false,
+                ..InstantFeedbackConfig::default()
+            })
+            .map_err(|e| e.to_string())?;
         let mut canvas = Self {
-            raw,
-            extent: [config.surface_width, config.surface_height],
+            producer,
+            engine,
             sequence: 0,
             real_timestamp_ns: 0,
             submitted_events: 0,
@@ -288,68 +277,44 @@ impl Canvas {
     }
 
     fn draw(&mut self) -> Result<(), String> {
-        check(unsafe { layer_canvas_draw_frame(self.raw) }, "draw frame")
-    }
-
-    fn draw_for(&mut self, now_ns: u64, presentation_ns: u64) -> Result<(), String> {
-        check(
-            unsafe { layer_canvas_draw_frame_for(self.raw, now_ns, presentation_ns) },
-            "draw predicted frame",
-        )
+        self.engine.render_frame().map_err(|e| e.to_string())
     }
 
     // Backpressure can defer consumption. Never record an empty submission as
     // a completed drawing frame. Count actual CPU frame creation separately
     // from time spent awaiting bounded backing capacity.
-    fn drain_submitted(&mut self, clocks: Option<(u64, u64)>) -> Result<u64, String> {
-        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    fn drain_submitted(&mut self) -> Result<u64, String> {
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut cpu = 0;
-        while self.metrics()?.input_events < self.submitted_events {
+        while self.engine.metrics().input_events < self.submitted_events {
             if Instant::now() >= deadline {
                 return Err("Input did not drain within the capture deadline".into());
             }
             self.wait_idle()?;
             std::thread::yield_now();
             let start = Instant::now();
-            match clocks {
-                Some((now, present)) => self.draw_for(now, present)?,
-                None => self.draw()?,
-            }
+            self.draw()?;
             cpu += start.elapsed().as_micros() as u64;
         }
         Ok(cpu)
     }
 
     fn wait_idle(&mut self) -> Result<(), String> {
-        check(
-            unsafe { layer_canvas_wait_idle(self.raw) },
-            "wait for GPU completion",
-        )
-    }
-
-    fn gpu_info(&self) -> Result<LayerGpuInfo, String> {
-        let mut info = LayerGpuInfo::default();
-        check(
-            unsafe { layer_canvas_get_gpu_info(self.raw, &mut info) },
-            "get GPU info",
-        )?;
-        Ok(info)
+        self.engine
+            .backend_mut()
+            .wait_idle()
+            .map_err(|e| e.to_string())
     }
 
     fn undo(&mut self) -> Result<(), String> {
-        let mut changed = 0;
-        check(
-            unsafe { layer_canvas_undo(self.raw, &mut changed) },
-            "undo warm-up stroke",
-        )?;
-        if changed == 0 {
+        if !self.engine.undo().map_err(|e| e.to_string())? {
             return Err("warm-up stroke was not committed".to_owned());
         }
         // A capture queue can defer the undo submission. Finish the actual
         // restoration here, outside the drawing measurement window.
-        let frames = self.metrics()?.frames;
-        let deadline = Instant::now() + std::time::Duration::from_secs(30);
-        while self.metrics()?.frames == frames {
+        let frames = self.engine.metrics().frames;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.engine.metrics().frames == frames {
             if Instant::now() >= deadline {
                 return Err("Warm-up undo did not finish".into());
             }
@@ -360,91 +325,87 @@ impl Canvas {
         self.wait_idle()
     }
 
-    fn set_brush(&mut self, brush: LayerBrushSettings) -> Result<(), String> {
-        check(
-            unsafe { layer_canvas_set_brush(self.raw, &brush) },
-            "set brush",
-        )
-    }
-
-    fn set_feedback(&mut self, enabled: bool) -> Result<(), String> {
-        let settings = LayerInstantFeedbackSettings {
-            enabled: u8::from(enabled),
-            ..LayerInstantFeedbackSettings::default()
+    fn set_brush(&mut self, brush: Brush) -> Result<(), String> {
+        let mut snapshot = default_brush(brush.preset);
+        snapshot.diameter = brush.diameter;
+        snapshot.opacity = brush.opacity;
+        snapshot.color_rgba_linear = brush.color;
+        snapshot.stabilization = BrushStabilization {
+            streamline: 0.0,
+            pressure_smoothing: 0.0,
+            stabilization: 0.0,
+            motion_filtering: 0.0,
+            expression: 1.0,
+            ..snapshot.stabilization
         };
-        check(
-            unsafe { layer_canvas_set_instant_feedback(self.raw, &settings) },
-            "set instant feedback",
-        )
-    }
-
-    fn set_active_layer(&mut self, layer: u64) -> Result<(), String> {
-        check(
-            unsafe { layer_canvas_set_active_layer(self.raw, layer) },
-            "set active layer",
-        )
-    }
-
-    fn add_layer(&mut self, name: &str, index: usize) -> Result<u64, String> {
-        let mut id = 0;
-        check(
-            unsafe {
-                layer_canvas_add_paint_layer(self.raw, name.as_ptr(), name.len(), index, &mut id)
-            },
-            "add paint layer",
-        )?;
-        Ok(id)
-    }
-
-    fn set_layer_opacity(&mut self, layer: u64, opacity: f32) -> Result<(), String> {
-        check(
-            unsafe { layer_canvas_set_layer_opacity(self.raw, layer, opacity) },
-            "set layer opacity",
-        )
-    }
-
-    fn submit(&mut self, events: &[LayerPenEvent]) -> Result<(), String> {
-        let mut accepted = 0;
-        check(
-            unsafe {
-                layer_canvas_submit_pen_events(
-                    self.raw,
-                    events.as_ptr(),
-                    events.len(),
-                    &mut accepted,
-                )
-            },
-            "submit pen events",
-        )?;
-        if accepted != events.len() {
-            return Err(format!(
-                "event ingress accepted {accepted} of {} records",
-                events.len()
-            ));
-        }
-        self.submitted_events += accepted as u64;
+        self.engine.set_brush(snapshot).map_err(|e| e.to_string())?;
+        self.engine.set_tool(if brush.preset == Preset::Eraser {
+            StrokeTool::Eraser
+        } else {
+            StrokeTool::Brush
+        });
         Ok(())
     }
 
-    fn metrics(&self) -> Result<LayerCanvasMetrics, String> {
-        let mut metrics = LayerCanvasMetrics::default();
-        check(
-            unsafe { layer_canvas_get_metrics(self.raw, &mut metrics) },
-            "get metrics",
-        )?;
-        Ok(metrics)
+    fn set_active_layer(&mut self, layer: u64) -> Result<(), String> {
+        self.engine
+            .set_active_layer(LayerId(layer))
+            .map_err(|e| e.to_string())
+    }
+
+    fn add_layer(&mut self, name: &str, index: usize) -> Result<u64, String> {
+        let id = self.engine.allocate_layer_id();
+        self.engine
+            .apply_edit(Edit::InsertLayer {
+                index,
+                layer: Layer::paint(id, name),
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(id.0)
+    }
+
+    fn set_layer_opacity(&mut self, layer: u64, opacity: f32) -> Result<(), String> {
+        self.engine
+            .set_layer_opacity(LayerId(layer), opacity)
+            .map_err(|e| e.to_string())
+    }
+
+    fn submit(&mut self, events: &[PenEvent]) -> Result<(), String> {
+        for (accepted, event) in events.iter().enumerate() {
+            if self.producer.push(*event).is_err() {
+                return Err(format!(
+                    "event ingress accepted {accepted} of {} records",
+                    events.len()
+                ));
+            }
+        }
+        self.submitted_events += events.len() as u64;
+        Ok(())
+    }
+
+    fn raster_metrics(&self) -> GpuRasterMetrics {
+        self.engine.backend().metrics()
     }
 
     fn write_png(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        let [width, height] = self.extent;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.engine.has_pending_input() || self.engine.has_pending_document_edits() {
+            if Instant::now() >= deadline {
+                return Err("Canvas work did not finish before readback".into());
+            }
+            self.draw()?;
+            if self.engine.has_pending_input() || self.engine.has_pending_document_edits() {
+                self.wait_idle()?;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let [width, height] = self.engine.backend().document_extent();
         let stride = width as usize * 4;
         let mut rgba = vec![0; stride * height as usize];
-        check(
-            unsafe {
-                layer_canvas_copy_rgba8_srgb(self.raw, rgba.as_mut_ptr(), rgba.len(), stride)
-            },
-            "copy canvas pixels",
-        )?;
+        self.engine
+            .backend_mut()
+            .copy_rgba8_srgb(&mut rgba, stride)
+            .map_err(|e| e.to_string())?;
         let file = BufWriter::new(File::create(path)?);
         let mut encoder = png::Encoder::new(file, width, height);
         encoder.set_color(png::ColorType::Rgba);
@@ -455,45 +416,36 @@ impl Canvas {
         Ok(())
     }
 
-    fn next_event(&mut self, sample: Sample, phase: u32) -> LayerPenEvent {
+    fn next_event(&mut self, sample: Sample, phase: PenPhase) -> PenEvent {
         self.real_timestamp_ns = self.real_timestamp_ns.saturating_add(1_000_000);
-        self.event_at(sample, phase, self.real_timestamp_ns, false)
-    }
-
-    fn predicted_event(&mut self, sample: Sample, timestamp_ns: u64) -> LayerPenEvent {
-        self.event_at(sample, 2, timestamp_ns, true)
-    }
-
-    fn event_at(
-        &mut self,
-        sample: Sample,
-        phase: u32,
-        timestamp_ns: u64,
-        predicted: bool,
-    ) -> LayerPenEvent {
         self.sequence = self.sequence.saturating_add(1);
-        LayerPenEvent {
+        PenEvent {
             device_id: 1,
             sequence: self.sequence,
-            timestamp_ns,
+            timestamp_ns: self.real_timestamp_ns,
             view_revision: 0,
-            x_physical_px: sample.x,
-            y_physical_px: sample.y,
+            surface_position: Point {
+                x: sample.x,
+                y: sample.y,
+            },
             pressure: sample.pressure,
-            tilt_x_radians: 0.0,
-            tilt_y_radians: 0.0,
+            tilt_radians: [0.0, 0.0],
             twist_radians: 0.0,
             distance: 0.0,
             phase,
-            tool: 1,
-            flags: 2 | u32::from(predicted),
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
         }
     }
 }
 
-impl Drop for Canvas {
-    fn drop(&mut self) {
-        unsafe { layer_canvas_destroy(self.raw) };
+fn phase(index: usize, count: usize) -> PenPhase {
+    if index == 0 {
+        PenPhase::Down
+    } else if index + 1 == count {
+        PenPhase::Up
+    } else {
+        PenPhase::Move
     }
 }
 
@@ -504,14 +456,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_options()?;
     DOCUMENT_COLOR.set(options.color).expect("benchmark color initialized once");
     eprintln!("Document mode: {}", document_mode());
-    if let Some(validation) = options.brush_validation {
-        run_brush_validation(&options.output_dir, validation)?;
-        return Ok(());
-    }
-    if options.feedback_comparison {
-        run_feedback_comparison(&options)?;
-        return Ok(());
-    }
     fs::create_dir_all(&options.output_dir)?;
     if let Some(parent) = options.report_path.parent() {
         fs::create_dir_all(parent)?;
@@ -538,8 +482,6 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut scenarios = ScenarioKind::LEGACY.to_vec();
     let mut output_dir = PathBuf::from("artifacts/images");
     let mut report_path = PathBuf::from("artifacts/benchmarks/gpu-4k.md");
-    let mut feedback_comparison = false;
-    let mut brush_validation = None;
     let mut repeats = 1;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -582,31 +524,6 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--report" => {
                 report_path = PathBuf::from(arguments.next().ok_or("--report needs a value")?);
             }
-            "--feedback-comparison" => {
-                feedback_comparison = true;
-                report_path = PathBuf::from("artifacts/benchmarks/instant-feedback.md");
-            }
-            "--brush-validation" => {
-                brush_validation = Some(
-                    match arguments
-                        .next()
-                        .ok_or(
-                            "--brush-validation needs blank, destination, watercolor, or transport",
-                        )?
-                        .as_str()
-                    {
-                        "blank" => BrushValidation::Blank,
-                        "destination" => BrushValidation::Destination,
-                        "watercolor" => BrushValidation::Watercolor,
-                        "transport" => BrushValidation::Transport,
-                        _ => {
-                            return Err(
-                                "--brush-validation needs blank, destination, watercolor, or transport".into(),
-                            );
-                        }
-                    },
-                );
-            }
             "--repeats" => {
                 repeats = arguments
                     .next()
@@ -620,8 +537,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 println!(
                     "gpu-bench [--scenario all|legacy|painter|dry|watercolor|SCENARIO_NAME] \
                      [--output-dir PATH] [--report PATH] [--repeats N] \
-                     [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16] \
-                     [--feedback-comparison] [--brush-validation blank|destination|watercolor|transport]"
+                     [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]"
                 );
                 std::process::exit(0);
             }
@@ -633,426 +549,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         scenarios,
         output_dir,
         report_path,
-        feedback_comparison,
-        brush_validation,
         repeats,
     })
-}
-
-fn run_brush_validation(
-    output_dir: &Path,
-    validation: BrushValidation,
-) -> Result<(), Box<dyn Error>> {
-    if validation == BrushValidation::Watercolor {
-        return run_watercolor_validation(output_dir);
-    }
-    if validation == BrushValidation::Transport {
-        return run_transport_validation(output_dir);
-    }
-    fs::create_dir_all(output_dir)?;
-    let scenarios: &[ScenarioKind] = match validation {
-        BrushValidation::Blank => &ScenarioKind::PAINTER,
-        BrushValidation::Destination => &ScenarioKind::INTERACTION,
-        BrushValidation::Watercolor => unreachable!(),
-        BrushValidation::Transport => unreachable!(),
-    };
-    let mut names = Vec::with_capacity(scenarios.len() + 2);
-    let mut reference = Canvas::new()?;
-    match validation {
-        BrushValidation::Blank => {
-            reference.write_png(&output_dir.join("blank_reference.png"))?;
-            names.push("blank_reference");
-        }
-        BrushValidation::Destination => {
-            prepare_validation_destination(&mut reference)?;
-            reference.wait_idle()?;
-            reference.write_png(&output_dir.join("destination_reference.png"))?;
-            names.push("destination_reference");
-
-            let mut liquify_reference = Canvas::new()?;
-            prepare_liquify_destination(&mut liquify_reference)?;
-            liquify_reference.wait_idle()?;
-            liquify_reference.write_png(&output_dir.join("liquify_reference.png"))?;
-            names.push("liquify_reference");
-        }
-        BrushValidation::Watercolor => unreachable!(),
-        BrushValidation::Transport => unreachable!(),
-    }
-    for &kind in scenarios {
-        eprintln!("rendering {} {:?} validation", kind.name(), validation);
-        let mut canvas = Canvas::new()?;
-        canvas.set_feedback(false)?;
-        if validation == BrushValidation::Destination {
-            if matches!(kind, ScenarioKind::LiquifyPush | ScenarioKind::LiquifyTwirl) {
-                prepare_liquify_destination(&mut canvas)?;
-            } else {
-                prepare_validation_destination(&mut canvas)?;
-            }
-        }
-        let strokes = match validation {
-            BrushValidation::Blank => blank_validation_strokes(kind),
-            BrushValidation::Destination => destination_validation_strokes(kind),
-            BrushValidation::Watercolor => unreachable!(),
-            BrushValidation::Transport => unreachable!(),
-        };
-        run_strokes(&mut canvas, &strokes, None)?;
-        canvas.wait_idle()?;
-        canvas.write_png(&output_dir.join(format!("{}.png", kind.name())))?;
-        names.push(kind.name());
-    }
-    write_validation_gallery(output_dir, validation, &names)?;
-    Ok(())
-}
-
-const WATERCOLOR_VALIDATION_NAMES: [&str; 12] = [
-    "01_single_wash",
-    "02_pressure_levels",
-    "03_opacity_levels",
-    "04_diameter_levels",
-    "05_red_blue_mix",
-    "06_yellow_blue_mix",
-    "07_three_pigment_mix",
-    "08_repeated_glazing",
-    "09_loop_and_inner_edge",
-    "10_wet_pull_curves",
-    "11_dynamic_pressure_curve",
-    "12_lower_layer_isolation",
-];
-
-fn run_watercolor_validation(output_dir: &Path) -> Result<(), Box<dyn Error>> {
-    fs::create_dir_all(output_dir)?;
-    for (index, name) in WATERCOLOR_VALIDATION_NAMES.iter().enumerate() {
-        eprintln!("rendering watercolor validation {}/12: {name}", index + 1);
-        let mut canvas = Canvas::new()?;
-        canvas.set_feedback(false)?;
-        let strokes = watercolor_validation_strokes(index, &mut canvas)?;
-        run_strokes(&mut canvas, &strokes, None)?;
-        canvas.wait_idle()?;
-        canvas.write_png(&output_dir.join(format!("{name}.png")))?;
-    }
-    write_validation_gallery(
-        output_dir,
-        BrushValidation::Watercolor,
-        &WATERCOLOR_VALIDATION_NAMES,
-    )?;
-    Ok(())
-}
-
-const TRANSPORT_VALIDATION_NAMES: [&str; 12] = [
-    "01_long_narrow_low_16px",
-    "02_long_narrow_medium_48px",
-    "03_long_narrow_high_88px",
-    "04_long_broad_low_16px",
-    "05_long_broad_medium_48px",
-    "06_long_broad_high_88px",
-    "07_short_narrow_low_16px",
-    "08_short_narrow_medium_48px",
-    "09_short_narrow_high_88px",
-    "10_short_broad_low_16px",
-    "11_short_broad_medium_48px",
-    "12_short_broad_high_88px",
-];
-
-fn run_transport_validation(output_dir: &Path) -> Result<(), Box<dyn Error>> {
-    fs::create_dir_all(output_dir)?;
-    for (index, name) in TRANSPORT_VALIDATION_NAMES.iter().enumerate() {
-        eprintln!("rendering transport validation {}/12: {name}", index + 1);
-        let field = (index / 3 + 1) as u32;
-        let level = index % 3;
-        let (distance, wet_flow, dry_flow) = match level {
-            0 => (16.0, 0.30, 0.16),
-            1 => (48.0, 0.68, 0.48),
-            _ => (88.0, 1.0, 0.86),
-        };
-        let mut canvas = Canvas::new()?;
-        canvas.set_feedback(false)?;
-
-        // Establish an already-wet blue field without transport. A red stroke
-        // inside it exposes wet-to-wet mixing; the isolated gold stroke below
-        // exposes wet-to-dry capillary bleed. Several submitted updates make
-        // the event-driven, incremental behavior visible without simulating
-        // flow between input events.
-        let mut base = transport_brush(field, 0.0, 0.0, 0.0, [0.0, 0.012, 0.82, 1.0]);
-        base.diameter_document_px = 1320.0;
-        base.opacity = 0.88;
-        // Represent an older but still wet wash. Fresh strokes below recharge
-        // much more water and therefore establish the gradient under test.
-        base.transport_water_load = 0.42;
-        let mut active = transport_brush(field, distance, wet_flow, dry_flow, [1.0, 0.0, 0.0, 1.0]);
-        active.diameter_document_px = 150.0;
-        active.opacity = 1.0;
-        active.transport_water_load = 0.98;
-        let mut accent = transport_brush(
-            field,
-            distance,
-            wet_flow * 0.78,
-            dry_flow,
-            [1.0, 0.08, 0.0, 1.0],
-        );
-        accent.diameter_document_px = 170.0;
-        accent.opacity = 1.0;
-        accent.transport_water_load = 0.98;
-        let strokes = vec![
-            StrokeSpec {
-                layer: 1,
-                brush: base,
-                samples: linear_samples(2, (1150.0, 1400.0), (1150.0, 1400.0), 1.0, 1.0),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: active,
-                samples: linear_samples(48, (1150.0, 900.0), (1150.0, 1850.0), 1.0, 1.0),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: accent,
-                samples: linear_samples(48, (2950.0, 2300.0), (2950.0, 3250.0), 1.0, 1.0),
-            },
-        ];
-        run_strokes(&mut canvas, &strokes, None)?;
-        canvas.wait_idle()?;
-        canvas.write_png(&output_dir.join(format!("{name}.png")))?;
-    }
-    write_validation_gallery(
-        output_dir,
-        BrushValidation::Transport,
-        &TRANSPORT_VALIDATION_NAMES,
-    )?;
-    Ok(())
-}
-
-fn watercolor_validation_strokes(
-    index: usize,
-    canvas: &mut Canvas,
-) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
-    let red = [0.68, 0.018, 0.012, 1.0];
-    let blue = [0.008, 0.055, 0.68, 1.0];
-    let yellow = [0.92, 0.48, 0.008, 1.0];
-    let green = [0.008, 0.42, 0.16, 1.0];
-    let violet = [0.34, 0.018, 0.58, 1.0];
-    let horizontal = |y, pressure| linear_samples(180, (420.0, y), (3670.0, y), pressure, pressure);
-    let cross_a = || {
-        bezier(
-            220,
-            [
-                (430.0, 820.0),
-                (1220.0, 3220.0),
-                (2830.0, 820.0),
-                (3660.0, 3220.0),
-            ],
-        )
-    };
-    let cross_b = || {
-        bezier(
-            220,
-            [
-                (430.0, 3220.0),
-                (1240.0, 820.0),
-                (2820.0, 3220.0),
-                (3660.0, 820.0),
-            ],
-        )
-    };
-
-    let strokes = match index {
-        0 => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(20, 720.0, 0.82, red),
-            samples: bezier(
-                220,
-                [
-                    (420.0, 2350.0),
-                    (1280.0, 900.0),
-                    (2820.0, 3160.0),
-                    (3670.0, 1740.0),
-                ],
-            ),
-        }],
-        1 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 500.0, 0.86, red),
-                samples: horizontal(900.0, 0.18),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 500.0, 0.86, blue),
-                samples: horizontal(2048.0, 0.52),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 500.0, 0.86, green),
-                samples: horizontal(3190.0, 0.96),
-            },
-        ],
-        2 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 520.0, 0.28, red),
-                samples: horizontal(900.0, 0.78),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 520.0, 0.58, blue),
-                samples: horizontal(2048.0, 0.78),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 520.0, 0.92, violet),
-                samples: horizontal(3190.0, 0.78),
-            },
-        ],
-        3 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 150.0, 0.84, red),
-                samples: horizontal(850.0, 0.82),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 380.0, 0.84, yellow),
-                samples: horizontal(2000.0, 0.82),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 760.0, 0.84, blue),
-                samples: horizontal(3220.0, 0.82),
-            },
-        ],
-        4 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 660.0, 0.78, red),
-                samples: cross_a(),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 580.0, 0.82, blue),
-                samples: cross_b(),
-            },
-        ],
-        5 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 700.0, 0.78, yellow),
-                samples: cross_a(),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 560.0, 0.86, blue),
-                samples: cross_b(),
-            },
-        ],
-        6 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 620.0, 0.76, red),
-                samples: cross_a(),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 540.0, 0.80, yellow),
-                samples: cross_b(),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 430.0, 0.84, blue),
-                samples: horizontal(2048.0, 0.88),
-            },
-        ],
-        7 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 820.0, 0.34, red),
-                samples: horizontal(1460.0, 0.74),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 760.0, 0.34, yellow),
-                samples: horizontal(2048.0, 0.74),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(20, 700.0, 0.34, blue),
-                samples: horizontal(2630.0, 0.74),
-            },
-        ],
-        8 => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(20, 420.0, 0.86, violet),
-            samples: circular_samples(360, (2048.0, 2048.0), 1120.0, 1.0),
-        }],
-        9 => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 760.0, 0.72, red),
-                samples: lissajous(260, 1320.0, 900.0, 0.3, 0.7),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(21, 620.0, 0.80, blue),
-                samples: bezier(
-                    240,
-                    [
-                        (350.0, 2700.0),
-                        (1420.0, 300.0),
-                        (2740.0, 3800.0),
-                        (3760.0, 1320.0),
-                    ],
-                ),
-            },
-        ],
-        10 => {
-            let mut samples = bezier(
-                300,
-                [
-                    (330.0, 3100.0),
-                    (1150.0, 160.0),
-                    (2940.0, 3940.0),
-                    (3760.0, 980.0),
-                ],
-            );
-            let last = samples.len().saturating_sub(1).max(1) as f32;
-            for (sample_index, sample) in samples.iter_mut().enumerate() {
-                let phase = sample_index as f32 / last;
-                sample.pressure = 0.12 + 0.86 * (phase * std::f32::consts::PI).sin().abs();
-            }
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(20, 780.0, 0.88, green),
-                samples,
-            }]
-        }
-        11 => {
-            let lower = vec![
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(1, 980.0, 1.0, red),
-                    samples: linear_samples(2, (900.0, 2048.0), (900.0, 2048.0), 1.0, 1.0),
-                },
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(1, 980.0, 1.0, yellow),
-                    samples: linear_samples(2, (2048.0, 2048.0), (2048.0, 2048.0), 1.0, 1.0),
-                },
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(1, 980.0, 1.0, blue),
-                    samples: linear_samples(2, (3190.0, 2048.0), (3190.0, 2048.0), 1.0, 1.0),
-                },
-            ];
-            run_strokes(canvas, &lower, None)?;
-            let watercolor_layer = canvas.add_layer("Wet watercolor", 0)?;
-            canvas.draw()?;
-            vec![StrokeSpec {
-                layer: watercolor_layer,
-                brush: brush(21, 620.0, 0.76, green),
-                samples: horizontal(2048.0, 0.84),
-            }]
-        }
-        _ => unreachable!("watercolor validation has exactly twelve cases"),
-    };
-    Ok(strokes)
 }
 
 fn measure_scenario(
@@ -1060,12 +558,11 @@ fn measure_scenario(
     repeats: usize,
 ) -> Result<(BenchResult, Canvas), Box<dyn Error>> {
     let mut all_measurements = Vec::new();
-    let mut aggregate_metrics = LayerCanvasMetrics::default();
+    let mut aggregate_metrics = GpuRasterMetrics::default();
     let mut final_canvas = None;
     for repeat in 0..repeats {
         eprintln!("  repetition {}/{}", repeat + 1, repeats);
         let mut canvas = Canvas::new()?;
-        canvas.set_feedback(false)?;
         for index in 0..31 {
             let _ = canvas.add_layer(&format!("Empty benchmark layer {index}"), 1)?;
         }
@@ -1078,7 +575,7 @@ fn measure_scenario(
             run_strokes(&mut canvas, &strokes[..1], None)?;
             canvas.undo()?;
         }
-        let before = canvas.metrics()?;
+        let before = canvas.raster_metrics();
         let mut measurements = Vec::with_capacity(
             strokes
                 .iter()
@@ -1086,8 +583,8 @@ fn measure_scenario(
                 .sum(),
         );
         run_strokes(&mut canvas, &strokes, Some(&mut measurements))?;
-        let after = canvas.metrics()?;
-        merge_metrics_delta(&mut aggregate_metrics, before, after);
+        let after = canvas.raster_metrics();
+        merge_metrics_delta(&mut aggregate_metrics, &before, &after);
         all_measurements.extend(measurements);
         // Retain only the final repetition for the gallery export. Keeping the
         // previous full 4K canvas alive while allocating the next one needlessly
@@ -1097,25 +594,19 @@ fn measure_scenario(
         }
     }
     Ok((
-        summarize(
-            kind,
-            repeats,
-            &all_measurements,
-            LayerCanvasMetrics::default(),
-            aggregate_metrics,
-        ),
+        summarize(kind, repeats, &all_measurements, &aggregate_metrics),
         final_canvas.expect("repeats is validated as non-zero"),
     ))
 }
 
 fn merge_metrics_delta(
-    aggregate: &mut LayerCanvasMetrics,
-    before: LayerCanvasMetrics,
-    after: LayerCanvasMetrics,
+    aggregate: &mut GpuRasterMetrics,
+    before: &GpuRasterMetrics,
+    after: &GpuRasterMetrics,
 ) {
-    aggregate.raster_dabs = aggregate
-        .raster_dabs
-        .saturating_add(after.raster_dabs.saturating_sub(before.raster_dabs));
+    aggregate.dabs = aggregate
+        .dabs
+        .saturating_add(after.dabs.saturating_sub(before.dabs));
     aggregate.raster_candidate_pixels = aggregate.raster_candidate_pixels.saturating_add(
         after
             .raster_candidate_pixels
@@ -1153,12 +644,12 @@ fn prepare_scenario(
         ScenarioKind::GPen => vec![
             StrokeSpec {
                 layer: 1,
-                brush: brush(1, 24.0, 1.0, [0.004, 0.006, 0.009, 1.0]),
+                brush: brush(Preset::GPen, 24.0, 1.0, [0.004, 0.006, 0.009, 1.0]),
                 samples: lissajous(1400, 1780.0, 1360.0, 0.0, 0.3),
             },
             StrokeSpec {
                 layer: 1,
-                brush: brush(1, 13.0, 0.92, [0.025, 0.01, 0.008, 1.0]),
+                brush: brush(Preset::GPen, 13.0, 0.92, [0.025, 0.01, 0.008, 1.0]),
                 samples: bezier(
                     900,
                     [
@@ -1174,14 +665,14 @@ fn prepare_scenario(
         ScenarioKind::Eraser => {
             let underpaint = vec![StrokeSpec {
                 layer: 1,
-                brush: brush(4, 720.0, 0.9, [0.18, 0.035, 0.012, 1.0]),
+                brush: brush(Preset::Paintbrush, 720.0, 0.9, [0.18, 0.035, 0.012, 1.0]),
                 samples: lissajous(700, 1500.0, 1320.0, 0.4, 1.1),
             }];
             run_strokes(canvas, &underpaint, None)?;
             vec![
                 StrokeSpec {
                     layer: 1,
-                    brush: brush(3, 360.0, 0.85, [0.0, 0.0, 0.0, 1.0]),
+                    brush: brush(Preset::Eraser, 360.0, 0.85, [0.0, 0.0, 0.0, 1.0]),
                     samples: bezier(
                         600,
                         [
@@ -1194,7 +685,7 @@ fn prepare_scenario(
                 },
                 StrokeSpec {
                     layer: 1,
-                    brush: brush(3, 620.0, 0.5, [0.0, 0.0, 0.0, 1.0]),
+                    brush: brush(Preset::Eraser, 620.0, 0.5, [0.0, 0.0, 0.0, 1.0]),
                     samples: lissajous(520, 1300.0, 1000.0, 1.2, 0.2),
                 },
             ]
@@ -1202,7 +693,7 @@ fn prepare_scenario(
         ScenarioKind::Paintbrush => vec![
             StrokeSpec {
                 layer: 1,
-                brush: brush(4, 680.0, 0.82, [0.28, 0.025, 0.008, 1.0]),
+                brush: brush(Preset::Paintbrush, 680.0, 0.82, [0.28, 0.025, 0.008, 1.0]),
                 samples: bezier(
                     560,
                     [
@@ -1215,7 +706,7 @@ fn prepare_scenario(
             },
             StrokeSpec {
                 layer: 1,
-                brush: brush(4, 520.0, 0.72, [0.01, 0.06, 0.24, 1.0]),
+                brush: brush(Preset::Paintbrush, 520.0, 0.72, [0.01, 0.06, 0.24, 1.0]),
                 samples: bezier(
                     520,
                     [
@@ -1228,19 +719,19 @@ fn prepare_scenario(
             },
             StrokeSpec {
                 layer: 1,
-                brush: brush(4, 880.0, 0.5, [0.5, 0.2, 0.006, 1.0]),
+                brush: brush(Preset::Paintbrush, 880.0, 0.5, [0.5, 0.2, 0.006, 1.0]),
                 samples: lissajous(500, 1250.0, 980.0, 0.2, 1.8),
             },
         ],
         ScenarioKind::Airbrush => vec![StrokeSpec {
             layer: 1,
-            brush: brush(5, 420.0, 0.82, [0.025, 0.12, 0.56, 1.0]),
+            brush: brush(Preset::Airbrush, 420.0, 0.82, [0.025, 0.12, 0.56, 1.0]),
             samples: lissajous(520, 1460.0, 1180.0, 0.2, 0.8),
         }],
         ScenarioKind::Chalk => vec![
             StrokeSpec {
                 layer: 1,
-                brush: brush(6, 150.0, 0.9, [0.68, 0.08, 0.025, 1.0]),
+                brush: brush(Preset::Chalk, 150.0, 0.9, [0.68, 0.08, 0.025, 1.0]),
                 samples: bezier(
                     480,
                     [
@@ -1253,23 +744,23 @@ fn prepare_scenario(
             },
             StrokeSpec {
                 layer: 1,
-                brush: brush(6, 96.0, 0.72, [0.03, 0.18, 0.52, 1.0]),
+                brush: brush(Preset::Chalk, 96.0, 0.72, [0.03, 0.18, 0.52, 1.0]),
                 samples: lissajous(420, 1320.0, 1040.0, 1.1, 0.0),
             },
         ],
         ScenarioKind::Marker => vec![StrokeSpec {
             layer: 1,
-            brush: brush(7, 230.0, 0.78, [0.78, 0.035, 0.12, 0.78]),
+            brush: brush(Preset::Marker, 230.0, 0.78, [0.78, 0.035, 0.12, 0.78]),
             samples: lissajous(480, 1520.0, 1120.0, 0.0, 1.2),
         }],
         ScenarioKind::Spray => vec![StrokeSpec {
             layer: 1,
-            brush: brush(8, 42.0, 0.74, [0.025, 0.42, 0.09, 1.0]),
+            brush: brush(Preset::Spray, 42.0, 0.74, [0.025, 0.42, 0.09, 1.0]),
             samples: lissajous(420, 1420.0, 1080.0, 0.9, 0.3),
         }],
         ScenarioKind::DualTexture => vec![StrokeSpec {
             layer: 1,
-            brush: brush(9, 340.0, 0.88, [0.09, 0.018, 0.48, 1.0]),
+            brush: brush(Preset::DualTexture, 340.0, 0.88, [0.09, 0.018, 0.48, 1.0]),
             samples: bezier(
                 480,
                 [
@@ -1284,7 +775,7 @@ fn prepare_scenario(
             prepare_destination_base(canvas)?;
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(14, 320.0, 0.66, [0.06, 0.22, 0.76, 1.0]),
+                brush: brush(Preset::MultiplyGlaze, 320.0, 0.66, [0.06, 0.22, 0.76, 1.0]),
                 samples: lissajous(360, 1280.0, 940.0, 0.6, 1.4),
             }]
         }
@@ -1292,7 +783,7 @@ fn prepare_scenario(
             prepare_destination_base(canvas)?;
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(10, 260.0, 0.94, [0.0, 0.0, 0.0, 1.0]),
+                brush: brush(Preset::Smudge, 260.0, 0.94, [0.0, 0.0, 0.0, 1.0]),
                 samples: bezier(
                     360,
                     [
@@ -1308,7 +799,7 @@ fn prepare_scenario(
             prepare_destination_base(canvas)?;
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(11, 300.0, 0.86, [0.015, 0.12, 0.62, 1.0]),
+                brush: brush(Preset::WetRound, 300.0, 0.86, [0.015, 0.12, 0.62, 1.0]),
                 samples: lissajous(360, 1260.0, 920.0, 0.3, 1.0),
             }]
         }
@@ -1316,7 +807,7 @@ fn prepare_scenario(
             prepare_destination_base(canvas)?;
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(12, 520.0, 1.0, [0.0; 4]),
+                brush: brush(Preset::LiquifyPush, 520.0, 1.0, [0.0; 4]),
                 samples: bezier(
                     300,
                     [
@@ -1332,7 +823,7 @@ fn prepare_scenario(
             prepare_destination_base(canvas)?;
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(13, 720.0, 1.0, [0.0; 4]),
+                brush: brush(Preset::LiquifyTwirl, 720.0, 1.0, [0.0; 4]),
                 samples: lissajous(240, 980.0, 760.0, 0.2, 0.5),
             }]
         }
@@ -1345,12 +836,12 @@ fn prepare_scenario(
             let mut strokes = vec![
                 StrokeSpec {
                     layer: color,
-                    brush: brush(4, 760.0, 0.76, [0.03, 0.2, 0.16, 1.0]),
+                    brush: brush(Preset::Paintbrush, 760.0, 0.76, [0.03, 0.2, 0.16, 1.0]),
                     samples: lissajous(520, 1440.0, 1160.0, 0.8, 0.0),
                 },
                 StrokeSpec {
                     layer: 1,
-                    brush: brush(1, 21.0, 0.95, [0.008, 0.008, 0.012, 1.0]),
+                    brush: brush(Preset::GPen, 21.0, 0.95, [0.008, 0.008, 0.012, 1.0]),
                     samples: lissajous(1000, 1660.0, 1320.0, 0.0, 0.7),
                 },
             ];
@@ -1376,16 +867,16 @@ fn prepare_scenario(
 
 fn painter_strokes(kind: ScenarioKind) -> Vec<StrokeSpec> {
     let (preset, diameter, opacity) = match kind {
-        ScenarioKind::TexturedFlat => (15, 420.0, 0.88),
-        ScenarioKind::DryScumble => (16, 520.0, 0.82),
-        ScenarioKind::PastelBlock => (17, 340.0, 0.84),
-        ScenarioKind::TransparentGlaze => (18, 620.0, 0.72),
-        ScenarioKind::OpaqueGouache => (19, 480.0, 0.92),
-        ScenarioKind::WatercolorWash => (20, 700.0, 0.78),
-        ScenarioKind::WetWatercolor => (21, 620.0, 0.82),
-        ScenarioKind::LoadedOil => (22, 560.0, 0.94),
-        ScenarioKind::PaletteKnife => (23, 680.0, 0.90),
-        ScenarioKind::NaturalBlender => (24, 520.0, 0.88),
+        ScenarioKind::TexturedFlat => (Preset::TexturedFlat, 420.0, 0.88),
+        ScenarioKind::DryScumble => (Preset::DryScumble, 520.0, 0.82),
+        ScenarioKind::PastelBlock => (Preset::PastelBlock, 340.0, 0.84),
+        ScenarioKind::TransparentGlaze => (Preset::TransparentGlaze, 620.0, 0.72),
+        ScenarioKind::OpaqueGouache => (Preset::OpaqueGouache, 480.0, 0.92),
+        ScenarioKind::WatercolorWash => (Preset::WatercolorWash, 700.0, 0.78),
+        ScenarioKind::WetWatercolor => (Preset::WetWatercolor, 620.0, 0.82),
+        ScenarioKind::LoadedOil => (Preset::LoadedOil, 560.0, 0.94),
+        ScenarioKind::PaletteKnife => (Preset::PaletteKnife, 680.0, 0.90),
+        ScenarioKind::NaturalBlender => (Preset::NaturalBlender, 520.0, 0.88),
         _ => unreachable!("only painter scenarios call painter_strokes"),
     };
     // A restrained warm/cool palette makes pickup and mixing legible without
@@ -1436,171 +927,6 @@ fn painter_strokes(kind: ScenarioKind) -> Vec<StrokeSpec> {
     ]
 }
 
-fn painter_validation_settings(kind: ScenarioKind) -> (u32, f32) {
-    match kind {
-        ScenarioKind::Smudge => (10, 360.0),
-        ScenarioKind::WetRound => (11, 360.0),
-        ScenarioKind::TexturedFlat => (15, 340.0),
-        ScenarioKind::DryScumble => (16, 320.0),
-        ScenarioKind::PastelBlock => (17, 300.0),
-        ScenarioKind::TransparentGlaze => (18, 420.0),
-        ScenarioKind::OpaqueGouache => (19, 350.0),
-        ScenarioKind::WatercolorWash => (20, 460.0),
-        ScenarioKind::WetWatercolor => (21, 420.0),
-        ScenarioKind::LoadedOil => (22, 380.0),
-        // This preset's 0.24 aspect produces a blade over four times wider
-        // than its nominal diameter. At 280 px, each row gets a visible blade
-        // while the two validation strokes remain spatially distinct.
-        ScenarioKind::PaletteKnife => (23, 280.0),
-        ScenarioKind::NaturalBlender => (24, 380.0),
-        _ => unreachable!("only paint and smudge scenarios have validation settings"),
-    }
-}
-
-fn blank_validation_strokes(kind: ScenarioKind) -> Vec<StrokeSpec> {
-    let (preset, diameter) = painter_validation_settings(kind);
-    vec![
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter, 0.92, [0.025, 0.018, 0.014, 1.0]),
-            samples: linear_samples(220, (360.0, 760.0), (3730.0, 760.0), 0.78, 0.78),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.88, 0.88, [0.025, 0.11, 0.48, 1.0]),
-            samples: bezier(
-                260,
-                [
-                    (360.0, 2050.0),
-                    (1220.0, 1160.0),
-                    (2820.0, 2940.0),
-                    (3730.0, 2050.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.72, 0.84, [0.48, 0.075, 0.018, 1.0]),
-            samples: linear_samples(220, (360.0, 3330.0), (3730.0, 3330.0), 0.12, 1.0),
-        },
-    ]
-}
-
-fn destination_validation_strokes(kind: ScenarioKind) -> Vec<StrokeSpec> {
-    if kind == ScenarioKind::LiquifyPush {
-        return vec![StrokeSpec {
-            layer: 1,
-            brush: brush(12, 760.0, 1.0, [0.0; 4]),
-            samples: bezier(
-                320,
-                [
-                    (480.0, 3200.0),
-                    (1260.0, 420.0),
-                    (2860.0, 3720.0),
-                    (3640.0, 880.0),
-                ],
-            ),
-        }];
-    }
-    if kind == ScenarioKind::LiquifyTwirl {
-        return vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(13, 920.0, 1.0, [0.0; 4]),
-                samples: circular_samples(220, (1320.0, 1320.0), 210.0, 2.25),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(13, 1060.0, 1.0, [0.0; 4]),
-                samples: circular_samples(240, (2780.0, 2780.0), 240.0, 2.5),
-            },
-        ];
-    }
-    let (preset, diameter) = painter_validation_settings(kind);
-    vec![
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter, 0.92, [0.018, 0.36, 0.10, 1.0]),
-            samples: bezier(
-                300,
-                [
-                    (300.0, 1600.0),
-                    (1280.0, 1200.0),
-                    (2840.0, 2000.0),
-                    (3790.0, 1600.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.72, 0.88, [0.56, 0.018, 0.28, 1.0]),
-            samples: linear_samples(260, (300.0, 2780.0), (3790.0, 2780.0), 0.82, 0.82),
-        },
-    ]
-}
-
-fn prepare_validation_destination(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
-    // Put the wells on an opaque neutral paint ground. A blender should
-    // exchange paint colors here, not accidentally demonstrate transparent
-    // alpha transport against the application's visual background.
-    let mut strokes = [1600.0, 2780.0]
-        .into_iter()
-        .map(|y| StrokeSpec {
-            layer: 1,
-            brush: brush(1, 1050.0, 1.0, [0.82, 0.80, 0.76, 1.0]),
-            samples: linear_samples(2, (0.0, y), (4095.0, y), 1.0, 1.0),
-        })
-        .collect::<Vec<_>>();
-    // Two rows of separated, single-contact color wells make pickup direction
-    // and color carry visible without repeated source-dab edges.
-    let swatches = [
-        (820.0, [0.66, 0.012, 0.006, 1.0]),
-        (2048.0, [0.78, 0.34, 0.004, 1.0]),
-        (3270.0, [0.006, 0.045, 0.62, 1.0]),
-    ];
-    strokes.extend(swatches.into_iter().flat_map(|(x, color)| {
-        [1600.0, 2780.0].map(|y| StrokeSpec {
-            layer: 1,
-            brush: brush(1, 900.0, 1.0, color),
-            samples: linear_samples(2, (x, y), (x, y), 1.0, 1.0),
-        })
-    }));
-    run_strokes(canvas, &strokes, None).map_err(Into::into)
-}
-
-fn prepare_liquify_destination(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
-    // Fine grid lines expose interpolation quality and local continuity while
-    // large, separated color wells make displacement direction unambiguous.
-    let grid_color = [0.055, 0.070, 0.095, 1.0];
-    let mut strokes = Vec::new();
-    for coordinate in (420..=3780).step_by(420) {
-        let coordinate = coordinate as f32;
-        strokes.push(StrokeSpec {
-            layer: 1,
-            brush: brush(1, 22.0, 0.72, grid_color),
-            samples: linear_samples(2, (coordinate, 240.0), (coordinate, 3850.0), 1.0, 1.0),
-        });
-        strokes.push(StrokeSpec {
-            layer: 1,
-            brush: brush(1, 22.0, 0.72, grid_color),
-            samples: linear_samples(2, (240.0, coordinate), (3850.0, coordinate), 1.0, 1.0),
-        });
-    }
-    for (x, y, color) in [
-        (980.0, 980.0, [0.72, 0.015, 0.008, 1.0]),
-        (3110.0, 980.0, [0.006, 0.075, 0.64, 1.0]),
-        (980.0, 3110.0, [0.86, 0.36, 0.004, 1.0]),
-        (3110.0, 3110.0, [0.015, 0.46, 0.12, 1.0]),
-    ] {
-        strokes.push(StrokeSpec {
-            layer: 1,
-            brush: brush(1, 720.0, 1.0, color),
-            samples: linear_samples(2, (x, y), (x, y), 1.0, 1.0),
-        });
-    }
-    run_strokes(canvas, &strokes, None).map_err(Into::into)
-}
-
 fn run_strokes(
     canvas: &mut Canvas,
     strokes: &[StrokeSpec],
@@ -1611,26 +937,19 @@ fn run_strokes(
         canvas.set_brush(stroke.brush)?;
         for start in (0..stroke.samples.len()).step_by(EVENTS_PER_FRAME) {
             let end = (start + EVENTS_PER_FRAME).min(stroke.samples.len());
-            let mut events = [LayerPenEvent::default(); EVENTS_PER_FRAME];
-            for (slot, index) in (start..end).enumerate() {
-                let phase = if index == 0 {
-                    1
-                } else if index + 1 == stroke.samples.len() {
-                    3
-                } else {
-                    2
-                };
-                events[slot] = canvas.next_event(stroke.samples[index], phase);
-            }
-            let events = &events[..end - start];
+            let events = (start..end)
+                .map(|index| {
+                    canvas.next_event(stroke.samples[index], phase(index, stroke.samples.len()))
+                })
+                .collect::<Vec<_>>();
             let commit = end == stroke.samples.len();
             let started = Instant::now();
-            let submit = canvas.submit(events);
+            let submit = canvas.submit(&events);
             let draw = canvas.draw();
             let mut submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             submit?;
             draw?;
-            submit_micros += canvas.drain_submitted(None)?;
+            submit_micros += canvas.drain_submitted()?;
             let drained_micros = started.elapsed().as_micros();
             canvas.wait_idle()?;
             if std::env::var_os("CAPY_TRACE_SLOW_FRAMES").is_some()
@@ -1644,163 +963,10 @@ fn run_strokes(
             }
             if let Some(output) = measurements.as_deref_mut() {
                 output.push(FrameMeasurement {
-                    backing_reserved_bytes: canvas.metrics()?.raster_backing_reserved_bytes,
+                    backing_reserved_bytes: canvas.raster_metrics().raster_backing_reserved_bytes,
                     submit_micros,
                     completed_micros: started.elapsed().as_micros().min(u64::MAX as u128) as u64,
                     commit,
-                    tip_gap_px: 0.0,
-                    correction_px: 0.0,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_feedback_comparison(options: &Options) -> Result<(), Box<dyn Error>> {
-    if let Some(parent) = options.report_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut results = Vec::with_capacity(options.scenarios.len());
-    for scenario in &options.scenarios {
-        eprintln!("measuring instant feedback off/on for {}", scenario.name());
-        let (off, _) = measure_feedback_scenario(*scenario, false)?;
-        let (on, on_measurements) = measure_feedback_scenario(*scenario, true)?;
-        let mut tip_gaps = on_measurements
-            .iter()
-            .filter(|sample| !sample.commit)
-            .map(|sample| sample.tip_gap_px)
-            .collect::<Vec<_>>();
-        let mut corrections = on_measurements
-            .iter()
-            .filter(|sample| !sample.commit)
-            .map(|sample| sample.correction_px)
-            .collect::<Vec<_>>();
-        tip_gaps.sort_by(f32::total_cmp);
-        corrections.sort_by(f32::total_cmp);
-        let result = FeedbackBenchResult {
-            name: scenario.name(),
-            preview_dabs: on.dabs.saturating_sub(off.dabs),
-            tip_gap_p95_px: quantile_f32(&tip_gaps, 0.95),
-            tip_gap_p99_px: quantile_f32(&tip_gaps, 0.99),
-            correction_p95_px: quantile_f32(&corrections, 0.95),
-            correction_p99_px: quantile_f32(&corrections, 0.99),
-            off,
-            on,
-        };
-        println!(
-            "{:<20} off p99 {:>7.3} ms  on p99 {:>7.3} ms  delta {:+7.3} ms  tip p99 {:>6.3} px",
-            result.name,
-            result.off.p99_micros as f64 / 1000.0,
-            result.on.p99_micros as f64 / 1000.0,
-            (result.on.p99_micros as i64 - result.off.p99_micros as i64) as f64 / 1000.0,
-            result.tip_gap_p99_px,
-        );
-        results.push(result);
-    }
-    write_feedback_report(&options.report_path, &results)?;
-    Ok(())
-}
-
-fn measure_feedback_scenario(
-    kind: ScenarioKind,
-    enabled: bool,
-) -> Result<(BenchResult, Vec<FrameMeasurement>), Box<dyn Error>> {
-    let mut canvas = Canvas::new()?;
-    canvas.set_feedback(enabled)?;
-    for index in 0..31 {
-        let _ = canvas.add_layer(&format!("Empty feedback layer {index}"), 1)?;
-    }
-    canvas.draw()?;
-    canvas.wait_idle()?;
-    let strokes = prepare_scenario(kind, &mut canvas)?;
-    if !strokes.is_empty() {
-        run_strokes_feedback(&mut canvas, &strokes[..1], enabled, None)?;
-        canvas.undo()?;
-    }
-    let before = canvas.metrics()?;
-    let mut measurements = Vec::with_capacity(
-        strokes
-            .iter()
-            .map(|stroke| stroke.samples.len().div_ceil(EVENTS_PER_FRAME))
-            .sum(),
-    );
-    run_strokes_feedback(&mut canvas, &strokes, enabled, Some(&mut measurements))?;
-    let after = canvas.metrics()?;
-    Ok((
-        summarize(kind, 1, &measurements, before, after),
-        measurements,
-    ))
-}
-
-fn run_strokes_feedback(
-    canvas: &mut Canvas,
-    strokes: &[StrokeSpec],
-    enabled: bool,
-    mut measurements: Option<&mut Vec<FrameMeasurement>>,
-) -> Result<(), String> {
-    for stroke in strokes {
-        canvas.set_active_layer(stroke.layer)?;
-        canvas.set_brush(LayerBrushSettings {
-            streamline: 0.68,
-            pressure_smoothing: 0.18,
-            stabilization: 0.24,
-            motion_filtering: 0.18,
-            stabilization_expression: 1.0,
-            ..stroke.brush
-        })?;
-        for start in (0..stroke.samples.len()).step_by(EVENTS_PER_FRAME) {
-            let end = (start + EVENTS_PER_FRAME).min(stroke.samples.len());
-            let commit = end == stroke.samples.len();
-            let mut events = Vec::with_capacity(EVENTS_PER_FRAME + 2);
-            for index in start..end {
-                let phase = if index == 0 {
-                    1
-                } else if index + 1 == stroke.samples.len() {
-                    3
-                } else {
-                    2
-                };
-                events.push(canvas.next_event(stroke.samples[index], phase));
-            }
-            let now_ns = canvas.real_timestamp_ns;
-            if enabled && !commit && end >= 2 {
-                let previous = stroke.samples[end - 2];
-                let current = stroke.samples[end - 1];
-                for future_ms in [4_u64, 8] {
-                    let future = future_ms as f32;
-                    let prediction = Sample {
-                        x: current.x + (current.x - previous.x) * future,
-                        y: current.y + (current.y - previous.y) * future,
-                        pressure: current.pressure,
-                    };
-                    events.push(
-                        canvas.predicted_event(
-                            prediction,
-                            now_ns.saturating_add(future_ms * 1_000_000),
-                        ),
-                    );
-                }
-            }
-            let presentation_ns = now_ns.saturating_add(8_000_000);
-            let started = Instant::now();
-            let submit = canvas.submit(&events);
-            let draw = canvas.draw_for(now_ns, presentation_ns);
-            let mut submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            submit?;
-            draw?;
-            submit_micros += canvas.drain_submitted(Some((now_ns, presentation_ns)))?;
-            canvas.wait_idle()?;
-            let completed_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            if let Some(output) = measurements.as_deref_mut() {
-                let metrics = canvas.metrics()?;
-                output.push(FrameMeasurement {
-                    backing_reserved_bytes: metrics.raster_backing_reserved_bytes,
-                    submit_micros,
-                    completed_micros,
-                    commit,
-                    tip_gap_px: metrics.last_tip_gap_surface_px,
-                    correction_px: metrics.last_endpoint_correction_surface_px,
                 });
             }
         }
@@ -1812,8 +978,7 @@ fn summarize(
     kind: ScenarioKind,
     repeats: usize,
     measurements: &[FrameMeasurement],
-    before: LayerCanvasMetrics,
-    after: LayerCanvasMetrics,
+    metrics: &GpuRasterMetrics,
 ) -> BenchResult {
     let mut move_times: Vec<u64> = measurements
         .iter()
@@ -1871,23 +1036,19 @@ fn summarize(
             .iter()
             .filter(|micros| **micros > FRAME_BUDGET_MICROS)
             .count(),
-        dabs: after.raster_dabs.saturating_sub(before.raster_dabs),
-        candidate_pixels: after
-            .raster_candidate_pixels
-            .saturating_sub(before.raster_candidate_pixels),
-        composited_pixels: after
-            .composited_pixels
-            .saturating_sub(before.composited_pixels),
-        paint_pages: after.paint_pages,
-        preview_pages: after.preview_pages,
-        coverage_pages: after.coverage_pages,
-        material_pages: after.material_pages,
-        storage_bytes: after
+        dabs: metrics.dabs,
+        candidate_pixels: metrics.raster_candidate_pixels,
+        composited_pixels: metrics.composited_pixels,
+        paint_pages: metrics.paint_pages,
+        preview_pages: metrics.preview_pages,
+        coverage_pages: metrics.coverage_pages,
+        material_pages: metrics.material_pages,
+        storage_bytes: metrics
             .paint_storage_bytes
-            .saturating_add(after.preview_storage_bytes)
-            .saturating_add(after.destination_storage_bytes)
-            .saturating_add(after.paint_state_storage_bytes)
-            .saturating_add(after.composite_storage_bytes),
+            .saturating_add(metrics.preview_storage_bytes)
+            .saturating_add(metrics.destination_storage_bytes)
+            .saturating_add(metrics.paint_state_storage_bytes)
+            .saturating_add(metrics.composite_storage_bytes),
         commit_p99_micros: quantile_sorted(&commit_times, 0.99),
     }
 }
@@ -1905,67 +1066,6 @@ fn print_result(result: &BenchResult) {
         result.over_budget,
         result.commit_over_budget,
     );
-}
-
-fn write_feedback_report(
-    path: &Path,
-    results: &[FeedbackBenchResult],
-) -> Result<(), Box<dyn Error>> {
-    let probe = Canvas::new().map_err(|error| format!("GPU probe failed: {error}"))?;
-    let gpu = probe.gpu_info()?;
-    let name_end = gpu
-        .name_utf8
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(gpu.name_utf8.len());
-    let gpu_name = String::from_utf8_lossy(&gpu.name_utf8[..name_end]);
-    let mode = document_mode();
-    let mut report = format!(
-        "# Instant stroke feedback — 4096×4096\n\n\
-         Adapter: `{gpu_name}`; backend code {}; device type code {}.\n\n\
-         Document: {mode}.\n\n\
-         Release build with debug symbols. Each scenario has at least 32 visible paint layers. The on run keeps an 8 ms replaceable real-input tail, submits platform-style predictions at +4/+8 ms, locks terminal coverage to the expected +8 ms presentation position, submits once, and then waits only for benchmark measurement. The off run bypasses all tail and preview work. Setup, warm-up, undo, and export are outside the timing window. Concurrent GPU load is not controlled.\n\n\
-         | brush | off completed p95 ms | on completed p95 ms | off completed p99 ms | on completed p99 ms | p99 delta ms | p99 regression | off submit p95 ms | on submit p95 ms | on frames >8.33 ms | tip gap p95/p99 px | correction p95/p99 px | extra preview dabs | preview pages | on resident MiB |\n\
-         |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
-        gpu.backend, gpu.device_type,
-    );
-    for result in results {
-        let delta = result.on.p99_micros as i64 - result.off.p99_micros as i64;
-        let regression = if result.off.p99_micros == 0 {
-            0.0
-        } else {
-            delta as f64 / result.off.p99_micros as f64 * 100.0
-        };
-        report.push_str(&format!(
-            "| {} | {:.3} | {:.3} | {:.3} | {:.3} | {:+.3} | {:+.1}% | {:.3} | {:.3} | {} | {:.3}/{:.3} | {:.3}/{:.3} | {} | {} | {:.1} |\n",
-            result.name,
-            result.off.p95_micros as f64 / 1000.0,
-            result.on.p95_micros as f64 / 1000.0,
-            result.off.p99_micros as f64 / 1000.0,
-            result.on.p99_micros as f64 / 1000.0,
-            delta as f64 / 1000.0,
-            regression,
-            result.off.submit_p95_micros as f64 / 1000.0,
-            result.on.submit_p95_micros as f64 / 1000.0,
-            result.on.over_budget,
-            result.tip_gap_p95_px,
-            result.tip_gap_p99_px,
-            result.correction_p95_px,
-            result.correction_p99_px,
-            result.preview_dabs,
-            result.on.preview_pages,
-            result.on.storage_bytes as f64 / (1024.0 * 1024.0),
-        ));
-    }
-    let all_pass = results
-        .iter()
-        .all(|result| result.on.p99_micros < FRAME_BUDGET_MICROS);
-    report.push_str(&format!(
-        "\n120 Hz completed-work gate: **{}**. Tip gap measures the distance from the configured presentation-time estimate to terminal brush coverage; zero means the estimate is covered. Correction is the surface-space displacement smoothly distributed over the provisional tail, not committed geometry. Offscreen timing excludes surface acquisition and scanout.\n",
-        if all_pass { "PASS" } else { "FAIL" }
-    ));
-    fs::write(path, report)?;
-    Ok(())
 }
 
 // Serialize the measurements already collected by the timing loop, after all
@@ -1993,22 +1093,16 @@ fn write_frame_samples(path: &Path, results: &[BenchResult]) -> Result<(), Box<d
 
 fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Error>> {
     let probe = Canvas::new().map_err(|error| format!("GPU probe failed: {error}"))?;
-    let gpu = probe.gpu_info()?;
-    let name_end = gpu
-        .name_utf8
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(gpu.name_utf8.len());
-    let gpu_name = String::from_utf8_lossy(&gpu.name_utf8[..name_end]);
+    let gpu = probe.engine.backend().adapter_info();
     let mode = document_mode();
     let mut report = format!(
         "# GPU raster benchmark — 4096×4096\n\n\
-         Adapter: `{gpu_name}`; backend code {}; device type code {}.\n\n\
+         Adapter: `{}`; backend code {}; device type code {}.\n\n\
          Document: {mode}.\n\n\
-         Release build with debug symbols. Each frame submits eight simulated coalesced pen samples through the public C ABI, calls the ABI frame function, then waits for that submission to complete. Every scenario has at least 32 visible paint layers. Each repetition creates a fresh canvas, warms the exact scenario pipeline, undoes the warm-up stroke, and contributes every measured frame to the reported distribution. Setup, shader/pipeline creation, canvas allocation, scenario warm-up/undo, brush selection, layer creation, and PNG export are outside the timing window. Submit latency is the production non-blocking path; completed-work latency serializes each measured frame to isolate its GPU work. Concurrent system/GPU load is not controlled, so these are reproducible workload references rather than cross-machine scores.\n\n\
+         Release build with debug symbols. Each frame submits eight simulated coalesced pen samples to `CanvasEngine`, renders one frame, then waits for that submission to complete. Every scenario has at least 32 visible paint layers. Each repetition creates a fresh canvas, warms the exact scenario pipeline, undoes the warm-up stroke, and contributes every measured frame to the reported distribution. Setup, shader/pipeline creation, canvas allocation, scenario warm-up/undo, brush selection, layer creation, and PNG export are outside the timing window. Submit latency is the production non-blocking path; completed-work latency serializes each measured frame to isolate its GPU work. Concurrent system/GPU load is not controlled, so these are reproducible workload references rather than cross-machine scores.\n\n\
          | scenario | state features | repeats | frames | move completed p50 ms | move completed p95 ms | move completed p99 ms | pen-up completed p99 ms | max move ms | submit p95 ms | move/pen-up frames > 8.33 ms | dabs | conservative contact Mpx | composite visits Mpx | paint pages | coverage pages | material pages | preview pages | resident canvas MiB |\n\
          |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
-        gpu.backend, gpu.device_type,
+        gpu.name, gpu.backend, gpu.device_type,
     );
     for result in results {
         report.push_str(&format!(
@@ -2082,72 +1176,12 @@ fn write_gallery(output_dir: &Path, results: &[BenchResult]) -> Result<(), Box<d
     Ok(())
 }
 
-fn write_validation_gallery(
-    output_dir: &Path,
-    validation: BrushValidation,
-    names: &[&str],
-) -> Result<(), Box<dyn Error>> {
-    let phase = match validation {
-        BrushValidation::Blank => "blank-canvas ink deposition",
-        BrushValidation::Destination => "destination pickup, mixing, and smudge",
-        BrushValidation::Watercolor => "layer-wide wet watercolor: twelve controlled cases",
-        BrushValidation::Transport => {
-            "event-driven capillary transport: field, rate, and distance matrix"
-        }
-    };
-    let mut html = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Layer brush validation</title>\
-         <style>body{{font:16px system-ui;background:#18191c;color:#eee;margin:32px}}\
-         main{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px}}\
-         figure{{margin:0;background:#24262b;padding:12px;border-radius:8px}}\
-         img{{display:block;width:100%;height:auto;background:white}}figcaption{{padding:10px 2px 2px}}</style>\
-         <h1>Layer brush validation: {phase}</h1><main>"
-    );
-    for name in names {
-        let label = name.replace('_', " ");
-        html.push_str(&format!(
-            "<figure><img src=\"{name}.png\" alt=\"{label}\"><figcaption>{label}</figcaption></figure>"
-        ));
-    }
-    html.push_str("</main>");
-    fs::write(output_dir.join("index.html"), html)?;
-    Ok(())
-}
-
-fn brush(preset: u32, diameter: f32, opacity: f32, color: [f32; 4]) -> LayerBrushSettings {
-    LayerBrushSettings {
+fn brush(preset: Preset, diameter: f32, opacity: f32, color: [f32; 4]) -> Brush {
+    Brush {
         preset,
-        diameter_document_px: diameter,
+        diameter,
         opacity,
-        color_rgba_linear: color,
-        ..LayerBrushSettings::default()
-    }
-}
-
-fn transport_brush(
-    field: u32,
-    distance: f32,
-    wet_flow: f32,
-    dry_flow: f32,
-    color: [f32; 4],
-) -> LayerBrushSettings {
-    LayerBrushSettings {
-        preset: 21,
-        diameter_document_px: 220.0,
-        opacity: 0.94,
-        color_rgba_linear: color,
-        transport_field: field,
-        // Match the large watercolor presets: one 256-texel field spans 1024
-        // document pixels, so a test stroke sees connected structures rather
-        // than several tiny repetitions.
-        transport_scale: 0.25,
-        transport_rotation_radians: 0.0,
-        transport_contrast: 0.90,
-        transport_wet_flow: wet_flow,
-        transport_dry_flow: dry_flow,
-        transport_distance_px: distance,
-        transport_water_load: 0.94,
-        ..LayerBrushSettings::default()
+        color,
     }
 }
 
@@ -2155,12 +1189,12 @@ fn prepare_destination_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
     let underpaint = vec![
         StrokeSpec {
             layer: 1,
-            brush: brush(4, 760.0, 0.92, [0.62, 0.025, 0.008, 1.0]),
+            brush: brush(Preset::Paintbrush, 760.0, 0.92, [0.62, 0.025, 0.008, 1.0]),
             samples: lissajous(260, 1360.0, 1100.0, 0.0, 0.4),
         },
         StrokeSpec {
             layer: 1,
-            brush: brush(5, 620.0, 0.72, [0.015, 0.18, 0.68, 1.0]),
+            brush: brush(Preset::Airbrush, 620.0, 0.72, [0.015, 0.18, 0.68, 1.0]),
             samples: bezier(
                 260,
                 [
@@ -2173,7 +1207,7 @@ fn prepare_destination_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
         },
         StrokeSpec {
             layer: 1,
-            brush: brush(6, 130.0, 0.8, [0.82, 0.42, 0.015, 1.0]),
+            brush: brush(Preset::Chalk, 130.0, 0.8, [0.82, 0.42, 0.015, 1.0]),
             samples: lissajous(300, 1160.0, 880.0, 1.1, 0.0),
         },
     ];
@@ -2186,7 +1220,7 @@ fn prepare_painter_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
     let underpaint = vec![
         StrokeSpec {
             layer: 1,
-            brush: brush(7, 620.0, 0.86, [0.48, 0.025, 0.010, 1.0]),
+            brush: brush(Preset::Marker, 620.0, 0.86, [0.48, 0.025, 0.010, 1.0]),
             samples: bezier(
                 120,
                 [
@@ -2199,7 +1233,7 @@ fn prepare_painter_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
         },
         StrokeSpec {
             layer: 1,
-            brush: brush(7, 660.0, 0.82, [0.012, 0.055, 0.42, 1.0]),
+            brush: brush(Preset::Marker, 660.0, 0.82, [0.012, 0.055, 0.42, 1.0]),
             samples: bezier(
                 120,
                 [
@@ -2212,7 +1246,7 @@ fn prepare_painter_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
         },
         StrokeSpec {
             layer: 1,
-            brush: brush(7, 440.0, 0.76, [0.64, 0.24, 0.008, 1.0]),
+            brush: brush(Preset::Marker, 440.0, 0.76, [0.64, 0.24, 0.008, 1.0]),
             samples: bezier(
                 100,
                 [
@@ -2241,44 +1275,6 @@ fn lissajous(
                 x: 2048.0 + radius_x * (t * 2.0 + phase_x).sin(),
                 y: 2048.0 + radius_y * (t * 3.0 + phase_y).sin(),
                 pressure: (0.58 + 0.34 * (t * 5.0 + 0.2).sin()).clamp(0.08, 1.0),
-            }
-        })
-        .collect()
-}
-
-fn circular_samples(
-    count: usize,
-    center: (f32, f32),
-    radius: f32,
-    revolutions: f32,
-) -> Vec<Sample> {
-    (0..count)
-        .map(|index| {
-            let t = index as f32 / count.saturating_sub(1).max(1) as f32;
-            let angle = t * revolutions * std::f32::consts::TAU;
-            Sample {
-                x: center.0 + angle.cos() * radius,
-                y: center.1 + angle.sin() * radius,
-                pressure: 0.88,
-            }
-        })
-        .collect()
-}
-
-fn linear_samples(
-    count: usize,
-    start: (f32, f32),
-    end: (f32, f32),
-    start_pressure: f32,
-    end_pressure: f32,
-) -> Vec<Sample> {
-    (0..count)
-        .map(|index| {
-            let t = index as f32 / (count - 1) as f32;
-            Sample {
-                x: start.0 + (end.0 - start.0) * t,
-                y: start.1 + (end.1 - start.1) * t,
-                pressure: start_pressure + (end_pressure - start_pressure) * t,
             }
         })
         .collect()
@@ -2321,27 +1317,14 @@ fn pencil_hatching(layer: u64) -> Vec<StrokeSpec> {
             .collect();
         strokes.push(StrokeSpec {
             layer,
-            brush: brush(2, 84.0, 0.74, [0.012, 0.014, 0.018, 1.0]),
+            brush: brush(Preset::Pencil, 84.0, 0.74, [0.012, 0.014, 0.018, 1.0]),
             samples,
         });
     }
     strokes
 }
 
-fn check(status: LayerStatus, operation: &str) -> Result<(), String> {
-    if status == LayerStatus::Ok {
-        Ok(())
-    } else {
-        Err(format!("{operation} failed with {status:?}"))
-    }
-}
-
 fn quantile_sorted(values: &[u64], fraction: f32) -> u64 {
     let index = ((values.len().saturating_sub(1)) as f32 * fraction).round() as usize;
     values.get(index).copied().unwrap_or(0)
-}
-
-fn quantile_f32(values: &[f32], fraction: f32) -> f32 {
-    let index = ((values.len().saturating_sub(1)) as f32 * fraction).round() as usize;
-    values.get(index).copied().unwrap_or(0.0)
 }

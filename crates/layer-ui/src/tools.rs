@@ -313,7 +313,7 @@ pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
             .collect(),
     })
 }
-pub(crate) fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
+pub fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
     PRESETS
         .iter()
         .find(|p| p.0 as u32 == id)

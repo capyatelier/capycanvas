@@ -103,8 +103,7 @@ The `layer-` prefix is the internal Cargo naming convention.
 | [`layer-render`](crates/layer-render/README.md) | Defines the drawing work and image requests passed between the engine and renderer. |
 | [`layer-render-wgpu`](crates/layer-render-wgpu/README.md) | Draws brushes, combines layers, runs filters and presents the canvas using `wgpu`. |
 | [`layer-host`](crates/layer-host/README.md) | Connects the shared editor and renderer for Android, Apple and Windows. GTK and web connect them directly. |
-| [`layer-ffi`](crates/layer-ffi/README.md) | Exposes offscreen drawing through a C interface for tests, benchmarks and embedding. |
-| [`layer-bench`](crates/layer-bench/README.md) | Runs GPU benchmarks and renderer regressions, and generates brush previews. |
+| [`layer-bench`](crates/layer-bench/README.md) | Runs the GPU workload benchmark and generates brush previews. |
 
 Brush resources and runtime filter definitions live in [`assets/`](assets).
 We share the interface icons and bundled brush previews in

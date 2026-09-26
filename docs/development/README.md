@@ -47,9 +47,8 @@ still have [documented gaps](../ui/drag-inventory.md).
 | Native widgets, input collection, surfaces or file pickers | [Platform integration](../platforms/README.md), then the relevant app under `apps/`. |
 | A runtime filter | The [JSON/WGSL contract](../reference/runtime-filters.md) and [Tent Blur example](../../examples/filters/tent-blur). |
 
-`layer-ffi` exposes a C API for embedding and the headless harness. It is not the
-universal entry point for every application; native bridges live with their hosts.
-The shared UI can also be called directly from Rust or WebAssembly bindings.
+Native bridges live with their hosts. The shared UI can also be called directly
+from Rust or WebAssembly bindings.
 
 The [shared workflow centralization handoff](shared-workflow-centralization-handoff.md)
 tracks portable color/photo, export, profile-library and recovery rules that Web

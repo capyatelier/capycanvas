@@ -6,7 +6,6 @@ members = [
     "crates/layer-engine",
     "crates/layer-render-wgpu",
     "crates/layer-shader-cache-key",
-    "crates/layer-ffi",
     "crates/layer-bench",
     "crates/layer-ui",
     "crates/layer-workspace",

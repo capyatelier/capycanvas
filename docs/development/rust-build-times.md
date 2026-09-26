@@ -219,7 +219,7 @@ flowchart TD
 | layer-linux, layer-web | core, color, engine, render, render-wgpu, ui, workspace |
 | layer-android | core, color, engine, render, render-wgpu, ui, workspace, host |
 
-`layer-ffi` and `layer-bench` are not on these app build paths. Web omits
+`layer-bench` is not on these app build paths. Web omits
 `layer-workspace`'s `native` feature; GTK and Android enable it. Different targets
 and features have separate compiled artifacts; a warm GTK build cannot warm
 the Web/Android target libraries.
