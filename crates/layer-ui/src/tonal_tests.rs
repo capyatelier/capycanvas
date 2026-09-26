@@ -194,7 +194,7 @@ mod tonal_checks {
         let ToolOption::Choice {items,..}=&s.state.tool_extra[0] else {unreachable!()};
         let icons:std::collections::BTreeSet<_>=items.iter().map(|i|i.icon).collect();
         assert_eq!(icons.len(),6,"each tonal range has its own icon");
-        assert!(icons.iter().all(|icon| ui_catalog().icons.contains(icon)));
+        assert!(icons.iter().all(|icon| crate::icon_ships(icon)));
         let context = s.state.toolbar_context();
         s.dispatch(UiAction::ToolbarEdit {
             context,

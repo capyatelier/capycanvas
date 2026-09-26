@@ -1,6 +1,6 @@
 # Command catalog and search
 
-The command bar projects `UiSession::command_catalog()` and executes through
+The command bar projects the shared `CommandSearchView` and executes through
 the existing `UiAction` dispatcher. It does not implement a second undo stack
 or tool engine. The implementation follows the
 [command and input investigation](../history/command-input-shortcut-audit-2026-09-25.md).
@@ -42,11 +42,6 @@ cannot execute arbitrary serialized internal events. Search invocation also
 checks the originating document epoch. Live validation and normal history
 remain in dispatch. Numeric entry uses the existing `NumericControl` schema,
 including expression parsing, units, bounds and tool applicability.
-
-The ten `ToolCategory` values describe behavior, independently of medium groups
-and cycling families. `CommandToolContext` includes the current parameter IDs
-and mask-editing target. Individual brush resources inherit their behavior
-category; they do not create a separate shortcut scope.
 
 ## Presentation
 

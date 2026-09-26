@@ -702,7 +702,7 @@ mod tests {
         let icons: std::collections::BTreeSet<_> = ToolGroup::ALL.map(ToolGroup::icon).into();
         assert_eq!(icons.len(), ToolGroup::ALL.len(), "Different media must remain distinguishable");
         for category in &catalog.brush_categories {
-            assert!(catalog.icons.contains(&category.icon));
+            assert!(crate::icon_ships(category.icon));
             for choice in &category.brushes {
                 let group = group(choice.id);
                 let brush = BrushState { preset: choice.id, tool: group.tool(), diameter: 10., opacity: 1., color: [0., 0., 0., 1.] };
@@ -718,8 +718,6 @@ mod tests {
     #[test]
     fn non_painting_modes_have_distinct_packaged_icons() {
         let brush = BrushState { preset: Tool::Pen.default_preset(), tool: Tool::Pen, diameter: 10., opacity: 1., color: [0., 0., 0., 1.] };
-        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
-        let catalog = ui_catalog();
         for tool in [
             LayerCanvasTool::Gradient { radial: false, transparent: false },
             LayerCanvasTool::Region { fill: true, source: RegionSource::Visible },
@@ -735,8 +733,7 @@ mod tests {
                 let unique: std::collections::BTreeSet<_> = items.iter().map(|i| i.icon).collect();
                 assert_eq!(unique.len(), items.len(), "{tool:?}: each mode needs its own meaning");
                 for item in items {
-                    assert!(catalog.icons.contains(&item.icon));
-                    assert!(bank.join(format!("layer-{}-symbolic.svg", item.icon)).is_file());
+                    assert!(crate::icon_ships(item.icon));
                 }
             }
         }

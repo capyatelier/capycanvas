@@ -10,10 +10,8 @@ export async function checkIcons({call, evaluate, settle}) {
   await checkIconControls({call,evaluate,settle},output);
   const icons = (await readdir(new URL("./icons/", import.meta.url))).filter(n => n.endsWith(".svg")).sort();
   const commands = await evaluate("layerApp.state().commands.map(({id,icon})=>({id,icon}))");
-  const catalog = await evaluate("layerApp.app.catalog().icons");
   for (const command of commands) {
     assert.ok(command.icon, `${command.id} needs an action icon`);
-    assert.ok(catalog.includes(command.icon), `${command.id} must preload its icon`);
     assert.ok(icons.includes(`layer-${command.icon}-symbolic.svg`), `${command.id} SVG must ship`);
   }
   for (const [id, icon] of Object.entries({clear_layer:"clear",eraser:"eraser",delete_layer:"delete",scale_rotate:"transform",

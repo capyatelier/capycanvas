@@ -47,14 +47,6 @@ pub enum ToolCategory {
     Navigation,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct CommandToolContext {
-    pub category: ToolCategory,
-    /// IDs from the current tool's parameter schema; never inferred from widgets.
-    pub parameters: Vec<&'static str>,
-    pub editing_mask: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandKind {
@@ -481,16 +473,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => ToolCategory::Selection,
         }
     }
-    pub fn command_tool_context(&self) -> CommandToolContext {
-        let category = Self::tool_category(self.layer_interaction.tool, self.state.brush.tool);
-        CommandToolContext {
-            category,
-            parameters: self.state.tool_settings.iter().map(|s| s.id).collect(),
-            editing_mask: self.selection_masks.target().is_some()
-                || self.engine.document().active_mask,
-        }
-    }
-
+    #[cfg(test)]
     pub fn command_catalog(&self) -> Vec<CommandDescriptor> {
         self.catalog_entries()
             .into_iter()

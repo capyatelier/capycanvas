@@ -2664,7 +2664,7 @@ mod tests {
         assert!(web.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(native.iter().all(|c| !c.label.is_empty()
             && !c.description.is_empty()
-            && ui_catalog().icons.contains(&c.icon)));
+            && crate::icon_ships(c.icon)));
         for choice in native {
             choice.control.validate().unwrap();
             let Some(action) = choice.control.action() else {

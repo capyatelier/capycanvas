@@ -48,7 +48,7 @@ toolkit, OS handles, filesystem, async runtime, or thread requirement. Target
 bindings live in the app that uses them; no separate binding framework/crate is
 needed for the Rust GTK and Wasm clients.
 
-`ui_catalog()` describes built-in panels, default toolbar controls and menus,
+`ui_catalog()` describes built-in panels, tool and layer commands,
 brush categories/presets, and [numeric input kind, limits, mapping, units and precision](numeric-controls.md). GTK consumes
 the same typed constants exposed to DOM through the Wasm catalog; hosts supply
 widgets/icons, not separate command lists or numeric rules. The ribbon allocator

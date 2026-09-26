@@ -76,7 +76,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
-pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
+pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
 mod settings;
 mod shortcuts;
 mod theme;
@@ -205,10 +205,9 @@ pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
     ToolbarControl::Opacity,
 ];
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct MenuSpec {
     pub label: &'static str,
-    /// Related commands; empty means the live `UiSession::workspace_menu` model.
     pub sections: &'static [&'static [CommandId]],
 }
 pub const PRIMARY_MENU: &[&[CommandId]] = &[
@@ -246,15 +245,6 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
         &[CommandId::ResetLayout],
     ],
 };
-/// Catalog used by hosts awaiting the expanded application-menu presentation.
-pub const MENUS: &[MenuSpec] = &[
-    EDIT_MENU,
-    VIEW_MENU,
-    MenuSpec {
-        label: WORKSPACE_MENU_LABEL,
-        sections: &[],
-    },
-];
 /// GTK-first until the document transport is available on the other hosts.
 pub const FILE_MENU: MenuSpec = MenuSpec {
     label: "File",
@@ -295,14 +285,9 @@ pub struct UiCatalog {
     pub text_size_pt: u8,
     pub zen_icon_size: u32,
     pub panel_expansion_ms: u32,
-    pub cursors: &'static [(CursorMode, &'static str)],
-    pub icons: Vec<&'static str>,
     pub panels: Vec<PanelChoice>,
-    pub toolbar: &'static [ToolbarControl],
-    pub menus: &'static [MenuSpec],
     /// Primary drawing tools for hosts that also expose a compact tool chooser.
     pub tool_commands: &'static [CommandId],
-    pub file_menu: MenuSpec,
     pub new_document: session::NewDocumentSpec,
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
@@ -311,7 +296,6 @@ pub struct UiCatalog {
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
     pub layer_blends: Vec<&'static str>,
-    pub pressure: NumericControl,
 }
 pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
@@ -320,181 +304,6 @@ pub fn ui_catalog() -> UiCatalog {
         app_name: APP_NAME,
         text_size_pt: UI_TEXT_PT,
         panel_expansion_ms: PANEL_EXPANSION_MS,
-        cursors: CursorMode::CHOICES,
-        icons: [
-            "brush-size",
-            "paint-flow",
-            "hardness",
-            "brush-spacing",
-            "angle",
-            "rotation-variation",
-            "paint-load",
-            "water",
-            "dilution",
-            "edge-strength",
-            "edge-width",
-            "wet-bleed",
-            "dry-bleed",
-            "strength",
-            "close-gap",
-            "expand",
-            "edge-smooth",
-            "feather",
-            "width",
-            "height",
-            "position-x",
-            "position-y",
-            "new-document",
-            "open-document",
-            "save-document",
-            "export-document",
-            "save-as",
-            "close-document",
-            "clear",
-            "transform",
-            "close",
-            "select-all",
-            "deselect",
-            "invert-selection",
-            "fill-selection",
-            "lasso-fill",
-            "add-layer",
-            "toolbar",
-            "new-toolbar",
-            "reset-layout",
-            "new-window",
-            "website",
-            "source-code",
-            "adjustments",
-            "properties",
-            "stats",
-            "brush",
-            "drawing-tools",
-            "paper",
-            "sculpt",
-            "paint",
-            "watercolor",
-            "oil-paint",
-            "marker",
-            "pastel",
-            "spray",
-            "gradient-transparent",
-            "gradient-radial",
-            "gradient-radial-transparent",
-            "rectangle-fill",
-            "rectangle-both",
-            "ellipse-fill",
-            "ellipse-both",
-            "reset",
-            "chevron-double-left",
-            "chevron-double-right",
-            "pen",
-            "pencil",
-            "airbrush",
-            "decoration",
-            "blend",
-            "liquify",
-            "eraser",
-            "lasso",
-            "select",
-            "rectangle-select",
-            "ellipse-select",
-            "polygon-select",
-            "color-select",
-            "tonal-select",
-            "tonal-shadows",
-            "tonal-mid-shadows",
-            "tonal-midtones",
-            "tonal-mid-highlights",
-            "tonal-highlights",
-            "tonal-bright-hdr",
-            "tonal-custom",
-            "selection-brush",
-            "selection-new",
-            "selection-add",
-            "selection-subtract",
-            "selection-intersect",
-            "move",
-            "alpha-lock",
-            "clip",
-            "reference",
-            "selection-checked",
-            "selection-empty",
-            "eye",
-            "eye-hidden",
-            "lock",
-            "folder",
-            "folder-open",
-            "link",
-            "mask",
-            "image",
-            "more",
-            "delete",
-            "animation",
-            "undo",
-            "redo",
-            "back",
-            "plus",
-            "minus",
-            "up",
-            "down",
-            "color",
-            "colors",
-            "swap",
-            "color-swap",
-            "color-circle",
-            "color-square",
-            "color-triangle",
-            "opacity",
-            "grip",
-            "pin",
-            "check",
-            "fit",
-            "navigator",
-            "hand",
-            "eyedropper",
-            "color-picker",
-            "gradient",
-            "figure",
-            "ruler",
-            "ruler-parallel",
-            "ruler-radial",
-            "ruler-snap",
-            "line",
-            "rectangle",
-            "ellipse",
-            "auto-select",
-            "fill",
-            "rotate-left",
-            "rotate-right",
-            "flip-horizontal",
-            "fullscreen-enter",
-            "fullscreen-exit",
-            "flip-vertical",
-            const { ZenIcon::LookingUp.icon() },
-            const { ZenIcon::FacingForward.icon() },
-            const { ZenIcon::Bathing.icon() },
-            const { ZenIcon::Sleeping.icon() },
-            "settings",
-            "menu",
-            "size",
-            "layers",
-            "appearance",
-            "keyboard",
-            "info",
-            "search",
-        ]
-        .into_iter()
-        .chain(CursorMode::CHOICES.iter().map(|(mode, _)| mode.icon()))
-        .chain(
-            layer_core::bundled_effect_catalog()
-                .filters()
-                .iter()
-                .map(|e| e.icon.as_ref()),
-        )
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect(),
         panels: Panel::ALL
             .into_iter()
             .map(|id| PanelChoice {
@@ -503,9 +312,6 @@ pub fn ui_catalog() -> UiCatalog {
                 kind: id.kind(),
             })
             .collect(),
-        toolbar: TOOLBAR_CONTROLS,
-        menus: MENUS,
-        file_menu: FILE_MENU,
         new_document: session::new_document_spec(),
         layer_commands: &CommandId::LAYERS,
         tool_commands: &CommandId::TOOLS,
@@ -518,7 +324,6 @@ pub fn ui_catalog() -> UiCatalog {
             .iter()
             .map(|b| b.label())
             .collect(),
-        pressure: NumericControl::pressure(),
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1545,15 +1350,32 @@ pub mod regions {
 }
 
 #[cfg(test)]
+pub(crate) fn icon_ships(icon: &str) -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../apps/layer-web/icons/layer-{icon}-symbolic.svg"))
+        .is_file()
+}
+
+#[cfg(test)]
 mod icon_tests {
     use super::*;
 
+    fn required_icons() -> std::collections::BTreeSet<&'static str> {
+        CommandId::ALL
+            .into_iter()
+            .filter_map(CommandId::icon)
+            .chain(CursorMode::CHOICES.iter().map(|(mode, _)| mode.icon()))
+            .chain(ZenIcon::CHOICES.iter().map(|(icon, _)| icon.icon()))
+            .chain(Panel::ALL.into_iter().map(Panel::icon))
+            .chain(brush_categories().map(|c| c.icon))
+            .chain(layer_core::bundled_effect_catalog().filters().iter().map(|e| e.icon.as_ref()))
+            .collect()
+    }
+
     #[test]
     fn bundled_filters_have_specific_icons_and_catalog_assets_ship() {
-        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
-        let catalog = ui_catalog();
-        for icon in &catalog.icons {
-            assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file(), "{icon}: missing asset");
+        for icon in required_icons() {
+            assert!(icon_ships(icon), "{icon}: missing asset");
         }
         let mut meanings = std::collections::BTreeSet::new();
         for filter in layer_core::bundled_effect_catalog().filters() {
@@ -1581,21 +1403,11 @@ mod icon_tests {
 
     #[test]
     fn every_command_has_a_packaged_icon_and_distinct_editing_semantics() {
-        let catalog = ui_catalog();
-        let bank =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
         for command in CommandId::ALL {
             let icon = command
                 .icon()
                 .expect("toolbar commands need meaningful icons");
-            assert!(
-                catalog.icons.contains(&icon),
-                "{command:?}: {icon} missing from catalog"
-            );
-            assert!(
-                bank.join(format!("layer-{icon}-symbolic.svg")).is_file(),
-                "{command:?}: missing SVG"
-            );
+            assert!(icon_ships(icon), "{command:?}: missing SVG");
         }
         // These actions previously shared misleading glyphs in both hosts.
         for commands in [

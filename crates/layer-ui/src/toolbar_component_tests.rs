@@ -847,7 +847,6 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
         fields.extend(options.controls());
         fields.extend(options.edge_controls());
     }
-    let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
     for id in fields.iter().map(|f| f.id).chain([
         "transform_x",
         "transform_y",
@@ -857,8 +856,7 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
     ]) {
         let icon = tool_setting_icon(id);
         assert_ne!(icon, "settings", "{id} needs a meaningful icon");
-        assert!(ui_catalog().icons.contains(&icon));
-        assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file());
+        assert!(crate::icon_ships(icon));
     }
 }
 

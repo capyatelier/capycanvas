@@ -187,36 +187,6 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
 }
 
 #[test]
-fn tool_categories_follow_behavior_and_live_parameter_schema() {
-    for (command, category) in [
-        (CommandId::Pen, ToolCategory::Drawing),
-        (CommandId::Eraser, ToolCategory::Erasing),
-        (CommandId::Blend, ToolCategory::Blending),
-        (CommandId::Liquify, ToolCategory::Warping),
-        (CommandId::RectangleSelect, ToolCategory::Selection),
-        (CommandId::Gradient, ToolCategory::FillGradient),
-        (CommandId::Figure, ToolCategory::ShapesRulers),
-        (CommandId::Move, ToolCategory::MoveTransform),
-        (CommandId::Eyedropper, ToolCategory::ColorSampling),
-        (CommandId::Hand, ToolCategory::Navigation),
-    ] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
-        invoke(&mut s, command);
-        let context = s.command_tool_context();
-        assert_eq!(context.category, category, "{command:?}");
-        assert_eq!(
-            context.parameters,
-            s.state
-                .tool_settings
-                .iter()
-                .map(|p| p.id)
-                .collect::<Vec<_>>()
-        );
-    }
-}
-
-#[test]
 fn command_search_does_not_rebuild_workspace_models() {
     let mut s = session();
     s.set_platform(Platform::Gtk);

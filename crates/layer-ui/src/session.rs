@@ -48,7 +48,7 @@ pub use art_layers::{
 mod application_menu;
 #[path = "command_catalog.rs"]
 mod command_catalog;
-pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
+pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
 #[path = "document_files.rs"]
 mod document_files;
 #[path = "workspace_session.rs"]
@@ -10032,7 +10032,7 @@ mod tests {
                 serde_json::from_str::<Settings>(&saved).unwrap(),
                 s.state.settings
             );
-            assert!(ui_catalog().icons.contains(&symbol.icon()));
+            assert!(crate::icon_ships(symbol.icon()));
         }
         let before = s.state.settings.clone();
         preference(
@@ -14938,18 +14938,9 @@ mod tests {
     }
     #[test]
     fn menu_sections_are_nonempty_unique_and_keep_related_commands_together() {
-        assert_eq!(
-            MENUS
-                .iter()
-                .filter(|m| m.sections.is_empty())
-                .map(|m| m.label)
-                .collect::<Vec<_>>(),
-            [WORKSPACE_MENU_LABEL]
-        );
-        for sections in MENUS
-            .iter()
-            .filter(|m| !m.sections.is_empty())
+        for sections in [FILE_MENU, EDIT_MENU, VIEW_MENU]
             .map(|m| m.sections)
+            .into_iter()
             .chain([PRIMARY_MENU])
         {
             assert!(!sections.is_empty());
@@ -14972,7 +14963,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            serde_json::to_value(MENUS).unwrap()[1]["sections"],
+            serde_json::to_value(VIEW_MENU.sections).unwrap(),
             serde_json::json!([
                 ["histogram"],
                 ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
@@ -15057,27 +15048,10 @@ mod tests {
             Panel::ALL
         );
         let session = session();
-        for id in catalog
-            .menus
-            .iter()
-            .flat_map(|m| m.sections)
-            .chain(PRIMARY_MENU)
-            .flat_map(|s| s.iter())
-            .chain(catalog.layer_commands)
-            .chain(catalog.tool_commands)
-        {
+        for id in catalog.layer_commands.iter().chain(catalog.tool_commands) {
             assert!(session.state.commands.iter().any(|c| c.id == *id));
         }
-        for control in catalog.toolbar {
-            if let ToolbarControl::Command { command } = control {
-                assert!(session.state.commands.iter().any(|c| c.id == *command));
-            }
-        }
-        assert_eq!(
-            serde_json::to_value(&catalog).unwrap()["pressure"]["step"],
-            0.05
-        );
-        for control in [catalog.brush_size, catalog.opacity, catalog.pressure] {
+        for control in [catalog.brush_size, catalog.opacity, catalog.layer_opacity] {
             assert!(control.validate(control.min as f32, "test").is_ok());
             assert!(control.validate(control.max as f32, "test").is_ok());
             assert!(control.validate(f32::NAN, "test").is_err());
