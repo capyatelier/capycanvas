@@ -141,6 +141,7 @@ fn canvas_bar_input_reply_hides_the_bar_during_canvas_contacts() {
         kind: PointerKind::Mouse,
         button: PointerButton::Primary,
         position: [500., 500.],
+        time_ns: 0,
     };
     assert!(s.input(pointer(ContactPhase::Down)).unwrap().canvas_bar_hidden);
     assert!(!s.input(pointer(ContactPhase::Up)).unwrap().canvas_bar_hidden);
@@ -425,7 +426,7 @@ fn a_finger_reaches_the_handles_of_every_transform() {
     let [x0, y0, x1, y1] = s.transform_document_bounds().unwrap();
     let m = s.state.camera.document_to_surface();
     let surface = |x: f32, y: f32| [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-    let touch = |id, phase, position| UiInput::Pointer { id, phase, kind: PointerKind::Touch, button: PointerButton::Primary, position };
+    let touch = |id, phase, position| UiInput::Pointer { id, phase, kind: PointerKind::Touch, button: PointerButton::Primary, position, time_ns: 0 };
     let inside = surface((x0 + x1) * 0.5, (y0 + y1) * 0.5);
     assert!(s.input(touch(1, ContactPhase::Down, inside)).unwrap().paint, "a finger inside the box moves it");
     s.input(touch(1, ContactPhase::Up, inside)).unwrap();

@@ -795,6 +795,20 @@ pub extern "system" fn Java_art_capycanvas_Native_predictionAvailability(
         .set_platform_prediction_available(available != 0);
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_touchPolicy(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    tap_ms: jint,
+    slop: jfloat,
+) {
+    let result = unsafe { app(handle) }.host.session.set_touch_policy(layer_ui::TouchPolicy {
+        tap_ms: tap_ms.max(0) as u32,
+        slop,
+    });
+    fail(&mut env, result);
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_pointer(
     mut env: JNIEnv,
     _: JClass,

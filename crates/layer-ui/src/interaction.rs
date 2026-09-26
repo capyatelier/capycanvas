@@ -21,6 +21,88 @@ pub enum PointerKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum PenButton {
+    Primary,
+    Secondary,
+}
+impl PenButton {
+    pub fn trigger(self) -> &'static str {
+        match self {
+            Self::Primary => "pen.button.primary",
+            Self::Secondary => "pen.button.secondary",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TouchPolicy {
+    pub tap_ms: u32,
+    pub slop: f32,
+}
+impl Default for TouchPolicy {
+    fn default() -> Self {
+        Self { tap_ms: 500, slop: 16.0 }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct TouchTaps {
+    starts: std::collections::BTreeMap<u64, [f32; 2]>,
+    first_ns: u64,
+    peak: usize,
+    lifted: bool,
+    failed: bool,
+    pub camera: Option<crate::Camera>,
+}
+impl TouchTaps {
+    pub fn active(&self) -> bool {
+        !self.starts.is_empty()
+    }
+    pub fn fail(&mut self) {
+        self.failed |= self.active();
+    }
+    pub fn contact(
+        &mut self,
+        id: u64,
+        phase: ContactPhase,
+        position: [f32; 2],
+        time_ns: u64,
+        policy: TouchPolicy,
+        eligible: bool,
+    ) -> Option<u8> {
+        match phase {
+            ContactPhase::Down => {
+                if !self.active() {
+                    *self = Self { first_ns: time_ns, camera: self.camera.take(), ..Self::default() };
+                }
+                self.failed |= !eligible || time_ns == 0 || self.lifted;
+                self.starts.insert(id, position);
+                self.peak = self.peak.max(self.starts.len());
+            }
+            ContactPhase::Move => {
+                let start = self.starts.get(&id)?;
+                self.failed |= !eligible || (position[0] - start[0]).hypot(position[1] - start[1]) > policy.slop;
+            }
+            ContactPhase::Up => {
+                self.starts.remove(&id)?;
+                self.lifted = true;
+                self.failed |= time_ns < self.first_ns
+                    || time_ns - self.first_ns > u64::from(policy.tap_ms) * 1_000_000;
+                if !self.active() && !self.failed && (2..=4).contains(&self.peak) {
+                    return Some(self.peak as u8);
+                }
+            }
+            ContactPhase::Cancel => {
+                self.starts.remove(&id)?;
+                self.failed = true;
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PointerButton {
     Primary,
     Pan,
@@ -91,6 +173,12 @@ pub enum UiInput {
         kind: PointerKind,
         button: PointerButton,
         position: [f32; 2],
+        #[serde(default)]
+        time_ns: u64,
+    },
+    PenButton {
+        button: PenButton,
+        pressed: bool,
     },
     CursorLeave,
     ColorPickerHold { id: u64, position: [f32; 2], offset: f32 },
@@ -140,4 +228,6 @@ pub(crate) struct Interaction {
     pub held_tool: Option<crate::CommandId>,
     pub hold_base: Option<(crate::LayerCanvasTool, u32)>,
     pub applying_hold: bool,
+    pub taps: TouchTaps,
+    pub touch_policy: TouchPolicy,
 }

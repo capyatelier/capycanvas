@@ -74,6 +74,34 @@ them and keeps the chosen tool. Modifiers owned by a hold do not change later
 chords, so Ctrl+Z still undoes while Alt samples. Relative step bindings use the
 setting's own numeric step and bounds and repeat while held.
 
+## Touch gestures and pen buttons
+
+Input settings map finger taps and pen side buttons to the same shortcut
+definitions. By default a two-finger tap undoes and a three-finger tap redoes.
+Four-finger taps and both side buttons do nothing until chosen. An unbound side
+button stays with the tablet driver and the host's previous behavior. Only
+overrides are stored, under `gestures`, keyed by trigger ID. An empty value turns
+off a default.
+
+Hosts supply native contact timestamps, the platform long-press time and touch
+slop. The shared recognizer turns a tap into an action only when all of these
+hold:
+
+- Two to four fingers land without lifting in between.
+- None of them moves farther than the slop.
+- Every finger lifts within the long-press time.
+- No pen, picker, placement or stroke owns the canvas.
+
+A recognized tap restores any view jitter from its brief contacts. Hosts that
+cannot supply timestamps send `time_ns: 0`, which disables taps.
+
+Side-button presses and releases arrive as `pen_button` input, never as pen
+samples. They use the same hold lifecycle as held keys. A button pressed during
+a stroke changes the tool only after the stroke ends, and blur releases it. GTK
+reports Wayland stylus buttons 2 and 3. Web reports pointer `buttons` bits 2 and
+4. Android reports the stylus primary and secondary buttons. Windows, macOS and
+iPadOS do not show these rows until their hosts deliver the same input.
+
 ## Saving and loading
 
 The host performs storage through its own APIs. Native clients write application

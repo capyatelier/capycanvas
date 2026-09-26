@@ -1851,6 +1851,14 @@ impl Workspace {
         self.refresh_cursor();
     }
 
+    pub fn set_touch_policy(&self, policy: layer_ui::TouchPolicy) {
+        if let Some(gpu) = self.gpu.borrow_mut().as_mut()
+            && let Err(error) = gpu.session.set_touch_policy(policy)
+        {
+            eprintln!("{error}");
+        }
+    }
+
     pub fn cursor_input(&self, event: Option<layer_engine::PenEvent>) {
         let had_preview = self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().color_picker.preview.is_some());
         if let Some(gpu) = self.gpu.borrow_mut().as_mut() {

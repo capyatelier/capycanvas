@@ -572,6 +572,7 @@ impl NativeHost {
                 },
                 button,
                 position: [event.surface_position.x, event.surface_position.y],
+                time_ns: event.timestamp_ns,
             })?
             .paint
         } else {

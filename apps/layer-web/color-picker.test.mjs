@@ -106,5 +106,26 @@ export async function checkColorPicker({call,evaluate,settle}) {
   assert.deepEqual((await state()).customization.drawer.columns,[['brushes'],['tool_settings']]);
   await send({type:'color_picker',action:{kind:'style',style:'eyedropper'}});await shot('paint-eyedropper-options');
   await invoke('eyedropper');
-  console.log('PASS: picker tiles, settings, real sampling, pen lift, touch offset/source/cancel, retained asynchronous wheel preview and category drawer');
+  await invoke('brush');await wait('layerApp.state().layer_tools.tool==="paint"');
+  await mouse('mousePressed',{x:point.x-12,y:point.y+80},'pen',1);await mouse('mouseMoved',{x:point.x+12,y:point.y+80},'pen',1);await mouse('mouseReleased',{x:point.x+12,y:point.y+80});await settle();
+  const redoable=()=>evaluate("layerApp.state().commands.find(c=>c.id==='redo').enabled");
+  const fingers=async count=>{
+    const points=[...Array(count).keys()].map(i=>({id:30+i,x:point.x-60+i*70,y:point.y+50}));
+    await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:points});
+    await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
+  };
+  assert.equal(await redoable(),false);const view=(await state()).camera;
+  await fingers(2);await wait("layerApp.state().commands.find(c=>c.id==='redo').enabled");
+  await fingers(3);assert.equal(await redoable(),false,'three-finger tap redoes');
+  assert.deepEqual([(await state()).camera.zoom,(await state()).camera.translation],[view.zoom,view.translation],'taps never move the view');
+  const barrel=async(type,buttons)=>{await call('Input.dispatchMouseEvent',{type,x:point.x+30,y:point.y+30,pointerType:'pen',button:type==='mouseMoved'?'none':'right',buttons,force:0});await settle();};
+  await barrel('mouseMoved',0);await barrel('mousePressed',2);
+  assert.equal((await state()).layer_tools.tool,'paint','unbound side buttons do nothing');
+  await barrel('mouseReleased',0);
+  await send({type:'preferences',action:{type:'edit',id:'pen_button',value:1}});
+  await barrel('mousePressed',2);assert.equal((await state()).layer_tools.tool,'pick_visible','bound side button samples while held');
+  await barrel('mouseMoved',2);assert.equal((await state()).layer_tools.tool,'pick_visible');
+  await barrel('mouseReleased',0);assert.equal((await state()).layer_tools.tool,'paint');
+  await send({type:'preferences',action:{type:'reset',id:'pen_button'}});
+  console.log('PASS: picker tiles, settings, real sampling, pen lift, touch offset/source/cancel, retained asynchronous wheel preview, category drawer, finger taps and pen side buttons');
 }

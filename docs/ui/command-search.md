@@ -143,9 +143,9 @@ events cannot discard the parameter step.
 | Measurements, drag/drop phases, restore/completion messages, raw pen samples | Private transport; never independently cataloged as commands |
 
 Scoped bindings and held tool overrides are described in
-[settings](settings.md#keyboard-shortcuts). Gesture and pen adapters, device
-adapters and compatibility presets remain the later D–F stages in the
-investigation. The command bar does not create Bluetooth support or reproduce
+[settings](settings.md#keyboard-shortcuts), and finger taps and pen side buttons in
+[settings](settings.md#touch-gestures-and-pen-buttons). Device adapters and
+compatibility presets remain the later E–F stages in the investigation. The command bar does not create Bluetooth support or reproduce
 other editors' held-modifier behavior by itself. The bar is implemented on GTK,
 Web, Android and Windows; the Apple presentation is separate follow-up work.
 

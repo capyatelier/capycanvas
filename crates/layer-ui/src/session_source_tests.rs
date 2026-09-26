@@ -8,7 +8,7 @@ fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outs
         Document::new("touch placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", source, None).unwrap();
     let input = |id, phase, position| UiInput::Pointer { id, phase, position,
-        kind: PointerKind::Touch, button: PointerButton::Primary };
+        kind: PointerKind::Touch, button: PointerButton::Primary, time_ns: 0 };
     assert!(!session.input(input(1, ContactPhase::Down, [10., 10.])).unwrap().paint);
     assert!(!session.input(input(2, ContactPhase::Down, [400., 300.])).unwrap().paint,
         "second contact joins camera navigation even over the photo");

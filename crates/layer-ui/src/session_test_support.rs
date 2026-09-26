@@ -234,6 +234,7 @@ pub(crate) fn pointer(
         position,
         button,
         kind: PointerKind::Pen,
+        time_ns: 0,
     })
     .unwrap()
 }

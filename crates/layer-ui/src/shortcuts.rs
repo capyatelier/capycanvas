@@ -230,6 +230,20 @@ impl BindingScope {
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GestureTrigger {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub default: &'static str,
+    pub held: bool,
+}
+pub const GESTURE_TRIGGERS: [GestureTrigger; 5] = [
+    GestureTrigger { id: "touch.tap.2", label: "Two-finger tap", default: "command.Undo", held: false },
+    GestureTrigger { id: "touch.tap.3", label: "Three-finger tap", default: "command.Redo", held: false },
+    GestureTrigger { id: "touch.tap.4", label: "Four-finger tap", default: "", held: false },
+    GestureTrigger { id: "pen.button.primary", label: "Pen side button", default: "", held: true },
+    GestureTrigger { id: "pen.button.secondary", label: "Pen second side button", default: "", held: true },
+];
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShortcutDefinition {
     pub id: String,
@@ -593,7 +607,41 @@ impl Settings {
             .then_some(definition)
         })
     }
+    pub(crate) fn gesture_binding(&self, trigger: &str) -> &str {
+        self.gestures.get(trigger).map_or_else(
+            || GESTURE_TRIGGERS.iter().find(|t| t.id == trigger).map_or("", |t| t.default),
+            String::as_str,
+        )
+    }
+    pub(crate) fn gesture_definition(&self, trigger: &str, platform: Platform) -> Option<ShortcutDefinition> {
+        let id = self.gesture_binding(trigger);
+        if id.is_empty() {
+            return None;
+        }
+        definitions(platform).into_iter().map(|(d, _)| d).find(|d| d.id == id)
+    }
+    fn validate_gestures(&self) -> Result<(), String> {
+        let all = definitions(Platform::Gtk);
+        for (trigger, id) in &self.gestures {
+            let trigger = GESTURE_TRIGGERS
+                .iter()
+                .find(|t| t.id == trigger)
+                .ok_or("Unknown gesture or pen button")?;
+            if id.is_empty() {
+                continue;
+            }
+            let definition = all
+                .iter()
+                .find(|(d, _)| d.id == *id)
+                .ok_or("Unknown gesture action")?;
+            if definition.0.action.held() && !trigger.held {
+                return Err(format!("{} cannot hold an action", trigger.label));
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn validate_shortcuts(&self) -> Result<(), String> {
+        self.validate_gestures()?;
         let all = definitions(Platform::Gtk);
         for (id, keys) in &self.shortcuts {
             if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {

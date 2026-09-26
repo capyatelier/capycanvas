@@ -133,7 +133,20 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         host.hdr.unbindSurface(this)
         if (attached) { host.detach(); attached = false }
     }
+    private var penButtons = 0
+    private fun penButtons(event: MotionEvent) {
+        val tool = event.getToolType(0)
+        if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_ERASER) return
+        val state = event.buttonState
+        val next = (if (state and (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_SECONDARY) != 0) 1 else 0) or
+            (if (state and (MotionEvent.BUTTON_STYLUS_SECONDARY or MotionEvent.BUTTON_TERTIARY) != 0) 2 else 0)
+        val changed = next xor penButtons
+        penButtons = next
+        for ((bit, button) in listOf(1 to "primary", 2 to "secondary"))
+            if (changed and bit != 0) host.input(obj("type" to "pen_button", "button" to button, "pressed" to (next and bit != 0)))
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        penButtons(event)
         pickerTouch(event)
         if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
             // Compose can synthesize cancellation with device/id/source zero
@@ -188,6 +201,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         return true
     }
     override fun onHoverEvent(event: MotionEvent): Boolean {
+        penButtons(event)
         // Hover otherwise waits for the UI vsync before reaching our separate
         // canvas Looper. The touch-only request on pen-down cannot cover it.
         if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(
@@ -204,6 +218,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         return true
     }
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        penButtons(event)
         if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
             // Use the same key-modified scroll semantics through a native query
             // boundary, rather than implementing camera math in Kotlin.

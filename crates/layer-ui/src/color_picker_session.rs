@@ -240,6 +240,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 kind,
                 button,
                 position,
+                ..
             } => {
                 let contact = (kind, id);
                 let consumed = self.eyedropper.picking.consumed.contains(&contact);

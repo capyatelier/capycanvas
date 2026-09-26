@@ -11,6 +11,7 @@ fn picker_pointer(
         kind,
         button: PointerButton::Primary,
         position: p,
+        time_ns: 0,
     })
     .unwrap()
 }
@@ -361,6 +362,7 @@ fn touch_release_cleans_up_even_when_normal_routing_is_blocked() {
             let reply = s.input(UiInput::Pointer {
                 id: 1, phase: terminal, kind: PointerKind::Touch, button: PointerButton::Primary,
                 position: if blocked == "invalid position" { [f32::NAN; 2] } else { [200., 200.] },
+                time_ns: 0,
             });
             assert_eq!(reply.is_err(), blocked == "invalid position");
             assert!(!s.touch.is_active(), "{blocked}/{terminal:?}");

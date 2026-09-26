@@ -391,7 +391,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (reply != null) main.post { reply(value) }
         // Discrete key actions must publish immediately even when the previous
         // focus event was inside the camera/pointer publication interval.
-        publish(input.optString("type") == "key" && (value.optJSONObject("change")?.optInt("regions", 0) ?: 0) != 0)
+        publish(input.optString("type") in listOf("key", "pen_button") && (value.optJSONObject("change")?.optInt("regions", 0) ?: 0) != 0)
         wake()
     }
     // These are presentation facts, supplied by native widgets. Rust owns Zen
@@ -431,6 +431,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
             frameInterval = (1_000_000_000.0 / refreshRate.coerceAtLeast(30f)).toLong()
             Native.resize(handle, width, height, density)
+            touchPolicy()
             // Sizing computes the toolbars/panels without a GPU. Publish their layout
             // before device creation or even the first compositing shader can block.
             publish(true)
@@ -457,9 +458,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
     }
     private var activeSurfaceGeneration = 0 // Render Looper only.
+    private fun touchPolicy() {
+        val configuration = android.view.ViewConfiguration.get(getApplication<Application>())
+        Native.touchPolicy(handle, android.view.ViewConfiguration.getLongPressTimeout(), configuration.scaledTouchSlop.toFloat())
+    }
     fun resize(width: Int, height: Int, density: Float) = post {
         logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
         Native.resize(handle, width, height, density)
+        touchPolicy()
         publish(true)
         wake()
     }

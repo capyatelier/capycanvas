@@ -1434,7 +1434,18 @@ function pickerTouch(e,stage){
   else if(stage===3||stage===4){canvasFingers.delete(e.pointerId);cancelPickerHold();}
 }
 
+const penSideButtons = new Map();
+window.addEventListener("blur", () => penSideButtons.clear());
+function penButtons(e) {
+  if (e.pointerType !== "pen") return;
+  const next = e.buttons & 6, previous = penSideButtons.get(e.pointerId) ?? 0;
+  if (next === previous) return;
+  penSideButtons.set(e.pointerId, next);
+  for (const [bit, button] of [[2, "primary"], [4, "secondary"]])
+    if ((next ^ previous) & bit) input({ type: "pen_button", button, pressed: !!(next & bit) });
+}
 function canvasPointer(e, stage) {
+  penButtons(e);
   pickerTouch(e,stage);
   if (e.cancelable) e.preventDefault();
   if (e.pointerType === "pen") {
@@ -1507,6 +1518,7 @@ function pointerInput(e, stage, point = position(e)) {
           ? "pan"
           : "other",
     position: point,
+    time_ns: BigInt(Math.round((e.timeStamp || 0) * 1e6)),
   });
 }
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());

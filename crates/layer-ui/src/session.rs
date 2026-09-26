@@ -12,6 +12,8 @@ mod art_layers;
 mod color_picker_session;
 #[path = "held_actions.rs"]
 mod held_actions;
+#[path = "gesture_input.rs"]
+mod gesture_input;
 #[path = "source_edit.rs"]
 pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
@@ -680,6 +682,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } = &input {
             self.touch.release(*id);
         }
+        let tap = self.recognize_tap(&input);
         let mut reply = InputReply {
             chrome_hidden: self.interaction.hidden,
             ..Default::default()
@@ -1110,12 +1113,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 }
             }
+            UiInput::PenButton { button, pressed } => self.pen_button(button, pressed, &mut reply)?,
             UiInput::Pointer {
                 id,
                 phase,
                 kind,
                 button,
                 position,
+                ..
             } => {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err("Invalid pointer position".into());
@@ -1203,6 +1208,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.touch.clear();
             }
+        }
+        if let Some(fingers) = tap {
+            self.perform_tap(fingers, &mut reply)?;
         }
         self.settle_holds_into(&mut reply)?;
         self.refresh_chrome();
@@ -3344,6 +3352,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }, kind,
                     button: PointerButton::Primary,
                     position: [event.surface_position.x, event.surface_position.y],
+                    time_ns: event.timestamp_ns,
                 });
             }
             return Ok(());
@@ -4879,6 +4888,7 @@ mod tests {
     include!("toolbar_component_tests.rs");
     include!("canvas_bar_tests.rs");
     include!("held_action_tests.rs");
+    include!("gesture_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -7134,6 +7144,7 @@ mod tests {
                             kind,
                             button: PointerButton::Primary,
                             position,
+                            time_ns: 0,
                         })
                         .unwrap();
                     assert!(!reply.paint && reply.pan_cursor);
@@ -13636,6 +13647,7 @@ mod tests {
                             kind,
                             button: PointerButton::Primary,
                             position: [225.0, 300.0],
+                            time_ns: 0,
                         })
                         .unwrap();
                         let visible = !hide || phase == end;
@@ -13738,6 +13750,7 @@ mod tests {
                                     kind,
                                     button: PointerButton::Primary,
                                     position: [225.0, 300.0],
+                                    time_ns: 0,
                                 })
                                 .unwrap();
                                 let visible = !hide || phase == end || (erasing && outline);
@@ -13808,6 +13821,7 @@ mod tests {
                             },
                             button: PointerButton::Primary,
                             position: [225.0, 300.0],
+                            time_ns: 0,
                         })
                         .unwrap();
                         let cursor = s.canvas_cursor();

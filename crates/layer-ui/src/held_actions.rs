@@ -14,7 +14,7 @@ pub(super) fn selects_tool(action: &UiAction) -> bool {
     }
 }
 
-fn merge(a: UiChange, b: UiChange) -> UiChange {
+pub(super) fn merge_change(a: UiChange, b: UiChange) -> UiChange {
     UiChange {
         revision: a.revision.max(b.revision),
         regions: a.regions | b.regions,
@@ -74,7 +74,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn settle_holds_into(&mut self, reply: &mut InputReply) -> Result<(), String> {
         if let Some(change) = self.settle_holds()? {
-            reply.change = merge(reply.change, change);
+            reply.change = merge_change(reply.change, change);
         }
         Ok(())
     }
@@ -97,7 +97,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             if let Some((tool, preset)) = self.interaction.hold_base {
-                change = merge(change, self.dispatch(if tool == LayerCanvasTool::Paint {
+                change = merge_change(change, self.dispatch(if tool == LayerCanvasTool::Paint {
                     UiAction::SelectBrush { id: preset }
                 } else {
                     UiAction::Layer { action: LayerAction::Tool { tool } }
@@ -109,7 +109,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.interaction.hold_base.is_none() {
                     self.interaction.hold_base = Some((self.layer_interaction.tool, self.state.brush.preset));
                 }
-                change = merge(change, self.dispatch(UiAction::Invoke { command })?);
+                change = merge_change(change, self.dispatch(UiAction::Invoke { command })?);
                 self.interaction.held_tool = Some(command);
             }
             None => self.interaction.hold_base = None,

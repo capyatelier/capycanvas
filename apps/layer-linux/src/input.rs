@@ -7,7 +7,7 @@ use glib::translate::IntoGlib;
 use gtk::{gdk, glib};
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
-use layer_ui::{ContactPhase, Modifiers, PointerButton, PointerKind, UiInput};
+use layer_ui::{ContactPhase, Modifiers, PenButton, PointerButton, PointerKind, TouchPolicy, UiInput};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
@@ -96,16 +96,35 @@ pub fn install(workspace: &Rc<Workspace>) {
     // side buttons before either painting or mouse-pan gestures can see them.
     let pen_buttons = gtk::EventControllerLegacy::new();
     pen_buttons.set_propagation_phase(gtk::PropagationPhase::Capture);
-    pen_buttons.connect_event(|_, event| {
-        if event.downcast_ref::<gdk::ButtonEvent>().is_some_and(|e| e.button() != 1)
-            && (event.device_tool().is_some()
-                || event.device().is_some_and(|d| d.source() == gdk::InputSource::Pen))
-        {
+    pen_buttons.connect_event(glib::clone!(
+        #[weak]
+        workspace,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, event| {
+            let Some(button) = event.downcast_ref::<gdk::ButtonEvent>().map(|e| e.button()).filter(|b| *b != 1)
+            else {
+                return glib::Propagation::Proceed;
+            };
+            if event.device_tool().is_none()
+                && !event.device().is_some_and(|d| d.source() == gdk::InputSource::Pen)
+            {
+                return glib::Propagation::Proceed;
+            }
+            let pen_button = match button {
+                2 => Some(PenButton::Primary),
+                3 => Some(PenButton::Secondary),
+                _ => None,
+            };
+            if let Some(button) = pen_button {
+                workspace.interact(UiInput::PenButton {
+                    button,
+                    pressed: event.event_type() == gdk::EventType::ButtonPress,
+                });
+            }
             glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
         }
-    });
+    ));
     workspace.area.add_controller(pen_buttons);
     let stylus = gtk::GestureStylus::new();
     stylus.set_stylus_only(false); // GTK provides one path for pen and mouse.
@@ -243,12 +262,20 @@ pub fn install(workspace: &Rc<Workspace>) {
                 }
                 input.picker_hold.input(&workspace, id, contact_phase(phase), position, input.touches.borrow().len());
                 let scale = workspace.area.scale_factor() as f32;
+                if phase == PenPhase::Down {
+                    let settings = gtk::Settings::for_display(&workspace.area.display());
+                    workspace.set_touch_policy(TouchPolicy {
+                        tap_ms: settings.gtk_long_press_time().max(1),
+                        slop: settings.gtk_dnd_drag_threshold().max(1) as f32 * scale,
+                    });
+                }
                 workspace.interact(UiInput::Pointer {
                     id,
                     phase: contact_phase(phase),
                     kind: PointerKind::Touch,
                     button: PointerButton::Primary,
                     position: position.map(|v| v * scale),
+                    time_ns: input.timestamp(event.time()),
                 });
             }
             if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
@@ -382,6 +409,7 @@ fn pan_event(workspace: &Rc<Workspace>, button: u32, phase: ContactPhase, positi
         kind: PointerKind::Mouse,
         button: PointerButton::Pan,
         position: position.map(|v| v * dpi),
+        time_ns: 0,
     });
 }
 
@@ -546,6 +574,7 @@ impl Input {
             },
             button: PointerButton::Primary,
             position: [event.surface_position.x, event.surface_position.y],
+            time_ns: event.timestamp_ns,
         });
         #[cfg(test)]
         if let Some(gpu) = workspace.gpu.borrow().as_ref() {

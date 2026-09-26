@@ -227,6 +227,61 @@ class AndroidCommandSearchTest {
         }
     }
 
+    @Test fun fingerTapsAndPenSideButtons() {
+        action(obj("type" to "invoke", "command" to "brush"))
+        action(obj("type" to "invoke", "command" to "add_layer"))
+        fun enabled(id: String) = state().array("commands").objects().first { it.getString("id") == id }.getBoolean("enabled")
+        fun tool() = state().getJSONObject("layer_tools").getString("tool")
+        waitFor("undoable edit") { enabled("undo") && !enabled("redo") && tool() == "paint" }
+        lateinit var canvas: View
+        main { canvas = canvasSurface(mainWindow)!! }
+        val origin = screenOrigin(canvas)
+        fun point(i: Int) = origin.x + canvas.width * (.42f + .07f * i) to origin.y + canvas.height * .55f
+        fun motion(down: Long, action: Int, points: List<Pair<Float, Float>>, tool: Int, source: Int, buttons: Int = 0): MotionEvent {
+            val properties = points.indices.map { MotionEvent.PointerProperties().apply { id = it; toolType = tool } }.toTypedArray()
+            val coordinates = points.map { (x, y) -> MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = if (source == InputDevice.SOURCE_TOUCHSCREEN) 1f else 0f; size = .1f } }.toTypedArray()
+            return MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, points.size, properties, coordinates, 0, buttons, 1f, 1f, 0, 0, source, 0)
+        }
+        fun inject(down: Long, action: Int, points: List<Pair<Float, Float>>, tool: Int, source: Int) {
+            val event = motion(down, action, points, tool, source)
+            try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+        }
+        fun tap(fingers: Int) {
+            val down = SystemClock.uptimeMillis()
+            val points = (0 until fingers).map(::point)
+            val finger = MotionEvent.TOOL_TYPE_FINGER
+            inject(down, MotionEvent.ACTION_DOWN, points.take(1), finger, InputDevice.SOURCE_TOUCHSCREEN)
+            for (i in 1 until fingers) inject(down, MotionEvent.ACTION_POINTER_DOWN or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points.take(i + 1), finger, InputDevice.SOURCE_TOUCHSCREEN)
+            for (i in fingers - 1 downTo 1) inject(down, MotionEvent.ACTION_POINTER_UP or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points.take(i + 1), finger, InputDevice.SOURCE_TOUCHSCREEN)
+            inject(down, MotionEvent.ACTION_UP, points.take(1), finger, InputDevice.SOURCE_TOUCHSCREEN)
+        }
+        val zoom = state().getJSONObject("camera").getDouble("zoom")
+        tap(2)
+        waitFor("two-finger tap undoes") { enabled("redo") }
+        tap(3)
+        waitFor("three-finger tap redoes") { !enabled("redo") }
+        assertEquals(zoom, state().getJSONObject("camera").getDouble("zoom"), 0.0)
+        val hover = SystemClock.uptimeMillis()
+        fun stylus(action: Int, buttons: Int) {
+            val local = point(1).let { (x, y) -> x - origin.x to y - origin.y }
+            val event = motion(hover, action, listOf(local), MotionEvent.TOOL_TYPE_STYLUS, InputDevice.SOURCE_STYLUS, buttons)
+            try { main { canvas.dispatchGenericMotionEvent(event) } } finally { event.recycle() }
+            SystemClock.sleep(120)
+        }
+        stylus(MotionEvent.ACTION_HOVER_ENTER, 0)
+        stylus(MotionEvent.ACTION_HOVER_MOVE, MotionEvent.BUTTON_STYLUS_PRIMARY)
+        assertEquals("unbound side buttons stay with the driver", "paint", tool())
+        stylus(MotionEvent.ACTION_HOVER_MOVE, 0)
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "pen_button", "value" to 1)))
+        stylus(MotionEvent.ACTION_HOVER_MOVE, MotionEvent.BUTTON_STYLUS_PRIMARY)
+        waitFor("bound side button samples while held") { tool() == "pick_visible" }
+        stylus(MotionEvent.ACTION_HOVER_MOVE, 0)
+        waitFor("release restores the brush") { tool() == "paint" }
+        stylus(MotionEvent.ACTION_HOVER_EXIT, 0)
+        action(obj("type" to "preferences", "action" to obj("type" to "reset", "id" to "pen_button")))
+        action(obj("type" to "invoke", "command" to "undo"))
+    }
+
     @Test fun panelGlassAndPlacement() {
         val (width, height) = 2048 to 1536
         val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || i / 4 % width / 8 % 2 == 0) -1 else 0 }

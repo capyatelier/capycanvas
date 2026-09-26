@@ -105,7 +105,7 @@ pub use customization::{
     tool_choice,
 };
 pub use interaction::{
-    ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
+    ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, TouchPolicy, UiInput,
 };
 pub use layout::{
     Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
@@ -133,7 +133,7 @@ pub use settings::{
     SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
-    BindingScope, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    BindingScope, GESTURE_TRIGGERS, GestureTrigger, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
 pub use theme::{

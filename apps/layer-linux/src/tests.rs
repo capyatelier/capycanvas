@@ -3224,6 +3224,7 @@ fn native_navigation_tools() {
             kind: PointerKind::Mouse,
             button: PointerButton::Primary,
             position,
+            time_ns: 0,
         });
         assert!(!reply.paint && reply.pan_cursor);
     }
@@ -9914,6 +9915,7 @@ fn native_frame_pacing() {
                         PointerButton::Pan
                     },
                     position: [event.surface_position.x, event.surface_position.y],
+                    time_ns: 0,
                 });
             }
             first = false;
@@ -9959,6 +9961,7 @@ fn native_frame_pacing() {
                     PointerButton::Pan
                 },
                 position: [600.0, 450.0],
+                time_ns: 0,
             });
         }
         pump(150);

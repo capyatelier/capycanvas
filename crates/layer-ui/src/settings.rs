@@ -29,6 +29,12 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
+    pub fn touch_gestures(self) -> bool {
+        matches!(self, Self::Gtk | Self::Web | Self::Android)
+    }
+    pub fn pen_buttons(self) -> bool {
+        matches!(self, Self::Gtk | Self::Web | Self::Android)
+    }
     pub fn system_accent(self) -> bool {
         matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)
     }
@@ -87,6 +93,8 @@ pub struct Settings {
     pub prediction_ms: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub gestures: BTreeMap<String, String>,
     /// Per-preset slider values, shared by every placement of that slider.
     pub slider_bookmarks: BTreeMap<String, SliderBookmarks>,
 }
@@ -114,6 +122,7 @@ impl Default for Settings {
             platform_prediction: true,
             prediction_ms: 16.0,
             shortcuts: BTreeMap::new(),
+            gestures: BTreeMap::new(),
             slider_bookmarks: BTreeMap::new(),
         }
     }
@@ -249,6 +258,11 @@ pub enum PreferenceId {
     Renderer,
     Website,
     SourceCode,
+    TwoFingerTap,
+    ThreeFingerTap,
+    FourFingerTap,
+    PenButton,
+    PenSecondaryButton,
 }
 impl PreferenceId {
     pub fn key(self) -> &'static str {
@@ -279,9 +293,44 @@ impl PreferenceId {
             Self::Renderer => "renderer",
             Self::Website => "website",
             Self::SourceCode => "source-code",
+            Self::TwoFingerTap => "two-finger-tap",
+            Self::ThreeFingerTap => "three-finger-tap",
+            Self::FourFingerTap => "four-finger-tap",
+            Self::PenButton => "pen-button",
+            Self::PenSecondaryButton => "pen-secondary-button",
         }
     }
+    fn gesture_trigger(self) -> Option<&'static GestureTrigger> {
+        let id = match self {
+            Self::TwoFingerTap => "touch.tap.2",
+            Self::ThreeFingerTap => "touch.tap.3",
+            Self::FourFingerTap => "touch.tap.4",
+            Self::PenButton => "pen.button.primary",
+            Self::PenSecondaryButton => "pen.button.secondary",
+            _ => return None,
+        };
+        GESTURE_TRIGGERS.iter().find(|t| t.id == id)
+    }
 }
+const TAP_CHOICES: [&str; 6] = [
+    "",
+    "command.Undo",
+    "command.Redo",
+    "command.Eyedropper",
+    "command.SearchCommands",
+    "command.ZenMode",
+];
+const PEN_BUTTON_CHOICES: [&str; 9] = [
+    "",
+    "hold.eyedropper",
+    "hold.eraser",
+    "canvas.pan",
+    "hold.move",
+    "command.Undo",
+    "command.Redo",
+    "command.Eyedropper",
+    "command.SearchCommands",
+];
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PreferenceValue {
@@ -852,6 +901,13 @@ impl Settings {
                     title: "Pen response".into(),
                     rows: input,
                 },
+                PreferenceGroup {
+                    title: "Touch and pen buttons".into(),
+                    rows: [TwoFingerTap, ThreeFingerTap, FourFingerTap, PenButton, PenSecondaryButton]
+                        .into_iter()
+                        .filter_map(|id| self.gesture_row(id, platform))
+                        .collect(),
+                },
             ],
             Vec::new(),
             vec![PreferenceGroup {
@@ -1002,7 +1058,44 @@ impl Settings {
         })
     }
 
-    fn field(&self, id: PreferenceId, platform: Platform) -> Result<PreferenceRow, String> {
+    fn gesture_choices(&self, trigger: &GestureTrigger, platform: Platform) -> Vec<(String, String)> {
+        let definitions = crate::shortcuts::definitions(platform);
+        let label = |id: &str| {
+            if id.is_empty() {
+                Some("Nothing".to_string())
+            } else {
+                definitions.iter().find(|(d, _)| d.id == id).map(|(d, _)| d.label.clone())
+            }
+        };
+        let current = self.gesture_binding(trigger.id);
+        let curated = if trigger.held { &PEN_BUTTON_CHOICES[..] } else { &TAP_CHOICES[..] };
+        curated
+            .iter()
+            .copied()
+            .chain((!curated.contains(&current)).then_some(current))
+            .filter_map(|id| label(id).map(|label| (id.to_string(), label)))
+            .collect()
+    }
+    fn gesture_row(&self, id: PreferenceId, platform: Platform) -> Option<PreferenceRow> {
+        let trigger = id.gesture_trigger()?;
+        if !(if trigger.held { platform.pen_buttons() } else { platform.touch_gestures() }) {
+            return None;
+        }
+        let choices = self.gesture_choices(trigger, platform);
+        let current = self.gesture_binding(trigger.id);
+        Some(row(
+            id,
+            trigger.label,
+            if trigger.held { "Nothing leaves the button to the tablet driver." } else { "" },
+            PreferenceKind::Choice {
+                presentation: ChoicePresentation::Dropdown,
+                icons: Vec::new(),
+                selected: choices.iter().position(|(c, _)| c == current).unwrap_or(0) as u32,
+                options: choices.into_iter().map(|(_, label)| label).collect(),
+            },
+        ))
+    }
+    pub(crate) fn field(&self, id: PreferenceId, platform: Platform) -> Result<PreferenceRow, String> {
         self.pages(platform)
             .into_iter()
             .flat_map(|p| p.groups)
@@ -1107,6 +1200,17 @@ impl Settings {
             }
             Version | License | Renderer | Website | SourceCode => {
                 return Err("This information is read-only".into());
+            }
+            TwoFingerTap | ThreeFingerTap | FourFingerTap | PenButton | PenSecondaryButton => {
+                let trigger = id.gesture_trigger().unwrap();
+                let (choice, _) = self
+                    .gesture_choices(trigger, platform)
+                    .swap_remove(value.choice().unwrap() as usize);
+                if choice == trigger.default {
+                    self.gestures.remove(trigger.id);
+                } else {
+                    self.gestures.insert(trigger.id.into(), choice);
+                }
             }
         }
         Ok(())
