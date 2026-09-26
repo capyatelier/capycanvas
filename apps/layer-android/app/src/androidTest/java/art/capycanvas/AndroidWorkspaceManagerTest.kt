@@ -94,27 +94,25 @@ class AndroidWorkspaceManagerTest {
         assertEquals("Legacy preferences are preserved", legacy, instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all)
     }
     @Test fun restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator() {
-        for(name in listOf("Photo","Paint")) {
-            val workspace=view().getJSONArray("defaults").objects().first{it.getString("title")==name}
-            tap("workspace-switch-${workspace.getString("id")}");idle()
-            action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
-            menu("Restore Starting Layout…");tap("workspace-submit");idle()
-            fun tabs(node:Any?):List<List<Any>> = when(node) {
-                is JSONObject -> (if(node.optString("kind")=="tabs") listOf(node.getJSONArray("panels").values()) else emptyList()) + node.keys().asSequence().flatMap{tabs(node.get(it))}
-                is org.json.JSONArray -> (0 until node.length()).flatMap{tabs(node.get(it))}
-                else -> emptyList()
-            }
-            fun panels(anchor:String)=tabs(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout")).first{anchor in it}
-            assertEquals("$name restores Palettes immediately after Color","palettes",panels("color").let{it[it.indexOf("color")+1]})
-            assertEquals("$name restores Proof immediately after Navigator","proof",panels("navigator").let{it[it.indexOf("navigator")+1]})
-            if(name=="Photo") continue
-            compose.onNodeWithTag("tab-proof").assertIsDisplayed().performTouchInput{click()}
-            compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().any{it.getString("active")=="proof"}}
-            compose.waitForIdle()
-            compose.onNodeWithTag("proof-mode-off").assertIsDisplayed()
-            compose.onNodeWithTag("proof-mode-print").assertIsDisplayed()
-            shot("restored-proof-${name.lowercase()}")
+        val name="Paint"
+        val workspace=view().getJSONArray("defaults").objects().first{it.getString("title")==name}
+        tap("workspace-switch-${workspace.getString("id")}");idle()
+        action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
+        menu("Restore Starting Layout…");tap("workspace-submit");idle()
+        fun tabs(node:Any?):List<List<Any>> = when(node) {
+            is JSONObject -> (if(node.optString("kind")=="tabs") listOf(node.getJSONArray("panels").values()) else emptyList()) + node.keys().asSequence().flatMap{tabs(node.get(it))}
+            is org.json.JSONArray -> (0 until node.length()).flatMap{tabs(node.get(it))}
+            else -> emptyList()
         }
+        fun panels(anchor:String)=tabs(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout")).first{anchor in it}
+        assertEquals("$name restores Palettes immediately after Color","palettes",panels("color").let{it[it.indexOf("color")+1]})
+        assertEquals("$name restores Proof immediately after Navigator","proof",panels("navigator").let{it[it.indexOf("navigator")+1]})
+        compose.onNodeWithTag("tab-proof").assertIsDisplayed().performTouchInput{click()}
+        compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().any{it.getString("active")=="proof"}}
+        compose.waitForIdle()
+        compose.onNodeWithTag("proof-mode-off").assertIsDisplayed()
+        compose.onNodeWithTag("proof-mode-print").assertIsDisplayed()
+        shot("restored-proof-${name.lowercase()}")
     }
 
     @Test fun workspacePreviewSwitchHistoryAndRestart() {

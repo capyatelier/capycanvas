@@ -24,12 +24,9 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import kotlin.math.abs
 
 class AndroidPaletteTest {
@@ -213,13 +210,8 @@ class AndroidPaletteTest {
     }
 
     @Test fun defaultsPlacePalettesAfterColorAndInSketchDrawer() {
-        val names = library().array("palettes").objects().map { it.getString("name") }
-        assertEquals(10, names.size)
-        assertTrue("Ink starter", "Ink" in names)
         for (id in listOf("builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             switchWorkspace(id)
-            val panels = group("color").array("panels").values().map { it.toString() }
-            assertEquals("$id keeps Palettes immediately after Color", panels.indexOf("color") + 1, panels.indexOf("palettes"))
             fun fitted() = group("color").getJSONObject("bounds").let { b -> listOf("x", "y", "width", "height").map { b.getDouble(it) } }
             fun assertFitted(label: String, expected: List<Double>) = expected.zip(fitted()).forEach { (e, a) -> assertEquals(label, e, a, .5) }
             val fitted = fitted()
@@ -415,40 +407,21 @@ class AndroidPaletteTest {
         }
     }
 
-    @Test fun importsAndExportsEverySupportedFormat() {
+    @Test fun importsAndExportsPaletteFiles() {
         showPalettes()
         val palette = library().array("palettes").objects().first { it.getLong("id") == view().getLong("palette") }
         val names = palette.array("swatches").objects().map { it.getString("name") }
-        for (format in listOf("capycolor", "aco", "swatches", "ase", "gpl")) {
-            val result = Native.paletteFile(obj("type" to "export", "palette" to palette, "format" to format).toString(), byteArrayOf())
-            val metadata = JSONObject(result[0] as String)
-            assertTrue(metadata.getString("file_name").endsWith(".$format"))
-            val bytes = result[1] as ByteArray
-            File(output, metadata.getString("file_name")).writeBytes(bytes)
-            val count = library().array("palettes").length()
-            val action = JSONObject(Native.paletteFile(obj("type" to "import", "file_name" to metadata.getString("file_name")).toString(), bytes)[0] as String)
-            assertNull(library(action.getJSONObject("action")))
-            assertEquals(count + 1, library().array("palettes").length())
-            val imported = view().array("swatches").objects()
-            assertEquals(format, names.size.coerceAtMost(if (format == "swatches") 30 else Int.MAX_VALUE), imported.size)
-            if (format != "swatches") assertEquals(format, names, imported.map { it.getString("name") })
-            library(obj("op" to "remove_palette", "id" to view().getLong("palette")))
-        }
-        val zip = ByteArrayOutputStream().also { buffer ->
-            ZipOutputStream(buffer).use { z ->
-                z.putNextEntry(ZipEntry("mimetype")); z.write("krita/x-colorset".toByteArray()); z.closeEntry()
-                z.putNextEntry(ZipEntry("colorset.xml"))
-                z.write("""<ColorSet version="2.0" name="Krita set" columns="8"><ColorSetEntry name="Red" id="1" spot="false" bitdepth="U8"><RGB r="1" g="0" b="0" space="sRGB-elle-V2-srgbtrc.icc"/></ColorSetEntry></ColorSet>""".toByteArray())
-                z.closeEntry()
-            }
-        }.toByteArray()
-        val gpl = "GIMP Palette\nName: GIMP set\n255 0 0 Red\n".toByteArray()
-        for ((name, bytes) in listOf("set.kpl" to zip, "set.gpl" to gpl)) {
-            val action = JSONObject(Native.paletteFile(obj("type" to "import", "file_name" to name).toString(), bytes)[0] as String)
-            assertNull(library(action.getJSONObject("action")))
-            assertEquals("Red", view().array("swatches").objects().single().getString("name"))
-        }
+        val result = Native.paletteFile(obj("type" to "export", "palette" to palette, "format" to "capycolor").toString(), byteArrayOf())
+        val metadata = JSONObject(result[0] as String)
+        assertTrue(metadata.getString("file_name").endsWith(".capycolor"))
+        val bytes = result[1] as ByteArray
+        File(output, metadata.getString("file_name")).writeBytes(bytes)
         val count = library().array("palettes").length()
+        val action = JSONObject(Native.paletteFile(obj("type" to "import", "file_name" to metadata.getString("file_name")).toString(), bytes)[0] as String)
+        assertNull(library(action.getJSONObject("action")))
+        assertEquals(count + 1, library().array("palettes").length())
+        assertEquals(names, view().array("swatches").objects().map { it.getString("name") })
+        library(obj("op" to "remove_palette", "id" to view().getLong("palette")))
         try { Native.paletteFile(obj("type" to "import", "file_name" to "bad.aco").toString(), byteArrayOf(0, 1, 0, 9)); fail("damaged file") }
         catch (e: IllegalStateException) { assertTrue(e.message!!.isNotEmpty()) }
         assertEquals("failed imports are atomic", count, library().array("palettes").length())

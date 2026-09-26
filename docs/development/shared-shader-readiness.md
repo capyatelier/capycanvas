@@ -102,7 +102,7 @@ checks pass. The record includes those separate verification timings and APK has
 - Isolated GTK: `native_startup_latency`, `native_contact_brushes` (every contact
   preset plus spray, pixels and history), and `native_runtime_filter_packages`.
 - Huion Android: `AndroidStartupTest` (startup, navigation, previously unused
-  pencil/watercolor, reuse and undo), `AndroidHostTest#stylusDrawsAndUndoRedoChangePixels`,
+  pencil/watercolor, reuse and undo), `AndroidPredictionTest#fallingPressureStrokeRendersAndSurvivesUndoRedo`,
   and optimized `UiStartupInstrumentation` timing runs.
 - Huion Web: `device.test.mjs --staged-startup` and `--filter-previews`, including
   zero optional pipeline calls during a held contact and resumption afterward.

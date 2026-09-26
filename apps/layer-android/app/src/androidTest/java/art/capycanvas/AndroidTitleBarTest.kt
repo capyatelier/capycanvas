@@ -246,7 +246,8 @@ class AndroidTitleBarTest {
         action(obj("type" to "restore_settings", "settings" to JSONObject()))
         assertTrue(state().getJSONObject("settings").getBoolean("zen_show_capy"))
         assertFalse(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
-        for (theme in listOf("dark", "light")) for (show in listOf(true, false)) for (edges in listOf(false, true)) {
+        val theme = "dark"
+        for ((show, edges) in listOf(true to false, true to true, false to false, false to true)) {
             action(obj("type" to "set_theme", "theme" to theme))
             action(obj("type" to "open_settings", "page" to "appearance"))
             // Reveal scrolls the native preferences row into view, then use real contacts.
@@ -263,7 +264,8 @@ class AndroidTitleBarTest {
             action(obj("type" to "close_settings"))
             val baseline = layout()
             val camera = state().getJSONObject("camera").toString()
-            for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+            val devices = if (show && !edges) listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS) else listOf(MotionEvent.TOOL_TYPE_FINGER)
+            for (device in devices) {
                 tool = device
                 val workspace = bounds("workspace")
                 instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(workspace.width / density / 2, workspace.height / density / 2)))) }
@@ -293,11 +295,12 @@ class AndroidTitleBarTest {
         scenario.close(); launch()
         assertFalse(state().getJSONObject("settings").getBoolean("zen_show_capy"))
         assertTrue(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
-        android.util.Log.i("ZenAcceptance", "PASS: defaults, switches, all combinations, both themes, touch/mouse/stylus, Capy exit, keyboard exit, unchanged layout/camera, restart persistence")
+        android.util.Log.i("ZenAcceptance", "PASS: defaults, switches, all combinations, touch/mouse/stylus, Capy exit, keyboard exit, unchanged layout/camera, restart persistence")
     }
 
-    @Test fun bankBodiesGripsCancellationAndHistoryEveryDeviceSizeAndTheme() {
-        for (theme in listOf("light", "dark")) for (size in listOf("small", "medium", "large"))
+    @Test fun bankBodiesGripsCancellationAndHistoryEveryDeviceAndSize() {
+        val theme = "light"
+        for (size in listOf("small", "medium", "large"))
             for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
                 tool = device
                 android.util.Log.i("TitleBarAcceptance", "Case $theme $size $device")

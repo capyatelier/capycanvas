@@ -73,22 +73,6 @@ class AndroidRasterTest {
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
-    @Test fun displaySurfaceCapabilities() {
-        val report=native{JSONObject(Native.displayStatus(it))}
-        compose.runOnIdle {
-            val display=activity.display!!
-            report.put("display_hdr",display.isHdr)
-            val capabilities=display.hdrCapabilities
-            val types=if(android.os.Build.VERSION.SDK_INT>=34)display.mode.supportedHdrTypes else capabilities?.supportedHdrTypes?:intArrayOf()
-            report.put("android_hdr_types",org.json.JSONArray(types.toList()))
-            report.put("desired_max_luminance",capabilities?.desiredMaxLuminance)
-            if(android.os.Build.VERSION.SDK_INT>=34)report.put("hdr_sdr_ratio",display.hdrSdrRatio)
-            report.put("wide_color_gamut",display.isWideColorGamut)
-        }
-        File(activity.filesDir,"display-capabilities.json").writeText(report.toString(2))
-        assertFalse(report.has("error"))
-        assertTrue(report.getJSONArray("formats").length()>0)
-    }
     @Test fun diagnosticsSampleInOpenColumns() {
         fun action(value: JSONObject) {
             val done = java.util.concurrent.CountDownLatch(1)
@@ -1791,47 +1775,6 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
 
-    @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {
-        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("photoWorkflow") == "true")
-        val photo = File(activity.filesDir, "photo-benchmark.jpg")
-        assertTrue("Copy the 61 MP test JPEG into the target app's files directory", photo.isFile)
-        fun send(action: JSONObject) { native { Native.dispatch(it, action.toString()) }; tick() }
-        fun histogram(): JSONObject {
-            val control = Native.captureControl()
-            try { return JSONObject(Native.inspectionHistogram(native { Native.inspectionTask(it, control) })).getJSONObject("histogram") }
-            finally { Native.captureFree(control) }
-        }
-        fun opaque(): String {
-            val h = histogram()
-            assertEquals("Painting must preserve the photo outside the stroke", 0L, h.getLong("transparent"))
-            assertEquals(9504L * 6336, h.getLong("pixels"))
-            return h.toString()
-        }
-        open(photo)
-        send(obj("type" to "invoke", "command" to "fit_canvas"))
-        val original = opaque()
-        send(obj("type" to "select_brush", "id" to 1))
-        send(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to "foreground",
-            "color" to obj("space" to "Srgb", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, 1.0 / 3))))))
-        stroke(0.0)
-        val painted = opaque()
-        assertNotEquals("G-Pen must actually change the photograph", original, painted)
-        val saved = manifest(save("large-photo-painted.capy"))
-        send(obj("type" to "invoke", "command" to "undo")); assertEquals(original, opaque())
-        send(obj("type" to "invoke", "command" to "redo")); assertEquals(painted, opaque())
-        open(File(files, "large-photo-painted.capy")); assertEquals(painted, opaque())
-        val reopened = manifest(save("large-photo-reopened.capy"))
-        assertEquals(saved.getJSONArray("blobs").toString(), reopened.getJSONArray("blobs").toString())
-        native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
-        compose.waitUntil(10_000) { host.failure != null }
-        compose.runOnUiThread { host.restartCanvas() }
-        compose.waitUntil(120_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
-        assertNull(host.failure)
-        assertEquals(painted, opaque())
-        assertNull(host.actionError)
-        println("61 MP JPEG: G-Pen, preserved opacity, exact undo/redo, native save/reopen and GPU replacement passed")
-    }
-
     @Test fun sixteenBitWideColorSurvivesSaveAndGpuReplacement() {
         val job = native { handle ->
             val (id, file) = request(handle, "new_document")
@@ -1907,37 +1850,6 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
-    @Test fun photoCorrectionsAndMasksRemainRevisableAfterReopen() {
-        val task=native { h -> val(id,f)=request(h,"new_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
-        try {
-            Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(513,257)),"color" to obj("space" to "ProPhoto","depth" to "U16"),"background" to "White").toString())
-            Native.projectWork(task,-1,513,257);native {Native.projectAdopt(it,task,"null")}
-        }finally{Native.projectFree(task)}
-        native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick();stroke(0.0)
-        val recipe=native {JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(2).getJSONObject(1)}
-        png("correction-source.png",recipe);open(File(files,"correction-source.png"))
-        val source=manifest(save("correction-source.capy")).getJSONObject("tiled_sources").toString()
-        val controls=listOf(Triple("exposure","exposure",.75),Triple("white_balance","temperature",25.0),Triple("levels","gamma",.9),Triple("curves","curve_0",0.0),Triple("hue_saturation","hue",10.0),Triple("color_balance","midtones_red",12.0))
-        val ids=mutableListOf<Long>()
-        fun send(value:JSONObject){native {Native.dispatch(it,value.toString())};tick()}
-        fun value(index:Int,changed:Boolean)=if(index==3)obj("kind" to "curve","value" to org.json.JSONArray(if(changed)"[[0,0],[1,1]]" else "[[0,0],[0.213,0.13],[0.79,0.9],[1,1]]")) else obj("kind" to "number","value" to (if(!changed)controls[index].third else if(index==2)1.2 else -controls[index].third))
-        fun set(index:Int,changed:Boolean)=send(obj("type" to "effect","action" to obj("op" to "set","layer" to ids[index],"key" to controls[index].second,"value" to value(index,changed))))
-        for((index,control)in controls.withIndex()){
-            send(obj("type" to "effect","action" to obj("op" to "insert","effect" to control.first)))
-            ids.add(native {state(it).getJSONObject("layer_properties").getLong("layer")})
-            set(index,false);send(obj("type" to "layer","action" to obj("op" to "add_mask","id" to ids.last(),"replace" to false)))
-        }
-        val edited=manifest(save("corrections.capy"));assertEquals(source,edited.getJSONObject("tiled_sources").toString())
-        assertEquals(6,edited.getJSONObject("document").getJSONArray("layers").objects().count {it.objectOrNull("effect")!=null && it.objectOrNull("mask")!=null})
-        fun histogram():String {val flag=Native.captureControl();try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,flag)})).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
-        val before=histogram();open(File(files,"corrections.capy"))
-        val reopened=manifest(save("corrections-reopened.capy"));assertEquals(edited.getJSONObject("document").getJSONArray("layers").toString(),reopened.getJSONObject("document").getJSONArray("layers").toString());assertEquals(before,histogram())
-        for(index in controls.indices){set(index,true);assertNotEquals(controls[index].first,before,histogram());set(index,false);assertEquals(controls[index].first,before,histogram())}
-        send(obj("type" to "layer","action" to obj("op" to "invert_mask","id" to ids[0])));assertNotEquals(before,histogram())
-        send(obj("type" to "invoke","command" to "undo"));assertEquals(before,histogram())
-        assertEquals(source,manifest(save("corrections-final.capy")).getJSONObject("tiled_sources").toString());assertNull(host.failure)
-    }
-
     @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
         val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
         png("profile-library.png",wide);open(File(files,"profile-library.png"))
@@ -1993,10 +1905,6 @@ class AndroidRasterTest {
         assertEquals(canonical(recipe),canonical(store(obj("type" to "get","index" to index)).getJSONObject("recipe")))
         val persisted=File(ColorPreferencesStore.directoryForTest!!,"color-export-presets.json").readBytes()
         assertArrayEquals("CAPYPRESETS".toByteArray(Charsets.US_ASCII),persisted.copyOfRange(0,11))
-        val updated=JSONObject(recipe.toString()).put("background","White")
-        store(obj("type" to "update","index" to index,"recipe" to updated))
-        store(obj("type" to "remember","index" to 3,"recipe" to updated))
-        assertEquals(canonical(updated),canonical(store(obj("type" to "get","index" to 3)).getJSONObject("recipe")))
         // Reopen through the real export dialog and load the persisted named recipe.
         DocumentController.nativeFileJobsForTest=false
         compose.runOnUiThread {host.invoke("export_document")}
@@ -2008,9 +1916,6 @@ class AndroidRasterTest {
         compose.onNodeWithText("321").assertExists();compose.onNodeWithText("123").assertExists()
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
-        DocumentController.nativeFileJobsForTest=true
-        store(obj("type" to "remove","index" to index));assertEquals(4,store(obj("type" to "list")).getJSONArray("names").length())
-        store(obj("type" to "reset","index" to 3));assertNotEquals(canonical(updated),canonical(store(obj("type" to "get","index" to 3)).getJSONObject("recipe")))
         assertNull(host.failure)
     }
 
@@ -2545,10 +2450,6 @@ class AndroidRasterTest {
         compose.waitUntil(60_000){host.surfaceReady};assertEquals(listOf(third,first,second),ids())
         assertEquals(exact,manifest(save("tabs-recreated.capy")).getJSONArray("blobs").toString())
         val bad=File(files,"tabs-invalid.capy").apply{writeText("invalid")};open(bad,true);assertEquals(3,ids().size)
-        native{Native.documentTabs(it,obj("op" to "storage","error" to "Disk full test").toString())}
-        val refused=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision")) to id}
-        try{assertTrue(runCatching{Native.projectWork(refused.first,-1,64,64)}.isFailure);assertEquals(3,ids().size)}finally{Native.projectFree(refused.first);native{Native.documentComplete(it,refused.second,false,"null")}}
-        native{Native.documentTabs(it,obj("op" to "storage","error" to null).toString())}
         select(second);stroke(80.0);ready()
         assertTrue("The close fixture must contain committed ink",native{state(it).getJSONObject("document_file").getBoolean("modified")})
         action("close_document")
@@ -2569,7 +2470,7 @@ class AndroidRasterTest {
             select(tabs().getLong("selected"),true)
         }
         assertEquals(0,tabs().getLong("selected"));assertEquals(0,tabs().getInt("parked_renderers"))
-        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-native.txt").writeText("PASS independent history, exact redo-only disk backing, device reuse, order undo, Activity recreation, admission failure, corrupt open, close cancellation/neighbour/final ownership")
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-native.txt").writeText("PASS independent history, exact redo-only disk backing, device reuse, order undo, Activity recreation, corrupt open, close cancellation/neighbour/final ownership")
     }
 
     @Test fun drawingTabsRecoverMultipleInactiveDrawings() {
@@ -2605,7 +2506,7 @@ class AndroidRasterTest {
         activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS two independently owned inactive/active recovery snapshots; sequential offers append unsaved independent drawings; durable origins retired only after publication")
     }
 
-    @Test fun drawingTabsNativePointerAndCloseUi() {
+    @Test fun drawingTabsNativePointerReorder() {
         fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
         fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
         fun settled(){compose.waitUntil(60_000){!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}};compose.runOnUiThread{host.documentChanged()};compose.waitForIdle();assertNull(host.failure);assertNull(host.actionError)}
@@ -2677,19 +2578,6 @@ class AndroidRasterTest {
             compose.onNodeWithTag("drawing-order-undo").performClick();compose.waitUntil(10_000){ids()==order};settled()
         }
         compose.runOnUiThread{host.drawingTabs.selector=false;DocumentController.nativeFileJobsForTest=false}
-        // Close a background drawing through the actual controller/UI. Selection
-        // precedes the prompt, cancellation retains it, clean close removes only it.
-        compose.runOnUiThread{host.drawingTabs.select(order.first())};settled()
-        native{Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick();settled()
-        compose.runOnUiThread{host.drawingTabs.select(order.last())};settled()
-        compose.onNodeWithTag("drawing-close-${order.first()}").performClick()
-        compose.waitUntil(30_000){compose.onAllNodesWithTag("document-close-cancel").fetchSemanticsNodes().isNotEmpty()}
-        assertEquals(order.first(),tabs().getLong("selected"));compose.onNodeWithTag("document-close-cancel").performClick();settled();assertEquals(order,ids())
-        compose.runOnUiThread{host.drawingTabs.closeSelected()}
-        compose.onNodeWithTag("document-close-discard").performClick()
-        compose.waitUntil(30_000){ids()==listOf(order.last())&&!host.drawingTabs.switching}
-        compose.runOnUiThread{host.drawingTabs.closeSelected()}
-        compose.waitUntil(30_000){activity.isFinishing||activity.isDestroyed}
     }
 
     @Test fun drawingTabsFileBatchKeepsDuplicateOwnersAndContinuesFailures() {

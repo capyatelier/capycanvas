@@ -255,10 +255,10 @@ class AndroidPredictionTest {
         waitFor { commandEnabled("undo") }
         val painted = pixels("stroke-painted")
         assertTrue("Pen input deposits visible pixels", painted > before + 100)
-        compose.runOnIdle { host.dispatch(obj("type" to "invoke", "command" to "undo")) }
+        compose.onNodeWithContentDescription("Undo").performClick()
         waitFor { commandEnabled("redo") }
         assertTrue("Undo removes committed ink and leaves no predicted tail", pixels("stroke-undo") < before + (painted - before) / 10)
-        compose.runOnIdle { host.dispatch(obj("type" to "invoke", "command" to "redo")) }
+        compose.onNodeWithContentDescription("Redo").performClick()
         waitFor { commandEnabled("undo") }
         assertTrue("Replay restores the real stroke", pixels("stroke-redo") >= before + (painted - before) * 9 / 10)
     }

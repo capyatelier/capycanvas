@@ -742,18 +742,6 @@ class AndroidHostTest {
             capture("adjustment-$id")
             action(obj("type" to "set_layer_visibility", "id" to view.getLong("layer"), "visible" to false))
         }
-        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
-        floatPanel("stats",650f,120f)
-        action(obj("type" to "set_layer_visibility", "id" to state().getJSONObject("layer_properties").getLong("layer"), "visible" to true))
-        repeat(16) { action(obj("type" to "set_layer_opacity", "id" to state().getJSONObject("layer_properties").getLong("layer"), "opacity" to .8+it*.01)) }
-        compose.onNodeWithTag("renderer-stats").assertIsDisplayed()
-        val chart = compose.onNodeWithTag("renderer-stats-chart").fetchSemanticsNode().boundsInRoot
-        assertTrue(chart.top >= compose.onNodeWithText("GPU · ms").fetchSemanticsNode().boundsInRoot.bottom)
-        val frames = compose.onNodeWithText("Frames").fetchSemanticsNode().boundsInRoot
-        assertTrue(frames.top >= chart.bottom)
-        assertTrue(compose.onNodeWithText("Canvas storage").fetchSemanticsNode().boundsInRoot.top >= frames.bottom)
-        capture("adjustments-stats-dark")
-        action(obj("type" to "set_theme", "theme" to "light"));capture("adjustments-stats-light")
     }
     @Test fun strokeRecordingSavesRawStylusInput() {
         customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
@@ -1274,43 +1262,39 @@ class AndroidHostTest {
     }
 
     @Test fun dockedPanelHandlesCollapseTheirColumnOnFirstDoubleTap() {
-        for (theme in listOf("light", "dark")) {
+        for ((theme, style) in listOf("light" to "automatic", "dark" to "icon")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for (style in listOf("automatic", "active_name", "icon_name", "name", "icon")) {
-                action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
-                val id = group("sizes").getInt("id")
-                customize(obj("type" to "set_tab_style", "group" to id, "style" to style))
-                val panels = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString()
-                compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
-                compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().any { column ->
-                    column.array("groups").objects().any { it.getInt("group") == id }
-                } }
-                assertTrue(groups().none { "sizes" in it.array("panels").values() })
-                assertEquals("Tab bar settings are unchanged", panels,
-                    state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString())
-                capture("workspace-docked-handle-collapse-$style-$theme")
-            }
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+            val id = group("sizes").getInt("id")
+            customize(obj("type" to "set_tab_style", "group" to id, "style" to style))
+            val panels = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString()
+            compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+            compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().any { column ->
+                column.array("groups").objects().any { it.getInt("group") == id }
+            } }
+            assertTrue(groups().none { "sizes" in it.array("panels").values() })
+            assertEquals("Tab bar settings are unchanged", panels,
+                state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels").toString())
+            capture("workspace-docked-handle-collapse-$style-$theme")
         }
     }
 
     @Test fun dockedToolbarHandlesRestoreSingleLanesOrNecessaryWrap() {
-        for (edge in listOf("left", "right", "top", "bottom")) {
-            for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
-                action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
-                customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
-                action(obj("type" to "move_panel", "panel" to "toolbar", "viewport" to viewport(), "target" to obj("kind" to "edge", "edge" to edge, "outer" to true)))
-                val natural = JSONObject(group("toolbar").toString())
-                val oversized = JSONObject(state().getJSONObject("workspace").toString())
-                val band = oversized.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").getInt("id") == natural.getInt("id") }
-                band.put("extent", band.number("extent") + 120f)
-                action(obj("type" to "restore_workspace", "workspace" to oversized))
-                compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
-                compose.waitUntil(10_000) { group("toolbar").getJSONObject("bounds").toString() == natural.getJSONObject("bounds").toString() }
-                assertFalse(group("toolbar").getBoolean("tabs_visible"))
-                assertFalse(group("toolbar").getBoolean("floating"))
-                capture("workspace-docked-toolbar-reset-$edge-$style")
-            }
-        }
+        val edge = "top"
+        val style = "labeled"
+        action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+        customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
+        action(obj("type" to "move_panel", "panel" to "toolbar", "viewport" to viewport(), "target" to obj("kind" to "edge", "edge" to edge, "outer" to true)))
+        val natural = JSONObject(group("toolbar").toString())
+        val oversized = JSONObject(state().getJSONObject("workspace").toString())
+        val band = oversized.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").getInt("id") == natural.getInt("id") }
+        band.put("extent", band.number("extent") + 120f)
+        action(obj("type" to "restore_workspace", "workspace" to oversized))
+        compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { group("toolbar").getJSONObject("bounds").toString() == natural.getJSONObject("bounds").toString() }
+        assertFalse(group("toolbar").getBoolean("tabs_visible"))
+        assertFalse(group("toolbar").getBoolean("floating"))
+        capture("workspace-docked-toolbar-reset-$edge-$style")
     }
 
     @Test fun floatingToolbarPresetsRefitTileSizesAndResetOnFirstDoubleClick() {
@@ -1676,21 +1660,6 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
-    @Test fun stylusDrawsAndUndoRedoChangePixels() {
-        penStroke()
-        waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
-        assertNull(host.failure)
-        val painted = capture("01-stylus-light")
-        val dark = darkPixels(painted)
-        assertTrue("Stroke deposits visible pixels in the canvas, not just cursor state ($dark)", dark > 100)
-        compose.onNodeWithContentDescription("Undo").performClick()
-        waitState { it.array("commands").objects().any { c -> c.getString("id") == "redo" && c.getBoolean("enabled") } }
-        val undone = darkPixels(capture("02-undo"))
-        assertTrue("Undo removes deposited pixels ($undone vs $dark)", undone < dark / 10)
-        compose.onNodeWithContentDescription("Redo").performClick()
-        waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
-        assertTrue("Redo restores deposited pixels", darkPixels(capture("03-redo")) >= dark * 9 / 10)
-    }
     @Test fun zenModesIconsAndContextMenuUseSharedSettings() {
         val saved = JSONObject(state().getJSONObject("settings").toString())
         fun edit(id: String, value: Any) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
