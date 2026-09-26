@@ -106,8 +106,10 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       }
       await press('scale_rotate',devices[(index+1)%3]);
       await wait(`layerApp.state().layer_tools.tool==='transform' && layerApp.state().canvas_bar?.context.kind==='transform' && ${visible}`);
-      for(const id of ['transform_aspect','transform_flip_horizontal','reset_transform','cancel_transform','apply_transform'])
+      for(const id of ['transform_flip_horizontal','reset_transform','cancel_transform','apply_transform'])
         assert.ok(await evaluate(`!!document.querySelector('${bar} [data-command="${id}"]')`),`${device}: the transform bar offers ${id}`);
+      const mode=`${bar} [data-toolbar-choice="transform-mode"]`,segment=i=>`${mode} [data-toolbar-segment="transform-mode-${i}"]`;
+      assert.ok(await evaluate(`(n=>!!n&&!n.hidden&&n.getBoundingClientRect().width<400)(document.querySelector('${mode}'))`),`${device}: the mode choice is shown at its natural width`);
       assert.ok(await evaluate(`document.querySelector('${bar} [data-command="apply_transform"]').classList.contains('suggested-action')`),'Apply uses the accent style');
       const transformBox=await anchor(),transformBar=await rect(bar);
       assert.ok(await beside(transformBar,transformBox),`${device}: the transform bar sits below the transform box`);
@@ -123,8 +125,12 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       const moved=await anchor(),movedBar=await rect(bar);
       assert.ok(moved.x>transformBox.x+20,`${device}: the drag moved the transform or panned the canvas`);
       assert.ok(await beside(movedBar,moved),`${device}: the bar follows the transform box ${JSON.stringify({moved,movedBar,camera:await camera()})}`);
-      await press('transform_aspect',device);
-      assert.equal(await evaluate(`document.querySelector('${bar} [data-command="transform_aspect"]').getAttribute('aria-pressed')`),String((await state()).commands.find(c=>c.id==='transform_aspect').selected));
+      await tap(await middle(segment(1)),device);
+      await wait(`layerApp.state().commands.find(c=>c.id==='transform_uniform').selected&&document.querySelector('${segment(1)}').getAttribute('aria-checked')==='true'`);
+      await tap(await middle(segment(2)),device);
+      await wait(`!!document.querySelector('${bar} [data-command="transform_perspective"]')&&document.querySelector('${segment(2)}').getAttribute('aria-checked')==='true'`);
+      await tap(await middle(segment(0)),device);
+      await wait(`!document.querySelector('${bar} [data-command="transform_perspective"]')&&layerApp.state().commands.find(c=>c.id==='transform_free').selected&&${visible}`);
       await tap(await middle(`${bar} .canvas-action-bar-more`),device);
       await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
       const labels=await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open .menu-label')].map(n=>n.textContent)`);

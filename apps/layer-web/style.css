@@ -1022,7 +1022,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .canvas-action-bar button { display: flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 40px; min-width: 40px; min-height: 40px; padding: 0 10px; font-weight: 400; white-space: nowrap; border-radius: var(--control-radius); }
 .canvas-action-bar svg { width: 20px; height: 20px; flex: none; }
 .canvas-action-bar > .canvas-action-bar-more { flex: none; width: 40px; padding: 0; }
-.canvas-action-bar .toolbar-segments { box-sizing: border-box; height: 40px; border-radius: var(--control-radius); }
+.canvas-action-bar .toolbar-segments { box-sizing: border-box; width: auto; height: 40px; border-radius: var(--control-radius); }
 .canvas-action-bar .toolbar-segments > button { flex: none; height: 38px; min-height: 38px; border-radius: 0; }
 .canvas-action-bar .toolbar-choice > button { width: auto; }
 #workspace > .canvas-action-bar .suggested-action { background: var(--accent); color: var(--accent-foreground); }
