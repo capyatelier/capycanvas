@@ -6,17 +6,11 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @"
 using System;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class CapySnapWindow {
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
-    [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
     [StructLayout(LayoutKind.Sequential)] public struct Monitor {public int size;public Rect bounds,work;public uint flags;}
-    [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
-    [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
-    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h,ref Point point);
-    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h,int command);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
@@ -25,9 +19,6 @@ public static class CapySnapWindow {
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr h,ref Monitor info);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h,int attribute,out Rect rect,int size);
-    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint process);
-    [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int size);
     public static Rect Frame(IntPtr h) {
         Rect rect;Marshal.ThrowExceptionForHR(DwmGetWindowAttribute(h,9,out rect,16));return rect;
     }
@@ -35,18 +26,6 @@ public static class CapySnapWindow {
         var info=new Monitor{size=Marshal.SizeOf(typeof(Monitor))};
         if(!GetMonitorInfo(MonitorFromWindow(h,2),ref info))throw new Exception("No monitor work area.");
         return info.work;
-    }
-    public static void Snap(uint process,ushort direction) {
-        uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-        if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-        var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x5B}},
-            new Input{type=1,keyboard=new Keyboard{key=direction}},
-            new Input{type=1,keyboard=new Keyboard{key=direction,flags=2}},
-            new Input{type=1,keyboard=new Keyboard{key=0x5B,flags=2}}};
-        if(SendInput(4,inputs,40)!=4){
-            // Release only the injected chord if Windows accepted a partial batch.
-            int error=Marshal.GetLastWin32Error();SendInput(2,new[]{inputs[2],inputs[3]},40);throw new Win32Exception(error);
-        }
     }
 }
 "@
@@ -68,8 +47,8 @@ function Ready {
     Wait-Until {
         $model=Model;$client=[CapySnapWindow+Rect]::new()
         if(!$model -or [CapySnapWindow]::IsIconic($handle) -or ![CapySnapWindow]::GetClientRect($handle,[ref]$client)){return $false}
-        $canvas=Find 'Drawing canvas' -Name;$origin=[CapySnapWindow+Point]::new()
-        if(!$canvas -or ![CapySnapWindow]::ClientToScreen($handle,[ref]$origin)){return $false}
+        $canvas=Find 'Drawing canvas' -Name;$origin=[CapyRowPointer+Point]::new()
+        if(!$canvas -or ![CapyRowPointer]::ClientToScreen($handle,[ref]$origin)){return $false}
         $bounds=$canvas.Current.BoundingRectangle
         $model.canvas_ready -and $model.brush_ready -and
             $canvas -and $canvas.Current.IsEnabled -and !$canvas.Current.IsOffscreen -and
@@ -111,8 +90,8 @@ function Check-Paint([string]$Name) {
     $width=[int][Math]::Min(200,[Math]::Floor($area[2]*.6));$height=[int][Math]::Min(100,[Math]::Floor($area[3]*.8))
     if($width -lt 64 -or $height -lt 40){throw 'Snap canvas is too small for the drawing fixture'}
     $script:sample=[Drawing.Rectangle]::new([int]($area[0]+($area[2]-$width)/2),[int]($area[1]+($area[3]-$height)/2),$width,$height)
-    $origin=[CapySnapWindow+Point]::new()
-    if(![CapySnapWindow]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas'}
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas'}
     $bounds=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
     $script:sample.Offset([int]($bounds.Left-$origin.x),[int]($bounds.Top-$origin.y))
     $parkX=[int]($bounds.Left+$area[0]+$area[2]/2);$parkY=[int]($bounds.Top+$area[1])+20
@@ -142,7 +121,7 @@ function Record([string]$Name,[string]$Before) {
     Ready
     if((Signature) -ne $Before){throw "Window transition changed the document, layers, brush or workspace: $Name"}
     $model=Model
-    $states.Add(@{name=$Name;frame=[CapySnapWindow]::Frame($handle);camera=$model.state.camera;caption=$model.titlebar_insets;scale=([CapySnapWindow]::GetDpiForWindow($handle)/96.)})
+    $states.Add(@{name=$Name;frame=[CapySnapWindow]::Frame($handle);camera=$model.state.camera;caption=$model.titlebar_insets;scale=([CapyRowPointer]::GetDpiForWindow($handle)/96.)})
     Capture $Name
     Check-Paint $Name
 }
@@ -167,7 +146,7 @@ try{
         if(![CapySnapWindow]::MoveWindow($handle,$work.left+48,$work.top+48,[int](($work.right-$work.left)*.7),[int](($work.bottom-$work.top)*.85),$true)){throw 'Cannot restore fixture placement'}
         Ready;$before=Signature
         [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null
-        [CapySnapWindow]::Snap([uint32]$review.Id,$(if($side -eq 'left'){0x25}else{0x27}))
+        [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x5B),$(if($side -eq 'left'){0x25}else{0x27}))
         $expected=[CapySnapWindow+Rect]::new();$expected.top=$work.top;$expected.bottom=$work.bottom
         $middle=[int](($work.left+$work.right)/2)
         $expected.left=if($side -eq 'left'){$work.left}else{$middle};$expected.right=if($side -eq 'left'){$middle}else{$work.right}

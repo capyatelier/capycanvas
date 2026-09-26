@@ -2,14 +2,6 @@ param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touc
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
-Add-Type -TypeDefinition '
-using System;
-using System.Runtime.InteropServices;
-public static class CapyStackCoordinates {
- [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
-}'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -26,9 +18,9 @@ function At([string]$Id) {
     @{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
 }
 function Screen($Box) {
-    $point=[CapyStackCoordinates+Point]::new()
-    if(![CapyStackCoordinates]::ClientToScreen($review.MainWindowHandle,[ref]$point)){throw 'Client origin unavailable'}
-    $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $point=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$point)){throw 'Client origin unavailable'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     @{x=[int]($point.x+$Box.x*$scale);y=[int]($point.y+$Box.y*$scale)}
 }
 function Tap([string]$Id) {
@@ -112,7 +104,7 @@ function Check-ItemDrag([int]$Id) {
     $before=HeaderJson
     $box=(Presentation).geometry.items|Where-Object id -eq $Id|Select-Object -ExpandProperty bounds
     $from=At ('header-select-'+$Id)
-    $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $distance=[int][Math]::Round($box.height*3*$scale)
     $far=@{x=$from.x;y=$from.y+$distance}
     [CapyRowPointer]::Down($Device,$from.x,$from.y)
@@ -297,7 +289,7 @@ function Check-Keyboard {
 function Check-Narrow {
  $initial=HeaderJson
  $size=$root.Current.BoundingRectangle
- $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+ $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](640*$scale)) -Height ([int](480*$scale))
  Check-Geometry
  foreach($i in 1..12){Drop-Component}

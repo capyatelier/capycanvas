@@ -5,25 +5,14 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class CapyWindowTest {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window,uint message,UIntPtr w,IntPtr l);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
  public static void Check(uint process,IntPtr window) {
    uint owner;GetWindowThreadProcessId(window,out owner);
    if(owner!=process || !IsWindow(window))throw new Exception("Window is not owned by this review.");
- }
- public static void NewWindow(uint process,IntPtr window) {
-   Check(process,window);
-   if(GetForegroundWindow()!=window)throw new Exception("Review window does not own keyboard focus; no key sent.");
-   var keys=new ushort[]{17,16,78,78,16,17};
-   var input=new Input[6];
-   for(int i=0;i<6;i++)input[i]=new Input{type=1,keyboard=new Keyboard{key=keys[i],flags=(uint)(i>=3?2:0)}};
-   if(SendInput(6,input,40)!=6)throw new Exception("Windows rejected the review shortcut.");
  }
  public static void Close(uint process,IntPtr window) {
    Check(process,window);
@@ -31,6 +20,7 @@ public static class CapyWindowTest {
  }
 }
 '@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -255,7 +245,8 @@ try {
     (Control 'Drawing canvas' -Name).SetFocus()
     [CapyWindowTest]::SetForegroundWindow([IntPtr]$second.hwnd)|Out-Null
     Wait-Until {[CapyWindowTest]::GetForegroundWindow() -eq [IntPtr]$second.hwnd} 'Second window could not become active'
-    [CapyWindowTest]::NewWindow([uint32]$review.Id,[IntPtr]$second.hwnd)
+    [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$second.hwnd)
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
     Wait-Until {@(Windows).Count -eq 2} 'Ctrl+Shift+N failed after the original window closed'
     $third=@(Windows|Where-Object id -ne $second.id)[0];Ready $third
     if((Model $third).state.settings.dark_base -ne $expectedDark -or (Model $third).state.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}

@@ -2,17 +2,6 @@ param([Parameter(Mandatory)][string]$Executable,[ValidateSet('Pointer','Automati
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
-Add-Type -TypeDefinition '
-using System;
-using System.Runtime.InteropServices;
-public static class CapyStackCoordinates {
- [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
- [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
- public static void Focus(IntPtr window) {SetForegroundWindow(window);}
-
-}'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -43,7 +32,7 @@ function Tap([string]$Id,[string]$Device='mouse') {
         Start-Sleep -Milliseconds 250;return
     }
     Wait-Until {(Control $Id).Current.IsEnabled -and (Model).brush_ready} "Disabled $Id" 120
-    $null=[CapyStackCoordinates]::Focus($review.MainWindowHandle);Start-Sleep -Milliseconds 100
+    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle);Start-Sleep -Milliseconds 100
     $at=At $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 60;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 240
 }
 function HeaderId([string]$Kind,[string]$Value) {
@@ -98,7 +87,7 @@ function Set-Theme([string]$Theme) {
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Close' -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Color theme' -Name)} 'Preferences did not close'
-    $null=[CapyStackCoordinates]::Focus($review.MainWindowHandle);Start-Sleep -Milliseconds 200
+    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle);Start-Sleep -Milliseconds 200
 }
 try {
     Enter-CapyEnvironment
@@ -109,7 +98,7 @@ try {
     Write-Output "Owned feature review $($review.Id): $run"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Feature review did not start' 90
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyStackCoordinates]::Focus($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Check-InputPreferences
     $switch=Find 'workspace-switch-sketch'

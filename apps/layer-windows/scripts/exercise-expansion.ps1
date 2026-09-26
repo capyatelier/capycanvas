@@ -3,34 +3,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 Add-Type -AssemblyName System.Drawing
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class CapyExpansionKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
- [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Escape(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x1B}},new Input{type=1,keyboard=new Keyboard{key=0x1B,flags=2}}};
-   if(SendInput(2,inputs,40)!=2)throw new Exception("Windows rejected Escape.");
- }
- public static void Context(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x10}},new Input{type=1,keyboard=new Keyboard{key=0x79}},
-     new Input{type=1,keyboard=new Keyboard{key=0x79,flags=2}},new Input{type=1,keyboard=new Keyboard{key=0x10,flags=2}}};
-   if(SendInput(4,inputs,40)!=4)throw new Exception("Windows rejected context-menu keys.");
- }
-}
-'@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -49,7 +22,7 @@ function ToolbarContext([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    (Control $Id).SetFocus();[CapyExpansionKeys]::Context([uint32]$review.Id)
+    (Control $Id).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
 }
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
 function DialogButton([string]$Id,[string]$Name){
@@ -73,15 +46,15 @@ function Configure([string]$Panel,[string]$Source="panel-tab-$Panel"){
     $configuration
 }
 function Dismiss([string]$Panel,[string]$Source="panel-tab-$Panel"){
-    (Control $Source).SetFocus();[CapyExpansionKeys]::Escape([uint32]$review.Id)
+    (Control $Source).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
     Wait-Until {$null -eq (Model).state.customization.expanded -and $null -eq (Find "panel-configuration-$Panel")} "Escape did not close $Panel configuration"
 }
 function Toggle([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 function Check-OverviewOverlap($Configuration){
     $overview=(Control 'navigator-overview' -Within $Configuration).Current.BoundingRectangle
-    $origin=[CapyExpansionKeys+Point]::new()
-    if(![CapyExpansionKeys]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
-    $scale=[CapyExpansionKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $document=(Model).state.tabs[0]
     $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
     $width=$document.width*$fit;$height=$document.height*$fit
@@ -116,7 +89,7 @@ try{
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/expansion-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned expansion review $($review.Id)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
-    [CapyExpansionKeys]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+    [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $configuration=Configure 'sizes'
     $identity=(Control 'configure-show-brush_size').GetRuntimeId() -join ':'

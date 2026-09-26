@@ -1,23 +1,7 @@
 param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class CapyNumberKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Key(uint process,ushort key) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=key}},new Input{type=1,keyboard=new Keyboard{key=key,flags=2}}};
-   if(SendInput(2,inputs,40)!=2)throw new Exception("Windows rejected numeric editing key.");
- }
-}
-'@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected an isolated CapyCanvas review process'}
 function Model {
@@ -182,16 +166,16 @@ foreach($tool in $tools){
 # Exercise real keyboard routing through the native spin field and Rust policy.
 Select-Tool 'auto_select'
 Draft 'gap_closing' '6 * 2'
-[CapyNumberKeys]::Key($ProcessId,0x0D)
+[CapyRowPointer]::Key($ProcessId,0x0D)
 Wait-Until {(Value 'gap_closing') -eq 12} 'Enter did not commit the spin expression'
-[CapyNumberKeys]::Key($ProcessId,0x26)
+[CapyRowPointer]::Key($ProcessId,0x26)
 Wait-Until {(Value 'gap_closing') -eq 13} 'Up did not step the spin control'
-[CapyNumberKeys]::Key($ProcessId,0x28)
+[CapyRowPointer]::Key($ProcessId,0x28)
 Wait-Until {(Value 'gap_closing') -eq 12} 'Down did not step the spin control'
 Draft 'gap_closing' 'invalid'
-[CapyNumberKeys]::Key($ProcessId,0x26)
+[CapyRowPointer]::Key($ProcessId,0x26)
 Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'invalid'} 'Invalid spin input was discarded'
-[CapyNumberKeys]::Key($ProcessId,0x1B)
+[CapyRowPointer]::Key($ProcessId,0x1B)
 Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '12'} 'Escape did not cancel the invalid spin draft'
 if((Value 'gap_closing') -ne 12){throw 'Invalid spin input changed the shared value'}
 # A long brush schema must retain its actual native scroll container and offset
@@ -250,7 +234,7 @@ Select-Tool 'pen'
 # consume the controlled stroke. Dismiss it explicitly before testing artwork.
 if((Model).state.customization.drawer){
     $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
-    $canvas.SetFocus();[CapyNumberKeys]::Key($ProcessId,0x1B)
+    $canvas.SetFocus();[CapyRowPointer]::Key($ProcessId,0x1B)
     Wait-Until {$null -eq (Model).state.customization.drawer} 'Tool drawer did not dismiss before the stroke'
 }
 Wait-Until {(Model).brush_ready} 'Selected pen did not become ready'

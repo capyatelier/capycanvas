@@ -1,24 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class CapyWorkspaceKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Context(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x10}},new Input{type=1,keyboard=new Keyboard{key=0x79}},
-     new Input{type=1,keyboard=new Keyboard{key=0x79,flags=2}},new Input{type=1,keyboard=new Keyboard{key=0x10,flags=2}}};
-   if(SendInput(4,inputs,40)!=4)throw new Exception("Windows rejected context-menu keys.");
- }
-}
-'@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -32,7 +15,7 @@ function ContextMenu([string]$Id){
     # UIA Invoke returns before WinUI finishes its flyout close animation.
     Start-Sleep -Milliseconds 250
     (Control $Id).SetFocus()
-    [CapyWorkspaceKeys]::Context([uint32]$review.Id)
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
 }
 try{
     Enter-CapyEnvironment

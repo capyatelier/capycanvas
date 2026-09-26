@@ -1,108 +1,10 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
-$CapyCacheModel=$true;$CapyEach={[CapyTabTouch]::Hold()}
+$CapyCacheModel=$true;$CapyEach={[CapyCanvasTouch]::Verify()}
 Add-Type -AssemblyName System.Drawing
-# OS-delivered synthetic touch exercises XAML routing/capture. It does not
-# establish physical digitizer behavior or input latency.
-# https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-injecttouchinput
-Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Threading;
-public static class CapyTabTouch {
- [StructLayout(LayoutKind.Sequential)] public struct Point { public int x,y; }
- [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
- [StructLayout(LayoutKind.Sequential)] public struct PointerInfo {
-  public uint type,id,frame,flags; public IntPtr device,target;
-  public Point pixel,himetric,pixelRaw,himetricRaw;
-  public uint time,history; public int data; public uint keys;
-  public ulong performance; public uint change;
- }
- [StructLayout(LayoutKind.Sequential)] public struct TouchInfo {
-  public PointerInfo pointer; public uint flags,mask;
-  public Rect contact,contactRaw; public uint orientation,pressure;
- }
- [DllImport("user32.dll",SetLastError=true)] static extern bool InitializeTouchInjection(uint count,uint feedback);
- [DllImport("user32.dll",SetLastError=true)] static extern bool InjectTouchInput(uint count,TouchInfo[] contacts);
- [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
- [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
- [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- static uint owner; static bool active; static Point last;
- static readonly object gate=new object(); static Timer pulse; static Exception failure;
- public static bool Active { get { lock(gate)return active; } }
- static void Check() { if(failure!=null)throw new Exception("Touch keepalive failed.",failure); }
- static void Pulse(object unused) {
-  lock(gate){
-   if(!active)return;
-   try{Guard(last);Send(last,0x20006);}
-   catch(Exception error){
-    failure=error;
-    try{Send(last,0x48000);}catch{}
-    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
-   }
-  }
- }
- public static void Initialize(uint process) {
-  owner=process;
-  if(Marshal.SizeOf(typeof(TouchInfo))!=144)throw new Exception("Touch structure must use the x64 ABI.");
-  if(!InitializeTouchInjection(1,3))throw new Win32Exception(Marshal.GetLastWin32Error());
-  // A UIA query or window capture may block PowerShell beyond the 100 ms
-  // contact timeout. Deliver held frames independently of those observations.
-  pulse=new Timer(Pulse,null,Timeout.Infinite,Timeout.Infinite);
- }
- static void Guard(Point point) {
-  uint process;GetWindowThreadProcessId(GetForegroundWindow(),out process);
-  if(process!=owner)throw new Exception("Review does not own foreground input.");
-  GetWindowThreadProcessId(WindowFromPoint(point),out process);
-  if(process!=owner)throw new Exception("Touch point is outside the owned review.");
- }
- static void Send(Point point,uint flags) {
-  var info=new TouchInfo {pointer=new PointerInfo {type=2,id=0,flags=flags,pixel=point},
-   mask=7,contact=new Rect {left=point.x-2,top=point.y-2,right=point.x+2,bottom=point.y+2},
-   orientation=90,pressure=512};
-  for(int retry=0;retry<20;retry++){
-   if(InjectTouchInput(1,new[]{info}))return;
-   int error=Marshal.GetLastWin32Error();
-   if(error!=21)throw new Win32Exception(error);
-   Thread.Sleep(1);
-  }
-  throw new Exception("Windows did not accept the touch frame.");
- }
- public static void Down(int x,int y) {
-  lock(gate){
-   Check();if(active)throw new Exception("A review touch is already active.");
-   var point=new Point{x=x,y=y};Guard(point);Send(point,0x10006);last=point;active=true;
-   pulse.Change(25,25);
-  }
- }
- public static void Move(int x,int y) {
-  lock(gate){
-   Check();if(!active)throw new Exception("No review touch is active.");
-   var point=new Point{x=x,y=y};Guard(point);Send(point,0x20006);last=point;
-  }
- }
- public static void Hold() { lock(gate){Check();if(active){Guard(last);Send(last,0x20006);}} }
- public static void Up() {
-  lock(gate){
-   Check();if(!active)return;Guard(last);Thread.Sleep(2);Send(last,0x40000);active=false;
-   pulse.Change(Timeout.Infinite,Timeout.Infinite);
-  }
- }
- public static void Cancel() {
-  lock(gate){
-   if(!active)return;
-   // This ends only our existing injected contact, including after focus loss.
-   Thread.Sleep(2);Send(last,0x48000);active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
-  }
- }
-}
-'@
+Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -164,15 +66,10 @@ function Check-Motion($Before,$After,[uint32]$Group) {
   }
  }
 }
-function Capture([string]$Name){
- [CapyTabTouch]::Hold()
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
- [CapyTabTouch]::Hold()
-}
 function Check-OverviewOverlap([string]$Before,[string]$After) {
  $overview=(Control 'navigator-overview').Current.BoundingRectangle
- $origin=[CapyTabTouch+Point]::new()
- if(![CapyTabTouch]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
+ $origin=[CapyRowPointer+Point]::new()
+ if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
  $document=(Model).state.tabs[0]
  $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
  $width=$document.width*$fit;$height=$document.height*$fit
@@ -202,7 +99,7 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
 }
 function Walk([double]$FromX,[double]$FromY,[double]$ToX,[double]$ToY){
  for($i=1;$i -le 8;$i++){
-  [CapyTabTouch]::Move([int]($FromX+($ToX-$FromX)*$i/8),[int]($FromY+($ToY-$FromY)*$i/8))
+  [CapyCanvasTouch]::Move(1,[int]($FromX+($ToX-$FromX)*$i/8),[int]($FromY+($ToY-$FromY)*$i/8))
   Start-Sleep -Milliseconds 18
  }
 }
@@ -212,7 +109,7 @@ function Start-Slide([double]$Grab=8){
  $neighbor=(Control 'panel-tab-sizes').Current.BoundingRectangle
  $startX=$source.Left+$Grab*$scale;$startY=$source.Top+$source.Height/2
  $finishX=$startX+$neighbor.Width/2+10*$scale
- [CapyTabTouch]::Down([int]$startX,[int]$startY)
+ [CapyCanvasTouch]::Down(1,[int]$startX,[int]$startY)
  Start-Sleep -Milliseconds 20
  Walk $startX $startY $finishX $startY
  Wait-Until {$null -ne (Preview) -and (Preview).insertion -eq 2} 'Attached native tab preview did not cross the shared insertion threshold'
@@ -238,21 +135,21 @@ try{
  [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/tab-drag-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
  Write-Output "Owned tab review $($review.Id)"
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
- [CapyTabTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
- [CapyTabTouch]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
- [CapyTabTouch]::Initialize([uint32]$review.Id)
- $scale=[CapyTabTouch]::GetDpiForWindow($review.MainWindowHandle)/96.
+ [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+ [CapyCanvasTouch]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id)
+ $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  Start-Sleep -Milliseconds 350
  $normal=(Model).layout|ConvertTo-Json -Depth 80 -Compress
  $position=Start-Slide
  Capture 'attached'
- [CapyTabTouch]::Up()
+ [CapyCanvasTouch]::Up(1)
  Wait-Until {((Current-Group).panels -join ',') -eq 'sizes,tool_settings'} 'Release did not commit the preview insertion'
  Undo-Workspace
  $position=Start-Slide 35
  Capture 'second-grab'
- [CapyTabTouch]::Cancel()
+ [CapyCanvasTouch]::CancelAll()
  Wait-Until {$null -eq (Find-Preview)} 'Cancelled pointer retained the overlay'
  if(((Model).layout|ConvertTo-Json -Depth 80 -Compress) -ne $normal){throw 'Cancellation changed the workspace'}
  $position=Start-Slide
@@ -272,13 +169,13 @@ try{
  if(((Control 'panel-tab-tool_settings').GetRuntimeId() -join ':') -ne $retainedTab -or
     ((Control 'Brush size' -Name).GetRuntimeId() -join ':') -ne $retainedField){throw 'Steady drag replaced native controls'}
  [IO.File]::WriteAllText((Join-Path $run 'retained-motion.json'),(@{before=$before;after=$after}|ConvertTo-Json -Depth 60))
- [CapyTabTouch]::Up()
+ [CapyCanvasTouch]::Up(1)
  Undo-Workspace
  $position=Start-Slide
  Walk $position.x $position.y $x $y
  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Cancellation review did not tear off'
  Start-Sleep -Milliseconds 400
- [CapyTabTouch]::Cancel()
+ [CapyCanvasTouch]::CancelAll()
  Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Detached cancellation did not restore the workspace'
  if((Model).state.document_file.modified){throw 'Workspace dragging modified the drawing'}
 
@@ -290,7 +187,7 @@ try{
  $source=(Control 'panel-tab-navigator').Current.BoundingRectangle
  $startX=$source.Left+8*$scale;$startY=$source.Top+$source.Height/2
  $x=$canvas.Left+180*$scale;$y=$canvas.Top+130*$scale
- [CapyTabTouch]::Down([int]$startX,[int]$startY)
+ [CapyCanvasTouch]::Down(1,[int]$startX,[int]$startY)
  Walk $startX $startY $x $y
  Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'navigator' -and $_.floating}).Count -eq 1} 'Navigator did not tear off'
  Start-Sleep -Milliseconds 600
@@ -320,7 +217,7 @@ try{
  }
  Capture 'navigator-moved'
  $secondPixel=Check-OverviewOverlap 'navigator-before' 'navigator-moved'
- [CapyTabTouch]::Cancel()
+ [CapyCanvasTouch]::CancelAll()
  Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Navigator cancellation did not restore workspace layout'
  Start-Sleep -Milliseconds 200
  Capture 'navigator-restored'
@@ -335,6 +232,6 @@ try{
 }catch{
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
- [CapyTabTouch]::Cancel()
+ [CapyCanvasTouch]::Dispose()
  Exit-CapyEnvironment
 }

@@ -2,14 +2,6 @@ param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touc
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
-Add-Type -TypeDefinition '
-using System;
-using System.Runtime.InteropServices;
-public static class CapyStackCoordinates {
- [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
-}'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -34,9 +26,9 @@ function At([string]$Id,[switch]$Name){
     @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5)}
 }
 function Screen($Bounds){
-    $point=[CapyStackCoordinates+Point]::new()
-    if(![CapyStackCoordinates]::ClientToScreen($review.MainWindowHandle,[ref]$point)){throw 'Native client origin is unavailable'}
-    $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $point=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$point)){throw 'Native client origin is unavailable'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     @{x=[int]($point.x+($Bounds.x+$Bounds.width*.5)*$scale);y=[int]($point.y+($Bounds.y+$Bounds.height*.5)*$scale)}
 }
 function Tap([string]$Id){$at=At $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()}
@@ -70,7 +62,7 @@ function Check-ColumnInteractions {
             [CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
         }else{
             $at=At 'divider-11'
-            $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+            $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
             Drag 'divider-11' @{x=[int]($at.x-160*$scale);y=$at.y}
         }
         Wait-Until {$null -eq (Column 12)} "$operation did not expand the column"

@@ -9,28 +9,14 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 public static class CapyLayersCapture {
-    [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
-    [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
-    [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
-    public static void Key(uint process,ushort key,ushort modifier=0) {
-        uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-        if(owner!=process)throw new Exception("Review does not own keyboard focus; no key sent.");
-        var keys=modifier==0?new[]{key}:new[]{modifier,key};var input=new Input[keys.Length*2];
-        for(int i=0;i<keys.Length;i++){
-            input[i]=new Input{type=1,keyboard=new Keyboard{key=keys[i]}};
-            input[input.Length-1-i]=new Input{type=1,keyboard=new Keyboard{key=keys[i],flags=2}};
-        }
-        if(SendInput((uint)input.Length,input,40)!=input.Length)throw new Exception("Windows rejected the review key.");
-    }
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
 }
 '@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -57,7 +43,7 @@ function Focus([string]$Id){
 function Toggle-Flag([string]$Id,[switch]$Keyboard){
     $pattern=(Control $Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     $before=$pattern.Current.ToggleState
-    if($Keyboard){Focus $Id;[CapyLayersCapture]::Key($review.Id,0x20)}else{$pattern.Toggle()}
+    if($Keyboard){Focus $Id;[CapyRowPointer]::Key([uint32]$review.Id,0x20)}else{$pattern.Toggle()}
     Wait-Until {$pattern.Current.ToggleState -ne $before} "Accessible toggle state did not change: $Id"
 }
 function Edit([string]$Id,[string]$Text){
@@ -139,13 +125,13 @@ try {
     foreach($target in @('name','content','mask')){foreach($shift in @($false,$true)){
         $isMask=$target -eq 'mask';$command=if($isMask){'layer-menu-enable_mask'}else{'menu-organize'}
         Focus "layer-$created-$target"
-        [CapyLayersCapture]::Key($review.Id,($shift ? 0x79 : 0x5D),($shift ? 0x10 : 0))
+        if($shift){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)}else{[CapyRowPointer]::Key([uint32]$review.Id,0x5D)}
         Wait-Until {$item=Find $command;$null -ne $item -and !$item.Current.IsOffscreen -and (Model).state.layer_tools.editing_layer.mask_selected -eq $isMask} "Keyboard opened the wrong layer context: $target, Shift=$shift"
         if($isMask -and $shift){Capture 'keyboard-mask-menu'}
-        [CapyLayersCapture]::Key($review.Id,0x1B)
+        [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
         Wait-Until {$item=Find $command;$null -eq $item -or $item.Current.IsOffscreen} 'Escape did not dismiss the layer menu'
     }}
-    Focus "layer-$created-name";[CapyLayersCapture]::Key($review.Id,0x71)
+    Focus "layer-$created-name";[CapyRowPointer]::Key([uint32]$review.Id,0x71)
     Wait-Until {(Model).state.layer_tools.rename_layer -eq $created} 'Rename did not begin'
     Edit "layer-$created-rename" 'Native layer';(Control 'layer-blend').SetFocus()
     Wait-Until {(Model).state.layer_tools.editing_layer.label -eq 'Native layer' -and $null -eq (Model).state.layer_tools.rename_layer} 'Rename did not commit'

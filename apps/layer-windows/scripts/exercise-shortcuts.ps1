@@ -2,31 +2,16 @@ param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$State
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
-Add-Type -TypeDefinition @"
-using System;using System.Collections.Generic;using System.Runtime.InteropServices;
-public static class CapyShortcutKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int size);
- public static void Key(uint process,ushort key,bool control,bool shift){
-  uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-  var keys=new List<ushort>();if(control)keys.Add(0x11);if(shift)keys.Add(0x10);keys.Add(key);
-  var inputs=new List<Input>();foreach(var k in keys)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=k}});
-  keys.Reverse();foreach(var k in keys)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=k,flags=2}});
-  if(SendInput((uint)inputs.Count,inputs.ToArray(),40)!=(uint)inputs.Count){
-   var releases=inputs.GetRange(keys.Count,keys.Count);SendInput((uint)releases.Count,releases.ToArray(),40);throw new Exception("Windows rejected shortcut input.");
-  }
- }
-}
-"@
 $review=Get-Process -Id $ProcessId
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
 $CapyStateFile=$StateFile
 Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated review did not become ready' 45
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-function Key([int]$Code,[switch]$Ctrl,[switch]$Shift){[CapyShortcutKeys]::Key([uint32]$ProcessId,[uint16]$Code,[bool]$Ctrl,[bool]$Shift)}
+function Key([int]$Code,[switch]$Ctrl,[switch]$Shift){
+    $modifiers=[Collections.Generic.List[uint16]]::new()
+    if($Ctrl){$modifiers.Add(0x11)};if($Shift){$modifiers.Add(0x10)}
+    [CapyRowPointer]::Chord([uint32]$ProcessId,$modifiers.ToArray(),[uint16]$Code)
+}
 function Focus($Control){$Control.SetFocus();Wait-Until {$Control.Current.HasKeyboardFocus} 'Native control did not receive focus'}
 function Click([string]$Id){
  $item=Control $Id;$b=$item.Current.BoundingRectangle

@@ -6,40 +6,13 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class CapyEditorKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
+public static class CapyEditorWindow {
  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
- [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Tab(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x09}},new Input{type=1,keyboard=new Keyboard{key=0x09,flags=2}}};
-   if(SendInput(2,inputs,40)!=2)throw new Exception("Windows rejected Tab.");
- }
- public static void Escape(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x1B}},new Input{type=1,keyboard=new Keyboard{key=0x1B,flags=2}}};
-   if(SendInput(2,inputs,40)!=2)throw new Exception("Windows rejected Escape.");
- }
- public static void Context(uint process) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
-   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=0x10}},new Input{type=1,keyboard=new Keyboard{key=0x79}},
-     new Input{type=1,keyboard=new Keyboard{key=0x79,flags=2}},new Input{type=1,keyboard=new Keyboard{key=0x10,flags=2}}};
-   if(SendInput(4,inputs,40)!=4)throw new Exception("Windows rejected context-menu keys.");
- }
 }
 '@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -58,7 +31,7 @@ function ToolbarContext([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    (Control $Id).SetFocus();[CapyEditorKeys]::Context([uint32]$review.Id)
+    (Control $Id).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
 }
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
 function DialogButton([string]$Id,[string]$Name){
@@ -75,12 +48,12 @@ function Set-Viewport {
     # and non-client dimensions differ, so adjust the window by the measured
     # canvas delta instead of assuming a fixed frame thickness.
     for($attempt=0;$attempt -lt 3;$attempt++){
-        $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+        $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
         $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
         $dx=[Math]::Round(986*$scale-$canvas.Width);$dy=[Math]::Round(658*$scale-$canvas.Height)
         if([Math]::Abs($dx) -lt 1 -and [Math]::Abs($dy) -lt 1){return}
-        $window=[CapyEditorKeys+Rect]::new()
-        if(![CapyEditorKeys]::GetWindowRect($review.MainWindowHandle,[ref]$window)){throw 'Cannot measure review window'}
+        $window=[CapyEditorWindow+Rect]::new()
+        if(![CapyEditorWindow]::GetWindowRect($review.MainWindowHandle,[ref]$window)){throw 'Cannot measure review window'}
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ($window.right-$window.left+$dx) -Height ($window.bottom-$window.top+$dy)
         Start-Sleep -Milliseconds 350
     }
@@ -88,10 +61,10 @@ function Set-Viewport {
 }
 function Capture([string]$Name){
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
-    $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
-    $origin=[CapyEditorKeys+Point]::new()
-    if(![CapyEditorKeys]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
     $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{
         [IO.File]::WriteAllText((Join-Path $run ($Name+'-metrics.json')),(@{
@@ -105,12 +78,12 @@ function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id}
 function Set-Zen {
     $button=Find (Command 'zen_mode').label -Name -Type ([System.Windows.Automation.ControlType]::Button)
     if($button){$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-    else{(Control 'Drawing canvas' -Name).SetFocus();[CapyEditorKeys]::Tab([uint32]$review.Id)}
+    else{(Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)}
 }
 function Check-Rect($Control,$Box,[double]$X=0,[double]$Y=0){
-    $origin=[CapyEditorKeys+Point]::new()
-    if(![CapyEditorKeys]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
-    $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $actual=$Control.Current.BoundingRectangle
     $expected=@(($origin.x+($X+$Box.x)*$scale),($origin.y+($Y+$Box.y)*$scale),($Box.width*$scale),($Box.height*$scale))
     $values=@($actual.Left,$actual.Top,$actual.Width,$actual.Height)
@@ -149,7 +122,7 @@ function Check-Zen {
     if($model.keep_zen_button -and !(Find 'zen-capy')){throw 'Full Zen hid the standalone Capy button'}
 }
 function Check-Header {
-    $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
     $settings=(Control 'settings-button' -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
     $points=@(
@@ -160,7 +133,7 @@ function Check-Header {
     foreach($entry in $points){
         $x=[int]$entry.x;$y=[int]$entry.y
         $point=[IntPtr](([int64]($y -band 65535) -shl 16) -bor ($x -band 65535))
-        if([CapyEditorKeys]::SendMessage($review.MainWindowHandle,0x84,[IntPtr]::Zero,$point).ToInt64() -ne $entry.expected){
+        if([CapyEditorWindow]::SendMessage($review.MainWindowHandle,0x84,[IntPtr]::Zero,$point).ToInt64() -ne $entry.expected){
             throw "Incorrect native titlebar hit region for $($entry.name)"
         }
     }
@@ -183,7 +156,7 @@ try{
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/editor-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned editor review $($review.Id)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
-    [CapyEditorKeys]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+    [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not complete' 45
     # Open secondary tools when the workspace keeps them in a collapsed column.

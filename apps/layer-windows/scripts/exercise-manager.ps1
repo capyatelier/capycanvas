@@ -2,23 +2,7 @@ param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class CapyManagerKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Key(uint process,ushort key) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no key sent.");
-   var input=new[]{new Input{type=1,keyboard=new Keyboard{key=key}},new Input{type=1,keyboard=new Keyboard{key=key,flags=2}}};
-   if(SendInput(2,input,40)!=2)throw new Exception("Windows rejected the review key.");
- }
-}
-'@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -101,7 +85,7 @@ try {
     if((Layout) -eq $before){throw 'Row selection did not preview Sketch'}
     if((Model).state.brush.diameter -ne $size){throw 'Workspace preview changed tool settings'}
     $identity=$item.GetRuntimeId() -join ':'
-    $item.SetFocus();[CapyManagerKeys]::Key([uint32]$review.Id,13)
+    $item.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,13)
     Start-Sleep -Milliseconds 250
     if(!(Manager)){throw 'Enter committed the preview'}
     if(((Control ('workspace-manager-row-'+$painter)).GetRuntimeId() -join ':') -ne $identity){throw 'Selection replaced the native row'}
@@ -125,7 +109,7 @@ try {
     $earlier=(Manager).rows|Where-Object {!$_.current}|Select-Object -First 1
     $item=Select-Row $earlier.id
     Capture 'history-preview'
-    $item.SetFocus();[CapyManagerKeys]::Key([uint32]$review.Id,27)
+    $item.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)
     Closed
     if((Layout) -ne $before){throw 'Escape did not restore the original history preview'}
     Menu 'Layout History…'
@@ -159,7 +143,7 @@ try {
         $action=Find $id
         if($action -and !$action.Current.IsOffscreen){throw 'Included workspace exposes a protected rename/delete action'}
     }
-    [CapyManagerKeys]::Key([uint32]$review.Id,27)
+    [CapyRowPointer]::Key([uint32]$review.Id,27)
     Wait-Until {$null -eq (Find 'workspace-manager-show')} 'Included workspace menu did not close'
     Choose 'Cancel';Closed
     if((HeaderChoice $original).Current.Name -ne $originalName){throw 'Included workspace name changed'}

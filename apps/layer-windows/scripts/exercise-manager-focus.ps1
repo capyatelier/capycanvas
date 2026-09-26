@@ -2,23 +2,7 @@ param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class CapyManagerKeys {
- [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- public static void Key(uint process,ushort key) {
-   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
-   if(owner!=process)throw new Exception("Review does not own keyboard focus; no key sent.");
-   var input=new[]{new Input{type=1,keyboard=new Keyboard{key=key}},new Input{type=1,keyboard=new Keyboard{key=key,flags=2}}};
-   if(SendInput(2,input,40)!=2)throw new Exception("Windows rejected the review key.");
- }
-}
-'@
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -91,7 +75,7 @@ try {
     Wait-Until {$null -eq (Find 'workspace-manager')} 'Switch to Window did not dismiss the source manager'
     Wait-Until {
         [uint32]$foregroundProcess=0
-        [CapyManagerKeys]::GetWindowThreadProcessId([CapyManagerKeys]::GetForegroundWindow(),[ref]$foregroundProcess)|Out-Null
+        [CapyRowPointer]::GetWindowThreadProcessId([CapyRowPointer]::GetForegroundWindow(),[ref]$foregroundProcess)|Out-Null
         $foregroundProcess -eq $first.Id
     } 'Windows did not activate the workspace owner'
     if((Model).windows_workspace.name -ne $secondName){throw 'Focusing another window changed the source workspace'}

@@ -41,11 +41,13 @@ public static class CapyRowPointer {
   if(!GetCursorInfo(ref info))throw new Win32Exception(Marshal.GetLastWin32Error());
   return (info.flags&1)!=0;
  }
- [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+ [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  static uint owner,kind,penButtons;static bool active;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
@@ -223,7 +225,10 @@ public static class CapyRowPointer {
   foreach(var modifier in modifiers)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifier}});
   inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key}});inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key,flags=2}});
   for(int i=modifiers.Length-1;i>=0;i--)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifiers[i],flags=2}});
-  if(SendInput((uint)inputs.Count,inputs.ToArray(),40)!=inputs.Count)throw new Win32Exception(Marshal.GetLastWin32Error());
+  if(SendInput((uint)inputs.Count,inputs.ToArray(),40)!=inputs.Count){
+   int error=Marshal.GetLastWin32Error();var releases=inputs.GetRange(modifiers.Length+1,modifiers.Length+1);
+   SendInput((uint)releases.Count,releases.ToArray(),40);throw new Win32Exception(error);
+  }
  }
  public static void Dispose() {
   try{lock(gate)ReleaseHeld();Cancel();}finally{
