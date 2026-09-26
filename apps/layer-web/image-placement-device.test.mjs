@@ -18,7 +18,8 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
   const placed=()=>wait('layerApp.state().commands.find(c=>c.id==="placement_original_size").enabled');
   const save=placementSave({evaluate,invoke,idle});
   const press=async id=>{
-    const p=await evaluate(`(()=>{const b=document.querySelector('.image-placement-controls [data-command=${id}]'),r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await wait(`(n=>n && n.getAttribute('aria-disabled')!=='true' && !n.closest('.canvas-action-bar.suppressed'))(document.querySelector('.canvas-action-bar [data-command=${id}]'))`);
+    const p=await evaluate(`(()=>{const b=document.querySelector('.canvas-action-bar [data-command=${id}]'),r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:92,...p}]});
     await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
   };

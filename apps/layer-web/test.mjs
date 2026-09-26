@@ -48,6 +48,7 @@ import { launchChrome } from "../../tools/cdp.mjs";
 import { checkRaster } from "./raster.test.mjs";
 import { checkPhotoPaint } from "./photo-paint.test.mjs";
 import { checkImagePlacement } from "./image-placement.test.mjs";
+import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -184,6 +185,9 @@ try {
   } else if (process.argv.includes("--image-placement")) {
     await checkImagePlacement({call,evaluate,settle});
     checkRasterErrors();
+  } else if (process.argv.includes("--canvas-bar")) {
+    await checkCanvasBar({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-paint")) {
     await checkPhotoPaint({call,evaluate,settle});
     checkRasterErrors();

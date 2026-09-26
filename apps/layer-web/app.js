@@ -7,6 +7,7 @@ import { createPreferences } from "./preferences.js";
 import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
+import { createCanvasBar } from "./canvas-bar.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
@@ -50,7 +51,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -625,6 +626,7 @@ function arrange(nextLayout, layoutOnly = false) {
     resizeCanvas();
     updateZen();
   }
+  canvasBar?.place();
   queuePanelMeasurements();
 }
 // Measure intrinsic widget content only when its width/copy changes. Rust owns
@@ -822,6 +824,8 @@ function update(regions) {
   if (regions & (2 | 4 | 16)) palettes.refresh(regions);
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
+  if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
+  if (regions & 32) canvasBar?.defer();
   if (regions & (1 | 128)) persistWorkspace();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
   if (regions & (4 | 8))
@@ -1022,6 +1026,7 @@ function flushWorkspacePresentation() {
   workspacePresentation = null;
   if (!update || update.model_revision !== workspaceModelRevision) return false;
   const drag = update.drag, moving = drag?.group;
+  canvasBar?.hold(!!moving);
   if (moving) {
     const group = layout.groups.find(g => g.id === moving.id), base = group?.bounds;
     if (base) {
@@ -1197,6 +1202,7 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
+    canvasBar?.suppress(!!reply.canvas_bar_hidden);
     const capy = $("zen-capy");
     if (capy && capy.hidden !== !reply.keep_zen_button)
       capy.hidden = !reply.keep_zen_button;
@@ -1228,6 +1234,7 @@ function chromeInput(event) {
       zen_button: capyBounds ? {x:capyBounds.x,y:capyBounds.y,width:capyBounds.width,height:capyBounds.height} : null,
       expanded_panel: customization?.placement(),
       ...workspaceChrome?.facts(),
+      canvas_bar: canvasBar?.bounds() ?? null,
       contact_tab: event.kind === "contact"
         ? document.elementFromPoint(...event.position)?.closest(".dock-tab")?.dataset.panel ?? null
         : null,
@@ -1663,6 +1670,7 @@ try {
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});
   workspace.append(capy);
+  canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu: node => customization.openMenu(node) });
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();

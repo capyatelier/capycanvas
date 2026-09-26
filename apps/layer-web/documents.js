@@ -307,7 +307,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
     mountProof:proof.mount,handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
-    const published=state();images.refresh(published);
+    const published=state();
     if(closing||changing||!published.document_file.close_ready)return;
     closing=true;
     const id=app.document_tabs(0).selected;

@@ -1,12 +1,12 @@
 /* Compact libadwaita color roles, native DOM controls over a full-window canvas. */
 :root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --text: #fafafb; --accent: #3584e4; --button: #ffffff0d; --thumb: #d3d3d3; --settings: #333333; --sidebar: #2e2e32; }
 body { --popover: var(--panel); --glass-panel: var(--panel); --glass-strip: var(--tabbar); --glass-tab: var(--panel); --glass-chip: var(--bg); --glass-switcher: var(--tabbar); --glass-selection: var(--selection); --glass-header-selection: var(--header-selection); --glass-switcher-selection: var(--header-selection); --glass-document-tab: var(--panel); --chrome-surface: var(--glass-chip); }
-:is(#workspace, #status, .image-placement-controls) { --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
+:is(#workspace, #status) { --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(12px * var(--corner-fit)); --tile-radius: 18px; }
 #header, .header-editor, .header-drag-preview { --header-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); }
-:is(#workspace, #status, .image-placement-controls) :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover) { --control-radius: 6px; }
+:is(#workspace, #status) :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover) { --control-radius: 6px; }
 @supports (corner-shape: squircle) {
-  :is(#workspace, #status, .image-placement-controls) { --corner-fit: 1; }
-  :where(#workspace, #status, .image-placement-controls), :where(#workspace, #status, .image-placement-controls) * { corner-shape: squircle; }
+  :is(#workspace, #status) { --corner-fit: 1; }
+  :where(#workspace, #status), :where(#workspace, #status) * { corner-shape: squircle; }
   :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .size-dot, .option-radio, .gradient-stops button, .battery-shell),
   :is(.panel-context-menu, .tile-popover, .popover, .toolbar-editor-popover, .color-wheel-control) * { corner-shape: round; }
 }
@@ -196,7 +196,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .dock-group, .divider { position: absolute; }
 .dock-group, .gpu-help { color: var(--text); border-radius: var(--surface-radius); box-shadow: 0 2px 8px rgb(0 0 0 / 16%); }
 .gpu-help { background: var(--panel); }
-:is(.dock-group, .collapsed-column, .content-drawer):not(.expanded-panel) { --selection: var(--glass-selection); }
+:is(.dock-group, .collapsed-column, .content-drawer, .canvas-action-bar):not(.expanded-panel) { --selection: var(--glass-selection); }
 .expanded-panel { --glass-panel: var(--panel); --glass-strip: var(--tabbar); --glass-tab: var(--panel); }
 .dock-group { overflow: hidden; display: flex; flex-direction: column; }
 .dock-group.tool-strip { --surface-radius: calc(var(--tile-radius) * var(--corner-fit)); }
@@ -899,15 +899,6 @@ body[data-theme="light"] #header { text-shadow:none; }
 .color-comparison figure { margin: 0; flex: 1 1 180px; text-align: center; }
 .color-comparison canvas { width: 100%; height: auto; background: repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 0 0/10px 10px; }
 .source-details { white-space: pre-wrap; }
-.image-placement-controls {
-  position: fixed; z-index: 100; bottom: max(48px, env(safe-area-inset-bottom));
-  left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap;
-  justify-content: center; gap: 8px; width: max-content; max-width: calc(100vw - 24px);
-  padding: 8px; border-radius: var(--surface-radius); background: var(--panel);
-  box-shadow: 0 2px 12px #0006;
-}
-.image-placement-controls[hidden] { display: none; }
-.image-placement-controls button { min-height: 44px; }
 
 .proof-panel { padding:6px 8px; }
 .proof-controls { box-sizing:border-box; width:100%; min-width:0; padding:0; color:var(--text); }
@@ -1019,6 +1010,23 @@ body[data-theme="light"] #header { text-shadow:none; }
 .toolbar-choice-menu { display: flex; flex-direction: column; gap: 2px; }
 .toolbar-choice-menu > button { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 32px; }
 .toolbar-choice-menu svg { width: 16px; height: 16px; }
+.canvas-action-bar { position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; box-sizing: border-box; width: max-content; color: var(--text); background: var(--glass-panel); border-radius: var(--surface-radius); box-shadow: 0 2px 8px rgb(0 0 0 / 16%); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.canvas-action-bar[hidden], .canvas-action-bar [hidden] { display: none !important; }
+.canvas-action-bar.suppressed { visibility: hidden; }
+.canvas-action-bar-label { flex: none; padding: 0 6px; white-space: nowrap; }
+.canvas-action-bar .toolbar-option { flex: none; }
+.canvas-action-bar button { display: flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 40px; min-width: 40px; min-height: 40px; padding: 0 10px; font-weight: 400; white-space: nowrap; border-radius: var(--control-radius); }
+.canvas-action-bar svg { width: 20px; height: 20px; flex: none; }
+.canvas-action-bar > .canvas-action-bar-more { flex: none; width: 40px; padding: 0; }
+.canvas-action-bar .toolbar-segments { box-sizing: border-box; height: 40px; border-radius: var(--control-radius); }
+.canvas-action-bar .toolbar-segments > button { flex: none; height: 38px; min-height: 38px; border-radius: 0; }
+.canvas-action-bar .toolbar-choice > button { width: auto; }
+#workspace > .canvas-action-bar .suggested-action { background: var(--accent); color: var(--accent-foreground); }
+:where(:root:not([data-touch])) #workspace > .canvas-action-bar .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
+#workspace > .canvas-action-bar .suggested-action:active { background: color-mix(in srgb, black 10%, var(--accent)); }
+#workspace > .canvas-action-bar button[aria-disabled="true"] { opacity: .36; }
+#workspace > .canvas-action-bar button[aria-disabled="true"]:is(:hover, :active) { background: transparent; }
+#workspace > .canvas-action-bar .suggested-action[aria-disabled="true"]:is(:hover, :active) { background: var(--accent); }
 /* Standalone brush tracks keep their value in the transient stamp preview. */
 .toolbar-slider { width: 100%; height: 100%; position: relative; }
 .toolbar-slider .toolbar-slider-cap { position: absolute; min-width: 0; min-height: 0; padding: 0; background: transparent; }

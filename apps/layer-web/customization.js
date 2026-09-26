@@ -88,14 +88,20 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (!node.dispatchEvent(claimed)) return;
     const model = node.menuModel ? node.menuModel() : node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
     menuCommand = node.menuCommand ?? null;
-    anchor = point;
+    anchor = point; context.menuOwner = node;
     renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);
   }
-  function positionPopup(node) {
+  function openMenu(node) {
     const r = node.getBoundingClientRect();
-    node.style.left = `${Math.max(6, Math.min(anchor[0], innerWidth - r.width - 6))}px`;
-    node.style.top = `${Math.max(6, Math.min(anchor[1], innerHeight - r.height - 6))}px`;
+    showContext(node, [r.left, r.bottom, r.top]);
+    return context;
+  }
+  function positionPopup(node) {
+    const r = node.getBoundingClientRect(), [x, y, top] = anchor;
+    const above = top != null && y + r.height > innerHeight - 6 && top - r.height >= 6;
+    node.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 6))}px`;
+    node.style.top = `${Math.max(6, Math.min(above ? top - r.height : y, innerHeight - r.height - 6))}px`;
   }
   function contextTarget(node) {
     if (node.closest("input,select,textarea,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
@@ -542,7 +548,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, field, discardFields, tileWidget, refreshTile, layoutTile, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

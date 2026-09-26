@@ -210,6 +210,30 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
 }
 
 #[test]
+fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
+    let mut s = filled_selection_session();
+    s.set_viewport([360., 640.], [360, 640]).unwrap();
+    assert!(s.layout([360., 640.]).work_area.width < 200., "the docks fill a phone-width window");
+    invoke(&mut s, CommandId::ScaleRotate);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    let layout = s
+        .canvas_bar_layout(&CanvasBarMeasure {
+            context: bar.context,
+            label: 0.,
+            items: vec![90.; 6],
+            completion: vec![80., 80.],
+            more: 40.,
+            height: 48.,
+            gap: 4.,
+            padding: 6.,
+        })
+        .unwrap();
+    assert_eq!(layout.side, CanvasBarSide::BottomEdge);
+    assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= 360., "{layout:?}");
+    assert!(layout.items < 6, "items that do not fit the window go to More");
+}
+
+#[test]
 fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     use layer_core::color::{SampleDepth, source::*};
     let source = || {

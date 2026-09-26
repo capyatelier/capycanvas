@@ -23,7 +23,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   const idle=()=>wait('!layerApp.state().document_file.busy');
   const placed=()=>wait('layerApp.state().commands.find(c=>c.id==="placement_original_size").enabled');
   const click=async selector=>{
-    await wait(`document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`);
+    await wait(`(n=>n && !n.disabled && n.getAttribute('aria-disabled')!=='true' && !n.closest('.canvas-action-bar.suppressed'))(document.querySelector(${JSON.stringify(selector)}))`);
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
     await settle();
@@ -65,12 +65,12 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['OpenEXR','TIFF','PNG','WebP','BMP','JPEG','GIF','HEIF','AVIF']);
     await importFiles(files);
     assert.equal((await state()).layers.length,baseCount+files.length);
-    await click('.image-placement-controls [data-command=cancel_transform]');
+    await click('.canvas-action-bar [data-command=cancel_transform]');
     assert.equal((await state()).layers.length,baseCount);
     assert.equal((await state()).document_file.modified,base.document_file.modified);
     await importFiles(files);
     const labels=(await state()).layers.slice(0,files.length).map(l=>l.label);
-    await click('.image-placement-controls [data-command=apply_transform]');
+    await click('.canvas-action-bar [data-command=apply_transform]');
     const fitted=await save(),sources=sourceIdentity(fitted);
     assert.equal(sources.length,files.length);
     for(let i=0;i<files.length;i++){
@@ -87,8 +87,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready()');
     assert.deepEqual(sourceIdentity(await save()),sources,'GPU replacement retains placed source samples');
     await invoke('scale_rotate');await placed();
-    await click('.image-placement-controls [data-command=placement_original_size]');
-    await click('.image-placement-controls [data-command=apply_transform]');
+    await click('.canvas-action-bar [data-command=placement_original_size]');
+    await click('.canvas-action-bar [data-command=apply_transform]');
     const native=await save();assert.equal(native.document.layers[0].properties.placement[0],1);assert.deepEqual(sourceIdentity(native),sources);
     // A malformed second file must discard all prepared sources.
     const before=await state();await invoke('import_image');await choose([files[0],bad]);await idle();
@@ -103,20 +103,21 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const p=await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect(),c=layerApp.app.camera(),a=c.work_area;return{x:r.x+(a[0]+a[2]*.6)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]*.6)*r.height/c.viewport[1]}})()`);
     await drop(p,[files[0]]);
     await idle();await placed();assert.equal((await state()).layers.length,before.layers.length+1);
-    await click('.image-placement-controls [data-command=cancel_transform]');
+    await click('.canvas-action-bar [data-command=cancel_transform]');
     assert.equal((await state()).layers.length,before.layers.length);
     // Placement controls remain reachable in a narrow viewport with panels hidden.
     await importFiles([files[0]]);await invoke('zen_mode');
     await call('Emulation.setDeviceMetricsOverride',{width:360,height:640,deviceScaleFactor:1,mobile:false});await settle();
-    assert.equal(await evaluate(`(()=>{const r=document.querySelector('.image-placement-controls').getBoundingClientRect();return r.x>=0&&r.right<=innerWidth&&r.y>=0&&r.bottom<=innerHeight})()`),true);
-    await click('.image-placement-controls [data-command=cancel_transform]');
+    await wait(`!document.querySelector('.canvas-action-bar').classList.contains('suppressed')`);
+    assert.equal(await evaluate(`(()=>{const r=document.querySelector('.canvas-action-bar').getBoundingClientRect();return r.x>=0&&r.right<=innerWidth&&r.y>=0&&r.bottom<=innerHeight})()`),true);
+    await click('.canvas-action-bar [data-command=cancel_transform]');
     await call('Emulation.clearDeviceMetricsOverride');await invoke('zen_mode');
     await call('Browser.grantPermissions',{origin:await evaluate('location.origin'),permissions:['clipboardReadWrite','clipboardSanitizedWrite']},null);
     const copied=await call('Runtime.evaluate',{expression:`navigator.clipboard.write([new ClipboardItem({['web '+placementTest.inputFiles[0].type]:placementTest.inputFiles[0]})])`,userGesture:true,awaitPromise:true});
     assert.equal(copied.exceptionDetails,undefined);
     await invoke('paste_image');await idle();await placed();
     assert.equal((await state()).layers.length,before.layers.length+1);
-    await click('.image-placement-controls [data-command=apply_transform]');
+    await click('.canvas-action-bar [data-command=apply_transform]');
     const pasted=sourceIdentity(await save());
     assert.ok(pasted.some(image=>JSON.stringify(image)===JSON.stringify(sources[0])),'Clipboard retains original source samples');
     await invoke('undo');assert.equal((await state()).layers.length,before.layers.length);
@@ -136,7 +137,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const group=(await state()).layers.find(l=>l.group),groupCount=(await state()).layers.length;
     const rowPoint=await evaluate(`(()=>{const r=document.querySelector('.layer-row[data-layer="${group.id}"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await drop(rowPoint,[files[0]]);
-    await idle();await placed();await click('.image-placement-controls [data-command=apply_transform]');
+    await idle();await placed();await click('.canvas-action-bar [data-command=apply_transform]');
     const grouped=await save();assert.ok(grouped.document.layers.some(l=>l.properties.parent===group.id&&l.name!==group.label));
     await invoke('undo');assert.equal((await state()).layers.length,groupCount);
     await evaluate(`layerApp.dispatch({type:'layer',action:{op:'lock',id:${group.id},value:true}})`);await settle();
@@ -153,7 +154,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await invoke('new_document');await wait('document.querySelector("dialog[open] input[type=number]")');
       await evaluate(`{const fields=document.querySelectorAll('dialog[open] input[type=number]');fields[0].value=2000;fields[1].value=1500;[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click();}`);
       await idle();await wait('layerApp.app.brush_ready()');
-      const started=Date.now();await importFiles(files);await click('.image-placement-controls [data-command=apply_transform]');
+      const started=Date.now();await importFiles(files);await click('.canvas-action-bar [data-command=apply_transform]');
       const loadingMs=Date.now()-started,baseline=await save();
       await measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs});
     }

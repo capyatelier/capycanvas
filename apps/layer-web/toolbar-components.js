@@ -2,6 +2,55 @@ import { createNumberField } from './numeric.js';
 import { createRangeControl } from './range-control.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
 
+export function actionField({ element, button, icon }, spec, send, { label, ariaDisabled = false, reason } = {}) {
+  const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
+  const b = button('', () => { if (b.getAttribute('aria-disabled') !== 'true') send({ type: 'invoke', command: spec.state.id }); });
+  b.append(icon(spec.state.icon || 'settings'));
+  if (label) b.append(element('span', 'toolbar-action-label', label));
+  row.append(b); b.setAttribute('aria-label', spec.state.label);
+  let tooltip, disabled, pressed;
+  function update(option) {
+    const state = option.Action.state;
+    if (disabled !== !state.enabled) {
+      disabled = !state.enabled;
+      if (ariaDisabled) b.setAttribute('aria-disabled', String(disabled)); else b.disabled = disabled;
+    }
+    if (spec.checkable && pressed !== state.selected) b.setAttribute('aria-pressed', String(pressed = state.selected));
+    const text = !state.enabled && reason ? reason(state.id) ?? state.tooltip : state.tooltip;
+    if (tooltip !== text) b.title = tooltip = text;
+  }
+  update({ Action: spec });
+  return { row, button: b, action: true, update };
+}
+
+export function choiceField({ element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
+  const row = element('div', `toolbar-option ${spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
+  row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
+  let selected = spec.items.findIndex(i => i.selected);
+  const buttons = spec.segmented ? spec.items.map((item, i) => {
+    const b = button('', () => send(item.action)); b.append(icon(item.icon));
+    if (labels) b.append(element('span', 'toolbar-segment-label', item.label));
+    b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; row.append(b); return b;
+  }) : [];
+  const b = spec.segmented ? null : button('', () => {
+    const menu = element('div', 'toolbar-choice-menu');
+    spec.items.forEach((item, i) => {
+      const entry = button('', () => { closePopup(); send(item.action); });
+      entry.append(icon(item.icon), element('span', '', item.label)); entry.setAttribute('role', 'menuitemradio'); entry.setAttribute('aria-checked', i === selected); menu.append(entry);
+    });
+    openPopup(b, menu);
+  });
+  if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; row.append(b); }
+  row.setAttribute('role', spec.segmented ? 'radiogroup' : 'group'); row.setAttribute('aria-label', spec.label);
+  function update(option) {
+    const items = option.Choice.items; selected = items.findIndex(i => i.selected);
+    if (b) { const item = items[selected] || items[0]; b.replaceChildren(icon(item.icon), element('span', 'toolbar-choice-label', item.label), icon('chevron-down')); }
+    buttons.forEach((button, i) => { button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', items[i].selected); button.setAttribute('aria-pressed', items[i].selected); });
+  }
+  update({ Choice: spec });
+  return { row, update, segmented: buttons.length };
+}
+
 // Retained DOM controls. Rust owns the field schema, edit context, numeric math,
 // and fitting; this adapter reports native font/control measurements.
 export function createToolbarComponent({ app, tile, view, element, button, icon, dispatch, draggable, target, place, panel }) {
@@ -228,31 +277,9 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     return { row, update: option => update(option.Numeric?.value ?? option.value), orient, dispose: () => number.cancelEditing(), number };
   }
   function choice(spec, context) {
-    const row = element('div', `toolbar-option ${spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
-    row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
-    let selected = spec.items.findIndex(i => i.selected);
-    const buttons = spec.segmented ? spec.items.map((item, i) => {
-      const b = button('', () => send(context, item.action)); b.append(icon(item.icon)); b.title = item.label;
-      b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; row.append(b); return b;
-    }) : [];
-    const b = spec.segmented ? null : button('', () => {
-      const menu = element('div', 'toolbar-choice-menu');
-      spec.items.forEach((item, i) => {
-        const entry = button('', () => { closePopup(); send(context, item.action); });
-        entry.append(icon(item.icon), element('span', '', item.label)); entry.setAttribute('role', 'menuitemradio'); entry.setAttribute('aria-checked', i === selected); menu.append(entry);
-      });
-      openPopup(b, menu);
-    });
-    if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; row.append(b); }
-    row.setAttribute('role', spec.segmented ? 'radiogroup' : 'group'); row.setAttribute('aria-label', spec.label);
-    function update(option) {
-      const items = option.Choice.items; selected = items.findIndex(i => i.selected);
-      if (b) { const item = items[selected] || items[0]; b.replaceChildren(icon(item.icon), element('span', 'toolbar-choice-label', item.label), icon('chevron-down')); }
-      buttons.forEach((button, i) => { button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', items[i].selected); button.setAttribute('aria-pressed', items[i].selected); });
-    }
-    update({ Choice: spec });
-    return { row, update, segmented: buttons.length, orient() {
-      row.classList.toggle('labeled', style.labeled); row.classList.toggle('stacked', vertical && extent[0] < style.size[0] * buttons.length);
+    const field = choiceField({ element, button, icon, openPopup, closePopup }, spec, action => send(context, action));
+    return { ...field, orient() {
+      field.row.classList.toggle('labeled', style.labeled); field.row.classList.toggle('stacked', vertical && extent[0] < style.size[0] * field.segmented);
     } };
   }
   function range(spec, context) {
@@ -263,10 +290,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     return {row, interval:true, update:option=>control.update(option.Range.bounds.map(f=>f.value)), dispose:()=>control.dispose()};
   }
   function action(spec, context) {
-    const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
-    const b = button('', () => send(context, { type: 'invoke', command: spec.state.id }));
-    b.append(icon(spec.state.icon || 'settings')); row.append(b); b.title = spec.state.tooltip; b.setAttribute('aria-label', spec.state.label);
-    return { row, action: true, update(option) { b.disabled = !option.Action.state.enabled; if (spec.checkable) b.setAttribute('aria-pressed', option.Action.state.selected); } };
+    return actionField({ element, button, icon }, spec, action => send(context, action));
   }
   function layout() {
     if (!model || !root.isConnected || !extent[0] || !extent[1]) return;

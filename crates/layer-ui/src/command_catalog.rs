@@ -888,7 +888,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         entries
     }
 
-    pub(super) fn command_disabled_reason(&self, command: CommandId) -> Option<String> {
+    pub fn command_disabled_reason(&self, command: CommandId) -> Option<String> {
         use CommandId as C;
         if self.command_flags(command).0 {
             return None;

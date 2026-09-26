@@ -3,10 +3,6 @@
 export function createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,interpret}) {
   let incoming=null,control=null;
   const command=id=>app.state().commands.find(c=>c.id===id);
-  const controls=element('aside','image-placement-controls');controls.setAttribute('aria-label','Image placement');
-  const actions=[['placement_original_size','Original Size (100%)'],['cancel_transform','Cancel'],['apply_transform','Apply']];
-  for(const [id,label] of actions) {const b=button(label,()=>dispatch({type:'invoke',command:id}));b.dataset.command=id;controls.append(b);}
-  document.body.append(controls);controls.hidden=true;
   const clear=()=>document.querySelectorAll('.external-image-drop').forEach(row=>row.classList.remove('external-image-drop','layer-drop-before','layer-drop-after','layer-drop-into'));
   const isFiles=e=>e.dataTransfer?.types.includes('Files');
   function hit(e) {
@@ -39,11 +35,6 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
   });
   window.addEventListener('pagehide',()=>control?.cancel());
   return {
-    refresh(state){
-      const commands=state.commands;
-      controls.hidden=!commands.find(c=>c.id==='placement_original_size')?.enabled;
-      for(const b of controls.children)b.disabled=!commands.find(c=>c.id===b.dataset.command)?.enabled;
-    },
     async run(id,choose) {
       const drop=incoming;incoming=null;
       const request=app.capture_image_import(id,drop?.screen??null,drop?.destination??null);

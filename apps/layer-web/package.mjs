@@ -39,7 +39,7 @@ function replaceRequired(text, from, to) {
 
 // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
 // Hash final bytes after rewriting dependencies; no bundler required.
-const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
+const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
 const workers = ["workspace-worker.js", "raster-worker.js", "proof-worker.js"];
 
 export function fingerprintAssets(directory) {
@@ -101,6 +101,7 @@ export function fingerprintAssets(directory) {
   let toolbarComponents = read(join(directory, "toolbar-components.js"));
   for (const path of ["numeric.js", "range-control.js"]) toolbarComponents = replaceRequired(toolbarComponents, `from './${path}'`, `from "./${names[path]}"`);
   publish("toolbar-components.js", toolbarComponents);
+  publish("canvas-bar.js", replaceRequired(read(join(directory, "canvas-bar.js")), 'from "./toolbar-components.js"', `from "./${names["toolbar-components.js"]}"`));
   publish("customization.js", replaceRequired(replaceRequired(read(join(directory, "customization.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`), 'from "./toolbar-components.js"', `from "./${names["toolbar-components.js"]}"`));
   publish("layers.js");
   publish("filter-previews.js");

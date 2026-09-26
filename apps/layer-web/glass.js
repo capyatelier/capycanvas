@@ -8,6 +8,7 @@ const surfaces = [
   "#zen-capy",
   "#canvas-status .proof-status",
   "#view-info",
+  ".canvas-action-bar",
 ].join(",");
 const dialogs = "#command-bar[open]";
 const zen = ".zen-hidden > :is(.dock-group:not(.floating-panel), .collapsed-column, .chrome:not(#header)), .zen-hidden #header > *";

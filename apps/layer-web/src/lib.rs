@@ -175,6 +175,23 @@ impl WebApp {
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
+    /// Places the canvas action bar from DOM control sizes; null for a stale context.
+    pub fn canvas_bar_layout(&self, measure: JsValue) -> Result<JsValue, JsValue> {
+        let measure: layer_ui::CanvasBarMeasure =
+            serde_wasm_bindgen::from_value(measure).map_err(js)?;
+        serialize(&self.session.canvas_bar_layout(&measure))
+    }
+    pub fn canvas_bar_menu(&self, context: JsValue, shown: usize) -> Result<JsValue, JsValue> {
+        let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
+        serialize(&self.session.canvas_bar_menu(context, shown))
+    }
+    pub fn command_disabled_reason(&self, command: JsValue) -> Result<Option<String>, JsValue> {
+        let command = serde_wasm_bindgen::from_value(command).map_err(js)?;
+        Ok(self.session.command_disabled_reason(command))
+    }
+    pub fn canvas_bar_reappear_ms(&self) -> u32 {
+        layer_ui::CANVAS_BAR_REAPPEAR_MS
+    }
     pub fn palette_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(

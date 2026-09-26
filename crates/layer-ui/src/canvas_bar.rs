@@ -456,11 +456,15 @@ fn bar_width(measure: &CanvasBarMeasure, shown: usize) -> f32 {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    fn canvas_bar_area(&self, layout: &ResolvedLayout) -> Bounds {
+    fn canvas_bar_area(&self, layout: &ResolvedLayout, viewport: [f32; 2], width: f32) -> Bounds {
         let mut area = layout.work_area;
         let status = layout.status;
         if status.height > 0. && status.y < area.y + area.height {
             area.height = (status.y - area.y).max(0.);
+        }
+        if area.width < width + 2. * CANVAS_BAR_MARGIN {
+            area.x = 0.;
+            area.width = viewport[0];
         }
         area
     }
@@ -507,8 +511,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if bar.context != measure.context || measure.items.len() != bar.items.len() {
             return None;
         }
-        let layout = self.layout(self.logical_viewport?);
-        let area = self.canvas_bar_area(&layout);
+        let viewport = self.logical_viewport?;
+        let layout = self.layout(viewport);
+        let area = self.canvas_bar_area(&layout, viewport, bar_width(measure, 0));
         let shown = fitted_items(measure, area.width - 2. * CANVAS_BAR_MARGIN);
         let obstacles: Vec<Bounds> = layout.groups.iter().filter(|g| g.floating).map(|g| g.bounds).collect();
         let (bounds, side) = place_canvas_bar(
