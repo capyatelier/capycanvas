@@ -260,6 +260,20 @@ class AndroidCommandSearchTest {
         open(); query("select"); capture("portrait")
         key(KeyEvent.KEYCODE_ESCAPE)
     }
+    @Test fun heldAltSamplesColorAndReturnsToTheBrush() {
+        action(obj("type" to "invoke", "command" to "brush"))
+        waitFor("brush") { state().getJSONObject("layer_tools").getString("tool") == "paint" }
+        val preset = state().getJSONObject("brush").getInt("preset")
+        val now = SystemClock.uptimeMillis()
+        val alt = { action: Int, meta: Int -> instrumentation.sendKeySync(KeyEvent(now, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_ALT_LEFT, 0, meta, -1, 0, 0, InputDevice.SOURCE_KEYBOARD)) }
+        alt(KeyEvent.ACTION_DOWN, KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON)
+        waitFor("sampling while Alt is held") { state().getJSONObject("layer_tools").getString("tool") == "pick_visible" }
+        alt(KeyEvent.ACTION_UP, 0)
+        waitFor("brush restored on release") {
+            state().getJSONObject("layer_tools").getString("tool") == "paint" && state().getJSONObject("brush").getInt("preset") == preset
+        }
+    }
+
     @Test fun panelGlassAndPlacement() {
         val (width, height) = 2048 to 1536
         val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || i / 4 % width / 8 % 2 == 0) -1 else 0 }
