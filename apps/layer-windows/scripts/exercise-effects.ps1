@@ -68,7 +68,7 @@ function Choose([string]$Id,[string]$Option){
 function Select-Panel([string]$Id){
     # Repeating an active tab opens panel configuration. Insertion can select
     # Properties itself, so select only when the shared active panel differs.
-    if(@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -eq 0){Invoke ('panel-tab-'+$Id)}
+    if(@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -eq 0){Invoke $(if(Find ('drawer-tab-'+$Id)){'drawer-tab-'+$Id}else{'panel-tab-'+$Id})}
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -gt 0} "Panel $Id did not become active"
 }
 function Select-Filter([string]$Id,[string]$Label){
@@ -230,8 +230,14 @@ try {
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1400
-    Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Initial resize did not reach the canvas'
+    $resized=$false
+    for($attempt=0;$attempt -lt 10 -and !$resized;$attempt++){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1400
+        try{Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Resize pending' 3;$resized=$true}catch{}
+    }
+    if(!$resized){throw 'Initial resize did not reach the canvas'}
+    $root=$null
+    Wait-Until {try{$script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)}catch{};$null -ne $root} 'Resized window has no automation root' 20
     Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Curves preview not ready' 120
     $original=Preview-Hash 'curves';if(!$original){throw 'No initial preview pixels'}
