@@ -1721,7 +1721,9 @@ class AndroidHostTest {
                 assertEquals("Hidden drawing matches No cursor", 0, difference(hidden, pixels("$tool-drawing-none")))
                 action(obj("type" to "preferences", "action" to obj("type" to "reset", "id" to "cursor")))
                 send(MotionEvent.ACTION_UP, tool)
-                val released = pixels("$tool-released")
+                var released = pixels("$tool-released")
+                val presented = SystemClock.uptimeMillis() + 3_000
+                while (difference(released, hidden) <= 4 && SystemClock.uptimeMillis() < presented) released = pixels("$tool-released")
                 preference("cursor", 0)
                 val painted = pixels("$tool-ink")
                 assertTrue("Release restores hover", difference(released, painted) > 4)
