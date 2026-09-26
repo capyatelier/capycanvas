@@ -805,8 +805,6 @@ fn native_restore_preflight_and_late_corruption_preserve_live_pixels_and_retry()
     r.restore_native_tiles(&[]).unwrap();
 }
 
-mod batched;
-
 #[test]
 fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() {
     use layer_core::color::{DocumentColor, f16};

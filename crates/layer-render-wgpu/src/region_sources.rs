@@ -282,10 +282,6 @@ impl RawRegions {
         self.mask = None;
     }
     #[cfg(test)]
-    pub fn binding_count(&self) -> usize {
-        self.bindings.len()
-    }
-    #[cfg(test)]
     pub fn tonal_cached(&self) -> bool {
         self.tonal_cache.as_ref().is_some_and(|c| c.ready)
     }

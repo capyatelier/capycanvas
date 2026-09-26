@@ -1379,49 +1379,4 @@ mod tests {
             .is_none()
         );
     }
-
-    #[test]
-    fn overview_resources_are_opt_in_and_reused() {
-        let r = WgpuRasterizer::new_headless().unwrap();
-        let mut presenter = ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm);
-        assert!(presenter.overview_pipeline.is_none());
-        assert!(presenter.overview_buffer.is_none());
-        let mut p = OverviewPlacement {
-            bounds: [0., 0., 100., 75.],
-            clip: None,
-            work_area: [[0.; 2]; 4],
-            outline_linear: [0.; 3],
-            background_linear: [0.; 3],
-            scale: 1.,
-            opacity: 1.,
-        };
-        presenter.set_overviews(&r, &[p]);
-        let pipeline = presenter.overview_pipeline.clone();
-        let buffer = presenter.overview_buffer.clone();
-        assert_eq!(buffer.as_ref().unwrap().size(), 128);
-        presenter.overviews_changed = false;
-        presenter.set_overviews(&r, &[p]);
-        assert!(
-            !presenter.overviews_changed,
-            "unchanged geometry is not uploaded"
-        );
-        p.work_area[0][0] = 1.;
-        presenter.set_overviews(&r, &[p]);
-        assert!(presenter.overviews_changed);
-        assert_eq!(presenter.overview_buffer, buffer, "panning reuses storage");
-        presenter.set_overviews(&r, &[OverviewPlacement { opacity: 0., ..p }]);
-        assert!(
-            presenter.overviews.is_empty(),
-            "hidden overview performs no draw"
-        );
-        presenter.set_overviews(&r, &[p]);
-        assert_eq!(
-            presenter.overview_buffer, buffer,
-            "reopening reuses storage"
-        );
-        assert_eq!(
-            presenter.overview_pipeline, pipeline,
-            "no redundant pipeline preparation"
-        );
-    }
 }

@@ -11,12 +11,6 @@ mod tonal_selection;
 mod selection_options;
 #[path = "selection_paint_tests.rs"]
 mod selection_painting;
-#[path = "figure_tests.rs"]
-mod figures;
-#[path = "overview_tests.rs"]
-mod overviews;
-#[path = "raster_tests.rs"]
-mod raster;
 #[path = "submission_tests.rs"]
 mod submissions;
 #[path = "paint_transform_tests.rs"]

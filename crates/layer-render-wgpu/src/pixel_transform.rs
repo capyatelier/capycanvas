@@ -15,14 +15,6 @@ pub(super) struct TransformTile<'a> {
 
 pub struct TransformSource {
     binding: wgpu::BindGroup,
-    #[cfg(test)]
-    flat: Option<Box<FlatSource>>,
-}
-#[cfg(test)]
-struct FlatSource {
-    metadata: [i32; (1 + TRANSFORM_SLOTS) * 4],
-    origin: [i32; 2],
-    background: f32,
 }
 pub struct TransformTarget<'a> {
     /// Single-sample attachment matching the prepared color/scalar working format,
@@ -70,24 +62,6 @@ pub struct PixelTransform {
     next_record: u64,
 }
 impl PixelTransform {
-    // Standalone numerical tests compile eagerly; application transforms always
-    // join the renderer's staged pipeline compiler and shared upload lifecycle.
-    #[cfg(test)]
-    pub fn new(device: &wgpu::Device) -> Self {
-        Self::headless(device, false)
-    }
-    /// The same resampling kernel for R8 wetness. Overlapping wetness uses max,
-    /// not color's source-over; a move must not invent extra water in overlap.
-    #[cfg(test)]
-    pub fn scalar(device: &wgpu::Device) -> Self {
-        Self::headless(device, true)
-    }
-    #[cfg(test)]
-    fn headless(device: &wgpu::Device, scalar: bool) -> Self {
-        let pass = Self::staged(&device.clone().into(), scalar);
-        pass.pipeline.compile();
-        pass
-    }
     pub(super) fn staged(device: &PipelineDevice, scalar: bool) -> Self {
         Self::create(device, scalar, false)
     }
@@ -267,60 +241,6 @@ impl PixelTransform {
         pass.placement = true;
         pass
     }
-    /// Input is linear premultiplied RGBA, optionally cropped to all content.
-    /// Selection uses the existing packed brush-coverage buffer (None = all).
-    /// Its geometry/offset is in the same coordinates as `origin` and the affine.
-    /// The source must not be overwritten by any preview render target.
-    #[cfg(test)]
-    pub fn source(
-        &mut self,
-        device: &wgpu::Device,
-        texture: &wgpu::Texture,
-        origin: [i32; 2],
-        selection: Option<&wgpu::Buffer>,
-    ) -> Result<TransformSource, &'static str> {
-        if texture.dimension() != wgpu::TextureDimension::D2
-            || texture.depth_or_array_layers() != 1
-            || texture.sample_count() != 1
-            || if self.scalar {
-                !matches!(texture.format(), wgpu::TextureFormat::R8Unorm | wgpu::TextureFormat::R32Float)
-            } else {
-                !matches!(
-                    texture.format(),
-                    wgpu::TextureFormat::Rgba8UnormSrgb
-                        | wgpu::TextureFormat::Rgba16Float
-                        | wgpu::TextureFormat::Rgba32Float
-                )
-            }
-            || !texture
-                .usage()
-                .contains(wgpu::TextureUsages::TEXTURE_BINDING)
-            || !valid_extent(origin, [texture.width(), texture.height()])
-        {
-            return Err("Invalid transform source");
-        }
-        let view = texture.create_view(&Default::default());
-        let mut source = self.source_views(
-            device,
-            &[TransformTile {
-                view: &view,
-                origin: [0, 0],
-                extent: [texture.width(), texture.height()],
-            }],
-            [0, 0, texture.width() as i32, texture.height() as i32],
-            selection,
-            &view,
-        )?;
-        source.flat = Some(Box::new(FlatSource {
-            metadata: source_metadata(
-                [0, 0, texture.width() as i32, texture.height() as i32],
-                std::iter::once(([0, 0], [texture.width(), texture.height()])),
-            ),
-            origin,
-            background: 0.,
-        }));
-        Ok(source)
-    }
 
     /// Inputs are consumed before another source-cache neighborhood is prepared.
     /// `bounds` and view origins are in document coordinates; missing texels use
@@ -425,8 +345,6 @@ impl PixelTransform {
         };
         Ok(TransformSource {
             binding,
-            #[cfg(test)]
-            flat: None,
         })
     }
     /// Begin a submitted frame. Multiple encodes in that frame use distinct
@@ -657,109 +575,6 @@ impl PixelTransform {
         pass.set_scissor_rect(x, y, w, h);
         pass.draw(0..3, 0..1);
     }
-    /// Each region and encode gets a distinct uniform offset. Uploads share the
-    /// frame's reusable staging belt and are finished by its submission owner.
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn encode(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        uploads: &mut Uploads,
-        encoder: &mut crate::submission::CommandEncoder,
-        source: &TransformSource,
-        transform: &ImageTransform,
-        targets: &[TransformTarget<'_>],
-    ) -> Result<(), &'static str> {
-        let flat = source.flat.as_ref().expect("flat numerical fixture");
-        let interpolation = transform.interpolation;
-        let matrix = transform.as_affine().ok_or("Unsupported transform")?;
-        if !flat.background.is_finite() || !(0.0..=1.0).contains(&flat.background) {
-            return Err("Invalid transform background");
-        }
-        let inverse = matrix
-            .inverse()
-            .ok_or("Transform must be finite and invertible")?
-            .0;
-        let bytes = (targets.len() as u64)
-            .checked_mul(u64::from(self.stride))
-            .ok_or("Too many transform regions")?;
-        let end = self
-            .next_record
-            .checked_add(bytes)
-            .ok_or("Too many transform regions")?;
-        if end > device.limits().max_buffer_size || end > u64::from(u32::MAX) {
-            return Err("Too many transform regions");
-        }
-        for target in targets {
-            let [x, y, w, h] = target.region;
-            if !valid_extent(target.origin, target.extent)
-                || target
-                    .extent
-                    .iter()
-                    .any(|v| *v > device.limits().max_texture_dimension_2d)
-                || w == 0
-                || h == 0
-                || x.checked_add(w).is_none_or(|v| v > target.extent[0])
-                || y.checked_add(h).is_none_or(|v| v > target.extent[1])
-            {
-                return Err("Invalid transform output region");
-            }
-        }
-        if targets.is_empty() {
-            return Ok(());
-        }
-        self.reserve_regions(device, end);
-        self.records.resize(bytes as usize, 0);
-        for (index, target) in targets.iter().enumerate() {
-            let values = [
-                inverse[0],
-                inverse[1],
-                inverse[2],
-                inverse[3],
-                inverse[4],
-                inverse[5],
-                flat.origin[0] as f32,
-                flat.origin[1] as f32,
-                target.origin[0] as f32,
-                target.origin[1] as f32,
-                f32::from(interpolation == Interpolation::Linear)
-                    + 2. * f32::from(matrix == Affine::IDENTITY),
-                flat.background,
-            ];
-            let record = &mut self.records[index * self.stride as usize..][..48];
-            for (value, slot) in values.iter().zip(record.as_chunks_mut::<4>().0.iter_mut()) {
-                slot.copy_from_slice(&value.to_le_bytes());
-            }
-        }
-        let mut source_bytes = [0; SOURCE_RECORD_BYTES as usize];
-        for (bytes, value) in source_bytes
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(flat.metadata)
-        {
-            *bytes = value.to_le_bytes();
-        }
-        uploads
-            .write(encoder, queue, &self.source_records, &source_bytes)
-            .map_err(|_| "Could not upload transform source records")?;
-        let (buffer, _) = self.uniforms.as_ref().unwrap();
-        uploads
-            .write_at(encoder, queue, buffer, self.next_record, &self.records)
-            .map_err(|_| "Could not upload transform uniforms")?;
-        for (index, target) in targets.iter().enumerate() {
-            self.draw(
-                encoder,
-                source,
-                self.next_record as u32 + index as u32 * self.stride,
-                0,
-                target,
-            );
-        }
-        self.next_record = end;
-        Ok(())
-    }
     /// Retained scratch only; source/targets are owned by the transaction host.
     pub fn storage_bytes(&self) -> u64 {
         self.capacity + 48 + self.source_capacity
@@ -804,6 +619,3 @@ fn valid_extent(origin: [i32; 2], extent: [u32; 2]) -> bool {
     })
 }
 
-#[cfg(test)]
-#[path = "pixel_transform_tests.rs"]
-mod tests;

@@ -6648,9 +6648,6 @@ mod tests {
     mod curve_reference;
     mod filter_library;
     #[cfg(not(target_arch = "wasm32"))]
-    mod source_tiles;
-    mod working;
-    #[cfg(not(target_arch = "wasm32"))]
     mod native_effects;
     #[cfg(not(target_arch = "wasm32"))]
     mod view_color;

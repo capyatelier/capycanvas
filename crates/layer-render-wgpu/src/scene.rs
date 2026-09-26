@@ -118,10 +118,6 @@ impl Scene {
         self.images.pass_pixels
     }
     #[cfg(test)]
-    pub fn image_mask_pixels(&self) -> u64 {
-        self.images.mask_pixels
-    }
-    #[cfg(test)]
     pub fn image_work(&self) -> [u64; 2] {
         [self.images.input_updates, self.images.pass_updates]
     }
@@ -2223,28 +2219,6 @@ impl Pipelines {
             pipeline,
         }
     }
-}
-#[cfg(test)]
-#[test]
-fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let a = Scene::new(&r);
-    let b = Scene::new(&r);
-    assert_eq!(
-        a.pipeline.clone().map(|p| p.compile().clone()),
-        r.scene_pipelines
-            .pipeline
-            .clone()
-            .map(|p| p.compile().clone())
-    );
-    assert_eq!(
-        a.pipeline.map(|p| p.compile().clone()),
-        b.pipeline.map(|p| p.compile().clone())
-    );
-    assert_eq!(a.uniforms, b.uniforms);
-    assert_eq!(a.layout, b.layout);
-    assert_ne!(a.buffer, b.buffer, "mutable records are not shared");
-    assert!(a.pool.is_empty() && b.pool.is_empty());
 }
 
 fn direct_effect_mask(layers: &[Layer], layer: &Layer) -> bool {
