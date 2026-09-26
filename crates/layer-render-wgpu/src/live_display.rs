@@ -291,7 +291,7 @@ impl Cache {
         allowance: u64,
     ) -> Result<Self, GpuRasterError> {
         let (plan, pyramid_bytes, complete, limit) = Self::allocation(r, r.document_extent, limit, allowance)?;
-        let coarse = display_mips::Image::new(r, pipelines, plan);
+        let coarse = display_mips::Image::new(r, plan);
         let retained = RetainedLevel::new(
                 r,
                 plan,

@@ -173,7 +173,7 @@ fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f6
 }
 
 #[test]
-fn native_export_navigator_thumbnails_and_raw_samples_keep_their_declared_color_coordinates() {
+fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinates() {
     use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
     for preview_space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
         for space in RgbSpace::ALL {
@@ -197,10 +197,6 @@ fn native_export_navigator_thumbnails_and_raw_samples_keep_their_declared_color_
                     let alpha = f64::from(codes[3]) / 65535.;
                     let export = r.readback_srgb_rgba8().unwrap();
                     close(&export[0..4], bytes(expected, alpha), "sRGB export");
-                    assert!(r.request_canvas_preview(None).unwrap());
-                    complete(&r);
-                    let navigator = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-                    close(&navigator.bytes[..4], bytes(preview, alpha), "Navigator");
                     r.request_thumbnail(7, layer.id).unwrap();
                     complete(&r);
                     let thumbnail = r.take_thumbnail().unwrap().unwrap();
@@ -474,10 +470,6 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         complete(&r);
         assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
         assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
-        assert!(r.request_canvas_preview(None).unwrap());
-        complete(&r);
-        let preview = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-        assert!(preview.bytes.iter().all(|v| *v == 0));
         assert_eq!(
             crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
             input

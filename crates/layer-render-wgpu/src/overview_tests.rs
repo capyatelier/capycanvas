@@ -275,10 +275,4 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
             "live overview {x}"
         );
     }
-    assert_eq!(
-        r.canvas_preview.storage_bytes(),
-        0,
-        "no preview image/readback allocation"
-    );
-    assert!(!r.canvas_preview_pending());
 }

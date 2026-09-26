@@ -83,7 +83,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.input_pending = false;
         self.touch.clear();
         self.navigator_drag = None;
-        self.navigator_preview = Default::default();
         self.eyedropper = Default::default();
         self.region_tools = Default::default();
         self.painted_selections = Default::default();

@@ -14,7 +14,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn release_idle_document_buffers(&mut self) {
         self.engine.release_idle_buffers();
-        self.navigator_preview = Default::default();
         self.filter_previews.renderer_replaced();
     }
 
@@ -191,7 +190,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
-        self.navigator_preview = Default::default();
         self.renderer_mut().cancel_filter_previews();
         self.filter_previews.renderer_replaced();
         if self.pending_filters.take().is_some() {
@@ -255,7 +253,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
-        self.navigator_preview = Default::default();
         self.filter_previews.renderer_replaced();
         if let Some(pending) = &mut self.pending_filters {
             pending.validated = false;
@@ -369,7 +366,6 @@ mod tests {
     struct Backend {
         assets: BTreeMap<AssetId, ProjectAsset>,
         reject_assets: bool,
-        previews: usize,
         samples: usize,
         validation: Option<layer_render::EffectValidationRequest>,
         validation_result: Option<layer_render::EffectValidationResult>,
@@ -396,10 +392,6 @@ mod tests {
         fn release_asset(&mut self, _: &AssetId) {}
         fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
             Ok(())
-        }
-        fn request_canvas_preview(&mut self, _: Option<u64>) -> Result<bool, Self::Error> {
-            self.previews += 1;
-            Ok(true)
         }
         fn request_color_sample(
             &mut self,
@@ -480,7 +472,6 @@ mod tests {
         )
         .unwrap();
         s.frame(0, 0).unwrap();
-        s.poll_navigator_preview(0, true).unwrap();
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
         s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
@@ -534,8 +525,6 @@ mod tests {
             "Recovered candidate"
         );
         assert!(!s.eyedropper.busy());
-        s.poll_navigator_preview(1, true).unwrap();
-        assert_eq!(s.engine.backend().previews, 1);
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
         s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();

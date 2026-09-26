@@ -29,51 +29,6 @@ fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions()
     }
 }
 
-#[test]
-fn native_preview_defers_mip_compilation_without_allocating_or_losing_the_request() {
-    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
-        space: RgbSpace::DisplayP3,
-        depth: SampleDepth::U16,
-    })
-    .unwrap();
-    let layers = [Layer::paint(LayerId(1), "deferred preview")];
-    r.ensure_document([513, 17], &layers).unwrap();
-    r.startup = Some(startup::Startup::new(&r.device).unwrap());
-    let (release, wait) = std::sync::mpsc::channel();
-    let (entered, blocked) = std::sync::mpsc::channel();
-    let compiler = &r.startup.as_ref().unwrap().compiler;
-    compiler.enqueue(0, move || {
-        entered.send(()).map_err(|e| e.to_string())?;
-        wait.recv_timeout(std::time::Duration::from_secs(20))
-            .map_err(|e| e.to_string())
-    });
-    compiler.start();
-    blocked
-        .recv_timeout(std::time::Duration::from_secs(20))
-        .unwrap();
-    assert!(!r.request_canvas_preview(None).unwrap());
-    assert!(!r.canvas_preview_pending());
-    assert_eq!(r.canvas_preview.storage_bytes(), 0);
-    release.send(()).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !r.request_canvas_preview(None).unwrap() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "mip pipeline did not complete"
-        );
-        std::thread::yield_now();
-    }
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    let image = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-    assert_eq!([image.width, image.height], [256, 8]);
-    assert!(image.bytes.iter().all(|v| *v == 0));
-}
-
 fn value(x: u32, y: u32) -> [f32; 4] {
     let alpha = ((x * 7 + y * 3) % 17) as f32 / 16.;
     [
@@ -127,7 +82,7 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         let source = upload(&r, extent, &expected);
         let source_before = pixels(&r, &source);
         let last = 8;
-        let mut image = Image::with_mips(&r, &pipelines, plan, last);
+        let mut image = Image::with_mips(&r, plan, last);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         // Reuse scratch and edge records in a single queued submission. Visit
         // partial tiles first to expose stale padding and mutable-uniform bugs.
@@ -195,7 +150,7 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         assert!(image.records.len() <= 4);
         assert_eq!(
             image.storage_bytes(),
-            plan.pixel_bytes_through(last) + 16 + image.records.len() as u64 * u64::from(last) * 16
+            plan.pixel_bytes_through(last) + image.records.len() as u64 * u64::from(last) * 16
         );
 
         // A later tile update changes only that tile's derived footprint.
@@ -231,151 +186,6 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
                         }
                     );
                 }
-            }
-        }
-    }
-}
-#[test]
-fn native_navigator_averages_fine_stripes_and_preserves_alpha_and_revision_reuse() {
-    let color = DocumentColor {
-        space: RgbSpace::Srgb,
-        depth: SampleDepth::U16,
-    };
-    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    let extent = [4101, 259];
-    let doc = layer_core::Document::new("Navigator mip geometry", extent[0], extent[1]);
-    r.submit(FramePacket {
-        layers: &doc.layers,
-        document_extent: extent,
-        view: layer_render::ViewState {
-            width_px: 640,
-            height_px: 480,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [0.; 4],
-        },
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: true,
-    })
-    .unwrap();
-    // One bright column per four pixels aliases to black under the old fixed
-    // sixteen samples. Full-area mip reduction must retain its quarter coverage.
-    let input: Vec<_> = (0..extent[1])
-        .flat_map(|_| {
-            (0..extent[0]).map(|x| {
-                let v = if x % 4 == 0 { 0.5 } else { 0. };
-                [v, v, v, 0.5]
-            })
-        })
-        .collect();
-    let source = upload(&r, extent, &input);
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    encoder.copy_texture_to_texture(
-        source.as_image_copy(),
-        r.composite_texture.as_ref().unwrap().as_image_copy(),
-        source.size(),
-    );
-    encoder.submit(&r.queue);
-    let before = pixels(&r, r.composite_texture.as_ref().unwrap());
-    assert!(r.request_canvas_preview(None).unwrap());
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    let preview = r.take_canvas_preview().unwrap().unwrap();
-    let revision = preview.revision;
-    let image = preview.image.unwrap();
-    assert_eq!([image.width, image.height], [256, 16]);
-    for row in image.bytes.chunks_exact(image.stride as usize) {
-        // The last column has the actual partial footprint and is tested below
-        // with a uniform coarse-cell fixture. All interior stripe averages agree.
-        for pixel in row[..(image.width as usize - 1) * 4].chunks_exact(4) {
-            for channel in &pixel[..3] {
-                assert!(channel.abs_diff(137) <= 1, "{pixel:?}");
-            }
-            assert!(pixel[3].abs_diff(128) <= 1);
-        }
-    }
-    assert_eq!(before, pixels(&r, r.composite_texture.as_ref().unwrap()));
-    let bytes = r.canvas_preview.storage_bytes();
-    assert!(bytes < 7 * 1024 * 1024);
-    assert!(r.request_canvas_preview(Some(revision)).unwrap());
-    assert!(r.take_canvas_preview().unwrap().unwrap().image.is_none());
-    assert_eq!(r.canvas_preview.storage_bytes(), bytes);
-
-    // Piecewise-constant colors aligned with sixteen-pixel mip cells allow an
-    // independent exact box integral in original document coordinates, including
-    // the final five columns and three rows, with no mip implementation oracle.
-    let values = |x: u32, y: u32| {
-        let alpha = if (y / 16) % 3 == 0 { 0.5 } else { 1. };
-        let v = ((x / 16) % 17) as f64 / 16. * alpha;
-        [v, v, v, alpha]
-    };
-    let input: Vec<_> = (0..extent[1])
-        .flat_map(|y| (0..extent[0]).map(move |x| values(x, y).map(|v| v as f32)))
-        .collect();
-    let source = upload(&r, extent, &input);
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    encoder.copy_texture_to_texture(
-        source.as_image_copy(),
-        r.composite_texture.as_ref().unwrap().as_image_copy(),
-        source.size(),
-    );
-    encoder.submit(&r.queue);
-    assert!(r.request_canvas_preview(None).unwrap());
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    let image = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-    for y in 0..image.height {
-        for x in 0..image.width {
-            let low = [
-                x as f64 / image.width as f64 * extent[0] as f64,
-                y as f64 / image.height as f64 * extent[1] as f64,
-            ];
-            let high = [
-                (x + 1) as f64 / image.width as f64 * extent[0] as f64,
-                (y + 1) as f64 / image.height as f64 * extent[1] as f64,
-            ];
-            let mut sum = [0.; 4];
-            let mut weight = 0.;
-            for yy in low[1].floor() as u32..high[1].ceil() as u32 {
-                for xx in low[0].floor() as u32..high[0].ceil() as u32 {
-                    let area = (high[0].min(xx as f64 + 1.) - low[0].max(xx as f64))
-                        * (high[1].min(yy as f64 + 1.) - low[1].max(yy as f64));
-                    let v = values(xx, yy);
-                    for i in 0..4 {
-                        sum[i] += v[i] * area;
-                    }
-                    weight += area;
-                }
-            }
-            let v = sum[0] / sum[3];
-            let srgb = if v <= 0.0031308 {
-                v * 12.92
-            } else {
-                1.055 * v.powf(1. / 2.4) - 0.055
-            };
-            let expected = [
-                (srgb * 255.).round() as u8,
-                (sum[3] / weight * 255.).round() as u8,
-            ];
-            let index = (y * image.stride + x * 4) as usize;
-            for i in 0..4 {
-                let e = expected[usize::from(i == 3)];
-                assert!(
-                    image.bytes[index + i].abs_diff(e) <= 1,
-                    "{x},{y} channel {i}: {} != {e}",
-                    image.bytes[index + i]
-                );
             }
         }
     }

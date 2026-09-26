@@ -120,7 +120,6 @@ pub struct UiSession<R: CanvasRenderer> {
     sdr_gesture: Option<layer_core::color::hdr::SdrRendition>,
     last_proof_mode: Option<ProofMode>,
     proof_setup_pending: bool,
-    navigator_preview: crate::navigator::Preview,
     filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
@@ -197,7 +196,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             sdr_gesture: None,
             last_proof_mode: None,
             proof_setup_pending: false,
-            navigator_preview: Default::default(),
             filter_previews: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
@@ -317,24 +315,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .unwrap_or(&self.state.workspace)
             .zen_mode;
         workspace
-    }
-    pub fn poll_navigator_preview(
-        &mut self,
-        now_ns: u64,
-        visible: bool,
-    ) -> Result<Option<layer_render::ReadbackImage>, String> {
-        self.navigator_preview
-            .poll(self.engine.backend_mut(), now_ns, visible)
-    }
-    /// UI hosts may retain their animation clock while live thumbnails change.
-    /// Camera-only motion does not make the document overview animated.
-    pub fn navigator_updates_continuously(&self) -> bool {
-        self.input_pending || self.engine.has_active_stroke() || self.wants_continuous_frames()
-    }
-    /// Lets event-driven hosts sleep after the last image, including a final
-    /// document update that arrived inside the preview throttle interval.
-    pub fn navigator_preview_current(&self, revision: u64) -> bool {
-        self.navigator_preview.is_current(revision)
     }
     pub fn set_platform(&mut self, platform: Platform) {
         if self.state.platform != platform {
@@ -5110,8 +5090,6 @@ mod tests {
         composites: usize,
         validation: Option<layer_render::EffectValidationRequest>,
         validation_result: Option<layer_render::EffectValidationResult>,
-        preview_requests: Vec<Option<u64>>,
-        preview_reply: Option<layer_render::CanvasPreview>,
         sample_requests: Vec<layer_render::ColorSampleRequest>,
         sample_reply: Option<layer_render::ColorSample>,
         selection_updates: Vec<layer_render::SelectionPaint>,
@@ -5168,15 +5146,6 @@ mod tests {
         }
         fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
             self.sample_reply.take().map(Ok)
-        }
-        fn request_canvas_preview(&mut self, known: Option<u64>) -> Result<bool, Self::Error> {
-            self.preview_requests.push(known);
-            Ok(true)
-        }
-        fn take_canvas_preview(
-            &mut self,
-        ) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
-            self.preview_reply.take().map(Ok)
         }
         fn request_effect_validation(
             &mut self,
@@ -8090,38 +8059,6 @@ mod tests {
         key(&mut s, "escape", true, false, false);
         s.frame(8, 8).unwrap();
         assert!(!s.operation.active());
-    }
-
-    #[test]
-    fn navigator_previews_are_visible_only_throttled_and_single_flight() {
-        let mut s = session();
-        s.poll_navigator_preview(0, false).unwrap();
-        assert!(s.renderer_mut().preview_requests.is_empty());
-        s.poll_navigator_preview(0, true).unwrap();
-        for now in [1, 66_666_667, 1_000_000_000] {
-            s.poll_navigator_preview(now, true).unwrap();
-        }
-        assert_eq!(s.renderer_mut().preview_requests, [None]);
-        s.renderer_mut().preview_reply = Some(layer_render::CanvasPreview {
-            revision: 42,
-            image: None,
-        });
-        s.poll_navigator_preview(1_000_000_000, false).unwrap();
-        assert_eq!(s.renderer_mut().preview_requests, [None]);
-        s.poll_navigator_preview(1_000_000_000, true).unwrap();
-        assert_eq!(s.renderer_mut().preview_requests, [None, Some(42)]);
-        s.renderer_mut().preview_reply = Some(layer_render::CanvasPreview {
-            revision: 42,
-            image: None,
-        });
-        invoke(&mut s, CommandId::ZoomIn);
-        s.poll_navigator_preview(1_010_000_000, true).unwrap();
-        assert_eq!(s.renderer_mut().preview_requests.len(), 2);
-        s.poll_navigator_preview(1_067_000_000, true).unwrap();
-        assert_eq!(
-            s.renderer_mut().preview_requests,
-            [None, Some(42), Some(42)]
-        );
     }
 
     #[test]

@@ -152,7 +152,7 @@ impl Scene {
                 space: r.document_color().space,
                 preview: PixelRect::EMPTY,
                 watercolor: None,
-                image: display_mips::Image::with_mips(r, &pipelines, plan, last),
+                image: display_mips::Image::with_mips(r, plan, last),
                 usable,
                 sample_level,
                 updates: 0,

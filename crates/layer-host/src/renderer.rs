@@ -45,12 +45,6 @@ impl CanvasRenderer for Renderer {
     ) -> Result<(), Self::Error> {
         self.gpu()?.set_transform_preview(preview)
     }
-    fn request_canvas_preview(&mut self, revision: Option<u64>) -> Result<bool, Self::Error> {
-        self.gpu()?.request_canvas_preview(revision)
-    }
-    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
-        self.0.as_mut()?.take_canvas_preview()
-    }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,

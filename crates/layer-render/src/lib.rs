@@ -270,12 +270,6 @@ pub struct EffectValidationResult {
     pub result: Result<(), String>,
 }
 
-/// Small cached canvas overview; no image means the requested revision is current.
-pub struct CanvasPreview {
-    pub revision: u64,
-    pub image: Option<ReadbackImage>,
-}
-
 /// Display-only picker geometry in physical surface pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorPickerOverlay {
@@ -649,18 +643,6 @@ pub trait CanvasRenderer {
         Ok(())
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        None
-    }
-    /// Bounded document overview, sampled from the current GPU composition.
-    /// An accepted request always produces a reply; unchanged revisions carry
-    /// no image and perform no GPU work. Only one request may be in flight.
-    fn request_canvas_preview(
-        &mut self,
-        _known_revision: Option<u64>,
-    ) -> Result<bool, Self::Error> {
-        Ok(false)
-    }
-    fn take_canvas_preview(&mut self) -> Option<Result<CanvasPreview, Self::Error>> {
         None
     }
     /// One texel, asynchronous and single-flight. Does not recomposite the scene.

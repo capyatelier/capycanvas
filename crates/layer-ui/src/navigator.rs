@@ -4,46 +4,6 @@ use crate::{Bounds, Camera};
 use layer_core::Point;
 use serde::Serialize;
 
-/// One producer per session, shared by docked and drawer projections. Camera
-/// changes do not invalidate the renderer's overview. Never queue behind a map.
-#[derive(Default)]
-pub(crate) struct Preview {
-    revision: Option<u64>,
-    pending: bool,
-    requested_ns: Option<u64>,
-}
-impl Preview {
-    pub fn is_current(&self, revision: u64) -> bool {
-        self.revision == Some(revision)
-    }
-    pub fn poll<R: layer_render::CanvasRenderer>(
-        &mut self,
-        renderer: &mut R,
-        now_ns: u64,
-        visible: bool,
-    ) -> Result<Option<layer_render::ReadbackImage>, String> {
-        let mut image = None;
-        if let Some(result) = renderer.take_canvas_preview() {
-            self.pending = false;
-            let result = result.map_err(|e| e.to_string())?;
-            self.revision = Some(result.revision);
-            image = result.image;
-        }
-        if visible
-            && !self.pending
-            && self
-                .requested_ns
-                .is_none_or(|t| now_ns.saturating_sub(t) >= 66_666_667)
-        {
-            self.requested_ns = Some(now_ns);
-            self.pending = renderer
-                .request_canvas_preview(self.revision)
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(image)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct NavigatorGeometry {
     pub image: Bounds,

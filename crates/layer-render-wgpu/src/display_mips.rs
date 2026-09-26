@@ -47,37 +47,11 @@ impl Plan {
 pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     fused_layout: wgpu::BindGroupLayout,
-    pub image_layout: wgpu::BindGroupLayout,
     pub reduce: Deferred<wgpu::ComputePipeline>,
     pub fused_reduce: Deferred<wgpu::ComputePipeline>,
 }
 impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
-        let image_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("coarse display sampling"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-            ],
-        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("display mip reduction"),
             entries: &[
@@ -167,7 +141,6 @@ impl Pipelines {
         Self {
             layout,
             fused_layout,
-            image_layout,
             reduce,
             fused_reduce,
         }
@@ -313,8 +286,6 @@ pub(super) struct Image {
     pub plan: Plan,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
-    pub binding: wgpu::BindGroup,
-    geometry: wgpu::Buffer,
     scratch: wgpu::Texture,
     views: Vec<wgpu::TextureView>,
     reduced: Vec<(wgpu::Texture, wgpu::TextureView)>,
@@ -323,12 +294,12 @@ pub(super) struct Image {
     records: BTreeMap<[u32; 2], Vec<Record>>,
 }
 impl Image {
-    pub fn new(r: &WgpuRasterizer, pipelines: &Pipelines, plan: Plan) -> Self {
-        Self::with_mips(r, pipelines, plan, plan.level)
+    pub fn new(r: &WgpuRasterizer, plan: Plan) -> Self {
+        Self::with_mips(r, plan, plan.level)
     }
     /// Retain optional coarser levels from the same tile reduction. Consumers
     /// select an existing level; source pixels and editing precision are intact.
-    pub fn with_mips(r: &WgpuRasterizer, pipelines: &Pipelines, plan: Plan, last: u32) -> Self {
+    pub fn with_mips(r: &WgpuRasterizer, plan: Plan, last: u32) -> Self {
         assert!(last >= plan.level && last < MIP_COUNT);
         let (texture, view) = create_target(
             &r.device,
@@ -336,31 +307,6 @@ impl Image {
             wgpu::TextureFormat::Rgba32Float,
             "coarse display image",
         );
-        let data = [plan.extent[0], plan.extent[1], 1 << plan.level, 0]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let geometry = r
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("coarse display geometry"),
-                contents: &data,
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("coarse display image"),
-            layout: &pipelines.image_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: geometry.as_entire_binding(),
-                },
-            ],
-        });
         let scratch = r.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("reusable display mip tile"),
             size: wgpu::Extent3d {
@@ -397,8 +343,6 @@ impl Image {
             plan,
             texture,
             view,
-            binding,
-            geometry,
             scratch,
             views,
             reduced,
@@ -407,7 +351,6 @@ impl Image {
     }
     pub fn storage_bytes(&self) -> u64 {
         self.plan.pixel_bytes_through(self.last_level())
-            + self.geometry.size()
             + self
                 .records
                 .values()

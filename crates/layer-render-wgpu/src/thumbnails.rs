@@ -66,10 +66,7 @@ impl WgpuRasterizer {
         &mut self,
         space: layer_core::color::RgbSpace,
     ) -> Result<(), GpuRasterError> {
-        if self.thumbnails.pending != 0
-            || self.canvas_preview_pending()
-            || self.filter_previews.is_some()
-        {
+        if self.thumbnails.pending != 0 || self.filter_previews.is_some() {
             return Err(GpuRasterError::Color(
                 "Configure preview color before starting UI image jobs".into(),
             ));
@@ -77,7 +74,6 @@ impl WgpuRasterizer {
         self.ui_preview_space = space;
         self.ui_preview_pipeline = None;
         self.thumbnails = Thumbnails::new();
-        self.canvas_preview = crate::canvas_preview::CanvasOverview::new();
         Ok(())
     }
 
@@ -248,9 +244,6 @@ impl UiImageTarget {
     }
     pub fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]
-    }
-    pub fn storage_bytes(&self) -> u64 {
-        u64::from(self.texture.height()) * u64::from(self.texture.width() * 4 + self.stride)
     }
     pub fn encode(
         &self,

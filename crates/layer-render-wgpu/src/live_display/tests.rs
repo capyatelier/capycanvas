@@ -758,22 +758,6 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
         .unwrap();
     let sample = cached.take_color_sample().unwrap().unwrap();
     assert!(sample.rgba.iter().all(|v| v.is_finite()));
-    assert!(cached.request_canvas_preview(None).unwrap());
-    cached
-        .device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    assert!(
-        cached
-            .take_canvas_preview()
-            .unwrap()
-            .unwrap()
-            .image
-            .is_some()
-    );
 }
 
 #[test]
@@ -1000,24 +984,6 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
                 "step {step} must change visible artwork"
             );
         }
-        // Both preview routes must reflect the same revised artwork, including
-        // masked physical filter halos and the whole-image inspection display.
-        for renderer in [&mut dense, &mut r] {
-            assert!(renderer.request_canvas_preview(None).unwrap());
-            renderer
-                .device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(READBACK_TIMEOUT),
-                })
-                .unwrap();
-        }
-        let expected = dense.take_canvas_preview().unwrap().unwrap().image.unwrap();
-        let actual = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-        assert!(
-            expected.bytes == actual.bytes,
-            "coarse preview at step {step}"
-        );
         assert!(Arc::ptr_eq(doc.layers[2].source.as_ref().unwrap(), &source));
     }
     // Recreating the GPU cache reconstructs the same pixels from retained source.
@@ -1034,20 +1000,13 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
 }
 
 #[test]
-fn in_surface_navigator_matches_bounded_preview_and_keeps_clipped_geometry() {
+fn in_surface_navigator_keeps_clipped_geometry() {
     let doc = document([1537, 769]);
     let mut r = bounded_renderer(doc.color).unwrap();
     r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
     submit(&mut r, &doc, view([1., 0., 0., 1., -900., -400.]), true);
-    assert!(r.request_canvas_preview(None).unwrap());
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    let preview = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-    let size = [preview.width, preview.height];
+    let size = [256, (256. * 769. / 1537f32).ceil() as u32];
+    let mut oracle = Vec::new();
     let (texture, target) = create_target(
         &r.device,
         size,
@@ -1070,16 +1029,20 @@ fn in_surface_navigator_matches_bounded_preview_and_keeps_clipped_geometry() {
         );
         presenter.present_overviews(&r, &target, size).unwrap();
         let actual = crate::layer_tests::page_bytes(&r, &texture);
+        if !clipped {
+            assert_ne!(&actual[..4], [0; 4]);
+            oracle = actual;
+            continue;
+        }
         for y in 0..size[1] {
             for x in 0..size[0] {
                 let i = ((y * size[0] + x) * 4) as usize;
-                if clipped && (!(13..size[0] - 18).contains(&x) || !(17..size[1] - 20).contains(&y))
-                {
+                if !(13..size[0] - 18).contains(&x) || !(17..size[1] - 20).contains(&y) {
                     assert_eq!(&actual[i..i + 4], [0; 4]);
                 } else {
                     for c in 0..4 {
                         assert!(
-                            actual[i + c].abs_diff(preview.bytes[i + c]) <= 1,
+                            actual[i + c].abs_diff(oracle[i + c]) <= 1,
                             "Navigator {x},{y} channel {c}"
                         );
                     }

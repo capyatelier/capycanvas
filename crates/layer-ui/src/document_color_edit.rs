@@ -209,7 +209,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.colors = colors;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
-        self.navigator_preview = Default::default();
         self.cursor.hover.reset();
         self.refresh_document();
         self.refresh_commands();

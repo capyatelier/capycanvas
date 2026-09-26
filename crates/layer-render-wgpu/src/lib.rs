@@ -30,7 +30,6 @@ use layer_render::{
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::{Arc, mpsc}, time::Duration};
 
 mod builtin_masks;
-mod canvas_preview;
 mod color_sample;
 mod source_access;
 mod material_sources;
@@ -886,7 +885,6 @@ pub struct WgpuRasterizer {
     ui_preview_space: layer_core::color::RgbSpace,
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
-    canvas_preview: canvas_preview::CanvasOverview,
     display_pipelines: Option<display_mips::Pipelines>,
     live_display: Option<live_display::Cache>,
     color_sampler: color_sample::ColorSampler,
@@ -1278,7 +1276,6 @@ impl WgpuRasterizer {
             effect_clocks: Default::default(),
             last_time_seconds: 0.,
             filter_source_epoch: 0,
-            canvas_preview: canvas_preview::CanvasOverview::new(),
             display_pipelines: None,
             live_display: None,
             color_sampler: color_sample::ColorSampler::new(),
@@ -1419,6 +1416,11 @@ impl WgpuRasterizer {
 
     pub fn document_extent(&self) -> [u32; 2] {
         self.document_extent
+    }
+
+    /// Changes only when document composition changes, never for camera motion.
+    pub fn canvas_preview_revision(&self) -> u64 {
+        self.composite_revision
     }
 
     /// Benchmark/export synchronization only. Live drawing never calls this.
@@ -3486,7 +3488,6 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.destination_storage_bytes
             + m.paint_state_storage_bytes
             + m.composite_storage_bytes
-            + self.canvas_preview.storage_bytes()
             + self.thumbnails.storage_bytes()
             + self.portable_blend.byte_len()
             + 160 + self.dry_records.storage_bytes()
@@ -3514,12 +3515,6 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
-    }
-    fn request_canvas_preview(&mut self, known_revision: Option<u64>) -> Result<bool, Self::Error> {
-        self.start_canvas_preview(known_revision)
-    }
-    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
-        self.canvas_preview.take()
     }
     fn request_color_sample(
         &mut self,
