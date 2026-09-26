@@ -16,6 +16,7 @@ local.properties
 /apps/layer-android/build/
 
 # Local environment, credentials, editor state, and private agent sessions.
+*.local.md
 .env
 .env.*
 !.env.example
