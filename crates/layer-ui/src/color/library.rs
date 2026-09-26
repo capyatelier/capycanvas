@@ -19,38 +19,20 @@ pub struct SavedColor {
 pub struct ColorPalette {
     pub id: u64,
     pub name: String,
-    #[serde(deserialize_with = "read_swatches")]
     pub swatches: Vec<SavedColor>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorLibrary {
     pub palettes: Vec<ColorPalette>,
-    #[serde(default = "first_palette")]
     pub active: u64,
-    #[serde(default)]
     pub history: Vec<RgbColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_name: Option<(RgbColor, String)>,
-    #[serde(default)]
     starters_installed: bool,
     #[serde(skip)]
     reorders: reorder::ReorderHistory,
     next_id: u64,
-}
-fn first_palette() -> u64 {
-    1
-}
-// Older workspaces allowed duplicate names. Repair only names on load; stable
-// IDs and original definitions remain untouched, including HDR/alpha values.
-fn read_swatches<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SavedColor>, D::Error> {
-    let mut swatches = Vec::<SavedColor>::deserialize(d)?;
-    let mut used = UniqueNames::default();
-    for swatch in &mut swatches {
-        let base = name(&swatch.name).map_err(serde::de::Error::custom)?;
-        swatch.name = used.claim(base);
-    }
-    Ok(swatches)
 }
 #[derive(Default)]
 struct UniqueNames {
@@ -524,7 +506,7 @@ impl ColorLibrary {
 mod tests {
     use super::*;
     #[test]
-    fn names_imports_and_legacy_workspaces_keep_ids_and_definitions() {
+    fn names_and_imports_keep_ids_and_definitions() {
         let mut library = ColorLibrary::default();
         let color = RgbColor::from_linear(RgbSpace::DisplayP3, [4., 0.1, 0.3, 0.25]).unwrap();
         library
@@ -588,14 +570,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(library, before, "failed import is atomic");
-        let mut legacy = serde_json::to_value(&library).unwrap();
-        legacy["palettes"][0]["swatches"][1]["name"] = "warm red".into();
-        legacy.as_object_mut().unwrap().remove("history");
-        legacy.as_object_mut().unwrap().remove("active");
-        let loaded: ColorLibrary = serde_json::from_value(legacy).unwrap();
-        loaded.validate().unwrap();
-        assert_eq!(loaded.swatch(id).unwrap().color, color);
-        assert_eq!(loaded.palettes[0].swatches[1].name, "warm red 2");
     }
     #[test]
     fn gpl_import_validates_channels_and_supplies_unique_missing_names() {

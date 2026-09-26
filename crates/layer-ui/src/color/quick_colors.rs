@@ -1,10 +1,6 @@
 //! Neutral shortcuts preserve the remembered pair when no paint slot is selected.
 use super::*;
 
-pub(super) fn black() -> RgbColor {
-    RgbColor::BLACK
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct QuickColorView {
     pub white: bool,
@@ -32,32 +28,6 @@ impl ColorState {
             }
         })
     }
-}
-
-// Old workspaces contain only the foreground/background picker coordinates.
-// Append an independent black paint without altering either remembered slot.
-fn widen<T: Default, E: serde::de::Error>(mut slots: Vec<T>) -> Result<[T; 3], E> {
-    if slots.len() == 2 {
-        slots.push(T::default());
-    }
-    slots
-        .try_into()
-        .map_err(|_| E::custom("Expected two or three paint slots"))
-}
-pub(super) fn deserialize_slots<'de, D, T>(reader: D) -> Result<[T; 3], D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de> + Default,
-{
-    widen(Vec::<T>::deserialize(reader)?)
-}
-pub(super) fn deserialize_hdr_slots<'de, D>(reader: D) -> Result<Option<[HdrPaint; 3]>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<Vec<HdrPaint>>::deserialize(reader)?
-        .map(widen)
-        .transpose()
 }
 
 #[cfg(test)]
@@ -123,23 +93,6 @@ mod tests {
             let restored: ColorState = serde_json::from_str(&saved).unwrap();
             restored.validate().unwrap();
             assert_eq!(s, restored);
-        }
-    }
-    #[test]
-    fn old_two_slot_workspaces_keep_colors_and_hdr_coordinates() {
-        for hdr in [false, true] {
-            let mut s = ColorState::default();
-            s.set_hdr_enabled(hdr).unwrap();
-            let mut value = serde_json::to_value(&s).unwrap();
-            value.as_object_mut().unwrap().remove("temporary");
-            for key in ["hues", "coordinates", "hdr_picker"] {
-                if let Some(slots) = value.get_mut(key).and_then(|v| v.as_array_mut()) {
-                    slots.truncate(2);
-                }
-            }
-            let restored: ColorState = serde_json::from_value(value).unwrap();
-            restored.validate().unwrap();
-            assert_eq!(restored, s);
         }
     }
 }

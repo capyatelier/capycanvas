@@ -418,12 +418,6 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 "hdr_stops" => hdr,
                 _ => true,
             });
-            for c in &mut controls {
-                if matches!(c.key.as_str(), "domain" | "hdr_stops") {
-                    // Older masters embed their original parameter labels.
-                    c.label = if c.key == "domain" { "Curve space" } else { "HDR range" }.into();
-                }
-            }
         }
         effect.program.label.to_string()
     } else if layer.kind == LayerKind::Background {

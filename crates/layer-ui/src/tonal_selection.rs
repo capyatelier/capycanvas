@@ -14,7 +14,7 @@ pub enum TonalAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StoredTonalOptions")]
+#[serde(deny_unknown_fields)]
 pub struct TonalOptions {
     pub tone: usize,
     pub custom: [f32; 2],
@@ -27,49 +27,6 @@ impl Default for TonalOptions {
             custom: [-3.5, -1.5],
             softness: 1.,
         }
-    }
-}
-// Read workspaces from the original band editor without retaining its editing
-// machinery. A legacy multi-band recipe migrates to its active included band.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct StoredTonalOptions {
-    tone: Option<usize>,
-    custom: Option<[f32; 2]>,
-    softness: Option<f32>,
-    bands: Vec<TonalBand>,
-    enabled: Vec<bool>,
-    active: usize,
-}
-impl From<StoredTonalOptions> for TonalOptions {
-    fn from(old: StoredTonalOptions) -> Self {
-        let mut options = Self::default();
-        options.softness = old.softness.unwrap_or(1.);
-        if let Some(tone) = old.tone {
-            options.tone = tone;
-            options.custom = old.custom.unwrap_or(options.custom);
-        } else if !old.bands.is_empty() {
-            let index = if old.enabled.get(old.active) == Some(&true) {
-                old.active
-            } else {
-                old.enabled.iter().position(|on| *on).unwrap_or(4)
-            };
-            if let Some(band) = old.bands.get(index) {
-                options.tone = index.min(7);
-                if index >= 7 {
-                    options.custom = [
-                        band.lower.unwrap_or(MIN_STOP),
-                        band.upper.unwrap_or(MAX_STOP),
-                    ];
-                }
-            }
-        }
-        // Preserve the retired Deep shadows interval as an editable Custom range.
-        if options.tone == 5 {
-            options.tone = 7;
-            options.custom = [MIN_STOP, -7.];
-        }
-        options
     }
 }
 impl TonalOptions {

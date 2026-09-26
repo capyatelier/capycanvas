@@ -329,16 +329,7 @@ mod tonal_checks {
         assert_eq!(hdr.custom, [1., layer_core::tonal::MAX_STOP]);
     }
     #[test]
-    fn tonal_legacy_workspace_and_invalid_controls() {
-        let old = serde_json::json!({"bands":layer_core::tonal::TonalBand::defaults(),"active":4,"enabled":[false,false,false,false,true,false,false],"invert":true,"linked":false,"softness":0.4});
-        let options: TonalOptions = serde_json::from_value(old).unwrap();
-        options.validate().unwrap();
-        assert_eq!(options.tone, 4);
-        assert_eq!(options.softness, 0.4);
-        let deep: TonalOptions = serde_json::from_value(serde_json::json!({"tone":5})).unwrap();
-        deep.validate().unwrap();
-        assert_eq!(deep.tone, 7);
-        assert_eq!(deep.custom, [layer_core::tonal::MIN_STOP, -7.]);
+    fn tonal_controls_reject_invalid_values() {
         let mut options = TonalOptions::default();
         assert!(options.edit("tonal_lower", 0.).is_err());
         for value in [f32::NAN, -1., 3.] {

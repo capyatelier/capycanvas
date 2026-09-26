@@ -10,7 +10,6 @@ mod okhsv;
 mod editor;
 mod hdr_picker;
 mod quick_colors;
-use quick_colors::{deserialize_slots, deserialize_hdr_slots};
 pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;
@@ -48,7 +47,6 @@ pub enum ColorShape {
 #[serde(rename_all = "snake_case")]
 pub enum ColorReadout {
     #[default]
-    #[serde(alias = "hsb", alias = "lab", alias = "oklch")]
     Shape,
     Rgb,
 }
@@ -118,25 +116,19 @@ pub struct ColorState {
     pub library: ColorLibrary,
     pub foreground: RgbColor,
     pub background: RgbColor,
-    #[serde(default = "quick_colors::black")]
     pub temporary: RgbColor,
     /// Coordinate system of the picker, independent of each paint definition.
     rgb_space: RgbSpace,
     pub slot: ColorSlot,
-    #[serde(default)]
     pub shape: ColorShape,
-    #[serde(default)]
     pub readout: ColorReadout,
     paint_slot: ColorSlot,
-    #[serde(deserialize_with = "deserialize_slots")]
     hues: [f32; 3],
     // RGB cannot identify a unique point at black, white, or an achromatic hue.
     // Retain both projections, independently for each paint, including across saves.
-    #[serde(default, deserialize_with = "deserialize_slots")]
     coordinates: [Option<ColorCoordinates>; 3],
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_hdr_slots")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     hdr_picker: Option<[HdrPaint; 3]>,
-    #[serde(default = "default_hdr_depth")]
     hdr_depth: layer_core::color::SampleDepth,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,8 +137,7 @@ struct ColorCoordinates {
     rgb: [f32; 3],
     hsv: [f32; 3],
     hls: [f32; 3],
-    #[serde(default)]
-    okhsv: Option<[f32; 3]>,
+    okhsv: [f32; 3],
 }
 
 /// Derived presentation data for native hosts. Geometry is normalized to a
@@ -205,7 +196,6 @@ pub struct ColorSwatchView {
     pub rgba: [f32; 4],
     pub selected: bool,
 }
-fn default_hdr_depth() -> layer_core::color::SampleDepth { layer_core::color::SampleDepth::F16 }
 
 impl Default for ColorState {
     fn default() -> Self {
@@ -260,17 +250,16 @@ impl ColorState {
                     return Err("Invalid color picker coordinates".into());
                 }
             }
-            if let Some(v) = c.okhsv
-                && (v.iter().enumerate().any(|(i, v)| {
-                    !v.is_finite() || !(0.0..=if i == 0 { 360. } else { 100. }).contains(v)
-                }) || okhsv::to_rgb_in(self.rgb_space, v)
-                    .iter()
-                    .zip(c.rgb)
-                    .any(|(a, b)| {
-                        (self.rgb_space.decode(*a as f64) - self.rgb_space.decode(b as f64)).abs()
-                            > 0.000003
-                            || (a - b).abs() > 0.25 / 255.
-                    }))
+            if c.okhsv.iter().enumerate().any(|(i, v)| {
+                !v.is_finite() || !(0.0..=if i == 0 { 360. } else { 100. }).contains(v)
+            }) || okhsv::to_rgb_in(self.rgb_space, c.okhsv)
+                .iter()
+                .zip(c.rgb)
+                .any(|(a, b)| {
+                    (self.rgb_space.decode(*a as f64) - self.rgb_space.decode(b as f64)).abs()
+                        > 0.000003
+                        || (a - b).abs() > 0.25 / 255.
+                })
             {
                 return Err("Invalid Okhsv picker coordinates".into());
             }
@@ -417,12 +406,9 @@ impl ColorState {
     fn okhsv_components(&self) -> [f32; 3] {
         if let Some(c) = self.coordinates[self.index()]
             && c.rgb == self.picker_rgba()[..3]
-            && let Some(v) = c.okhsv
         {
-            return v;
+            return c.okhsv;
         }
-        // Old documents contain conventional HSV hue memory. Convert the hue
-        // anchor, not its numeric angle, when first opening the Okhsv disc.
         let fallback =
             okhsv::from_rgb_in(self.rgb_space, hue_color(self.hues[self.index()]), 0.)[0];
         okhsv::from_rgb_in(
@@ -557,7 +543,7 @@ impl ColorState {
             rgb: rgba[..3].try_into().unwrap(),
             hsv,
             hls,
-            okhsv: Some(okhsv),
+            okhsv,
         });
         match self.paint_slot {
             ColorSlot::Background => self.background = color,
@@ -591,7 +577,7 @@ impl ColorState {
         self.set_picker_rgba([r, g, b, self.rgba()[3]])?;
         let index = self.index();
         let coordinates = self.coordinates[index].as_mut().unwrap();
-        coordinates.okhsv = Some(values);
+        coordinates.okhsv = values;
         if values[1] == 0. || values[2] == 0. {
             // Gray/black cannot carry hue in RGB. Keep the ordinary HSB/HLS
             // readout in step with explicit hue changes made on the Okhsv ring.
@@ -1552,7 +1538,7 @@ mod tests {
         state.validate().unwrap();
     }
     #[test]
-    fn saved_coordinates_are_validated_and_legacy_colors_still_load() {
+    fn saved_coordinates_are_validated() {
         let mut state = ColorState::default();
         component(&mut state, 1, 80.);
         let mut json = serde_json::to_value(&state).unwrap();
@@ -1565,16 +1551,11 @@ mod tests {
         );
         json["coordinates"][0]["hsv"][1] = 0.into();
         assert!(
-            serde_json::from_value::<ColorState>(json.clone())
+            serde_json::from_value::<ColorState>(json)
                 .unwrap()
                 .validate()
                 .is_err()
         );
-        json.as_object_mut().unwrap().remove("coordinates");
-        serde_json::from_value::<ColorState>(json)
-            .unwrap()
-            .validate()
-            .unwrap();
     }
     #[test]
     fn curved_controls_fit_four_tiles_without_covering_the_hue_ring() {
@@ -1701,26 +1682,6 @@ mod tests {
                 assert_eq!(serde_json::from_str::<ColorState>(&saved).unwrap(), state);
             }
         }
-        let mut old = serde_json::to_value(&state).unwrap();
-        old.as_object_mut().unwrap().remove("shape");
-        old.as_object_mut().unwrap().remove("readout");
-        let loaded: ColorState = serde_json::from_value(old.clone()).unwrap();
-        assert_eq!(loaded.shape, ColorShape::Circle);
-        assert_eq!(loaded.readout, ColorReadout::Shape);
-        for legacy in ["hsb", "lab", "oklch", "shape", "rgb"] {
-            old["readout"] = legacy.into();
-            let migrated: ColorState = serde_json::from_value(old.clone()).unwrap();
-            let expected = if legacy == "rgb" {
-                ColorReadout::Rgb
-            } else {
-                ColorReadout::Shape
-            };
-            assert_eq!(migrated.readout, expected);
-            assert_eq!(
-                serde_json::to_value(&migrated).unwrap()["readout"],
-                if legacy == "rgb" { "rgb" } else { "shape" }
-            );
-        }
         let before = state.clone();
         assert!(
             state
@@ -1734,8 +1695,7 @@ mod tests {
         assert_eq!(state, before);
     }
     #[test]
-    fn okhsv_circle_keeps_color_when_switching_models_and_loading_old_memory() {
-        let g = ColorWheelGeometry::new(236.).unwrap();
+    fn okhsv_circle_keeps_color_when_switching_models() {
         for rgb in [
             [0., 0., 0.],
             [1., 1., 1.],
@@ -1757,24 +1717,6 @@ mod tests {
                 }
             }
             assert_eq!(state.wheel_components(), circle);
-            let mut saved = serde_json::to_value(&state).unwrap();
-            saved["coordinates"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("okhsv");
-            let mut loaded: ColorState = serde_json::from_value(saved).unwrap();
-            loaded.validate().unwrap();
-            assert_eq!(loaded.rgba(), original);
-            loaded
-                .apply(ColorAction::PickWheel {
-                    part: ColorWheelPart::Field,
-                    point: loaded.wheel_marker(&g),
-                    size: 236.,
-                })
-                .unwrap();
-            for (a, b) in loaded.rgba().into_iter().zip(original) {
-                assert!((a - b).abs() < 0.00002);
-            }
         }
         // Okhsv has its own hue angles. Legacy host payloads remain ordinary HSV.
         let mut red = ColorState::default();
