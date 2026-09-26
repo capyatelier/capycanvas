@@ -208,11 +208,11 @@ impl CapyHost {
         if let Some(service) = self.documents.as_mut() {
             service.poll(&mut self.native)?;
             service.proof.poll(&mut self.native)?;
-            if !self.gpu.is_lost(self.native.session.engine().backend().0.as_ref().map(|g| g.device())) {
-                if service.tone.tick(&self.native)? {
-                    self.native.dirty = true;
-                    self.native.invalidate_snapshot();
-                }
+            if !self.gpu.is_lost(self.native.session.engine().backend().0.as_ref().map(|g| g.device()))
+                && service.tone.tick(&self.native)?
+            {
+                self.native.dirty = true;
+                self.native.invalidate_snapshot();
             }
         }
         self.sync_document();

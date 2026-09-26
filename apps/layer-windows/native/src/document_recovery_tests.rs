@@ -6,6 +6,7 @@ use layer_host::DeviceWatch;
 use crate::gpu_recovery_tests::{remove_device, renderer};
 use layer_ui::{CommandId, Platform};
 use std::sync::{atomic::AtomicU64, mpsc};
+use std::time::Duration;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture {

@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(target_os = "windows")]
-use layer_render::CanvasRenderer;
 use std::{
     fs,
     sync::atomic::{AtomicU64, Ordering},

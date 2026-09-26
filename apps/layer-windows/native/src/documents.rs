@@ -19,7 +19,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::Duration,
 };
 
 #[derive(Deserialize)]
@@ -87,7 +86,7 @@ enum Job {
         path: PathBuf,
     },
     Prepare {
-        environment: OpenEnvironment,
+        environment: Box<OpenEnvironment>,
         source: Source,
         cancelled: Arc<AtomicBool>,
     },
@@ -243,7 +242,7 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
             environment,
             source,
             cancelled,
-        } => prepare(environment, source, &cancelled),
+        } => prepare(*environment, source, &cancelled),
     }
 }
 fn prepare(
@@ -533,7 +532,7 @@ impl DocumentService {
             let opening = self.opening.take().ok_or("No image interpretation is pending")?;
             if let Some(profile) = profile {
                 let Opening { environment, imported, .. } = *opening;
-                self.worker.submit(Job::Prepare { environment, source: Source::Interpret(Box::new(imported), profile), cancelled: self.active.as_ref().and_then(|a| a.cancelled.clone()).ok_or("Opening control missing")? });
+                self.worker.submit(Job::Prepare { environment: Box::new(environment), source: Source::Interpret(Box::new(imported), profile), cancelled: self.active.as_ref().and_then(|a| a.cancelled.clone()).ok_or("Opening control missing")? });
             } else { self.worker.submit(Job::DiscardOpening(opening)); }
             host.invalidate_snapshot();
             return Ok(());
@@ -635,7 +634,7 @@ impl DocumentService {
                             options, name: preset, defaults,
                         } })?;
                     }
-                    (Job::Prepare { environment, source: Source::Create(options), cancelled: Arc::new(AtomicBool::new(false)) }, None)
+                    (Job::Prepare { environment: Box::new(environment), source: Source::Create(options), cancelled: Arc::new(AtomicBool::new(false)) }, None)
                 }
                 DocumentAction::Open {
                     epoch,
@@ -649,7 +648,7 @@ impl DocumentService {
                         self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     (
                         Job::Prepare {
-                            environment,
+                            environment: Box::new(environment),
                             source: Source::Open(PathBuf::from(path)),
                             cancelled: Arc::new(AtomicBool::new(false)),
                         },
@@ -793,6 +792,7 @@ mod tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::{atomic::AtomicU64, mpsc};
+    use std::time::Duration;
     static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Fixture {
         host: NativeHost,
@@ -1198,6 +1198,7 @@ mod gpu_tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::mpsc;
+    use std::time::{Duration, Instant};
     pub(super) fn invoke(host: &mut NativeHost, command: CommandId) {
         host.dispatch(UiAction::Invoke { command }).unwrap();
     }
