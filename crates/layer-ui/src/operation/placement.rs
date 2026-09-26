@@ -89,6 +89,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: doc.revision,
             basis,
             bounds,
+            start: pose,
             pose,
             drag: None,
         });

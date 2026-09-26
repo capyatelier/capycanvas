@@ -354,6 +354,11 @@ impl CommandId {
             Self::SourceCode => "command.SourceCode",
             Self::Drawings => "command.Drawings",
             Self::ShowCanvasActionBar => "command.ShowCanvasActionBar",
+            Self::TransformFlipHorizontal => "command.TransformFlipHorizontal",
+            Self::TransformFlipVertical => "command.TransformFlipVertical",
+            Self::TransformRotateLeft => "command.TransformRotateLeft",
+            Self::TransformRotateRight => "command.TransformRotateRight",
+            Self::ResetTransform => "command.ResetTransform",
         }.into()
     }
 }

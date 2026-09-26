@@ -113,7 +113,7 @@ extension XCTestCase {
         command("Undo"); expectPixels(painted)
 
         for apply in [false, true] {
-            menu("Edit", "scale_rotate", "Scale / rotate")
+            menu("Edit", "scale_rotate", "Transform")
             XCTAssertTrue(value("x").waitForExistence(timeout: 5))
             let aspect = app.buttons["tool-action-transform_aspect"]
             reveal(aspect)
@@ -173,7 +173,7 @@ extension XCTestCase {
         }
         let filled = [true, true, true, true, true], blank = [false, false, false, false, false]
         func begin() {
-            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
             let aspect = app.buttons["tool-action-transform_aspect"]
             revealTransform(aspect, in: app)
             if aspect.isSelected { workspaceActivate(aspect) }
@@ -289,7 +289,7 @@ extension XCTestCase {
         app.launch(); capturePaintEditor(in: app)
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
-        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
         let angle = app.buttons["number-value-tool-transform_angle"]
         let scroll = app.scrollViews.containing(.button, identifier: "number-value-tool-transform_x").firstMatch
         revealTransform(angle, in: app)
@@ -421,7 +421,7 @@ extension XCTestCase {
         workspaceActivate(app.buttons["layer-New layer"])
         expectLayerCount(initialCount + 1)
         fill()
-        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
         let aspect = app.buttons["tool-action-transform_aspect"]
         revealTransform(aspect, in: app)
         if aspect.isSelected { workspaceActivate(aspect) }
@@ -555,7 +555,7 @@ extension XCTestCase {
 
         // A bounded paint layer exposes loss of alpha or accidental edits to
         // the source when clearing, recoloring and removing its duplicate.
-        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
         let aspect = app.buttons["tool-action-transform_aspect"]
         revealTransform(aspect, in: app)
         if aspect.isSelected { workspaceActivate(aspect) }
@@ -670,7 +670,7 @@ extension XCTestCase {
         expectInk([false, false, false, false])
         // The inverted full-selection mask hides the paper. Shrinking only the
         // mask leaves a blue border around a white center, all through native UI.
-        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
         let aspect = app.buttons["tool-action-transform_aspect"]
         revealTransform(aspect, in: app)
         if !aspect.isSelected { workspaceActivate(aspect) }
@@ -697,12 +697,12 @@ extension XCTestCase {
                     editorHistory("Redo", in: app); expectInk(moved)
                     editorHistory("Undo", in: app); expectInk(baseline)
                 }
-                editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+                editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
                 editTransform("x", "512", in: app); expectInk(moved)
                 attachEditor(in: app, name: "transform-" + name)
                 finishTransform(true, in: app); expectInk(moved); history()
                 // Cancellation must retain the same target and committed mask.
-                editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+                editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
                 editTransform("x", "512", in: app); expectInk(moved)
                 finishTransform(false, in: app); expectInk(baseline)
                 XCTAssertTrue(target.isSelected)
@@ -743,7 +743,7 @@ extension XCTestCase {
                 editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
                 editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
             }
-            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
             let aspect = app.buttons["tool-action-transform_aspect"]
             revealTransform(aspect, in: app)
             if aspect.isSelected { workspaceActivate(aspect) }
@@ -847,7 +847,7 @@ extension XCTestCase {
         let baseline = filled, previous = blank
         #endif
         for leaveApp in [false, true] {
-            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+            editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
             editTransform("x", "4096", in: app); expectInk(blank)
             if leaveApp {
                 #if os(macOS)

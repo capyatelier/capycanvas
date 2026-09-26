@@ -655,6 +655,11 @@ pub enum CommandId {
     SourceCode,
     Drawings,
     ShowCanvasActionBar,
+    TransformFlipHorizontal,
+    TransformFlipVertical,
+    TransformRotateLeft,
+    TransformRotateRight,
+    ResetTransform,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -667,7 +672,12 @@ impl CommandId {
             Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::ShowCanvasActionBar => platform.canvas_bar(),
+            Self::ShowCanvasActionBar
+            | Self::TransformFlipHorizontal
+            | Self::TransformFlipVertical
+            | Self::TransformRotateLeft
+            | Self::TransformRotateRight
+            | Self::ResetTransform => platform.canvas_bar(),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -861,13 +871,18 @@ impl CommandId {
             Self::ResetLayout => "reset-layout",
             Self::NewWindow | Self::Drawings => "new-window",
             Self::ShowCanvasActionBar => "toolbar",
+            Self::TransformFlipHorizontal => "flip-horizontal",
+            Self::TransformFlipVertical => "flip-vertical",
+            Self::TransformRotateLeft => "rotate-left",
+            Self::TransformRotateRight => "rotate-right",
+            Self::ResetTransform => "reset",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 127] = [
+    pub const ALL: [Self; 132] = [
         Self::SearchCommands,
         Self::DrawingBrush,
         Self::Sculpt,
@@ -997,6 +1012,11 @@ impl CommandId {
         Self::SourceCode,
         Self::Drawings,
         Self::ShowCanvasActionBar,
+        Self::TransformFlipHorizontal,
+        Self::TransformFlipVertical,
+        Self::TransformRotateLeft,
+        Self::TransformRotateRight,
+        Self::ResetTransform,
     ];
     pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
@@ -1113,7 +1133,7 @@ impl CommandId {
             Self::SelectionReference => "Sample reference layers",
 
             Self::Move => "Operation",
-            Self::ScaleRotate => "Scale / rotate",
+            Self::ScaleRotate => "Transform",
             Self::ApplyTransform => "Apply transform",
             Self::CancelTransform => "Cancel transform",
             Self::TransformAspect => "Keep proportions",
@@ -1159,6 +1179,11 @@ impl CommandId {
             Self::NewWindow => "New Window",
             Self::Drawings => "Drawings…",
             Self::ShowCanvasActionBar => "Show canvas action bar",
+            Self::TransformFlipHorizontal => "Flip horizontally",
+            Self::TransformFlipVertical => "Flip vertically",
+            Self::TransformRotateLeft => "Rotate 90° left",
+            Self::TransformRotateRight => "Rotate 90° right",
+            Self::ResetTransform => "Reset transform",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

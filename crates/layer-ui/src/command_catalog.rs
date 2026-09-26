@@ -403,6 +403,9 @@ fn action_description(action: &UiAction) -> &'static str {
             RedoWorkspace => "Reapply an undone workspace layout change.",
             ZenMode => "Hide or restore workspace controls to give the canvas more room.",
             ShowCanvasActionBar => "Show next steps beside selections, transforms and placed images.",
+            TransformFlipHorizontal | TransformFlipVertical => "Mirror the content being transformed, about the centre of its box.",
+            TransformRotateLeft | TransformRotateRight => "Turn the content being transformed by a quarter turn.",
+            ResetTransform => "Undo every change made in this transform, keeping it open.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -976,7 +979,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::ResetLayout if self.managed_workspace.is_some() => "The layout already matches its starting state",
             C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
             C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
-            C::ApplyTransform | C::CancelTransform | C::TransformAspect => "Start a transform first",
+            C::ApplyTransform
+            | C::CancelTransform
+            | C::TransformAspect
+            | C::TransformFlipHorizontal
+            | C::TransformFlipVertical
+            | C::TransformRotateLeft
+            | C::TransformRotateRight
+            | C::ResetTransform => "Start a transform first",
             C::SnapRulers => "Show rulers first",
             C::DeleteRuler => "Select a ruler first",
             C::CompleteSelection

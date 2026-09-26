@@ -2014,9 +2014,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::PlacementOriginalSize => idle && self.operation.placing(),
-            CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
-                idle && self.operation.active()
-            }
+            CommandId::ApplyTransform
+            | CommandId::CancelTransform
+            | CommandId::TransformAspect
+            | CommandId::TransformFlipHorizontal
+            | CommandId::TransformFlipVertical
+            | CommandId::TransformRotateLeft
+            | CommandId::TransformRotateRight
+            | CommandId::ResetTransform => idle && self.operation.active(),
             CommandId::ShowRulers => idle,
             CommandId::SnapRulers => idle && self.rulers.visible,
             CommandId::DeleteRuler => {
@@ -4048,6 +4053,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refresh_tools();
                 Ok((BRUSH, false))
             }
+            CommandId::TransformFlipHorizontal
+            | CommandId::TransformFlipVertical
+            | CommandId::TransformRotateLeft
+            | CommandId::TransformRotateRight
+            | CommandId::ResetTransform => {
+                self.reorient_transform(command)?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::PlacementOriginalSize => {
                 self.placement_original_size()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -4543,10 +4556,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_actions = if self.operation.active() {
             [
                 CommandId::TransformAspect,
+                CommandId::TransformFlipHorizontal,
+                CommandId::TransformFlipVertical,
+                CommandId::TransformRotateLeft,
+                CommandId::TransformRotateRight,
+                CommandId::ResetTransform,
                 CommandId::ApplyTransform,
                 CommandId::CancelTransform,
             ]
             .into_iter()
+            .filter(|c| c.available_on(self.state.platform))
             .chain(self.operation.placing().then_some(CommandId::PlacementOriginalSize))
             .map(|command| ToolSettingAction {
                 command,

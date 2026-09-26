@@ -83,6 +83,7 @@ struct Transaction {
     revision: u64,
     basis: Affine,
     bounds: Rect,
+    start: Pose,
     pose: Pose,
     drag: Option<Drag>,
 }
@@ -155,7 +156,7 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
     ToolSetView {
         groups: [
             ("Move", "move", false),
-            ("Scale / rotate", "transform", true),
+            ("Transform", "transform", true),
         ]
         .into_iter()
         .map(|(label, icon, item)| ToolSetItem {
@@ -331,6 +332,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: doc.revision,
             basis,
             bounds,
+            start: Pose::identity(),
             pose: Pose::identity(),
             drag: None,
         });
@@ -569,6 +571,40 @@ impl<R: CanvasRenderer> UiSession<R> {
             PenPhase::Hover => (),
         }
         Ok(())
+    }
+    /// Flips and quarter turns act in the layer's axes about the box centre.
+    pub(super) fn reorient_transform(&mut self, command: CommandId) -> Result<(), String> {
+        self.require_idle()?;
+        let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        let p = t.pose;
+        let turn = |angle: f32| {
+            (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+        };
+        t.pose = match command {
+            CommandId::TransformFlipHorizontal => Pose {
+                angle: -p.angle,
+                shear: -p.shear,
+                scale: [-p.scale[0], p.scale[1]],
+                ..p
+            },
+            CommandId::TransformFlipVertical => Pose {
+                angle: -p.angle,
+                shear: -p.shear,
+                scale: [p.scale[0], -p.scale[1]],
+                ..p
+            },
+            CommandId::TransformRotateLeft => Pose {
+                angle: turn(p.angle - std::f32::consts::FRAC_PI_2),
+                ..p
+            },
+            CommandId::TransformRotateRight => Pose {
+                angle: turn(p.angle + std::f32::consts::FRAC_PI_2),
+                ..p
+            },
+            CommandId::ResetTransform => t.start,
+            _ => return Err("Not a transform command".into()),
+        };
+        self.update_transform()
     }
     /// Restore the pose from before the current handle drag, keeping the session.
     pub(super) fn cancel_transform_drag(&mut self) -> Result<bool, String> {
@@ -840,6 +876,7 @@ mod tests {
                 min: Point { x: 20., y: 40. },
                 max: Point { x: 240., y: 190. },
             },
+            start: Pose::identity(),
             pose: Pose::identity(),
             drag: None,
         }

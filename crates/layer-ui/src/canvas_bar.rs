@@ -65,6 +65,11 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::CancelTransform => "Cancel",
         CommandId::TransformAspect => "Uniform",
         CommandId::PlacementOriginalSize => "Original Size",
+        CommandId::TransformFlipHorizontal => "Flip H",
+        CommandId::TransformFlipVertical => "Flip V",
+        CommandId::TransformRotateLeft => "−90°",
+        CommandId::TransformRotateRight => "+90°",
+        CommandId::ResetTransform => "Reset",
         _ => command.label(),
     }
 }
@@ -97,12 +102,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.state.platform.canvas_bar() || !self.operation.active() {
             return None;
         }
-        let transform_items = vec![(CommandId::TransformAspect, true)];
+        let transform_items = vec![
+            (CommandId::TransformAspect, true),
+            (CommandId::TransformFlipHorizontal, false),
+            (CommandId::TransformFlipVertical, false),
+            (CommandId::TransformRotateLeft, false),
+            (CommandId::TransformRotateRight, false),
+            (CommandId::ResetTransform, false),
+        ];
         let completion = vec![CommandId::CancelTransform, CommandId::ApplyTransform];
         if self.operation.placing() {
             let count = self.operation.placement_count();
             let mut items = transform_items;
-            items.push((CommandId::PlacementOriginalSize, false));
+            items.insert(1, (CommandId::PlacementOriginalSize, false));
             return Some(Plan {
                 kind: CanvasBarKind::Placement,
                 label: (count > 1).then(|| format!("{count} images")),

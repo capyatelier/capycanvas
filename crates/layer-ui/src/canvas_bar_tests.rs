@@ -81,7 +81,7 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     assert_ne!(change.regions & regions::CANVAS_BAR, 0);
     let bar = s.state.canvas_bar.clone().expect("transform bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Transform);
-    assert_eq!(bar_commands(&bar.items), [CommandId::TransformAspect]);
+    assert_eq!(bar_commands(&bar.items), [CommandId::TransformAspect, CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
     assert_eq!(bar_commands(&bar.completion), [CommandId::CancelTransform, CommandId::ApplyTransform]);
     assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
     assert_eq!(bar.anchor, s.transform_document_bounds());
@@ -167,7 +167,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     let measure = |width: f32| CanvasBarMeasure {
         context: bar.context,
         label: 0.,
-        items: vec![width],
+        items: vec![width; 6],
         completion: vec![80., 80.],
         more: 40.,
         height: 48.,
@@ -175,7 +175,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
         padding: 6.,
     };
     let layout = s.canvas_bar_layout(&measure(100.)).expect("current context");
-    assert_eq!(layout.items, 1);
+    assert_eq!(layout.items, 6);
     assert_eq!(layout.side, CanvasBarSide::Below);
     let lowest = s
         .transform_handle_points()
@@ -222,9 +222,83 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     s.frame(0, 0).unwrap();
     let bar = s.state.canvas_bar.clone().expect("placement bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Placement);
-    assert_eq!(bar_commands(&bar.items), [CommandId::TransformAspect, CommandId::PlacementOriginalSize]);
+    assert_eq!(
+        bar_commands(&bar.items),
+        [
+            CommandId::TransformAspect,
+            CommandId::PlacementOriginalSize,
+            CommandId::TransformFlipHorizontal,
+            CommandId::TransformFlipVertical,
+            CommandId::TransformRotateLeft,
+            CommandId::TransformRotateRight,
+            CommandId::ResetTransform,
+        ]
+    );
     assert_eq!(bar.label, None);
     s.set_platform(Platform::Mac);
     s.frame(1, 1).unwrap();
     assert!(s.state.canvas_bar.is_none(), "hosts without the bar keep their own controls");
+}
+
+#[test]
+fn transform_flips_quarter_turns_and_reset_keep_the_box_centred() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.dispatch(UiAction::SetToolSetting { id: "transform_angle".into(), value: 0.3 }).unwrap();
+    s.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.2 }).unwrap();
+    s.dispatch(UiAction::SetToolSetting { id: "transform_x".into(), value: 25. }).unwrap();
+    s.frame(2, 2).unwrap();
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.affine;
+    let settled = preview(&mut s);
+    let [x0, y0, x1, y1] = s.transform_document_bounds().unwrap();
+    let centre = Point { x: (x0 + x1) * 0.5, y: (y0 + y1) * 0.5 };
+    let close = |a: layer_core::Affine, b: layer_core::Affine| a.0.iter().zip(b.0).all(|(x, y)| (x - y).abs() < 1e-3);
+    for (command, times) in [
+        (CommandId::TransformFlipHorizontal, 2),
+        (CommandId::TransformFlipVertical, 2),
+        (CommandId::TransformRotateRight, 4),
+        (CommandId::TransformRotateLeft, 4),
+    ] {
+        for _ in 0..times {
+            invoke(&mut s, command);
+        }
+        s.frame(3, 3).unwrap();
+        assert!(close(preview(&mut s), settled), "{command:?} returns after {times}");
+    }
+    invoke(&mut s, CommandId::TransformFlipHorizontal);
+    s.frame(4, 4).unwrap();
+    let flipped = preview(&mut s);
+    let mirror = layer_core::Affine::translation(Point { x: -centre.x, y: -centre.y })
+        .then(layer_core::Affine([-1., 0., 0., 1., 0., 0.]))
+        .then(layer_core::Affine::translation(centre));
+    assert!(close(flipped, settled.then(mirror)), "flip mirrors about the box centre: {flipped:?}");
+    invoke(&mut s, CommandId::ResetTransform);
+    s.frame(5, 5).unwrap();
+    assert_eq!(preview(&mut s), layer_core::Affine::IDENTITY, "reset returns to the session start");
+    assert!(s.operation.active());
+}
+
+#[test]
+fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("flip placement", 200, 150), [800, 600]).unwrap();
+    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    invoke(&mut s, CommandId::ApplyTransform);
+    let placed = s.engine.document().clone();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformFlipHorizontal);
+    invoke(&mut s, CommandId::TransformRotateRight);
+    invoke(&mut s, CommandId::ApplyTransform);
+    let layer = s.engine.document().layer(s.engine.document().active_layer).unwrap();
+    assert!(layer.source.is_some(), "the retained photo is kept");
+    let [a, b, c, d, _, _] = layer.properties.placement.0;
+    assert!(a.abs() < 1e-4 && d.abs() < 1e-4 && (b * c) > 0.9, "a mirrored quarter turn: {a} {b} {c} {d}");
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, placed.layers, "one undo step restores the placement");
 }
