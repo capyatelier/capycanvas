@@ -4,7 +4,7 @@
 
 The canvas action bar shows the next steps for the object being edited, beside it. It is an accelerator: every item is an ordinary command, so the menus, Tool Options and command search stay complete, and each item keeps its shared validation and one-step history.
 
-Status: shared model, GTK, Web and Windows hosts implemented. Android is in progress; Apple keeps its earlier placement controls until it adopts the bar.
+Status: shared model, GTK, Web, Android and Windows hosts implemented. Apple keeps its earlier placement controls until it adopts the bar.
 
 ## Contexts
 
@@ -68,10 +68,12 @@ Status: shared model, GTK, Web and Windows hosts implemented. Android is in prog
 - **Shared model:** `crates/layer-ui/src/canvas_bar.rs` holds the context derivation, items, `CanvasBarEdit` validation, fitting, placement and the More menu. Transform geometry and modes live in `crates/layer-ui/src/operation.rs`.
 - **GTK host:** `apps/layer-linux/src/canvas_bar.rs` is a `DockSurface` slot.
 - **Web host:** `apps/layer-web/canvas-bar.js` is a glass toolbar in `#workspace`, built from the Tool Options field builders in `toolbar-components.js`. It measures its controls once per bar and moves with a transform.
+- **Android host:** `apps/layer-android/app/src/main/java/art/capycanvas/CanvasBar.kt` is a glass Compose surface in the workspace, above floating groups and below drawers, built from the Tool Options `ToolOptionField` and `toolOptionSize` builders. `NativeHost::query` answers `canvas_bar_layout`, `canvas_bar_menu`, `canvas_bar_choice_menu` and `canvas_bar_reason`. The bar registers its glass region before its first visible frame. Its menus, and the Tool Options choice and value menus, open without taking window focus; the value popup takes focus only while its number field is edited.
 - **Windows host:** `apps/layer-windows/CanvasActionBar.h` is a glass squircle in the workspace canvas. It places itself through the `canvas_bar_layout` native host query and opens More and dropdown choices through `canvas_bar_menu` and `canvas_bar_choice_menu`. The canvas input thread reports the first and last canvas contact, so the bar hides without a published state change.
 - **Narrow windows:** when docks leave the work area narrower than the smallest bar, placement uses the window width.
 - **Tests:**
   - shared: `crates/layer-ui/src/canvas_bar_tests.rs`;
   - GTK native: `native_canvas_bar_input` and `native_canvas_bar_polygon_input` in `apps/layer-linux/src/canvas_bar_tests.rs`;
   - Web: `node --test apps/layer-web/canvas-bar.test.mjs`, `node apps/layer-web/test.mjs --headless --canvas-bar`, and `device.test.mjs --canvas-bar` on a tablet;
+  - Android: `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` with mouse, finger and stylus, and `AndroidCanvasBarBenchmarkTest` for frame timing on a 6000 × 4000 canvas (see the [Android guide](../development/android.md)).
   - Windows: `apps/layer-windows/scripts/exercise-canvas-bar.ps1` with mouse, touch and pen, and the native host queries in `crates/layer-host/src/lib.rs`.

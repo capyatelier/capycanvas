@@ -69,7 +69,8 @@ The [canvas action bar](canvas-action-bar.md) presents the same `ToolOption`
 actions and choices beside the object being edited. On the Web it builds them
 with the same `actionField` and `choiceField` builders as Tool Options; a
 segmented choice keeps its natural width there, and other choices open a
-dropdown.
+dropdown. Android uses the same `ToolOptionField` and `toolOptionSize` as its
+Tool Options, with each item's short caption.
 
 Horizontal numeric fields use label/icon, slider, then editable value, with
 the label/icon outside the value field. Editing stays within the same footprint;
