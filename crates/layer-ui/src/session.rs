@@ -3140,10 +3140,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && matches!(
                         action,
                         PreferenceAction::Edit {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::PredictionAlgorithm,
+                            id: PreferenceId::PredictionHorizon,
                             ..
                         } | PreferenceAction::Reset {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::PredictionAlgorithm
+                            id: PreferenceId::PredictionHorizon
                         }
                     )
                 {
@@ -16759,18 +16759,6 @@ mod tests {
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
             assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
-            let algorithm = rows.iter().find(|r| r.id == PreferenceId::PredictionAlgorithm).unwrap();
-            assert_eq!(algorithm.enabled, !supported);
-            if supported {
-                for action in [
-                    PreferenceAction::Edit { id: algorithm.id, value: PreferenceValue::Choice(0) },
-                    PreferenceAction::Reset { id: algorithm.id },
-                ] {
-                    preference(&mut s, action);
-                    assert!(s.preferences().unwrap().error.is_some());
-                    assert_eq!(s.state.settings, settings);
-                }
-            }
             // Legacy settings still load, but neither old actions nor their
             // stored value can override automatic endpoint tracking.
             for action in [

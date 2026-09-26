@@ -16,7 +16,7 @@ pub mod recording;
 
 pub use brush::DabGenerator;
 pub use canvas::{CanvasEngine, EngineCapacity, EngineError, EngineMetrics};
-pub use feedback::{FeedbackConfigError, InstantFeedbackConfig, PredictionAlgorithm};
+pub use feedback::{FeedbackConfigError, InstantFeedbackConfig};
 pub use input::{
     InputConsumer, InputProducer, PenEvent, PenPhase, PressureCurve, SampleFlags, ToolKind,
     ViewTransform, input_queue,

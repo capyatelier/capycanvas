@@ -59,10 +59,9 @@ def main():
         (out/'checks.json').write_text(json.dumps(dict(failures=failures),indent=2)+'\n')
         sources=[Path('crates/layer-engine/src/feedback.rs'),*Path('crates/layer-engine/src/feedback').glob('*.rs')]
         (out/'source-manifest.json').write_text(json.dumps(dict(
-            algorithm='optimized',
             replay_sha256=hashlib.sha256((args.bin_dir/'prediction-replay').read_bytes()).hexdigest(),
             sources_at_replay={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}),indent=2)+'\n')
-        index[path.stem]=dict(recording_sha256=digest,algorithm='optimized',summary=summary,failures=failures)
+        index[path.stem]=dict(recording_sha256=digest,summary=summary,failures=failures)
         print(f'{path.stem}: {summary["contacts"]} contacts; {out}',flush=True)
         if failures:raise SystemExit('\n'.join(failures))
     (args.output/'bank.json').write_text(json.dumps(index,indent=2)+'\n')

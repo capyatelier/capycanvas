@@ -1,4 +1,4 @@
-use crate::{InstantFeedbackConfig, PredictionAlgorithm, SampleFlags, ToolKind};
+use crate::{InstantFeedbackConfig, SampleFlags, ToolKind};
 use layer_core::{Point, StrokePoint};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -65,9 +65,6 @@ impl From<StrokePoint> for Sample {
     }
 }
 
-// Version 2 recordings reserve an enum discriminant after the three switches.
-// Keep the tuple layout and Optimized slot (3). Retired values, including
-// Previous (4), migrate to the supported predictor without retaining old code.
 mod config_wire {
     use super::*;
     pub fn serialize<S: serde::Serializer>(
@@ -100,7 +97,7 @@ mod config_wire {
             enabled,
             use_platform_prediction,
             use_engine_prediction,
-            algorithm,
+            _,
             timestamp_resolution_micros,
             finalization_lag_micros,
             prediction_horizon_micros,
@@ -123,15 +120,10 @@ mod config_wire {
             f32,
             f32,
         ) = Deserialize::deserialize(deserializer)?;
-        let prediction_algorithm = match algorithm {
-            0..=4 => PredictionAlgorithm::Optimized,
-            _ => return Err(serde::de::Error::custom("invalid version 2 predictor slot")),
-        };
         Ok(InstantFeedbackConfig {
             enabled,
             use_platform_prediction,
             use_engine_prediction,
-            prediction_algorithm,
             timestamp_resolution_micros,
             finalization_lag_micros,
             prediction_horizon_micros,
@@ -149,45 +141,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn predictor_slot_preserves_optimized_and_migrates_retired_captures() {
-        let config = InstantFeedbackConfig {
-            prediction_horizon_micros: 23_000,
-            timestamp_resolution_micros: 1,
-            use_platform_prediction: false,
-            ..Default::default()
+    fn policy_round_trips_through_the_binary_wire() {
+        let policy = Policy {
+            config: InstantFeedbackConfig {
+                prediction_horizon_micros: 23_000,
+                use_platform_prediction: false,
+                ..Default::default()
+            },
+            transform: [2., 0., 0., 2., 5., 7.],
         };
-        let transform = [1., 0., 0., 1., 0., 0.];
-        for slot in 0u32..=5 {
-            // Freeze the original v2 tuple, independent of the runtime struct.
-            let wire = (
-                (
-                    true, false, true, slot, 1u32, 8_000u32, 23_000u32, 96f32, 1f32, 1.5f32, 12f32,
-                    1f32,
-                ),
-                transform,
-            );
-            let bytes = bincode::serde::encode_to_vec(wire, bincode::config::standard()).unwrap();
-            let result =
-                bincode::serde::decode_from_slice::<Policy, _>(&bytes, bincode::config::standard());
-            if slot == 5 {
-                assert!(result.is_err());
-                continue;
-            }
-            let (policy, used) = result.unwrap();
-            assert_eq!(used, bytes.len());
-            assert_eq!(policy.transform, transform);
-            assert_eq!(policy.config, config);
-            if slot == 3 {
-                assert_eq!(
-                    bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap(),
-                    bytes
-                );
-            }
-            let current = Policy { config, transform };
-            assert_eq!(
-                bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap(),
-                bincode::serde::encode_to_vec(current, bincode::config::standard()).unwrap()
-            );
-        }
+        let bytes = bincode::serde::encode_to_vec(policy, bincode::config::standard()).unwrap();
+        let (decoded, used) =
+            bincode::serde::decode_from_slice::<Policy, _>(&bytes, bincode::config::standard())
+                .unwrap();
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded.config, policy.config);
+        assert_eq!(decoded.transform, policy.transform);
     }
 }

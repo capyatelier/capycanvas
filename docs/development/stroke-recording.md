@@ -80,9 +80,7 @@ native-prediction precedence, on the recorded inputs, policies and query timing.
 It writes per-query CSV to stdout and summary diagnostics to stderr;
 `--frames frames.jsonl` additionally exports the entire preview and causal
 actual-sample replacements. The v2 policy wire layout keeps
-the original integer slot: historical values 0–4 read as Optimized, and new
-captures write 3. This includes captures made with the retired Previous choice.
-Unknown values are rejected; the rest of each recorded policy is preserved.
+its reserved integer slot, which new captures write as 3 and replay ignores.
 
 ## Evaluating visible stability and tracking
 

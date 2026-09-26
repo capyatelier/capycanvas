@@ -1,15 +1,11 @@
 //! Portable preferences, editor state and host requests. Hosts render this model
 //! and perform storage/window services; they do not decide settings policy.
 use crate::*;
-use layer_engine::PredictionAlgorithm as StrokePrediction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[path = "settings_color.rs"]
 mod color;
 pub use color::{MissingProfilePolicy, PhotoOpenPolicy};
-
-const PREDICTION_ALGORITHMS: [(StrokePrediction, &str); 1] =
-    [(StrokePrediction::Optimized, "Smooth Motion (Optimized)")];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +94,6 @@ pub struct Settings {
     pub zoom_speed: f32,
     pub feedback: bool,
     pub platform_prediction: bool,
-    pub prediction_algorithm: StrokePrediction,
     pub prediction_ms: f32,
     /// Retained for saved-settings compatibility; preview tracking is automatic.
     pub tip_lock: f32,
@@ -129,7 +124,6 @@ impl Default for Settings {
             zoom_speed: 1.0,
             feedback: true,
             platform_prediction: true,
-            prediction_algorithm: StrokePrediction::default(),
             prediction_ms: 16.0,
             tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
@@ -169,7 +163,6 @@ impl Settings {
         layer_engine::InstantFeedbackConfig {
             enabled: self.feedback,
             use_platform_prediction: self.platform_prediction,
-            prediction_algorithm: self.prediction_algorithm,
             prediction_horizon_micros: (self.prediction_ms * 1000.0).round() as u32,
             // Always track the predicted endpoint at full strength. Prediction
             // time alone controls how far ahead the preview should reach.
@@ -272,7 +265,6 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
-    PredictionAlgorithm,
     /// Retired preference ID, retained to decode old serialized actions.
     TipLock,
     Version,
@@ -305,7 +297,6 @@ impl PreferenceId {
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
             Self::PredictionHorizon => "prediction-horizon",
-            Self::PredictionAlgorithm => "prediction-algorithm",
             Self::TipLock => "tip-lock",
             Self::Version => "version",
             Self::License => "license",
@@ -776,23 +767,9 @@ impl Settings {
                 64.0,
                 1.0,
             ),
-            row(
-                PredictionAlgorithm,
-                "Prediction algorithm",
-                "",
-                PreferenceKind::Choice {
-                    presentation: ChoicePresentation::Dropdown,
-                    icons: Vec::new(),
-                    options: PREDICTION_ALGORITHMS.iter().map(|c| c.1.into()).collect(),
-                    selected: PREDICTION_ALGORITHMS.iter().position(|c| c.0 == self.prediction_algorithm).unwrap() as u32,
-                },
-            ),
         ];
         for r in &mut input {
-            if matches!(
-                r.id,
-                PredictionHorizon | PredictionAlgorithm | PlatformPrediction
-            ) {
+            if matches!(r.id, PredictionHorizon | PlatformPrediction) {
                 r.enabled = self.feedback;
             }
         }
@@ -1172,8 +1149,6 @@ impl Settings {
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
-            PredictionAlgorithm => self.prediction_algorithm = PREDICTION_ALGORITHMS[n as usize].0,
-
             TipLock => return Err("Pen tip tracking is automatic.".into()),
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
@@ -1220,7 +1195,7 @@ impl PreferencesState {
                 row.enabled = false;
                 row.kind = PreferenceKind::Switch { active: false };
             }
-            if matches!(row.id, PreferenceId::PredictionHorizon | PreferenceId::PredictionAlgorithm)
+            if row.id == PreferenceId::PredictionHorizon
                 && platform_prediction_available
                 && settings.platform_prediction
             {
@@ -1800,31 +1775,6 @@ mod copy_tests {
                 .edit(id, settings.default_value(id, platform).unwrap(), platform)
                 .unwrap();
             assert!(settings.hide_cursor_while_drawing);
-        }
-    }
-
-    #[test]
-    fn prediction_choice_round_trips_resets_and_reaches_every_platform() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows, Platform::Generic] {
-            let mut settings = Settings::default();
-            let id = PreferenceId::PredictionAlgorithm;
-            assert_eq!(settings.prediction_algorithm, StrokePrediction::Optimized);
-            let row = settings.field(id, platform).unwrap();
-            assert!(matches!(row.kind, PreferenceKind::Choice { presentation: ChoicePresentation::Dropdown, ref options, selected: 0, .. }
-                if options == &["Smooth Motion (Optimized)"]));
-            for (index, &(algorithm, _)) in PREDICTION_ALGORITHMS.iter().enumerate() {
-                settings.edit(id, PreferenceValue::Choice(index as u32), platform).unwrap();
-                let restored: Settings = serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
-                assert_eq!(restored, settings);
-                for native in [false, true] {
-                    assert_eq!(restored.feedback_config_for(platform, native).prediction_algorithm, algorithm);
-                }
-            }
-            assert!(settings.edit(id, PreferenceValue::Choice(1), platform).is_err());
-            settings.edit(id, settings.default_value(id, platform).unwrap(), platform).unwrap();
-            assert_eq!(settings.prediction_algorithm, StrokePrediction::Optimized);
-            settings.feedback = false;
-            assert!(settings.edit(id, PreferenceValue::Choice(0), platform).is_err());
         }
     }
 

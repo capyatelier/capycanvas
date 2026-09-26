@@ -1411,9 +1411,8 @@ affine combinations, cross-platform image equivalence and performance remain sep
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-prediction.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 ~~~
 
-The isolated fixture verifies the Windows prediction toggle and dependent
-prediction-time and algorithm controls (the single Smooth Motion choice, saved as
-`optimized`), then exercises mouse, touch, and OS-injected pen.
+The isolated fixture verifies the Windows prediction toggle and the dependent
+prediction-time control, then exercises mouse, touch, and OS-injected pen.
 Opt-in counters prove that native predictions reach live preview. See the
 [native prediction qualification](../../docs/development/windows-native-prediction-20260920.md)
 for regression coverage and the 61 MP / 18 px benchmark.

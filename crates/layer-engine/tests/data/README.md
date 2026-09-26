@@ -8,8 +8,7 @@ recognized characters or predictor inputs. Keep devices and sessions separate
 when splitting training and evaluation data.
 
 The Rust bank test and Python runner discover every recording automatically.
-The benchmark runs Optimized, including for captures made with retired
-predictors. Other recorded policies and query clocks are preserved.
+The benchmark runs Smooth Motion; recorded policies and query clocks are preserved.
 Device names are provenance labels, not hardware IDs inferred from input events.
 
 ## Current recordings

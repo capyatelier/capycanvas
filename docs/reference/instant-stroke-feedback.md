@@ -148,11 +148,7 @@ selects the speculative endpoint. `render_frame_at` uses the configured horizon.
 The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
 existing saved values are preserved.
 
-**Smooth Motion** is shared across platforms. **Settings → Input → Prediction
-algorithm** retains its dropdown for future alternatives, with **Smooth Motion
-(Optimized)** as its only supported choice and default. Saved Previous and other
-retired experimental choices migrate to Optimized while other preferences remain
-intact. The standalone C feedback API retains its ABI and uses Optimized.
+**Smooth Motion** is the single shared predictor on every platform.
 
 The predictor combines a recent acceleration fit with 100 ms of causal drawing
 history. Sustained smooth motion supports stable reach; slow/medium detail keeps
@@ -170,7 +166,7 @@ falling raw pressure corroborates an impending lift. Pressure remaining steady
 never prevents a stop; measured braking, distance and stale-input bounds still
 apply independently. Falling pressure alone does not cut a steady forecast short.
 
-Optimized filters visible display lead separately from curve geometry. A brief
+Smooth Motion filters visible display lead separately from curve geometry. A brief
 fit-window confidence collapse may retain reach while recent drawing history
 still supports continuation, with a missing fit bridged for at most 24 ms.
 The newest observations always refit local geometry. The anchor join has its own
@@ -189,12 +185,12 @@ touches; Windows creates a WinUI `PointerPredictor` for the canvas input source 
 falls back to Smooth Motion when it is unavailable or fails. Linux and macOS
 currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
-prediction is selected, **Prediction amount**, **Prediction algorithm**, and their
-reset actions are disabled. Native timing comes from its sample timestamps and presentation time.
+prediction is selected, **Prediction amount** and its
+reset action are disabled. Native timing comes from its sample timestamps and presentation time.
 Endpoint tracking is always full strength for both native and shared prediction;
 the retired `tip_lock` preference still loads but no longer affects rendering.
 If native samples are absent,
-the engine uses the selected shared algorithm with its automatic 8 ms fallback. Turning native prediction off, or
+the engine uses Smooth Motion with its automatic 8 ms fallback. Turning native prediction off, or
 losing support, restores the saved prediction time.
 
 ## Lead stability and impending lift

@@ -18,14 +18,6 @@ pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 
-/// Supported engine predictors; retained as a setting for future alternatives.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PredictionAlgorithm {
-    #[default]
-    Optimized,
-}
-
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
 /// of a brush preset or persisted stroke.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -33,7 +25,6 @@ pub struct InstantFeedbackConfig {
     pub enabled: bool,
     pub use_platform_prediction: bool,
     pub use_engine_prediction: bool,
-    pub prediction_algorithm: PredictionAlgorithm,
     /// Input clock quantum, supplied by the host (GTK/GDK: 1 ms). This is
     /// measurement uncertainty, not prediction time or a user preference.
     pub timestamp_resolution_micros: u32,
@@ -63,7 +54,6 @@ impl Default for InstantFeedbackConfig {
             enabled: true,
             use_platform_prediction: true,
             use_engine_prediction: true,
-            prediction_algorithm: PredictionAlgorithm::default(),
             timestamp_resolution_micros: 1,
             finalization_lag_micros: 8_000,
             prediction_horizon_micros: 8_000,

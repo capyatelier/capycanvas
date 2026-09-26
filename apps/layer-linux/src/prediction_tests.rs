@@ -1,45 +1,5 @@
 use super::*;
-use layer_ui::{PreferenceAction, PreferenceId, SettingsPage, UiAction};
-
-#[test]
-#[ignore = "native GTK settings; requires isolated settings/workspaces and Wayland/Vulkan"]
-fn native_prediction_settings() {
-    let app = native_test_app("art.capycanvas.PredictionSettingsTest");
-    let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
-    crate::install_actions(&app, &windows);
-    app.activate_action("new-window", None);
-    let w = windows.borrow()[0].clone();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !w
-        .gpu
-        .borrow()
-        .as_ref()
-        .is_some_and(|g| g.session.engine().backend().startup.complete)
-    {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
-    w.dispatch(UiAction::OpenSettings {
-        page: SettingsPage::Input,
-    });
-    pump(200);
-    let choice = find_named(w.window.upcast_ref(), "setting-prediction-algorithm")
-        .unwrap().downcast::<adw::ComboRow>().unwrap();
-    assert_eq!(choice.selected(), 0);
-    assert_eq!(choice.model().unwrap().n_items(), 1);
-    assert_eq!(state(&w).settings.prediction_algorithm, layer_engine::PredictionAlgorithm::Optimized);
-    w.dispatch(UiAction::CloseSettings);
-    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
-    pump(100);
-    let choice = find_named(w.window.upcast_ref(), "setting-prediction-algorithm")
-        .unwrap().downcast::<adw::ComboRow>().unwrap();
-    assert_eq!(choice.selected(), 0);
-    assert_eq!(choice.model().unwrap().n_items(), 1);
-    assert!(find_named(w.window.upcast_ref(), "setting-prediction-horizon").is_some());
-    w.window.destroy();
-    pump(100);
-    layer_render_wgpu::finish_shader_compiler_shutdown();
-}
+use layer_ui::{PreferenceAction, PreferenceId, UiAction};
 
 #[test]
 #[ignore = "4K GTK/Vulkan integration; use an isolated 3840x2160 Wayland compositor"]
