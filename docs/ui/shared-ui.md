@@ -103,7 +103,6 @@ dock allocator. This shares docking rules without prescribing widget types.
 Both frontends dispatch `DragDivider` phases in full-window logical coordinates
 and `NudgeDivider` directions for keyboard resizing. Rust owns drag lifecycle,
 the 12px nudge step, inset conversion, direction, handle thickness, ratios and limits.
-`ResizeDock` remains the direct programmatic center-position action.
 Resize gestures preserve the pointer-to-divider grab offset in stable window
 coordinates, never accumulating offsets from a moving handle. GTK uses the
 [surface-relative event position](https://docs.gtk.org/gdk4/method.Event.get_position.html).
@@ -374,7 +373,7 @@ core-owned settings view. `preferences()` describes
 pages, groups and typed choice/number/switch/information rows, current values,
 availability, dependencies, search results, errors and shortcut recording state.
 Each accepted `PreferenceAction` edit validates, applies and requests persistence
-immediately; the bulk `EditSettings` action does the same for programmatic callers.
+immediately.
 `CloseSettings` only closes the view; Done, Back and dismissal never revert values.
 Invalid edits preserve the last accepted value and report an inline error.
 Hosts render this small settings-specific model,

@@ -45,6 +45,14 @@ fn edited(gamma: f32) -> Settings {
         ..Default::default()
     }
 }
+fn preference(id: layer_ui::PreferenceId, value: f32) -> UiAction {
+    UiAction::Preferences {
+        action: layer_ui::PreferenceAction::Edit {
+            id,
+            value: layer_ui::PreferenceValue::Number(value),
+        },
+    }
+}
 
 #[test]
 fn settings_round_trip_uses_shared_validation_and_migration() {
@@ -239,16 +247,15 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
         page: layer_ui::SettingsPage::Appearance,
     })
     .unwrap();
-    host.dispatch(UiAction::EditSettings {
-        settings: edited(1.1),
-    })
-    .unwrap();
+    host.dispatch(preference(layer_ui::PreferenceId::Pressure, 1.1))
+        .unwrap();
     service.poll(&mut host).unwrap();
     wait.recv_timeout(Duration::from_secs(5)).unwrap();
     for i in 2..=100 {
-        host.dispatch(UiAction::EditSettings {
-            settings: edited(1. + i as f32 / 100.),
-        })
+        host.dispatch(preference(
+            layer_ui::PreferenceId::Pressure,
+            1. + i as f32 / 100.,
+        ))
         .unwrap();
         service.poll(&mut host).unwrap();
         assert_eq!(
@@ -288,18 +295,14 @@ fn windows_merge_unrelated_edits_and_share_current_preferences() {
         .unwrap();
     }
     first
-        .dispatch(UiAction::EditSettings {
-            settings: edited(1.25),
-        })
+        .dispatch(preference(layer_ui::PreferenceId::Pressure, 1.25))
         .unwrap();
     a.poll(&mut first).unwrap();
     assert!(wakes.load(Ordering::Relaxed) > 0);
     // This owner has not consumed the notification yet: its edit is based on
     // the original settings and must not undo the first owner's pressure edit.
-    let mut local = second.session.state().settings.clone();
-    local.pan_speed = 1.5;
     second
-        .dispatch(UiAction::EditSettings { settings: local })
+        .dispatch(preference(layer_ui::PreferenceId::PanSpeed, 1.5))
         .unwrap();
     b.poll(&mut second).unwrap();
     a.poll(&mut first).unwrap();
@@ -486,10 +489,8 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
     })
     .unwrap();
     for (gamma, failed) in [(1.25, true), (1.75, false)] {
-        host.dispatch(UiAction::EditSettings {
-            settings: edited(gamma),
-        })
-        .unwrap();
+        host.dispatch(preference(layer_ui::PreferenceId::Pressure, gamma))
+            .unwrap();
         service.poll(&mut host).unwrap();
         completed.recv_timeout(Duration::from_secs(5)).unwrap();
         service.poll(&mut host).unwrap();
@@ -504,10 +505,8 @@ fn change_preferences(host: &mut NativeHost, gamma: f32) {
         page: layer_ui::SettingsPage::Appearance,
     })
     .unwrap();
-    host.dispatch(UiAction::EditSettings {
-        settings: edited(gamma),
-    })
-    .unwrap();
+    host.dispatch(preference(layer_ui::PreferenceId::Pressure, gamma))
+        .unwrap();
     host.dispatch(UiAction::CloseSettings).unwrap();
 }
 fn pump_close(

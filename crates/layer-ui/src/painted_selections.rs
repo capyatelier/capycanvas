@@ -308,7 +308,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::SelectLayer { .. }
                 | UiAction::SetLayerVisibility { .. }
                 | UiAction::SetLayerOpacity { .. }
-                | UiAction::MoveLayer { .. }
         ) {
             return false;
         }

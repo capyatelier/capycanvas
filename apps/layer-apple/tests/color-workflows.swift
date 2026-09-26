@@ -42,7 +42,7 @@ import QuartzCore
                 try await Task.sleep(for: .milliseconds(10))
             }
             let options = JSON(["extent": [63, 47], "color": ["space": "DisplayP3", "depth": "U16"], "background": "Transparent"])
-            try await edit(store, ["type": "new_document_settings", "settings": ["defaults": options.raw, "presets": []]])
+            try await edit(store, ["type": "new_document_preferences", "action": ["type": "remember", "options": options.raw, "name": "", "defaults": true]])
             try await edit(store, ["type": "invoke", "command": "new_document"])
             try await wait("Creation choices") { store.projectFiles.creating }
             try require(store.projectFiles.newDocumentSpec["creation"]["options"].stableKey == options.stableKey, "New must expose saved defaults")

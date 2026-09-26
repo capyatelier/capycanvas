@@ -219,7 +219,6 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
-            UiAction::SetToolText { .. } => false,
             UiAction::Tonal { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Choice {items,..} if items.iter().any(|i| i.action==*action))),
             UiAction::ToggleSliderBookmark { control } => control.slider()
                 .is_some_and(|binding| binding.field(self).is_some()),

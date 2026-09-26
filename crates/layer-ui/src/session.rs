@@ -2150,10 +2150,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         self.engine.backend_mut().shader_input();
         self.end_holds_for_tool_choice(&action);
-        match action {
-            UiAction::CommandSearch { action } => return self.command_search_action(action),
-            UiAction::ExecuteCommand { id, value } => return self.execute_catalog_command(&id, value),
-            _ => {}
+        if let UiAction::CommandSearch { action } = action {
+            return self.command_search_action(action);
         }
         if let UiAction::ToolbarEdit { context, action } = action {
             if context != self.state.toolbar_context() || !self.state.toolbar_edit_allowed(&action) {
@@ -2169,7 +2167,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.operation.placing() && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
-            | UiAction::SetLayerOpacity { .. } | UiAction::MoveLayer { .. }
+            | UiAction::SetLayerOpacity { .. }
             | UiAction::Effect { .. } | UiAction::FilterPicker { .. })
         {
             return Err("Apply or cancel the photo placement first".into());
@@ -2290,11 +2288,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::MoveColumn { .. }
                 | UiAction::MoveTile { .. }
                 | UiAction::SelectPanelTab { .. }
-                | UiAction::ResizeDock { .. }
                 | UiAction::DoubleClickPanelHandle { .. }
                 | UiAction::ResetColumnWidth { .. }
                 | UiAction::NudgeDivider { .. }
-                | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
                     command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar | CommandId::ShowCanvasActionBar
                 }
@@ -2328,7 +2324,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
-            UiAction::CommandSearch { .. } | UiAction::ExecuteCommand { .. } => unreachable!("handled above"),
+            UiAction::CommandSearch { .. } => unreachable!("handled above"),
             UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } => unreachable!("validated before dispatch"),
             UiAction::ToggleSliderBookmark { control } => {
                 let binding = control.slider().ok_or("Not a brush slider")?;
@@ -2829,7 +2825,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(self.changed(BRUSH | DOCUMENT, true));
                 }
                 let hdr = self.engine.document().color.depth.is_float();
-                if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
+                if matches!(action, ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
                 self.state.colors.set_document_depth(self.engine.document().color.depth)?;
@@ -2891,7 +2887,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
             UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
-            UiAction::SetToolText { .. } => return Err("Unknown text setting".into()),
             UiAction::StepToolSetting { id, steps } => {
                 let setting = self
                     .state
@@ -2958,23 +2953,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::SetLayerOpacity { id, opacity } => {
                 self.require_idle()?;
                 self.set_layer_opacity(id, opacity)?;
-                (0, true)
-            }
-            UiAction::MoveLayer { id, index } => {
-                self.require_idle()?;
-                let layers = &self.engine.document().layers;
-                if !layers
-                    .iter()
-                    .any(|layer| layer.id == LayerId(id) && layer.kind == LayerKind::Paint)
-                    || !layers
-                        .get(index as usize)
-                        .is_some_and(|layer| layer.kind == LayerKind::Paint)
-                {
-                    return Err("Move paint layers within the paint stack".into());
-                }
-                self.engine
-                    .move_layer(LayerId(id), index as usize)
-                    .map_err(error)?;
                 (0, true)
             }
             UiAction::MovePanel {
@@ -3055,17 +3033,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 )?;
                 (LAYOUT, false)
             }
-            UiAction::ResizeDock {
-                id,
-                position,
-                viewport,
-            } => {
-                self.state
-                    .workspace
-                    .layout
-                    .resize_workspace(id, position, viewport)?;
-                (LAYOUT, false)
-            }
             UiAction::DragDivider {
                 id,
                 phase,
@@ -3136,10 +3103,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .resize_workspace(id, position, viewport)?;
                 (LAYOUT, false)
             }
-            UiAction::PrioritizeBand { id } => {
-                self.state.workspace.layout.prioritize(id)?;
-                (LAYOUT, false)
-            }
             UiAction::SetTheme { theme } => {
                 self.state.settings.theme = theme;
                 (SETTINGS, true)
@@ -3165,25 +3128,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 settings.apply(action)?;
                 save_settings = settings != self.state.settings.new_document;
                 self.state.settings.new_document = settings;
-                (SETTINGS | COMMANDS, save_settings)
-            }
-            UiAction::NewDocumentSettings { settings } => {
-                settings.validate()?;
-                save_settings = settings != self.state.settings.new_document;
-                if save_settings {
-                    self.state.settings.new_document = settings;
-                }
-                (SETTINGS | COMMANDS, save_settings)
-            }
-            UiAction::EditSettings { settings } => {
-                settings.validate()?;
-                if !self.state.settings_open {
-                    return Err("Settings are not open".into());
-                }
-                save_settings = settings != self.state.settings;
-                if save_settings {
-                    self.apply_settings(settings)?;
-                }
                 (SETTINGS | COMMANDS, save_settings)
             }
             UiAction::OpenSettings { page } => {
@@ -4953,7 +4897,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             has_mask: l.mask.is_some(),
             mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
             mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
-            show_mask_area: l.mask.as_ref().is_some_and(|m| m.show_area),
             alpha_locked: l.properties.alpha_locked,
             locked: doc.is_locked(l.id),
             clipped: l.properties.clipped,
@@ -9690,7 +9633,8 @@ mod tests {
             })
             .is_err()
         );
-        s.layer_action(LayerAction::Solo { id: group.0 }).unwrap();
+        s.layer_action(LayerAction::Select { id: group.0, mask: false }).unwrap();
+        s.layer_action(LayerAction::SoloSelected).unwrap();
         assert!(s.engine.document().layer(LayerId(id)).unwrap().visible);
     }
     #[test]
@@ -10680,9 +10624,9 @@ mod tests {
         assert_eq!(s.set_viewport(logical, physical).unwrap().regions, 0);
         s.gesture([100.0; 2], [200.0; 2], 1.2, 0.4).unwrap();
         let camera = s.state.camera.clone();
-        s.dispatch(UiAction::ResizeDock {
+        s.dispatch(UiAction::NudgeDivider {
             id: 3,
-            position: [310.0, 100.0],
+            forward: true,
             viewport: logical,
         })
         .unwrap();
@@ -10781,26 +10725,17 @@ mod tests {
                 group: 5,
                 panel: Panel::Brushes,
             },
-            UiAction::PrioritizeBand { id: 7 },
             UiAction::Invoke {
                 command: CommandId::ZenMode,
+            },
+            UiAction::NudgeDivider {
+                id: 7,
+                forward: false,
+                viewport,
             },
         ] {
             source.dispatch(action).unwrap();
         }
-        let divider = source
-            .layout(viewport)
-            .dividers
-            .into_iter()
-            .find(|d| d.id == 7)
-            .unwrap();
-        source
-            .dispatch(UiAction::ResizeDock {
-                id: 7,
-                position: [divider.bounds.x - 30.0 + divider.bounds.width * 0.5, 450.0],
-                viewport,
-            })
-            .unwrap();
         for zen_mode in [true, false] {
             if !zen_mode {
                 invoke(&mut source, CommandId::ZenMode);
@@ -14875,7 +14810,7 @@ mod tests {
             cursor: CursorMode::Cross,
             ..Settings::default()
         };
-        s.dispatch(UiAction::EditSettings { settings }).unwrap();
+        s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
         s.dispatch(UiAction::CloseSettings).unwrap();
         let cross = s.canvas_cursor().unwrap();
         assert_eq!(cross.segments.len(), 1);
@@ -16380,7 +16315,7 @@ mod tests {
         assert_eq!(app.state.settings.theme, Some(Theme::Light));
         check_menu(&app.state);
         invoke(&mut app, CommandId::Settings);
-        app.dispatch(UiAction::EditSettings {
+        app.dispatch(UiAction::RestoreSettings {
             settings: Settings::default(),
         })
         .unwrap();
@@ -16391,38 +16326,6 @@ mod tests {
         assert_eq!(app.state.settings.theme, None);
         check_menu(&app.state);
     }
-    #[test]
-    fn settings_apply_individually_and_dismissal_never_reverts_them() {
-        let mut app = session();
-        invoke(&mut app, CommandId::Settings);
-        let settings = Settings {
-            theme: Some(Theme::Light),
-            pressure_gamma: 1.6,
-            ..Settings::default()
-        };
-        app.dispatch(UiAction::EditSettings {
-            settings: settings.clone(),
-        })
-        .unwrap();
-        assert_eq!(app.state.settings, settings);
-        app.dispatch(UiAction::CloseSettings).unwrap();
-        assert!(!app.state.settings_open);
-        assert_eq!(app.state.settings, settings);
-        invoke(&mut app, CommandId::Settings);
-        app.dispatch(UiAction::EditSettings {
-            settings: settings.clone(),
-        })
-        .unwrap();
-        app.dispatch(UiAction::CloseSettings).unwrap();
-        assert_eq!(app.state.settings, settings);
-        assert!(
-            app.dispatch(UiAction::EditSettings {
-                settings: Settings::default()
-            })
-            .is_err()
-        );
-    }
-
     fn preference(s: &mut UiSession<Recorder>, action: PreferenceAction) {
         s.dispatch(UiAction::Preferences { action }).unwrap();
     }

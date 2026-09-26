@@ -159,7 +159,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::CompleteRequest { .. }
             | UiAction::CloseSettings
             | UiAction::OpenSettings { .. }
-            | UiAction::EditSettings { .. }
             | UiAction::RestoreSettings { .. }
             | UiAction::Preferences { .. }
             | UiAction::SetTheme { .. }

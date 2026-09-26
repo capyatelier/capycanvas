@@ -37,7 +37,7 @@ actions report layer grouping and deletion errors, missing selections or masks,
 filters while editing a mask, and locked layers. The generic "Unavailable in
 the current tool or edit target" text remains only a fallback.
 
-`ExecuteCommand` accepts only an ID found in a newly evaluated catalog. It
+Search execution accepts only an ID found in a newly evaluated catalog. It
 cannot execute arbitrary serialized internal events. Search invocation also
 checks the originating document epoch. Live validation and normal history
 remain in dispatch. Numeric entry uses the existing `NumericControl` schema,

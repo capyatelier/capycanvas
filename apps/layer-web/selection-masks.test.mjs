@@ -104,7 +104,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
   await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();
   // BigInt IDs follow the same native serialization used by real layer buttons.
-  await evaluate(`layerApp.dispatch({type:'selection',action:{op:'edit_layer',id:BigInt(${JSON.stringify(id)})}})`);await settle();
+  await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(id)})})`);await settle();
   assert.equal(String((await evaluate('String(layerApp.state().layer_tools.mask_editing.layer)'))),id);
   await send({type:'selection',action:{op:'begin_resize',grow:true,layer:Number(id)}});
   assert.ok(await evaluate('document.querySelector("#selection-resize-dialog").open'));

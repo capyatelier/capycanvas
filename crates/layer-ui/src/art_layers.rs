@@ -199,9 +199,6 @@ pub enum LayerAction {
     Reference {
         id: u64,
     },
-    Solo {
-        id: u64,
-    },
     AddMask {
         id: u64,
         replace: bool,
@@ -1067,7 +1064,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.layer_edit(Edit::SetReferences(references))?;
             }
-            a @ (LayerAction::Solo { .. } | LayerAction::SoloSelected) => {
+            LayerAction::SoloSelected => {
                 let next: Vec<_> = if let Some(previous) = self.layer_interaction.solo.take() {
                     previous
                         .into_iter()
@@ -1075,11 +1072,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .collect()
                 } else {
                     let doc = self.engine.document();
-                    let roots = if let LayerAction::Solo { id } = a {
-                        vec![LayerId(id)]
-                    } else {
-                        doc.layer_roots(&self.layer_interaction.selected)
-                    };
+                    let roots = doc.layer_roots(&self.layer_interaction.selected);
                     if roots.is_empty() {
                         return Err("Select layers first".into());
                     }

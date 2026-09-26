@@ -92,6 +92,26 @@ fn pump(ms: u64) {
 fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
 }
+fn drag_divider(w: &Rc<Workspace>, id: u32, to: [f32; 2]) {
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let d = w.resolved().dividers.into_iter().find(|d| d.id == id).unwrap();
+    let from = [
+        d.bounds.x + d.bounds.width * 0.5,
+        d.bounds.y + d.bounds.height * 0.5,
+    ];
+    for (phase, position) in [
+        (ContactPhase::Down, from),
+        (ContactPhase::Move, to),
+        (ContactPhase::Up, to),
+    ] {
+        w.dispatch(UiAction::DragDivider {
+            id,
+            phase,
+            position,
+            viewport,
+        });
+    }
+}
 
 // Dock/gesture regressions exercise a stable, deliberately customized workspace
 // (including its tab IDs and eight-tile ribbon), not the evolving shipped preset.
@@ -2508,18 +2528,13 @@ fn native_operation_tool() {
         workspace: Box::new(workspace),
     });
     pump(100);
-    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let divider = w
         .resolved()
         .dividers
         .into_iter()
         .find(|d| d.axis == Axis::Vertical && d.bounds.x < 100.)
         .unwrap();
-    w.dispatch(UiAction::ResizeDock {
-        id: divider.id,
-        position: [100., 220.],
-        viewport,
-    });
+    drag_divider(&w, divider.id, [100., 220.]);
     w.dispatch(UiAction::Invoke {
         command: CommandId::FitCanvas,
     });
@@ -2630,13 +2645,13 @@ fn native_operation_tool() {
             .filter(|d| d.band && d.axis == Axis::Horizontal)
             .min_by(|a, b| (a.bounds.x - edge).abs().total_cmp(&(b.bounds.x - edge).abs()))
             .unwrap();
-        w.dispatch(UiAction::ResizeDock {
-            id: divider.id,
-            position: [divider.parent.x + 128. + WORKSPACE_SPACING * 0.5, 0.],
-            viewport,
-        });
-        pump(120);
         let minimum = layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32;
+        drag_divider(
+            &w,
+            divider.id,
+            [divider.parent.x + minimum as f32 + WORKSPACE_SPACING * 0.5, 0.],
+        );
+        pump(120);
         assert_eq!(panel.width(), minimum);
         assert!(
             w.tool_settings
@@ -2647,11 +2662,11 @@ fn native_operation_tool() {
             "tool settings exceed their six-tile minimum"
         );
         capture_reference(&w, &format!("{dir}/operation-narrow-{theme:?}.png"), 1.);
-        w.dispatch(UiAction::ResizeDock {
-            id: divider.id,
-            position: [divider.bounds.x + divider.bounds.width * 0.5, 0.],
-            viewport,
-        });
+        drag_divider(
+            &w,
+            divider.id,
+            [divider.bounds.x + divider.bounds.width * 0.5, 0.],
+        );
         pump(120);
     }
     let cancel: gtk::Button = find_named(
@@ -9404,11 +9419,7 @@ fn native_workspace_restore() {
         },
         viewport: [1200.0, 900.0],
     });
-    source.dispatch(UiAction::ResizeDock {
-        id: 3,
-        position: [320.0, 450.0],
-        viewport: [1200.0, 900.0],
-    });
+    drag_divider(&source, 3, [320.0, 450.0]);
     source.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
     });
@@ -12603,11 +12614,7 @@ fn native_workspace_controls_docking_and_ink() {
         .unwrap()
         .1
         .clone();
-    w.dispatch(UiAction::ResizeDock {
-        id: 3,
-        position: [282.0, 0.0],
-        viewport: [w.surface.width() as f32, w.surface.height() as f32],
-    });
+    drag_divider(&w, 3, [282.0, 0.0]);
     pump(100);
     assert!(
         w.surface
@@ -12622,11 +12629,7 @@ fn native_workspace_controls_docking_and_ink() {
     // Repeated allocations retire differently sized display images. The pool
     // must remain bounded, eventually present the latest size, then go idle.
     for position in [250.0, 310.0, 260.0, 320.0, 270.0, 300.0] {
-        w.dispatch(UiAction::ResizeDock {
-            id: 3,
-            position: [position, 0.0],
-            viewport: [w.surface.width() as f32, w.surface.height() as f32],
-        });
+        drag_divider(&w, 3, [position, 0.0]);
         pump(25);
     }
     restore_fixture_docking();
@@ -12771,11 +12774,11 @@ fn native_workspace_controls_docking_and_ink() {
         .into_iter()
         .find(|d| d.id == band.id)
         .unwrap();
-    w.dispatch(UiAction::ResizeDock {
-        id: band.id,
-        position: [d.bounds.x + d.bounds.width * 0.5 + 38.0, d.bounds.y],
-        viewport: [w.surface.width() as f32, w.surface.height() as f32],
-    });
+    drag_divider(
+        &w,
+        band.id,
+        [d.bounds.x + d.bounds.width * 0.5 + 38.0, d.bounds.y],
+    );
     pump(100);
     assert_eq!(w.toolbar.width(), 74);
     let wrapped = tiles();

@@ -88,7 +88,6 @@ pub enum ColorWheelPart {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ColorAction {
     QuickColor { white: bool },
-    Brightness { stops: f32 },
     /// Multiply the bounded picker color in linear light, retaining its coordinates.
     HdrIntensity { stops: f32 },
     SetSlot { slot: ColorSlot, color: RgbColor },
@@ -657,7 +656,6 @@ impl ColorState {
                 }
                 self.set_color(if white { RgbColor::WHITE } else { RgbColor::BLACK })?;
             }
-            ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev_at_depth(self.rgb_space, stops, self.hdr_depth)?)?,
             ColorAction::HdrIntensity { stops } => self.set_hdr_intensity(stops)?,
             ColorAction::SetSlotIntensity { slot, color, stops } => {
                 if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }

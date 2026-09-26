@@ -28,20 +28,8 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
         catalog.iter().find(|d| d.id == "canvas.pan").unwrap().kind,
         CommandKind::Held
     );
-    assert!(
-        s.dispatch(UiAction::ExecuteCommand {
-            id: "canvas.pan".into(),
-            value: None
-        })
-        .is_err()
-    );
-    assert!(
-        s.dispatch(UiAction::ExecuteCommand {
-            id: "complete_request".into(),
-            value: None
-        })
-        .is_err()
-    );
+    assert!(s.execute_catalog_command("canvas.pan", None).is_err());
+    assert!(s.execute_catalog_command("complete_request", None).is_err());
 }
 
 #[test]
@@ -169,13 +157,7 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
         },
     })
     .unwrap();
-    assert!(
-        s.dispatch(UiAction::ExecuteCommand {
-            id: clear.id,
-            value: None
-        })
-        .is_err()
-    );
+    assert!(s.execute_catalog_command(&clear.id, None).is_err());
     search_action(&mut s, CommandSearchAction::Close);
     s.dispatch(UiAction::Layer {
         action: LayerAction::Lock {
@@ -185,11 +167,8 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
     })
     .unwrap();
     let before = s.engine.document().layers.len();
-    s.dispatch(UiAction::ExecuteCommand {
-        id: "command.add_layer".into(),
-        value: None,
-    })
-    .unwrap();
+    s.execute_catalog_command("command.add_layer", None)
+        .unwrap();
     assert_eq!(s.engine.document().layers.len(), before + 1);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().layers.len(), before);
@@ -366,18 +345,10 @@ fn active_layer_command_ids_resolve_new_targets_and_toggle_values() {
         .id;
     invoke(&mut s, CommandId::AddLayer);
     let second = s.engine.document().active_layer;
-    s.dispatch(UiAction::ExecuteCommand {
-        id: lock.clone(),
-        value: None,
-    })
-    .unwrap();
+    s.execute_catalog_command(&lock, None).unwrap();
     assert!(!s.engine.document().is_locked(first));
     assert!(s.engine.document().is_locked(second));
-    s.dispatch(UiAction::ExecuteCommand {
-        id: lock,
-        value: None,
-    })
-    .unwrap();
+    s.execute_catalog_command(&lock, None).unwrap();
     assert!(!s.engine.document().is_locked(second));
 }
 
@@ -400,11 +371,7 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
             .unwrap_or_else(|| panic!("{label} is cataloged"))
     };
     let execute = |s: &mut UiSession<Recorder>, id: &str, value: Option<&str>| {
-        s.dispatch(UiAction::ExecuteCommand {
-            id: id.into(),
-            value: value.map(Into::into),
-        })
-        .unwrap();
+        s.execute_catalog_command(id, value.map(Into::into)).unwrap();
     };
     let radial = find(&s, "Ruler › Radial");
     assert!(!radial.selected);

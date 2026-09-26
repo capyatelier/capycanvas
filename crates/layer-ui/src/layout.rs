@@ -3312,16 +3312,6 @@ impl DockLayout {
         }
         Ok(())
     }
-    pub fn prioritize(&mut self, id: u32) -> Result<(), String> {
-        let index = self
-            .bands
-            .iter()
-            .position(|band| band.id == id)
-            .ok_or("Unknown dock")?;
-        let band = self.bands.remove(index);
-        self.bands.insert(0, band);
-        Ok(())
-    }
     pub fn resolve(&self, width: f32, height: f32) -> ResolvedLayout {
         let base = self.resolve_bands(width, height, &self.bands, false);
         if !self
@@ -7810,17 +7800,6 @@ mod tests {
             .find(|g| g.panels.contains(&panel))
             .unwrap()
             .bounds
-    }
-    #[test]
-    fn corners_follow_explicit_band_priority() {
-        let mut layout = DockLayout::default();
-        let before = layout.resolve(1400.0, 900.0);
-        assert!(group(&before, Panel::Toolbar).width < 1400.0);
-        assert_eq!(group(&before, Panel::Layers).y, 0.0);
-        layout.prioritize(1).unwrap();
-        let after = layout.resolve(1400.0, 900.0);
-        assert!(group(&after, Panel::Layers).y > 0.0);
-        assert_eq!(group(&after, Panel::Toolbar).width, 1400.0);
     }
     #[test]
     fn divider_centers_roundtrip_for_every_edge_and_nested_split() {

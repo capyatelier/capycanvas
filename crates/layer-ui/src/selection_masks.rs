@@ -56,9 +56,6 @@ pub enum SelectionAction {
         parent: Option<u64>,
         save_current: bool,
     },
-    EditLayer {
-        id: u64,
-    },
     LoadLayer {
         id: u64,
         mode: SelectionMode,
@@ -821,7 +818,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn selection_action(&mut self, action: SelectionAction) -> Result<(), String> {
         if self.selection_masks.quick() {
             match &action {
-                SelectionAction::EditLayer { id: 0 } => return Ok(()),
                 SelectionAction::LoadLayer { id: 0, .. }
                 | SelectionAction::LoadThumbnail { id: 0, .. } => return self.return_to_artwork(),
                 _ => (),
@@ -953,9 +949,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(Edit::InsertLayer { index: 0, layer })?;
                 self.begin_selection_mask(SelectionTarget::Saved(id))?;
                 self.state.layer_tools.rename_layer = Some(id.0);
-            }
-            SelectionAction::EditLayer { id } => {
-                self.begin_selection_mask(SelectionTarget::Saved(LayerId(id)))?
             }
             SelectionAction::LoadThumbnail {
                 id,

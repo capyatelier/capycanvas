@@ -323,10 +323,8 @@ mod painted_selection_checks {
             .unwrap()
             .id;
         assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
-        s.dispatch(UiAction::Selection {
-            action: SelectionAction::EditLayer { id: id.0 },
-        })
-        .unwrap();
+        s.dispatch(UiAction::SelectLayer { id: id.0 }).unwrap();
+        assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
         invoke(&mut s, CommandId::ClearSelectionMask);
         assert_eq!(
             s.engine.document().saved_selection(id).unwrap(),
@@ -518,7 +516,8 @@ mod painted_selection_checks {
         let id = s.engine.document().layers.iter().find(|l| l.kind == LayerKind::Selection).unwrap().id;
         assert_eq!(s.engine.document().layer(id).unwrap().properties.selection_mask.as_ref().unwrap().opacity, 0.3);
         invoke(&mut s, CommandId::ReturnToArtwork);
-        s.dispatch(UiAction::Selection { action: SelectionAction::EditLayer { id: id.0 } }).unwrap();
+        s.dispatch(UiAction::SelectLayer { id: id.0 }).unwrap();
+        assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
         s.dispatch(set(id.0, "mask_opacity", EffectValue::Number(0.7))).unwrap();
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.mask_properties().opacity, 0.3);

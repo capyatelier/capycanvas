@@ -15,7 +15,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
             color: DocumentColor { space: RgbSpace::AdobeRgb, depth: SampleDepth::U16 },
             background: DocumentBackground::Transparent,
         };
-        app.action(json!({"type":"new_document_settings","settings":{"defaults":defaults,"presets":[]}}));
+        app.action(json!({"type":"new_document_preferences","action":{"type":"remember","options":defaults,"name":"","defaults":true}}));
         let adopt = |job: &ProjectJob, options: NewDocumentOptions| {
             // NativeOwner durably completes settings requests before a window
             // parks its active session; mirror that host boundary here.
@@ -54,7 +54,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
         // A worker consumes the settings captured by its owner, not later edits.
         let captured = ProjectJob::new(&app, true);
         let changed = NewDocumentOptions { extent: [73, 51], ..defaults };
-        app.action(json!({"type":"new_document_settings","settings":{"defaults":changed,"presets":[]}}));
+        app.action(json!({"type":"new_document_preferences","action":{"type":"remember","options":changed,"name":"","defaults":true}}));
         assert_eq!(unsafe { capy_project_read(captured.0, -1, c"Drawing.capy".as_ptr()) }, 0, "{:?}", captured.error());
         adopt(&captured, defaults);
         assert_eq!(app.state()["settings"]["new_document"]["defaults"], json!(changed));

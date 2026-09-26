@@ -1255,7 +1255,6 @@ pub struct LayerState {
     pub has_mask: bool,
     pub mask_enabled: bool,
     pub mask_linked: bool,
-    pub show_mask_area: bool,
     pub alpha_locked: bool,
     pub locked: bool,
     pub clipped: bool,
@@ -1336,11 +1335,8 @@ pub struct UiState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
     CommandSearch { action: CommandSearchAction },
-    /// Public semantic invocation; IDs come from the shared catalog.
-    ExecuteCommand { id: String, value: Option<String> },
     Selection { action: SelectionAction },
     Tonal { action: TonalAction },
-    SetToolText { id: String, value: String },
     ActivateHeaderItem {
         id: u32,
     },
@@ -1500,10 +1496,6 @@ pub enum UiAction {
         id: Option<u64>,
         opacity: f32,
     },
-    MoveLayer {
-        id: u64,
-        index: u32,
-    },
     MovePanel {
         panel: Panel,
         target: DockTarget,
@@ -1531,12 +1523,6 @@ pub enum UiAction {
         group: u32,
         panel: Panel,
     },
-    /// Divider center in logical workspace units, for mouse/touch or keyboard.
-    ResizeDock {
-        id: u32,
-        position: [f32; 2],
-        viewport: [f32; 2],
-    },
     DragDivider {
         id: u32,
         phase: ContactPhase,
@@ -1548,9 +1534,6 @@ pub enum UiAction {
         forward: bool,
         viewport: [f32; 2],
     },
-    PrioritizeBand {
-        id: u32,
-    },
     SetTheme {
         theme: Option<Theme>,
     },
@@ -1559,14 +1542,8 @@ pub enum UiAction {
         #[serde(default)]
         accent: Option<HexColor>,
     },
-    NewDocumentSettings {
-        settings: NewDocumentSettings,
-    },
     NewDocumentPreferences {
         action: NewDocumentAction,
-    },
-    EditSettings {
-        settings: Settings,
     },
     OpenSettings {
         page: SettingsPage,
