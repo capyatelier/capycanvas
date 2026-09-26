@@ -1358,7 +1358,7 @@ impl WgpuRasterizer {
             renderer.pipelines.compile_all();
             if renderer.device.portable_blend() { for pipeline in &renderer.portable_blend.pipelines { pipeline.compile(); } }
             renderer.layer_masks.compile_all();
-            renderer.selection_clip.compile_all();
+            for pipeline in renderer.selection_clip.pipelines() { pipeline.compile(); }
             for pipeline in renderer.transforms.as_ref().unwrap().pipelines() {
                 pipeline.compile();
             }
@@ -3343,12 +3343,7 @@ impl CanvasRenderer for WgpuRasterizer {
             if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
                 if let Some(startup) = &self.startup {
                     startup.compiler.check()?;
-                    let mut ready = true;
-                    for pipeline in [&self.selection_clip.crossings, &self.selection_clip.fill] {
-                        startup.compiler.pipeline(pipeline, startup::BRUSH);
-                        ready &= pipeline.ready();
-                    }
-                    if !ready { return Ok(()); }
+                    if !startup.compiler.require(self.selection_clip.pipelines().into_iter().take(2), startup::BRUSH) { return Ok(()); }
                 }
                 let mut encoder = crate::submission::CommandEncoder::new(&self.device,
                     &wgpu::CommandEncoderDescriptor { label: Some("selection overlay") });

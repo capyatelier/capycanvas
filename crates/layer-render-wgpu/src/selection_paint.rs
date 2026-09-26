@@ -185,16 +185,10 @@ impl SelectionPainter {
         }
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
-            let mut ready = true;
-            for pipeline in self.pipelines.iter().chain([
-                &r.selection_clip.crossings,
-                &r.selection_clip.fill,
-                &r.selection_clip.resample,
-            ]) {
-                startup.compiler.pipeline(pipeline, startup::BRUSH);
-                ready &= pipeline.ready();
-            }
-            if !ready {
+            if !startup.compiler.require(
+                self.pipelines.iter().chain(r.selection_clip.pipelines()),
+                startup::BRUSH,
+            ) {
                 return Ok(false);
             }
         }

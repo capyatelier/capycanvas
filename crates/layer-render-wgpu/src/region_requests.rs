@@ -92,14 +92,9 @@ impl RegionRequests {
                     .prepare(&startup.compiler, options);
             }
             if request.limit.is_some() || request.selection.is_some() {
-                for pipeline in [
-                    &r.selection_clip.crossings,
-                    &r.selection_clip.fill,
-                    &r.selection_clip.resample,
-                ] {
-                    startup.compiler.pipeline(pipeline, startup::BRUSH);
-                    ready &= pipeline.ready();
-                }
+                ready &= startup
+                    .compiler
+                    .require(r.selection_clip.pipelines(), startup::BRUSH);
             }
             if !ready {
                 self.waiting = Some(request);

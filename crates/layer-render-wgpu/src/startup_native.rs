@@ -82,7 +82,11 @@ impl Compiler {
                             } else { worker.wake.wait(queue).unwrap() };
                         }
                     };
-                    let _span = Span::new(job.priority);
+                    let _span = crate::performance_trace::Span::new(match job.priority {
+                        DOCUMENT => c"capy.compile.document",
+                        BRUSH => c"capy.compile.brush",
+                        _ => c"capy.compile.other",
+                    });
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.work))
                         .unwrap_or_else(|_| Err("Shader compilation failed".into()));
                     if let Err(error) = result {
@@ -115,6 +119,9 @@ impl Compiler {
             });
         }
     }
+    pub fn require<'a, T: Send + Sync + 'static>(&self, pipelines: impl IntoIterator<Item = &'a Deferred<T>>, priority: u8) -> bool {
+        pipelines.into_iter().fold(true, |ready, p| { self.pipeline(p, priority); ready & p.ready() })
+    }
     pub fn start(&self) {
         self.0.queue.lock().unwrap().started = true;
         self.0.wake.notify_one();
@@ -144,70 +151,6 @@ impl Drop for Compiler {
         retired.retain(|worker| !worker.is_finished());
         retired.push(self.1.take().unwrap());
     }
-}
-struct Span {
-    #[cfg(target_os = "windows")]
-    start: Option<std::time::Instant>,
-    #[cfg(target_os = "windows")]
-    priority: u8,
-}
-impl Span {
-    fn new(priority: u8) -> Self {
-        #[cfg(target_os = "android")]
-        unsafe {
-            ATrace_beginSection(
-                match priority {
-                    DOCUMENT => c"capy.compile.document",
-                    BRUSH => c"capy.compile.brush",
-                    _ => c"capy.compile.other",
-                }
-                .as_ptr(),
-            );
-        }
-        #[cfg(not(target_os = "android"))]
-        let _ = priority;
-        Self {
-            #[cfg(target_os = "windows")]
-            start: std::env::var_os("CAPY_TRACE_SHADER_JOBS").map(|_| {
-                eprintln!(
-                    "shader_job begin priority={priority} utc_ms={}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                );
-                std::time::Instant::now()
-            }),
-            #[cfg(target_os = "windows")]
-            priority,
-        }
-    }
-}
-impl Drop for Span {
-    fn drop(&mut self) {
-        #[cfg(target_os = "windows")]
-        if let Some(start) = self.start {
-            eprintln!(
-                "shader_job end priority={} elapsed_ms={:.3} utc_ms={}",
-                self.priority,
-                start.elapsed().as_secs_f64() * 1000.,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-            );
-        }
-        #[cfg(target_os = "android")]
-        unsafe {
-            ATrace_endSection();
-        }
-    }
-}
-#[cfg(target_os = "android")]
-#[link(name = "android")]
-unsafe extern "C" {
-    fn ATrace_beginSection(name: *const std::ffi::c_char);
-    fn ATrace_endSection();
 }
 
 #[cfg(test)]

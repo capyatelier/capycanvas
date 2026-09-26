@@ -119,18 +119,7 @@ impl PipelineDevice {
     ) -> Self {
         let cache = super::shader_cache::Cache::open(&device, &adapter.get_info(), directory)
             .map(std::sync::Arc::new);
-        Self {
-            device,
-            cache,
-            tone_pipelines: Default::default(),
-            blend_pipelines: Default::default(),
-            working_format: super::SRGB8_FORMAT,
-            working_space: Default::default(),
-            hdr: false,
-            source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
-                512 * 1024 * 1024,
-            )),
-        }
+        Self { cache, ..Self::from(device) }
     }
     pub fn create_texture(&self, descriptor: &wgpu::TextureDescriptor<'_>) -> wgpu::Texture {
         let _trace = crate::performance_trace::Span::new(c"capy.allocate_texture");

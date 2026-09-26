@@ -1065,7 +1065,7 @@ impl Worker {
                 Command::AdoptColor(id) => {
                     self.adopt_color(id, telemetry_enabled)?;
                     startup_input = None;
-                    startup_progress = color::complete();
+                    startup_progress = layer_render_wgpu::StartupProgress::COMPLETE;
                     document_drawn = true;
                     reply.send(Reply::ColorAdopted(id, self.renderer.brush_sources(), self.renderer.snapshot_gpu(), self.renderer.shader_activity())).map_err(error)?;
                 }

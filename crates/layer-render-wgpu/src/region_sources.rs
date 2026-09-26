@@ -243,17 +243,13 @@ impl RawRegions {
         [&self.seed_pipeline, &self.tile_pipeline].into_iter()
     }
     pub fn prepare(&self, compiler: &startup::Compiler) -> bool {
-        let mut ready = true;
-        for pipeline in self.pipelines() {
-            compiler.pipeline(pipeline, startup::BRUSH);
-            ready &= pipeline.ready();
-        }
-        ready
+        compiler.require(self.pipelines(), startup::BRUSH)
     }
     pub fn prepare_tonal(&self, compiler: &startup::Compiler) -> bool {
-        compiler.pipeline(&self.tonal_pipeline, startup::BRUSH);
-        compiler.pipeline(&self.tonal_cached_pipeline, startup::BRUSH);
-        self.tonal_pipeline.ready() && self.tonal_cached_pipeline.ready()
+        compiler.require(
+            [&self.tonal_pipeline, &self.tonal_cached_pipeline],
+            startup::BRUSH,
+        )
     }
     pub fn storage_bytes(&self) -> u64 {
         self.capture.storage_bytes()

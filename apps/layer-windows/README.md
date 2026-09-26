@@ -1013,7 +1013,7 @@ not a guarantee for every GPU, painting cadence or input latency.
 This fixture opens isolated profiles and closes the exact owned process at
 several delays after editor readiness. Each launch must exit successfully within
 five seconds. A late but successful exit is recorded and still fails the fixture.
-Opt-in CAPY_TRACE_SHADER_JOBS records compiler job and pipeline durations to
+Opt-in CAPY_TRACE_SHADER_JOBS records pipeline durations to
 stderr; the fixture keeps these logs and its results under ignored artifacts.
 
 The hardware material regression compares specialized and uniform-dispatched

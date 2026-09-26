@@ -106,10 +106,8 @@ impl SelectionClip {
             pixel_clock: 0,
         }
     }
-    pub fn compile_all(&self) {
-        self.crossings.compile();
-        self.fill.compile();
-        self.resample.compile();
+    pub fn pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 3] {
+        [&self.crossings, &self.fill, &self.resample]
     }
 
     pub fn reset(&mut self) {

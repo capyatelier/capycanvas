@@ -30,6 +30,9 @@ pub struct StartupProgress {
     pub brush_ready: bool,
     pub complete: bool,
 }
+impl StartupProgress {
+    pub const COMPLETE: Self = Self { canvas_ready: true, brush_ready: true, complete: true };
+}
 /// Only changes that can require different pipelines invalidate readiness.
 /// Ordinary raster/parameter edits reuse their prepared dependencies. The
 /// revision memo avoids scanning layers on unchanged display callbacks.
@@ -88,12 +91,8 @@ impl Requirements {
         self.render.iter().all(Deferred::ready) && self.compute.iter().all(Deferred::ready)
     }
     fn enqueue(&self, compiler: &Compiler, priority: u8) {
-        for p in &self.render {
-            compiler.pipeline(p, priority);
-        }
-        for p in &self.compute {
-            compiler.pipeline(p, priority);
-        }
+        compiler.require(&self.render, priority);
+        compiler.require(&self.compute, priority);
     }
     fn style(
         &mut self,
@@ -103,11 +102,7 @@ impl Requirements {
         preview: bool,
     ) {
         if style.selection.is_some() {
-            self.compute.extend([
-                r.selection_clip.crossings.clone(),
-                r.selection_clip.fill.clone(),
-                r.selection_clip.resample.clone(),
-            ]);
+            self.compute.extend(r.selection_clip.pipelines().map(Clone::clone));
         }
         if mask {
             let index = usize::from(matches!(style.tip, BrushTip::Mask(_))) * 2
@@ -288,6 +283,7 @@ impl WgpuRasterizer {
         };
         startup.finished = false;
         if startup.document_key.as_ref().is_none_or(|key| !key.matches(document)) {
+            let shader = ShaderDocument::new(document);
             let mut required = Requirements::default();
             required
                 .render
@@ -302,39 +298,19 @@ impl WgpuRasterizer {
                 required.compute.push(mip.reduce.clone());
                 required.compute.push(mip.fused_reduce.clone());
             }
-            if document.layers.iter().any(|l| l.source.is_some()) {
+            if shader.key.source {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }
-            if document
-                .layers
-                .iter()
-                .any(|l| l.mask.is_some() || !l.pending_operations.is_empty())
-            {
+            if shader.key.operations {
                 required.render.push(self.layer_masks.initialize.clone());
-                required.compute.extend([
-                    self.selection_clip.crossings.clone(),
-                    self.selection_clip.fill.clone(),
-                    self.selection_clip.resample.clone(),
-                ]);
+                required.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
             }
-            if document.layers.iter().any(|l| {
-                l.pending_operations
-                    .iter()
-                    .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
-                    .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))
-            }) {
-                required.render.extend(
-                    self.transforms
-                        .as_ref()
-                        .unwrap()
-                        .pipelines()
-                        .into_iter()
-                        .cloned(),
-                );
+            if shader.key.transform {
+                required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
-            startup.document_key = Some(ShaderDocument::new(document));
+            startup.document_key = Some(shader);
             let chains = scene::startup_effect_chains(&document.layers);
             let cached = self.scene.as_ref().map(|s| &s.effects).or(self.validated_effects.as_ref());
             if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution))) {
@@ -400,34 +376,22 @@ impl WgpuRasterizer {
         if let Some(native) = &self.native_edit {
             current.compute.extend(native.required_pipelines(document.color.depth).cloned());
         }
-        let locked = document
-            .layers
-            .iter()
-            .find(|l| l.id == document.active_layer)
-            .is_some_and(|l| l.properties.alpha_locked);
+        let locked = startup.document_key.as_ref().unwrap().key.locked;
         // A physical eraser can select the erase variant without a UI change.
         for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
-            let mut style = style(brush, tool, locked);
-            style.selection = document.selection.clone().map(Arc::new);
+            let style = layer_render::DabStyle {
+                alpha_locked: locked,
+                selection: document.selection.clone().map(Arc::new),
+                ..layer_render::DabStyle::for_brush(brush, tool)
+            };
             startup.masks.style(&startup.compiler, &style, BRUSH);
             current.style(self, &style, document.active_mask, true);
         }
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
         if transform {
-            current.render.extend(
-                self.transforms
-                    .as_ref()
-                    .unwrap()
-                    .pipelines()
-                    .into_iter()
-                    .cloned(),
-            );
-            current.compute.extend([
-                self.selection_clip.crossings.clone(),
-                self.selection_clip.fill.clone(),
-                self.selection_clip.resample.clone(),
-            ]);
+            current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
+            current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
         }
         current.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
@@ -445,11 +409,7 @@ impl WgpuRasterizer {
             }
         }
         let Some(startup) = &mut self.startup else {
-            return Ok(StartupProgress {
-                canvas_ready: true,
-                brush_ready: true,
-                complete: true,
-            });
+            return Ok(StartupProgress::COMPLETE);
         };
         startup.compiler.check()?;
         if let Some(rx) = &startup.effects {
@@ -499,26 +459,6 @@ impl WgpuRasterizer {
             self.scene = Some(scene::Scene::new(self));
         }
         Ok(progress)
-    }
-}
-fn style(brush: &BrushSnapshot, tool: StrokeTool, alpha_locked: bool) -> layer_render::DabStyle {
-    layer_render::DabStyle {
-        brush_to_layer: layer_core::Affine::IDENTITY,
-        alpha_locked,
-        selection: None,
-        tip: brush.tip.clone(),
-        mode: match tool {
-            StrokeTool::Brush => DabMode::Paint,
-            StrokeTool::Eraser => DabMode::Erase,
-        },
-        execution: brush.execution_class(),
-        grain: brush.grain.clone(),
-        dual: brush.dual.clone(),
-        rendering: brush.rendering,
-        wet_mix: brush.wet_mix,
-        transport: brush.transport.clone(),
-        deform: brush.deform,
-        contact: brush.contact,
     }
 }
 
@@ -644,7 +584,7 @@ mod gpu_tests {
         );
         for index in [2, 3] {
             assert!(renderer.pipelines.dry_material.as_ref().unwrap()
-                .for_style(&style(&brush, StrokeTool::Brush, false))[index].ready(),
+                .for_style(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush))[index].ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
         while !renderer.poll_startup().unwrap().complete {

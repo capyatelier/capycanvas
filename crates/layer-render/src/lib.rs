@@ -154,6 +154,31 @@ pub struct DabStyle {
     pub deform: BrushDeform,
     pub contact: Option<layer_core::BrushContact>,
 }
+impl DabStyle {
+    pub fn for_brush(brush: &layer_core::BrushSnapshot, tool: layer_core::StrokeTool) -> Self {
+        Self {
+            brush_to_layer: layer_core::Affine::IDENTITY,
+            alpha_locked: false,
+            selection: None,
+            tip: brush.tip.clone(),
+            mode: match tool {
+                layer_core::StrokeTool::Brush => DabMode::Paint,
+                layer_core::StrokeTool::Eraser => DabMode::Erase,
+            },
+            execution: brush.execution_class(),
+            grain: brush.grain.clone(),
+            dual: brush.dual.clone(),
+            rendering: brush.rendering,
+            wet_mix: brush.wet_mix,
+            transport: brush.transport.clone(),
+            deform: brush.deform,
+            contact: brush.contact.map(|mut material| {
+                material.fibers *= (brush.diameter / 128.).max(1.);
+                material
+            }),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DabBatchKind {

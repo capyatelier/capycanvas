@@ -45,7 +45,7 @@ impl SelectionStroke {
         self.real_points >= crate::canvas::MAX_CONTACT_POINTS
     }
     pub fn style(&self) -> layer_render::DabStyle {
-        crate::canvas::style_for(&self.brush, layer_core::StrokeTool::Brush)
+        layer_render::DabStyle::for_brush(&self.brush, layer_core::StrokeTool::Brush)
     }
     /// Predicted samples and late correction deliveries cannot close a loop.
     pub fn push(&mut self, event: PenEvent, dabs: &mut Vec<Dab>) -> Vec<Selection> {

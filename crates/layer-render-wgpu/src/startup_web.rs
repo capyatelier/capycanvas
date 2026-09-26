@@ -60,6 +60,9 @@ impl Compiler {
             });
         }
     }
+    pub fn require<'a, T: 'static>(&self, pipelines: impl IntoIterator<Item = &'a Deferred<T>>, priority: u8) -> bool {
+        pipelines.into_iter().fold(true, |ready, p| { self.pipeline(p, priority); ready & p.ready() })
+    }
     pub fn start(&self) {
         self.queue.borrow_mut().started = true;
     }

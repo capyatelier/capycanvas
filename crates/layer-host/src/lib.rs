@@ -112,11 +112,7 @@ impl NativeHost {
             error: None,
             sequence: 0,
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
-            startup: layer_render_wgpu::StartupProgress {
-                canvas_ready: true,
-                brush_ready: true,
-                complete: true,
-            },
+            startup: layer_render_wgpu::StartupProgress::COMPLETE,
             deferred_contacts: Default::default(),
             last_pen: None,
             paint_start_sequence: 0,

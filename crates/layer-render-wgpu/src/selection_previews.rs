@@ -153,23 +153,15 @@ impl PreviewPipeline {
             return Ok(true);
         };
         startup.compiler.check()?;
-        let mut ready = true;
-        for p in [
-            &r.selection_clip.crossings,
-            &r.selection_clip.fill,
-            &r.selection_clip.resample,
-        ] {
-            startup.compiler.pipeline(p, startup::BRUSH);
-            ready &= p.ready();
-        }
-        if thumbnail {
-            startup.compiler.pipeline(&self.thumbnail, startup::BRUSH);
-            ready &= self.thumbnail.ready();
-        } else {
-            startup.compiler.pipeline(&self.merge, startup::BRUSH);
-            ready &= self.merge.ready();
-        }
-        Ok(ready)
+        let clip = startup
+            .compiler
+            .require(r.selection_clip.pipelines(), startup::BRUSH);
+        Ok(clip
+            & if thumbnail {
+                startup.compiler.require([&self.thumbnail], startup::BRUSH)
+            } else {
+                startup.compiler.require([&self.merge], startup::BRUSH)
+            })
     }
 }
 impl WgpuRasterizer {

@@ -93,16 +93,8 @@ impl Effects {
     /// Queue missing variants without starting compilation on the render path.
     /// The same cache serves document rendering and visible filter previews.
     pub(super) fn enqueue(&self, compiler: &startup::Compiler, priority: u8) -> bool {
-        let mut ready = true;
-        for (_, _, pipeline) in &self.pipelines {
-            compiler.pipeline(pipeline, priority);
-            ready &= pipeline.ready();
-        }
-        for (_, pipeline) in &self.preparation.pipelines {
-            compiler.pipeline(pipeline, priority);
-            ready &= pipeline.ready();
-        }
-        ready
+        compiler.require(self.pipelines.iter().map(|(_, _, p)| p), priority)
+            & compiler.require(self.preparation.pipelines.iter().map(|(_, p)| p), priority)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(&self) {

@@ -20,7 +20,7 @@ use layer_core::{
     Rect, Stroke, StrokeId, StrokeTool,
 };
 use layer_render::{
-    CanvasRenderer, Dab, DabBatch, DabBatchKind, DabMode, DabStyle, FramePacket, ViewState,
+    CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, ViewState,
 };
 use std::{collections::VecDeque, fmt};
 
@@ -538,7 +538,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 stroke_end: false,
                 first_dab: 0,
                 dab_count: 0,
-                style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+                style: DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush),
                 damage,
             });
         }
@@ -773,7 +773,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         stroke_end: false,
                         first_dab: 0,
                         dab_count: 0,
-                        style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+                        style: DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush),
                         damage: operation.bounds(layer.local_extent([document.width, document.height])),
                     });
                 }
@@ -1256,7 +1256,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         };
                     }
                 }
-                let mut style = style_for(&brush, tool);
+                let mut style = DabStyle::for_brush(&brush, tool);
                 style.brush_to_layer = layer_core::Affine::translation(offset)
                     .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
@@ -1769,7 +1769,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             && let Some(stroke) = self.completed_stroke.as_ref()
         {
             self.rebuild_completed = false;
-            let mut style = style_for(&stroke.brush, stroke.tool);
+            let mut style = DabStyle::for_brush(&stroke.brush, stroke.tool);
             style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
                 .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
@@ -2043,32 +2043,6 @@ fn rect_area(rect: Rect) -> f32 {
         0.0
     } else {
         (rect.max.x - rect.min.x).max(0.0) * (rect.max.y - rect.min.y).max(0.0)
-    }
-}
-
-pub(crate) fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
-    DabStyle {
-        brush_to_layer: layer_core::Affine::IDENTITY,
-        alpha_locked: false,
-        selection: None,
-        tip: brush.tip.clone(),
-        mode: match tool {
-            StrokeTool::Brush => DabMode::Paint,
-            StrokeTool::Eraser => DabMode::Erase,
-        },
-        execution: brush.execution_class(),
-        grain: brush.grain.clone(),
-        dual: brush.dual.clone(),
-        rendering: brush.rendering,
-        wet_mix: brush.wet_mix,
-        transport: brush.transport.clone(),
-        deform: brush.deform,
-        contact: brush.contact.map(|mut material| {
-            // Resolve strand density once per style so pressure changes
-            // retain strand identity while large tools keep fine bristles.
-            material.fibers *= (brush.diameter / 128.).max(1.);
-            material
-        }),
     }
 }
 
@@ -4978,7 +4952,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let make_batch = |execution, first_dab, dab_count| {
-            let mut style = style_for(&BrushSnapshot::default(), StrokeTool::Brush);
+            let mut style = DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush);
             style.execution = execution;
             DabBatch {
                 material_update: 0,

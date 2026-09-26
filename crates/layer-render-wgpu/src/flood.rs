@@ -135,13 +135,7 @@ impl Flood {
         STAGES.into_iter().map(|entry| &self.pipelines[entry])
     }
     pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement) -> bool {
-        let mut ready = true;
-        for entry in stages(refinement) {
-            let pipeline = &self.pipelines[entry];
-            compiler.pipeline(pipeline, startup::BRUSH);
-            ready &= pipeline.ready();
-        }
-        ready
+        compiler.require(stages(refinement).map(|entry| &self.pipelines[entry]), startup::BRUSH)
     }
     /// A tiled classifier can populate eligibility without a full color image.
     /// The packed mask is reused by the existing morphology/connected components.

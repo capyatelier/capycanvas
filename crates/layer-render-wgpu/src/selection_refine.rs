@@ -90,15 +90,16 @@ impl SelectionRefiner {
         }
     }
     pub fn prepare(&self, compiler: &startup::Compiler, options: &SelectionRefinement) -> bool {
-        let mut ready = true;
-        for (index, pipeline) in self.pipelines.iter().enumerate() {
-            if (index == 0 && options.feather == 0.) || (index == 2 && options.resize == 0) {
-                continue;
-            }
-            compiler.pipeline(pipeline, startup::BRUSH);
-            ready &= pipeline.ready();
-        }
-        ready
+        compiler.require(
+            self.pipelines
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    !(*index == 0 && options.feather == 0. || *index == 2 && options.resize == 0)
+                })
+                .map(|(_, p)| p),
+            startup::BRUSH,
+        )
     }
     /// A tonal mask is already antialiased byte coverage in document space.
     /// With no feather/combination it needs bounds, not another image allocation

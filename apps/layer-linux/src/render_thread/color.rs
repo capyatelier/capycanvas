@@ -115,7 +115,7 @@ impl RenderWorker {
         self.color = color;
         self.hdr_view = None;
         self.startup_generation += 1;
-        self.startup = complete();
+        self.startup = layer_render_wgpu::StartupProgress::COMPLETE;
         self.startup_key = None;
         self.selection = None;
         self.transform_preview = None;
@@ -130,14 +130,6 @@ impl RenderWorker {
         self.effect_validation_pending = false;
         self.brush_sources.clear();
         Ok(true)
-    }
-}
-
-pub(super) fn complete() -> layer_render_wgpu::StartupProgress {
-    layer_render_wgpu::StartupProgress {
-        canvas_ready: true,
-        brush_ready: true,
-        complete: true,
     }
 }
 
