@@ -80,9 +80,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // The bundled catalog is already accepted. A refresh with no new code
         // only updates library metadata; it must not lock the document or ask
         // the renderer to compile every unused program again.
-        // Demand-driven hosts retain asynchronous first-use readiness. Legacy
-        // native hosts still use this transaction for catalog warmup.
-        if matches!(self.state.platform, Platform::Web | Platform::Android | Platform::Gtk | Platform::Windows) && !migrate_instances && changed.is_empty() {
+        if !migrate_instances && changed.is_empty() {
             if candidate.filters() == self.effect_catalog.filters()
                 && candidate.categories() == self.effect_catalog.categories()
             {

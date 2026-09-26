@@ -8180,14 +8180,17 @@ mod tests {
     #[test]
     fn save_and_close_during_library_warmup_waits_for_the_saved_checkpoint() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        let mut s = session(Platform::Mac);
+        use std::sync::Arc;
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
+        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        Arc::make_mut(&mut definition.program).label = "New library version".into();
         let package = EffectPackage {
             format: 1,
             categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
+            filters: vec![definition],
         };
         s.load_effect_library(
             &serde_json::to_string(&package).unwrap(),
