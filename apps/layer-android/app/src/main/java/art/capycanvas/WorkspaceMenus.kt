@@ -36,14 +36,29 @@ import org.json.JSONObject
 /** Header menus, context menus and configuration options render the same Rust
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
-    command: ((JSONObject) -> Unit)? = null, dismiss: () -> Unit) {
+    focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null, dismiss: () -> Unit) {
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
-    BackHandler(preserveContact, dismiss)
+    BackHandler(!focusable, dismiss)
     DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu"),
-        properties = PopupProperties(focusable = !preserveContact),
+        properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
         WorkspaceMenuItems(host, menu.array("sections"), dismiss, if (menu.has("title")) menu.getString("title") else null, command)
+    }
+}
+
+internal val WindowlessMenu = PopupProperties(focusable = false)
+
+@Composable internal fun WindowlessPopup(open: Boolean, dismiss: () -> Unit) {
+    BackHandler(open, dismiss)
+    PopupOwner(open)
+}
+
+@Composable internal fun PopupOwner(open: Boolean) {
+    val dock = LocalDock.current
+    DisposableEffect(dock, open) {
+        if (open) dock?.popup(true)
+        onDispose { if (open) dock?.popup(false) }
     }
 }
 

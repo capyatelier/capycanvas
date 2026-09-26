@@ -53,6 +53,7 @@ pub struct NativeHost {
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
+    pub canvas_bar_hidden: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
     pub error: Option<String>,
@@ -111,6 +112,7 @@ impl NativeHost {
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,
+            canvas_bar_hidden: false,
             keep_zen_button: false,
             pan_cursor: false,
             error: None,
@@ -304,6 +306,7 @@ impl NativeHost {
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
+        self.canvas_bar_hidden = reply.canvas_bar_hidden;
         self.keep_zen_button = reply.keep_zen_button;
         self.pan_cursor = reply.pan_cursor;
         self.apply_change(previous, reply.change);
@@ -690,6 +693,10 @@ impl NativeHost {
                 context: layer_ui::CanvasBarContext,
                 id: String,
             },
+            CanvasBarReason {
+                context: layer_ui::CanvasBarContext,
+                command: layer_ui::CommandId,
+            },
             LayerMenu {
                 id: u64,
                 mask: bool,
@@ -794,7 +801,11 @@ impl NativeHost {
                 self.dirty |= change.canvas_wake;
                 json!(self.session.state().filter_load)
             }
-            Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::Catalog => {
+                let mut catalog = json!(layer_ui::ui_catalog());
+                catalog["canvas_bar_reappear_ms"] = json!(layer_ui::CANVAS_BAR_REAPPEAR_MS);
+                catalog
+            }
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
@@ -836,6 +847,7 @@ impl NativeHost {
             Query::CanvasBarLayout { measure } => json!(self.session.canvas_bar_layout(&measure)),
             Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
             Query::CanvasBarChoiceMenu { context, id } => json!(self.session.canvas_bar_choice_menu(context, &id)),
+            Query::CanvasBarReason { context, command } => json!(self.canvas_bar_reason(context, command)),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
@@ -1030,6 +1042,16 @@ impl NativeHost {
             }
         };
         Ok(result)
+    }
+
+    fn canvas_bar_reason(&self, context: layer_ui::CanvasBarContext, command: layer_ui::CommandId) -> Option<String> {
+        let bar = self.session.state().canvas_bar.as_ref().filter(|bar| bar.context == context)?;
+        bar.items
+            .iter()
+            .chain(&bar.completion)
+            .any(|item| matches!(&item.option, layer_ui::ToolOption::Action { state, .. } if state.id == command))
+            .then(|| self.session.command_disabled_reason(command))
+            .flatten()
     }
 
     fn workspace_drop(
@@ -1514,6 +1536,80 @@ mod tests {
         app.resize(1600, 2560, 2.0).unwrap();
         assert!(app.take_value().is_some());
     }
+    #[test]
+    fn canvas_bar_queries_place_list_and_expire_with_the_bar() {
+        use layer_ui::CommandId;
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        assert_eq!(
+            app.query(json!({"type": "catalog"})).unwrap()["canvas_bar_reappear_ms"],
+            layer_ui::CANVAS_BAR_REAPPEAR_MS
+        );
+        app.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect }).unwrap();
+        app.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
+        let bar = app.session.state().canvas_bar.clone().expect("selection bar");
+        let snapshot = app.snapshot();
+        assert_eq!(snapshot["state"]["canvas_bar"]["context"], json!(bar.context));
+        let measure = |context: Value, items: usize| {
+            json!({"type": "canvas_bar_layout", "measure": {
+                "context": context, "label": 0, "items": vec![90.; items],
+                "completion": vec![70.; bar.completion.len()], "more": 32, "height": 44, "gap": 4, "padding": 6,
+            }})
+        };
+        let layout = app.query(measure(json!(bar.context), bar.items.len())).unwrap();
+        let bounds = &layout["bounds"];
+        assert!(bounds["width"].as_f64().unwrap() > 0. && bounds["height"] == 44.);
+        let shown = layout["items"].as_u64().unwrap() as usize;
+        assert!((1..=bar.items.len()).contains(&shown));
+        assert!(layout["side"].is_string());
+        assert!(app.query(measure(json!(bar.context), bar.items.len() + 1)).unwrap().is_null());
+        let mut stale = json!(bar.context);
+        stale["generation"] = json!(bar.context.generation + 1);
+        assert!(app.query(measure(stale.clone(), bar.items.len())).unwrap().is_null());
+
+        let menu = app
+            .query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0}))
+            .unwrap();
+        let labels: Vec<&str> = menu["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section.as_array().unwrap())
+            .filter_map(|item| item["label"].as_str())
+            .collect();
+        assert!(labels.contains(&CommandId::Deselect.label()), "overflowed items are in More: {labels:?}");
+        assert!(labels.contains(&CommandId::ShowCanvasActionBar.label()));
+        let overflow = &menu["sections"][0][0]["action"];
+        assert_eq!(overflow["type"], "canvas_bar_edit");
+        app.dispatch(serde_json::from_value(overflow.clone()).unwrap()).unwrap();
+        assert!(app.session.engine().document().selection.is_none(), "an overflowed Deselect applies");
+        assert!(app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap().is_null());
+        assert!(
+            app.query(json!({"type": "canvas_bar_reason", "context": bar.context, "command": "deselect"}))
+                .unwrap()
+                .is_null()
+        );
+    }
+
+    #[test]
+    fn canvas_contacts_report_the_hidden_canvas_bar() {
+        use layer_ui::CommandId;
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        app.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect }).unwrap();
+        app.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
+        let bar = app.session.state().canvas_bar.clone().expect("selection bar");
+        for (tool, phase) in [(0, 1.), (0, 2.), (0, 3.), (3, 1.), (3, 4.), (1, 1.), (1, 3.)] {
+            app.pointer(1, tool, 0, &[800., 600., 1., 0., 0., 0., 0., 1., phase], false)
+                .unwrap();
+            assert_eq!(app.canvas_bar_hidden, phase < 3., "tool {tool} phase {phase}");
+        }
+        let reason = app
+            .query(json!({"type": "canvas_bar_reason", "context": bar.context, "command": "apply_transform"}))
+            .unwrap();
+        assert!(reason.is_null(), "only commands on the bar have reasons");
+    }
+
     #[test]
     fn camera_patches_preserve_pending_structural_updates() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();

@@ -1,0 +1,138 @@
+package art.capycanvas
+
+import android.os.SystemClock
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.math.ceil
+
+private const val BarGap = 4f
+private const val BarPadding = 6f
+private const val BarItemHeight = 32f
+private const val BarLabelPadding = 6f
+private val BarItemStyle = obj("sliders" to false, "text" to true)
+
+@Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject) {
+    val dragging = dock.dragging
+    LaunchedEffect(dragging) { host.holdCanvasBar(CanvasHost.CanvasBarWorkspaceDrag, dragging) }
+    val view = host.canvasBar ?: return
+    if (!host.canvasBarVisible) return
+    key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout) }
+}
+
+@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject) {
+    val colors = LocalPalette.current
+    val density = LocalDensity.current.density
+    val context = view.getJSONObject("context")
+    val items = view.array("items").objects()
+    val completion = view.array("completion").objects()
+    val label = if (view.isNull("label")) null else view.getString("label")
+    val measurer = rememberTextMeasurer()
+    val textStyle = LocalTextStyle.current
+    fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
+    fun width(item: JSONObject) = toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight,
+        BarItemStyle, ::textWidth, item.getString("label"))[0]
+    val itemWidths = items.map(::width)
+    val completionWidths = completion.map(::width)
+    val labelWidth = label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f
+    val measure = obj("context" to context, "label" to labelWidth, "items" to JSONArray(itemWidths),
+        "completion" to JSONArray(completionWidths), "more" to BarItemHeight, "height" to BarItemHeight + 2 * BarPadding,
+        "gap" to BarGap, "padding" to BarPadding).toString()
+    var placed by remember { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(measure, view.opt("anchor")?.toString(), layout) {
+        placed = host.awaitQuery(obj("type" to "canvas_bar_layout", "measure" to JSONObject(measure)))
+    }
+    val placement = placed ?: return
+    var revealed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        host.glassPresented()
+        revealed = true
+    }
+    DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.refresh() } }
+    val shown = placement.optInt("items").coerceIn(0, items.size)
+    val shape = ControlShape
+    fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
+    fun reason(command: String, reply: (String) -> Unit) = host.query(obj("type" to "canvas_bar_reason", "context" to context, "command" to command)) {
+        (it as? String)?.let(reply)
+    }
+    Box(Modifier.placed(placement.getJSONObject("bounds"), density).zIndex(198f).testTag("canvas-action-bar")
+        .graphicsLayer { alpha = if (revealed) 1f else 0f }
+        .chromeRegion(dock).onGloballyPositioned {
+            val bounds = it.boundsInRoot().translate(-dock.origin)
+            if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
+        }
+        .panelShadow(6.dp, shape).clip(shape).glass(shape)
+        .semantics { contentDescription = "Canvas actions" }) {
+        CompositionLocalProvider(LocalPalette provides colors.onGlass) {
+            Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
+                Row(Modifier.padding(BarPadding.dp).clipToBounds(), horizontalArrangement = Arrangement.spacedBy(BarGap.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    label?.let {
+                        Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
+                            color = colors.secondary, maxLines = 1, softWrap = false)
+                    }
+                    items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason) }
+                    CanvasBarMore(host, context, shown)
+                    completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason) }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun BarField(item: JSONObject, width: Float, completion: Boolean, edit: (JSONObject) -> Unit,
+    reason: (String, (String) -> Unit) -> Unit) {
+    val option = item.getJSONObject("option")
+    val command = option.optJSONObject("Action")?.getJSONObject("state")?.getString("id")
+    Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
+        ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
+            caption = item.getString("label"), prefix = "canvas-bar",
+            accent = completion && command in listOf("apply_transform", "complete_selection"), reason = reason)
+    }
+}
+
+@Composable private fun CanvasBarMore(host: CanvasHost, context: JSONObject, shown: Int) {
+    var menu by remember { mutableStateOf<JSONObject?>(null) }
+    var closedAt by remember { mutableLongStateOf(0L) }
+    var pressedAt by remember { mutableLongStateOf(0L) }
+    PopupOwner(menu != null)
+    HoverTip("More") {
+        Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape)
+            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); pressedAt = SystemClock.uptimeMillis() } }
+            .clickable(role = Role.Button, onClickLabel = "More") {
+                if (menu == null && pressedAt - closedAt > 300) host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) {
+                    menu = it as? JSONObject
+                }
+            }, contentAlignment = Alignment.Center) {
+            SharedIcon("more", "More", Modifier.size(16.dp))
+            menu?.let {
+                WorkspaceMenu(host, it, focusable = false) { menu = null; closedAt = SystemClock.uptimeMillis() }
+            }
+        }
+    }
+}

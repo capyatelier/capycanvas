@@ -185,9 +185,13 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 }
 
 @Composable private fun Workspace(host: CanvasHost, snapshot: JSONObject?) {
+    val dock = remember(host) { DockInteraction(host) }
+    CompositionLocalProvider(LocalDock provides dock) { Workspace(host, snapshot, dock) }
+}
+
+@Composable private fun Workspace(host: CanvasHost, snapshot: JSONObject?, dock: DockInteraction) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
-    val dock = remember(host) { DockInteraction(host) }
     val header = remember(host, dock) { HeaderInteraction(host, dock) }
     SideEffect {
         header.editing = snapshot?.objectOrNull("header")?.optBoolean("editing") == true
@@ -344,6 +348,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                   }
                 }
             }
+            CanvasBar(host, dock, layout)
             if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"

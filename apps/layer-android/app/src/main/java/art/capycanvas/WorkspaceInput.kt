@@ -22,6 +22,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
+internal val LocalDock = staticCompositionLocalOf<DockInteraction?> { null }
 
 /** Mouse handles use system hands; pen handles keep Android's default hover.
  * Directional resize cursors remain available to either pointing device. */
@@ -103,7 +104,13 @@ internal class DockInteraction(val host: CanvasHost) {
     var contactSource: Any? = null
     var retiredContext: String? = null
     var contextAnchor = Rect.Zero
-    var popupOpen = false
+    private var popupOwners = 0
+    val popupOpen get() = popupOwners > 0
+    fun popup(open: Boolean) {
+        popupOwners = (popupOwners + if (open) 1 else -1).coerceAtLeast(0)
+        refresh()
+    }
+    var canvasBar: Rect? = null
     private var active: JSONObject? = null
     private var position = Offset.Zero
     private var generation = 0
@@ -156,9 +163,9 @@ internal class DockInteraction(val host: CanvasHost) {
 
     // Shared workspace gestures have their own Zen state in Rust. Only tile
     // reordering uses the host's generic dragging fact.
+    private fun Rect.logical() = obj("x" to left / density, "y" to top / density, "width" to width / density, "height" to height / density)
     fun facts() = obj("held" to false, "dragging" to (active?.optString("type") == "tile_drag"),
-        "zen_button" to zenButton?.let { obj("x" to it.left / density, "y" to it.top / density,
-            "width" to it.width / density, "height" to it.height / density) },
+        "zen_button" to zenButton?.logical(), "canvas_bar" to canvasBar?.logical(),
         "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
         "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())

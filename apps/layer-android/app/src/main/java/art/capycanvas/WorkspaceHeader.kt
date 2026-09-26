@@ -238,8 +238,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     LaunchedEffect(compact, editing) { menu = null }
     DisposableEffect(menu != null) {
         val ownsPopup = menu != null
-        if (ownsPopup) { input.dock.popupOpen = true; input.dock.refresh() }
-        onDispose { if (ownsPopup) { input.dock.popupOpen = false; input.dock.refresh() } }
+        if (ownsPopup) input.dock.popup(true)
+        onDispose { if (ownsPopup) input.dock.popup(false) }
     }
     val open = input.dock.drawerSources["tool"]?.anchor?.let { it.optString("kind") == "header" && it.optInt("id") == id } == true
     Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)

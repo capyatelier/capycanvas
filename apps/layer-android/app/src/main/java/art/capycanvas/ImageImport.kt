@@ -14,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
@@ -202,15 +201,5 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         }
     }
     images.profilePrompt?.let { SourceProfileDialog(it, images::chooseProfile) }
-    if (commands["placement_original_size"]?.optBoolean("enabled") != true) return
-    BackHandler { host.invoke("cancel_transform") }
-    androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
-        Surface(Modifier.padding(horizontal = 8.dp, vertical = 48.dp).testTag("image-placement-controls"), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-            FlowRow(Modifier.padding(4.dp).widthIn(max = 360.dp), horizontalArrangement = Arrangement.Center) {
-                for ((id, label) in listOf("placement_original_size" to "Original Size (100%)", "cancel_transform" to "Cancel", "apply_transform" to "Apply")) {
-                    TextButton({ host.invoke(id) }, enabled = commands[id]?.optBoolean("enabled") == true, modifier = Modifier.testTag(id)) { Text(label) }
-                }
-            }
-        }
-    }
+    BackHandler(commands["placement_original_size"]?.optBoolean("enabled") == true) { host.invoke("cancel_transform") }
 }

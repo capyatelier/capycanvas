@@ -1290,7 +1290,8 @@ class AndroidRasterTest {
         }
         fun press(command: String) {
             compose.waitUntil(20_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == command && it.getBoolean("enabled") } == true }
-            compose.onNodeWithTag(command).assertIsDisplayed().performClick()
+            compose.waitUntil(20_000) { compose.onAllNodesWithTag("canvas-bar-action-$command").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("canvas-bar-action-$command").assertIsDisplayed().performClick()
             compose.waitForIdle(); tick()
         }
         fun memoryStage(label: String) {
@@ -1346,7 +1347,8 @@ class AndroidRasterTest {
         fun count() = native { state(it).array("layers").length() }
         fun press(command: String) {
             compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == command && it.getBoolean("enabled") } == true }
-            compose.onNodeWithTag(command).assertIsDisplayed().performClick(); compose.waitForIdle(); tick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("canvas-bar-action-$command").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("canvas-bar-action-$command").assertIsDisplayed().performClick(); compose.waitForIdle(); tick()
         }
         fun systemNode(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
             fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
@@ -1914,7 +1916,8 @@ class AndroidRasterTest {
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.getJSONObject("document").getJSONArray("layers").length()+2}
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
             assertNull(host.actionError)
-            compose.onNodeWithTag("apply_transform").assertIsDisplayed().performClick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("canvas-bar-action-apply_transform").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("canvas-bar-action-apply_transform").assertIsDisplayed().performClick()
             compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.first { it.getString("id")=="placement_original_size" }?.getBoolean("enabled")==false }
             DocumentController.nativeFileJobsForTest=true
             val pasted=manifest(save("placement-pasted.capy"))

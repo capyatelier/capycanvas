@@ -283,7 +283,7 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
 /** Hover only: touch holds remain available for editing and context menus. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun HoverTip(label: String, modifier: Modifier = Modifier,
-    resolve: (((String) -> Unit) -> Unit)? = null, enabled: Boolean = true, content: @Composable () -> Unit) {
+    resolve: (((String) -> Unit) -> Unit)? = null, enabled: Boolean = true, reveal: Int = 0, content: @Composable () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val state = rememberTooltipState()
@@ -297,6 +297,12 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
             delay(500)
             state.show()
         } else state.dismiss()
+    }
+    LaunchedEffect(reveal) {
+        if (reveal > 0) {
+            currentResolve?.invoke { text = it }
+            state.show()
+        }
     }
     Box(modifier, propagateMinConstraints = true) {
         Box(Modifier.hoverable(interaction)) {

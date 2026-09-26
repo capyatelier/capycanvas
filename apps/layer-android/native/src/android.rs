@@ -848,6 +848,14 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
     fail(&mut env, result);
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_canvasBarHidden(
+    _: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jboolean {
+    unsafe { app(handle) }.host.canvas_bar_hidden as jboolean
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_frame(
     mut env: JNIEnv,
     _: JClass,
