@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <unordered_map>
 #include <memory>
 #include <map>
 #include <optional>
@@ -205,14 +206,28 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     return result;
 }
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
+struct TooltipOwner {weak_ref<DependencyObject> owner;ToolTip tip{nullptr};};
+inline std::unordered_map<void*,TooltipOwner>& tooltipOwners(){thread_local std::unordered_map<void*,TooltipOwner> owners;return owners;}
+inline void setTouchContact(bool touch){
+    if(touchContact()==touch)return;
+    touchContact()=touch;
+    std::erase_if(tooltipOwners(),[touch](auto const& entry){
+        auto owner=entry.second.owner.get();if(!owner)return true;
+        if(touch){entry.second.tip.IsOpen(false);ToolTipService::SetToolTip(owner,nullptr);}
+        else ToolTipService::SetToolTip(owner,entry.second.tip);
+        return false;
+    });
+}
 inline void tooltip(DependencyObject const& target,hstring const& text){
-    if(auto current=ToolTipService::GetToolTip(target).try_as<ToolTip>()){
-        if(unbox_value_or<hstring>(current.Content(),L"")!=text)current.Content(box_value(text));
+    auto& owners=tooltipOwners();
+    if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==target){
+        if(unbox_value_or<hstring>(found->second.tip.Content(),L"")!=text)found->second.tip.Content(box_value(text));
         return;
     }
+    if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
     ToolTip tip;tip.Content(box_value(text));
-    tip.Opened([](winrt::Windows::Foundation::IInspectable const& sender,auto&&){if(touchContact())sender.as<ToolTip>().IsOpen(false);});
-    ToolTipService::SetToolTip(target,tip);
+    if(!touchContact())ToolTipService::SetToolTip(target,tip);
+    owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target),tip});
 }
 inline bool pickerControl(J const& control){
     auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");
