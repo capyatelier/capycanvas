@@ -68,6 +68,10 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::CancelTransform => "Cancel",
         CommandId::TransformAspect => "Uniform",
         CommandId::PlacementOriginalSize => "Original Size",
+        CommandId::TransformFree => "Free",
+        CommandId::TransformUniform => "Uniform",
+        CommandId::TransformDistort => "Distort",
+        CommandId::TransformPerspective => "Perspective",
         CommandId::TransformFlipHorizontal => "Flip H",
         CommandId::TransformFlipVertical => "Flip V",
         CommandId::TransformRotateLeft => "−90°",
@@ -123,10 +127,30 @@ impl CanvasBarState {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PlanItem {
+    Command(CommandId, bool),
+    Choice(ToolActionGroup),
+}
+fn group_commands(group: ToolActionGroup) -> &'static [CommandId] {
+    match group {
+        ToolActionGroup::TransformMode => &[CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort],
+        ToolActionGroup::SelectionMode | ToolActionGroup::SelectionSource => &[],
+    }
+}
+impl PlanItem {
+    fn commands(self) -> Vec<CommandId> {
+        match self {
+            Self::Command(id, _) => vec![id],
+            Self::Choice(group) => group_commands(group).to_vec(),
+        }
+    }
+}
+
 struct Plan {
     kind: CanvasBarKind,
     label: Option<String>,
-    items: Vec<(CommandId, bool)>,
+    items: Vec<PlanItem>,
     completion: Vec<CommandId>,
     placement: Option<CanvasBarPlacement>,
 }
@@ -172,7 +196,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(Plan {
             kind: CanvasBarKind::Selection,
             label: None,
-            items: vec![
+            items: [
                 (CommandId::Deselect, false),
                 (CommandId::InvertSelection, false),
                 (CommandId::ScaleRotate, false),
@@ -183,6 +207,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .filter(|(id, _)| id.available_on(self.state.platform))
+            .map(|(id, checkable)| PlanItem::Command(id, checkable))
             .collect(),
             completion: Vec::new(),
             placement: edge.then_some(CanvasBarPlacement::BottomEdge),
@@ -203,24 +228,30 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Some(Plan {
                 kind: CanvasBarKind::Polygon,
                 label: None,
-                items: vec![(CommandId::RemoveSelectionPoint, false)],
+                items: vec![PlanItem::Command(CommandId::RemoveSelectionPoint, false)],
                 completion: vec![CommandId::CancelSelection, CommandId::CompleteSelection],
                 placement: Some(CanvasBarPlacement::BottomEdge),
             });
         }
-        let transform_items = vec![
-            (CommandId::TransformAspect, true),
-            (CommandId::TransformFlipHorizontal, false),
-            (CommandId::TransformFlipVertical, false),
-            (CommandId::TransformRotateLeft, false),
-            (CommandId::TransformRotateRight, false),
-            (CommandId::ResetTransform, false),
-        ];
+        let distorting = self
+            .transform_mode()
+            .is_some_and(|(mode, _)| mode == operation::TransformMode::Distort);
+        let mut transform_items = vec![PlanItem::Choice(ToolActionGroup::TransformMode)];
+        if distorting {
+            transform_items.push(PlanItem::Command(CommandId::TransformPerspective, true));
+        }
+        transform_items.extend([
+            PlanItem::Command(CommandId::TransformFlipHorizontal, false),
+            PlanItem::Command(CommandId::TransformFlipVertical, false),
+            PlanItem::Command(CommandId::TransformRotateLeft, false),
+            PlanItem::Command(CommandId::TransformRotateRight, false),
+            PlanItem::Command(CommandId::ResetTransform, false),
+        ]);
         let completion = vec![CommandId::CancelTransform, CommandId::ApplyTransform];
         if self.operation.placing() {
             let count = self.operation.placement_count();
             let mut items = transform_items;
-            items.insert(1, (CommandId::PlacementOriginalSize, false));
+            items.insert(1, PlanItem::Command(CommandId::PlacementOriginalSize, false));
             return Some(Plan {
                 kind: CanvasBarKind::Placement,
                 label: (count > 1).then(|| format!("{count} images")),
@@ -268,7 +299,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             plan.items.clear();
         }
         let toolbar = self.state.toolbar_context();
-        let commands = || plan.items.iter().map(|i| i.0).chain(plan.completion.iter().copied());
+        let commands = || {
+            plan.items
+                .iter()
+                .flat_map(|i| i.commands())
+                .chain(plan.completion.iter().copied())
+                .filter(|id| id.available_on(self.state.platform))
+                .collect::<Vec<_>>()
+        };
         let idle = self.require_idle().is_ok();
         let previous_flags = self.canvas_bar.key.as_ref().map(|k| k.flags.clone()).unwrap_or_default();
         let key = CanvasBarKey {
@@ -278,6 +316,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             transaction: self.operation.serial(),
             anchor: self.canvas_bar_anchor(plan.kind),
             flags: commands()
+                .into_iter()
                 .map(|id| {
                     let (enabled, selected) = self.command_flags(id);
                     let steady = previous_flags
@@ -306,13 +345,38 @@ impl<R: CanvasRenderer> UiSession<R> {
                 label: short_label(id),
             }
         };
+        let plan_item = |entry: &PlanItem| match *entry {
+            PlanItem::Command(id, checkable) => item(id, checkable),
+            PlanItem::Choice(group) => CanvasBarItem {
+                option: ToolOption::Choice {
+                    id: group.id(),
+                    label: group.label(),
+                    segmented: group.segmented(),
+                    items: group_commands(group)
+                        .iter()
+                        .filter(|id| id.available_on(self.state.platform))
+                        .map(|&id| {
+                            let state = self.command(id);
+                            ToolSetItem {
+                                label: short_label(id),
+                                icon: state.icon.unwrap_or("transform"),
+                                action: UiAction::Invoke { command: id },
+                                selected: state.selected,
+                                preview: None,
+                            }
+                        })
+                        .collect(),
+                },
+                label: group.label(),
+            },
+        };
         self.state.canvas_bar = Some(CanvasBarView {
             context: CanvasBarContext {
                 generation: self.canvas_bar.generation,
                 kind: plan.kind,
             },
             label: plan.label,
-            items: plan.items.iter().map(|&(id, checkable)| item(id, checkable)).collect(),
+            items: plan.items.iter().map(plan_item).collect(),
             completion: plan.completion.iter().map(|&id| item(id, false)).collect(),
             placement: match plan.placement {
                 Some(placement) => placement,

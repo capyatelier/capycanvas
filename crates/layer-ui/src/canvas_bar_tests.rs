@@ -63,6 +63,19 @@ fn filled_selection_session() -> UiSession<Recorder> {
     s
 }
 
+fn mode_choice(bar: &CanvasBarView) -> Vec<CommandId> {
+    match &bar.items[0].option {
+        ToolOption::Choice { items, .. } => items
+            .iter()
+            .map(|i| match i.action {
+                UiAction::Invoke { command } => command,
+                _ => panic!("mode items are commands"),
+            })
+            .collect(),
+        _ => panic!("the transform bar starts with its mode choice"),
+    }
+}
+
 fn bar_commands(items: &[CanvasBarItem]) -> Vec<CommandId> {
     items
         .iter()
@@ -81,7 +94,8 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     assert_ne!(change.regions & regions::CANVAS_BAR, 0);
     let bar = s.state.canvas_bar.clone().expect("transform bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Transform);
-    assert_eq!(bar_commands(&bar.items), [CommandId::TransformAspect, CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
+    assert_eq!(mode_choice(&bar), [CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort]);
+    assert_eq!(bar_commands(&bar.items), [CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
     assert_eq!(bar_commands(&bar.completion), [CommandId::CancelTransform, CommandId::ApplyTransform]);
     assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
     assert_eq!(bar.anchor, s.transform_document_bounds());
@@ -196,11 +210,12 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     assert!(s.canvas_bar_layout(&stale).is_none());
     let menu = s.canvas_bar_menu(bar.context, 0).unwrap();
     let first = &menu.sections[0][0];
+    assert_eq!(first.label, "Mode");
     assert_eq!(
-        first.action,
+        first.sections[0][0].action,
         Some(UiAction::CanvasBarEdit {
             context: bar.context,
-            action: Box::new(UiAction::Invoke { command: CommandId::TransformAspect }),
+            action: Box::new(UiAction::Invoke { command: CommandId::TransformFree }),
         })
     );
     assert!(menu
@@ -254,7 +269,6 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     assert_eq!(
         bar_commands(&bar.items),
         [
-            CommandId::TransformAspect,
             CommandId::PlacementOriginalSize,
             CommandId::TransformFlipHorizontal,
             CommandId::TransformFlipVertical,
@@ -419,6 +433,7 @@ fn selection_bar_masks_the_active_layer_in_one_step() {
     assert_eq!(s.engine.document().layers, before.layers);
     assert_eq!(s.engine.document().selection, before.selection);
 }
+
 #[test]
 fn a_finger_reaches_the_handles_of_every_transform() {
     let mut s = filled_selection_session();
@@ -433,4 +448,77 @@ fn a_finger_reaches_the_handles_of_every_transform() {
     let outside = surface(x1 + 300., y1 + 300.);
     assert!(!s.input(touch(2, ContactPhase::Down, outside)).unwrap().paint, "elsewhere a finger navigates");
     s.input(touch(2, ContactPhase::Up, outside)).unwrap();
+}
+
+#[test]
+fn distort_moves_corners_folds_back_and_resets() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.map;
+    invoke(&mut s, CommandId::TransformDistort);
+    assert!(s.command(CommandId::TransformDistort).selected);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    assert!(bar_commands(&bar.items).contains(&CommandId::TransformPerspective), "Perspective appears with Distort");
+    let quad = s.operation.quad();
+    let drag = |s: &mut UiSession<Recorder>, from: Point, to: Point| {
+        s.transform_pen(event(s, 1, PenPhase::Down, 1.), from).unwrap();
+        s.transform_pen(event(s, 2, PenPhase::Move, 1.), to).unwrap();
+        s.transform_pen(event(s, 3, PenPhase::Up, 1.), to).unwrap();
+        s.frame(3, 3).unwrap();
+    };
+    let target = Point { x: quad[1].x + 40., y: quad[1].y - 30. };
+    drag(&mut s, quad[1], target);
+    assert!(matches!(preview(&mut s), layer_core::TransformMap::Projective(_)), "a lone corner drag is perspective");
+    let moved = s.operation.quad();
+    for (i, corner) in moved.iter().enumerate() {
+        let expected = if i == 1 { target } else { quad[i] };
+        assert!((corner.x - expected.x).abs() < 0.01 && (corner.y - expected.y).abs() < 0.01, "corner {i}: {corner:?}");
+    }
+    invoke(&mut s, CommandId::TransformFree);
+    assert!(s.operation.distorted(), "a perspective quad stays folded under Free");
+    invoke(&mut s, CommandId::ResetTransform);
+    s.frame(4, 4).unwrap();
+    assert!(s.command(CommandId::TransformFree).selected);
+    assert_eq!(preview(&mut s), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+    invoke(&mut s, CommandId::TransformDistort);
+    let quad = s.operation.quad();
+    let edge = Point { x: (quad[0].x + quad[1].x) * 0.5, y: (quad[0].y + quad[1].y) * 0.5 };
+    drag(&mut s, edge, Point { x: edge.x + 50., y: edge.y });
+    invoke(&mut s, CommandId::TransformFree);
+    s.frame(5, 5).unwrap();
+    assert!(!s.operation.distorted(), "a parallelogram folds back into the pose exactly");
+    assert!(s.operation.shear().abs() > 0.1, "an edge drag skews: {}", s.operation.shear());
+    invoke(&mut s, CommandId::CancelTransform);
+}
+
+#[test]
+fn perspective_mirrors_a_corner_drag_onto_its_neighbour() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformDistort);
+    invoke(&mut s, CommandId::TransformPerspective);
+    let quad = s.operation.quad();
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), quad[0]).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: quad[0].x + 30., y: quad[0].y + 4. }).unwrap();
+    let moved = s.operation.quad();
+    assert!((moved[0].x - quad[0].x - 30.).abs() < 0.01 && (moved[0].y - quad[0].y).abs() < 0.01);
+    assert!((moved[1].x - quad[1].x + 30.).abs() < 0.01, "the top edge narrows symmetrically");
+    assert!((moved[2].x - quad[2].x).abs() < 0.01 && (moved[3].x - quad[3].x).abs() < 0.01);
+}
+
+#[test]
+fn distort_is_refused_on_photo_placements_with_the_route_that_works() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("distort placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
+    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    assert!(!s.command(CommandId::TransformDistort).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::TransformDistort).as_deref(), Some(operation::DISTORT_PLACEMENT));
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformDistort }).is_err());
 }

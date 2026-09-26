@@ -2576,14 +2576,14 @@ fn native_operation_tool() {
     edit_number(&number("transform_angle"), "360/12");
     pump(150);
     assert!((value("transform_angle") - std::f32::consts::PI / 6.).abs() < 0.001);
-    let toggle: gtk::CheckButton = find_named(
+    let uniform: gtk::ToggleButton = find_named(
         &w.panel_widget(Panel::ToolSettings),
-        "tool-action-TransformAspect",
+        "tool-action-TransformUniform",
     )
     .unwrap()
     .downcast()
     .unwrap();
-    toggle.set_active(true);
+    uniform.set_active(true);
     edit_number(&number("transform_width"), "150");
     pump(100);
     assert!((value("transform_height") - 1.5).abs() < 0.01);

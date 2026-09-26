@@ -2,7 +2,7 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::error;
 use crate::*;
-use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Rect, TransformMap};
+use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Projective, Rect, TransformMap};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
 #[path = "operation/placement.rs"]
@@ -62,13 +62,21 @@ impl Pose {
         }
     }
 }
+pub(super) const DISTORT_PLACEMENT: &str = "Select All, then Transform, to distort this photo's pixels";
 /// Skew is presented as an angle; its tangent is the pose shear.
 const MAX_SKEW: f32 = 85. * std::f32::consts::PI / 180.;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TransformMode {
+    Free,
+    Distort,
+}
 #[derive(Clone, Copy)]
 enum Handle {
     Move,
     Scale([f32; 2]),
     Rotate,
+    Corner(usize),
+    Edge(usize),
 }
 #[derive(Clone, Copy)]
 struct Drag {
@@ -76,13 +84,21 @@ struct Drag {
     press: Point,
     current: Point,
     pose: Pose,
+    inner: Option<Projective>,
 }
+/// `bounds` is the source rectangle. `inner` maps it onto a quad before the
+/// pose, which acts about the `frame` box: the bounds, or the quad's bounds
+/// once a distortion has been folded in.
 struct Transaction {
     placement: Option<Placement>,
     request: TransformPreview,
     revision: u64,
     basis: Affine,
     bounds: Rect,
+    frame: Rect,
+    inner: Option<Projective>,
+    mode: TransformMode,
+    perspective: bool,
     start: Pose,
     pose: Pose,
     drag: Option<Drag>,
@@ -103,6 +119,18 @@ impl Operation {
     }
     pub fn serial(&self) -> u64 {
         self.serial
+    }
+    #[cfg(test)]
+    pub(super) fn quad(&self) -> [Point; 4] {
+        self.current.as_ref().unwrap().quad()
+    }
+    #[cfg(test)]
+    pub(super) fn distorted(&self) -> bool {
+        self.current.as_ref().is_some_and(|t| t.inner.is_some())
+    }
+    #[cfg(test)]
+    pub(super) fn shear(&self) -> f32 {
+        self.current.as_ref().map_or(0., |t| t.pose.shear)
     }
     pub fn dragging(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.drag.is_some())
@@ -334,6 +362,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: doc.revision,
             basis,
             bounds,
+            frame: bounds,
+            inner: None,
+            mode: TransformMode::Free,
+            perspective: false,
             start: Pose::identity(),
             pose: Pose::identity(),
             drag: None,
@@ -386,8 +418,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
-        let affine = t.pose.affine(center(t.bounds));
-        t.request.transform.map = TransformMap::Affine(affine);
+        t.request.transform.map = t.map();
+        let affine = t.pose_affine();
         if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
             for layer in placement.preview_layers(self.engine.document(), affine)? {
@@ -550,6 +582,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         press: p,
                         current: p,
                         pose: t.pose,
+                        inner: t.inner,
                     });
                     self.layer_interaction.path = vec![p];
                 }
@@ -559,8 +592,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     drag.current = p;
                 }
                 if let Some(drag) = t.drag {
-                    t.pose =
-                        t.drag_pose(drag, p, self.interaction.modifiers, self.operation.aspect);
+                    t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect);
                 }
                 if event.phase == PenPhase::Up {
                     t.drag = None;
@@ -604,7 +636,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 angle: turn(p.angle + std::f32::consts::FRAC_PI_2),
                 ..p
             },
-            CommandId::ResetTransform => t.start,
+            CommandId::ResetTransform => {
+                t.reset();
+                t.pose
+            }
             _ => return Err("Not a transform command".into()),
         };
         self.update_transform()
@@ -618,6 +653,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(false);
         };
         t.pose = drag.pose;
+        t.inner = drag.inner;
         self.layer_interaction.path.clear();
         self.update_transform()?;
         Ok(true)
@@ -637,14 +673,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(drag) = t.drag else {
             return Ok(false);
         };
-        t.pose = t.drag_pose(
-            drag,
-            drag.current,
-            self.interaction.modifiers,
-            self.operation.aspect,
-        );
+        t.apply_drag(drag, drag.current, self.interaction.modifiers, self.operation.aspect);
         self.update_transform()?;
         Ok(true)
+    }
+    pub(super) fn set_transform_mode(&mut self, mode: TransformMode, uniform: bool) -> Result<(), String> {
+        self.require_idle()?;
+        let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        if mode == TransformMode::Distort && t.placement.is_some() {
+            return Err(DISTORT_PLACEMENT.into());
+        }
+        t.set_mode(mode);
+        self.operation.aspect = uniform;
+        self.update_transform()
+    }
+    pub(super) fn toggle_transform_perspective(&mut self) -> Result<(), String> {
+        let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        t.perspective = !t.perspective;
+        self.refresh_tools();
+        Ok(())
+    }
+    pub(super) fn transform_mode(&self) -> Option<(TransformMode, bool)> {
+        self.operation.current.as_ref().map(|t| (t.mode, t.perspective))
     }
     fn transform_surface_map(&self, t: &Transaction) -> impl Fn(Point) -> [f32; 2] {
         let camera = Affine(self.state.camera.view().document_to_surface);
@@ -697,12 +747,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             line(corners[i], corners[(i + 1) % 4], false);
         }
         let reach = self.ruler_reach();
-        let affine = t.pose.affine(center(t.bounds));
-        line(
-            map(affine.map(local_handle(t.bounds, [0., -1.]))),
-            map(t.rotate_handle(reach)),
-            true,
-        );
+        if t.mode == TransformMode::Free {
+            line(
+                map(t.pose_affine().map(local_handle(t.frame, [0., -1.]))),
+                map(t.rotate_handle(reach)),
+                true,
+            );
+        }
         for p in t.handle_points(reach) {
             let [x, y] = map(p);
             segments.push(CursorSegment {
@@ -716,24 +767,142 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 }
 
+fn quad_of(bounds: Rect, inner: Option<Projective>, outer: Affine) -> [Point; 4] {
+    [0, 2, 4, 6].map(|i| {
+        let corner = local_handle(bounds, HANDLES[i]);
+        outer.map(inner.and_then(|m| m.map(corner)).unwrap_or(corner))
+    })
+}
+fn midpoint(a: Point, b: Point) -> Point {
+    Point { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }
+}
+fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
+    let side = |a: Point, b: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let sides = [0, 1, 2, 3].map(|i| side(quad[i], quad[(i + 1) % 4]));
+    sides.iter().all(|s| *s >= 0.) || sides.iter().all(|s| *s <= 0.)
+}
 impl Transaction {
+    fn pose_affine(&self) -> Affine {
+        self.pose.affine(center(self.frame))
+    }
+    fn map(&self) -> TransformMap {
+        let outer = self.pose_affine();
+        match self.inner {
+            None => TransformMap::Affine(outer),
+            Some(inner) => match inner.then(Projective::from_affine(outer)) {
+                map if map.as_affine().is_some() => TransformMap::Affine(map.as_affine().unwrap()),
+                map => TransformMap::Projective(map),
+            },
+        }
+    }
+    /// The source rectangle's corners as displayed, top-left clockwise.
+    fn quad(&self) -> [Point; 4] {
+        quad_of(self.bounds, self.inner, self.pose_affine())
+    }
     fn corners(&self) -> [Point; 4] {
-        let affine = self.pose.affine(center(self.bounds));
-        [0, 2, 4, 6].map(|i| affine.map(local_handle(self.bounds, HANDLES[i])))
+        match self.mode {
+            TransformMode::Distort => self.quad(),
+            TransformMode::Free => {
+                let affine = self.pose_affine();
+                [0, 2, 4, 6].map(|i| affine.map(local_handle(self.frame, HANDLES[i])))
+            }
+        }
     }
     fn handle_points(&self, reach: f32) -> Vec<Point> {
-        let affine = self.pose.affine(center(self.bounds));
-        HANDLES
-            .into_iter()
-            .map(|h| affine.map(local_handle(self.bounds, h)))
-            .chain([self.rotate_handle(reach)])
-            .collect()
+        match self.mode {
+            TransformMode::Distort => {
+                let q = self.quad();
+                q.into_iter()
+                    .chain((0..4).map(|i| midpoint(q[i], q[(i + 1) % 4])))
+                    .collect()
+            }
+            TransformMode::Free => {
+                let affine = self.pose_affine();
+                HANDLES
+                    .into_iter()
+                    .map(|h| affine.map(local_handle(self.frame, h)))
+                    .chain([self.rotate_handle(reach)])
+                    .collect()
+            }
+        }
+    }
+    /// Fold the pose into the quad so corners can move independently.
+    fn fold(&mut self) {
+        let outer = Projective::from_affine(self.pose_affine());
+        let inner = self.inner.map_or(outer, |m| m.then(outer));
+        self.inner = Some(inner);
+        self.pose = Pose::identity();
+        self.frame = inner.bounds(self.bounds).unwrap_or(self.bounds);
+    }
+    fn set_mode(&mut self, mode: TransformMode) {
+        match mode {
+            TransformMode::Distort => self.fold(),
+            TransformMode::Free => {
+                if let Some(inner) = self.inner {
+                    let combined = inner.then(Projective::from_affine(self.pose_affine()));
+                    match combined.as_affine().and_then(|a| Pose::from_affine(a, center(self.bounds))) {
+                        Some(pose) => {
+                            self.pose = pose;
+                            self.inner = None;
+                            self.frame = self.bounds;
+                        }
+                        None => self.fold(),
+                    }
+                }
+            }
+        }
+        self.mode = mode;
+    }
+    fn reset(&mut self) {
+        self.pose = self.start;
+        self.inner = None;
+        self.frame = self.bounds;
+        self.mode = TransformMode::Free;
+    }
+    fn apply_drag(&mut self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) {
+        let distorts = matches!(drag.handle, Handle::Corner(_) | Handle::Edge(_))
+            || (self.mode == TransformMode::Distort && matches!(drag.handle, Handle::Move));
+        if distorts {
+            self.pose = drag.pose;
+            if let Some(inner) = self.drag_quad(drag, p, modifiers) {
+                self.inner = Some(inner);
+            }
+        } else {
+            self.pose = self.drag_pose(drag, p, modifiers, aspect);
+        }
+    }
+    fn drag_quad(&self, drag: Drag, p: Point, modifiers: Modifiers) -> Option<Projective> {
+        let outer = drag.pose.affine(center(self.frame));
+        let mut q = quad_of(self.bounds, drag.inner, outer);
+        let mut delta = sub(p, drag.press);
+        match drag.handle {
+            Handle::Corner(i) => {
+                if self.perspective || modifiers.shift {
+                    let (along_x, along_y) = ([1, 0, 3, 2][i], [3, 2, 1, 0][i]);
+                    if delta.x.abs() >= delta.y.abs() {
+                        q[along_x].x -= delta.x;
+                        delta.y = 0.;
+                    } else {
+                        q[along_y].y -= delta.y;
+                        delta.x = 0.;
+                    }
+                }
+                q[i] = add(q[i], delta);
+            }
+            Handle::Edge(i) => {
+                q[i] = add(q[i], delta);
+                q[(i + 1) % 4] = add(q[(i + 1) % 4], delta);
+            }
+            Handle::Move => q = q.map(|c| add(c, delta)),
+            Handle::Scale(_) | Handle::Rotate => return drag.inner,
+        }
+        let inverse = outer.inverse()?;
+        Projective::rect_to_quad(self.bounds, q.map(|c| inverse.map(c)))
     }
     fn rotate_handle(&self, reach: f32) -> Point {
         let top = self
-            .pose
-            .affine(center(self.bounds))
-            .map(local_handle(self.bounds, [0., -1.]));
+            .pose_affine()
+            .map(local_handle(self.frame, [0., -1.]));
         let (s, c) = self.pose.angle.sin_cos();
         let [a, b, d, e, _, _] = self.basis.0;
         let length = (a * s - d * c).hypot(b * s - e * c);
@@ -746,19 +915,36 @@ impl Transaction {
             let q = self.basis.map(q);
             (world.x - q.x).hypot(world.y - q.y)
         };
+        if self.mode == TransformMode::Distort {
+            let quad = self.quad();
+            let nearest = |points: &mut dyn Iterator<Item = (usize, Point)>| {
+                points
+                    .map(|(i, q)| (distance(q), i))
+                    .filter(|(d, _)| *d <= reach)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, i)| i)
+            };
+            if let Some(i) = nearest(&mut quad.into_iter().enumerate()) {
+                return Some(Handle::Corner(i));
+            }
+            if let Some(i) = nearest(&mut (0..4).map(|i| (i, midpoint(quad[i], quad[(i + 1) % 4])))) {
+                return Some(Handle::Edge(i));
+            }
+            return inside_convex(&quad, p).then_some(Handle::Move);
+        }
         if distance(self.rotate_handle(reach)) <= reach { return Some(Handle::Rotate); }
-        let affine = self.pose.affine(center(self.bounds));
+        let affine = self.pose_affine();
         if let Some((_, h)) = HANDLES.into_iter()
-            .map(|h| (distance(affine.map(local_handle(self.bounds, h))), h))
+            .map(|h| (distance(affine.map(local_handle(self.frame, h))), h))
             .filter(|(d, _)| *d <= reach).min_by(|a, b| a.0.total_cmp(&b.0))
         { return Some(Handle::Scale(h)); }
         let q = affine.inverse()?.map(p);
-        (q.x >= self.bounds.min.x && q.y >= self.bounds.min.y
-            && q.x <= self.bounds.max.x && q.y <= self.bounds.max.y).then_some(Handle::Move)
+        (q.x >= self.frame.min.x && q.y >= self.frame.min.y
+            && q.x <= self.frame.max.x && q.y <= self.frame.max.y).then_some(Handle::Move)
     }
     fn drag_pose(&self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) -> Pose {
         let mut pose = drag.pose;
-        let pivot = center(self.bounds);
+        let pivot = center(self.frame);
         match drag.handle {
             Handle::Move => {
                 let mut delta = sub(p, drag.press);
@@ -784,8 +970,8 @@ impl Transaction {
             }
             Handle::Scale(side) if modifiers.command && (side[0] == 0. || side[1] == 0.) => {
                 let start = pose.affine(pivot);
-                let moving = local_handle(self.bounds, side);
-                let fixed = local_handle(self.bounds, side.map(|v| -v));
+                let moving = local_handle(self.frame, side);
+                let fixed = local_handle(self.frame, side.map(|v| -v));
                 let top_bottom = side[0] == 0.;
                 let along = pose.map_linear(if top_bottom {
                     Point { x: 1., y: 0. }
@@ -812,13 +998,14 @@ impl Transaction {
                     pose = next;
                 }
             }
+            Handle::Corner(_) | Handle::Edge(_) => {}
             Handle::Scale(side) => {
                 let start = pose.affine(pivot);
-                let moving = local_handle(self.bounds, side);
+                let moving = local_handle(self.frame, side);
                 let fixed = if modifiers.alt {
                     pivot
                 } else {
-                    local_handle(self.bounds, side.map(|v| -v))
+                    local_handle(self.frame, side.map(|v| -v))
                 };
                 let anchor = start.map(fixed);
                 let current = add(start.map(moving), sub(p, drag.press));
@@ -880,6 +1067,13 @@ mod tests {
                 min: Point { x: 20., y: 40. },
                 max: Point { x: 240., y: 190. },
             },
+            frame: Rect {
+                min: Point { x: 20., y: 40. },
+                max: Point { x: 240., y: 190. },
+            },
+            inner: None,
+            mode: TransformMode::Free,
+            perspective: false,
             start: Pose::identity(),
             pose: Pose::identity(),
             drag: None,
@@ -919,7 +1113,7 @@ mod tests {
                 } else {
                     Point { x: 0., y: 1. }
                 });
-                let drag = Drag { handle: Handle::Scale(side), press, current: press, pose: t.pose };
+                let drag = Drag { handle: Handle::Scale(side), press, current: press, pose: t.pose, inner: t.inner };
                 let target = add(press, Point { x: along.x * 0.2, y: along.y * 0.2 });
                 let next = t.drag_pose(drag, target, command, false);
                 let fixed = local_handle(t.bounds, side.map(|v| -v));
@@ -952,6 +1146,7 @@ mod tests {
                         press,
                         current: press,
                         pose: t.pose,
+                        inner: t.inner,
                     };
                     for alt in [false, true] {
                         for shift in [false, true] {
@@ -1007,6 +1202,7 @@ mod tests {
                     press,
                     current: press,
                     pose: t.pose,
+                    inner: None,
                 },
                 add(press, Point { x: delta, y: -150. }),
                 Modifiers::default(),
@@ -1022,6 +1218,7 @@ mod tests {
                 press,
                 current,
                 pose: t.pose,
+                inner: None,
             },
             current,
             Modifiers {

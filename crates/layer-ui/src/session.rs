@@ -1976,7 +1976,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::TransformFlipVertical
             | CommandId::TransformRotateLeft
             | CommandId::TransformRotateRight
-            | CommandId::ResetTransform => idle && self.operation.active(),
+            | CommandId::ResetTransform
+            | CommandId::TransformFree
+            | CommandId::TransformUniform => idle && self.operation.active(),
+            CommandId::TransformDistort => idle && self.operation.active() && !self.operation.placing(),
+            CommandId::TransformPerspective => {
+                idle && self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
+            }
             CommandId::ShowRulers => idle,
             CommandId::SnapRulers => idle && self.rulers.visible,
             CommandId::DeleteRuler => {
@@ -2103,6 +2109,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
             || (id == CommandId::TransformAspect && self.operation.aspect)
+            || match (id, self.transform_mode()) {
+                (CommandId::TransformFree, Some((operation::TransformMode::Free, _))) => !self.operation.aspect,
+                (CommandId::TransformUniform, Some((operation::TransformMode::Free, _))) => self.operation.aspect,
+                (CommandId::TransformDistort, Some((operation::TransformMode::Distort, _))) => true,
+                (CommandId::TransformPerspective, Some((_, perspective))) => perspective,
+                _ => false,
+            }
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
@@ -3895,6 +3908,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.reorient_transform(command)?;
                 Ok((BRUSH | DOCUMENT, true))
             }
+            CommandId::TransformFree | CommandId::TransformUniform | CommandId::TransformDistort => {
+                let mode = if command == CommandId::TransformDistort {
+                    operation::TransformMode::Distort
+                } else {
+                    operation::TransformMode::Free
+                };
+                self.set_transform_mode(mode, command == CommandId::TransformUniform)?;
+                Ok((BRUSH | DOCUMENT | COMMANDS, true))
+            }
+            CommandId::TransformPerspective => {
+                self.toggle_transform_perspective()?;
+                Ok((BRUSH | COMMANDS, false))
+            }
             CommandId::PlacementOriginalSize => {
                 self.placement_original_size()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -4388,7 +4414,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
         self.state.tool_actions = if self.operation.active() {
             [
-                CommandId::TransformAspect,
+                CommandId::TransformFree,
+                CommandId::TransformUniform,
+                CommandId::TransformDistort,
+                CommandId::TransformPerspective,
                 CommandId::TransformFlipHorizontal,
                 CommandId::TransformFlipVertical,
                 CommandId::TransformRotateLeft,
@@ -4399,6 +4428,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .filter(|c| c.available_on(self.state.platform))
+            .filter(|c| {
+                *c != CommandId::TransformPerspective
+                    || self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
+            })
             .chain(self.operation.placing().then_some(CommandId::PlacementOriginalSize))
             .map(|command| ToolSettingAction {
                 command,

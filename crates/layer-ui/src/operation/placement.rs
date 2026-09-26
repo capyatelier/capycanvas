@@ -90,6 +90,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: doc.revision,
             basis,
             bounds,
+            frame: bounds,
+            inner: None,
+            mode: TransformMode::Free,
+            perspective: false,
             start: pose,
             pose,
             drag: None,
@@ -186,6 +190,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             placement.members = members;
             t.bounds = batch_bounds(self.engine.document(), &placement.members);
+            t.frame = t.bounds;
             t.pose = Pose::identity();
         } else { t.pose.scale = [1.; 2]; }
         self.update_transform()

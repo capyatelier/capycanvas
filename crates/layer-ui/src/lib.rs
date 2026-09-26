@@ -454,6 +454,10 @@ command_ids! {
     ResetTransform,
     RemoveSelectionPoint,
     MaskSelection,
+    TransformFree,
+    TransformUniform,
+    TransformDistort,
+    TransformPerspective,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -466,7 +470,11 @@ impl CommandId {
             | Self::TransformRotateRight
             | Self::ResetTransform
             | Self::RemoveSelectionPoint
-            | Self::MaskSelection => platform.canvas_bar(),
+            | Self::MaskSelection
+            | Self::TransformFree
+            | Self::TransformUniform
+            | Self::TransformDistort
+            | Self::TransformPerspective => platform.canvas_bar(),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
             _ => true,
@@ -483,6 +491,7 @@ impl CommandId {
             Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
+                | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::ZenMode
                 | Self::Fullscreen
                 | Self::ToggleTheme
@@ -605,6 +614,10 @@ impl CommandId {
             Self::ResetTransform => "reset",
             Self::RemoveSelectionPoint => "back",
             Self::MaskSelection => "mask",
+            Self::TransformFree => "transform",
+            Self::TransformUniform => "link",
+            Self::TransformDistort => "distort",
+            Self::TransformPerspective => "perspective",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
@@ -768,6 +781,10 @@ impl CommandId {
             Self::ResetTransform => "Reset transform",
             Self::RemoveSelectionPoint => "Remove last point",
             Self::MaskSelection => "Mask to selection",
+            Self::TransformFree => "Free transform",
+            Self::TransformUniform => "Uniform transform",
+            Self::TransformDistort => "Distort",
+            Self::TransformPerspective => "Perspective",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

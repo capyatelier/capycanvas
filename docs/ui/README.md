@@ -87,6 +87,10 @@ The drawing interface uses [squircle corners](squircle-corners.md): tiles,
 toolbars, panels, tabs and drawers share one radius scale on every host, while
 settings, menus and popovers keep native styling.
 
+The [canvas action bar](canvas-action-bar.md) shows the next steps for a
+selection, transform or placed image beside it, as a glass panel that stays out
+of the way of canvas contacts.
+
 GTK [toolbar components](toolbar-components.md) provide inline brush size/opacity
 sliders and a contextual Tool Options bar, with shared sizing, overflow and
 workspace behavior.

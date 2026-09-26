@@ -17,20 +17,22 @@ pub struct ToolSettingAction {
 pub enum ToolActionGroup {
     SelectionMode,
     SelectionSource,
+    TransformMode,
 }
 impl ToolActionGroup {
     pub fn segmented(self) -> bool {
-        matches!(self, Self::SelectionMode)
+        matches!(self, Self::SelectionMode | Self::TransformMode)
     }
     pub fn id(self) -> &'static str {
         match self {
             Self::SelectionMode => "selection-mode",
             Self::SelectionSource => "selection-source",
+            Self::TransformMode => "transform-mode",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::SelectionMode => "Mode",
+            Self::SelectionMode | Self::TransformMode => "Mode",
             Self::SelectionSource => "Source",
         }
     }
@@ -45,6 +47,7 @@ impl ToolSettingAction {
             SelectionVisible | SelectionEditing | SelectionReference => {
                 Some(ToolActionGroup::SelectionSource)
             }
+            TransformFree | TransformUniform | TransformDistort => Some(ToolActionGroup::TransformMode),
             _ => None,
         }
     }

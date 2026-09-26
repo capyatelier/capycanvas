@@ -139,16 +139,17 @@ Brush, Quick Mask, and Load Selection. Do not clear the selection merely because
 the user opens a menu outside its boundary. During polygon construction, use
 Complete Selection and Cancel Selection, not commands assuming a completed mask.
 
-An optional floating **selection action bar** is Next UI work, not required for
-the underlying commands. Suggested compact default: Deselect, Invert, Quick
-Mask, Fill, More. More opens the same menu. Additional refinement/copy/transform
-items become customizable when delivered. Avoid a second customization system;
-reuse existing command inventory/workspace mechanisms. Provide a View toggle.
+The selection action bar is now the selection context of the
+[canvas action bar](canvas-action-bar.md): Deselect, Invert, Transform, Mask,
+Fill, Quick Mask and Save as Selection Layer beside the selection, with More
+opening the same Select menu. Refinement, copy and clear items join it as their
+commands ship. It is not customizable yet; any future customization reuses the
+workspace command inventory, never a second system. The View toggle is **Show
+canvas action bar**.
 
-If the bar can be moved, use an explicit drag handle and the shared
-[drag convention](drag-and-reorder.md). Its handle drags immediately after slop;
-reorderable button bodies require a hold outside Customize Title Bar. Keep it
-away from the contact and viewport edges, and do not move it during a stroke.
+The bar is not movable. If a move handle is added, use an explicit drag handle
+and the shared [drag convention](drag-and-reorder.md): the handle drags
+immediately after slop, and the bar never moves during a stroke.
 
 ## 3. Tool controls
 
@@ -284,7 +285,7 @@ direction and must not accidentally call this destructive replacement path.
 | Edit | Stroke Selection… | Later. Paint an outline with width/alignment/brush settings; Border Selection changes coverage instead. |
 | Document | Crop Canvas to Selection… | Next. Crop to the bounding rectangle of nonzero coverage; holes/soft edges do not erase artwork. Affects the whole document and stored masks. |
 | View | Show Selection Outline | Core. Hides ants without changing coverage or editing target. |
-| View | Show Selection Action Bar | Next, only when the optional bar exists. |
+| View | Show canvas action bar | Implemented; one toggle for every canvas action bar context. |
 
 Outline visibility and mask-overlay visibility are independent display settings.
 Hiding the outline keeps a visible selection-active indication in the Select

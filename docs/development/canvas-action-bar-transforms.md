@@ -2,7 +2,13 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Drag convention](../ui/drag-and-reorder.md) · [Panel transparency](../ui/panel-transparency.md)
 
-Status: **implementation plan, not started.** Written 2026-09-26 against `origin/main` at `5eb45a47`; citations re-checked at `b7a73e07`. Verify the cited lines before relying on them; later commits move code.
+Status: **in progress.** Done and pushed: A1, A2, A3, B1–B3, C1 (GTK), D1, D2, D4, D5, E1, E2 and finger-touch handles for every transform. Distort (D3, D8) is ready on GTK and ships with the renderer's projective support (D6). The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
+
+Two refinements made during implementation:
+- **More opens a menu,** not the Tool Options drawer: the items that did not fit (mode choices as submenus), then the context's own menu and the bar toggle. Bar items are commands and choices that menus can represent, so no new drawer anchor was needed on any host.
+- **Flips and quarter turns act in the layer's axes** about the centre of the transformed box. These are the document axes unless the layer itself is rotated.
+
+The original plan follows. Written 2026-09-26 against `origin/main` at `5eb45a47`; citations re-checked at `b7a73e07`. Verify the cited lines before relying on them; later commits move code.
 
 Phase 1 delivers two things together:
 - **The canvas action bar:** a floating glass bar beside the selection, transform box or placed image, which offers the next steps and mode switches.

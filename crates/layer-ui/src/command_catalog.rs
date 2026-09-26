@@ -417,6 +417,9 @@ fn action_description(action: &UiAction) -> &'static str {
             ResetTransform => "Undo every change made in this transform, keeping it open.",
             RemoveSelectionPoint => "Remove the most recent point of a polygon selection in progress.",
             MaskSelection => "Add or replace the active layer's mask so only the selection shows.",
+            TransformFree | TransformUniform => "Transform with box handles; Uniform keeps proportions.",
+            TransformDistort => "Pin each corner of the transform box independently, including perspective.",
+            TransformPerspective => "While distorting, mirror each corner drag onto its neighbour for symmetric perspective.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1025,7 +1028,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::TransformFlipVertical
             | C::TransformRotateLeft
             | C::TransformRotateRight
-            | C::ResetTransform => "Start a transform first",
+            | C::ResetTransform
+            | C::TransformFree
+            | C::TransformUniform
+            | C::TransformPerspective => "Start a transform first",
+            C::TransformDistort if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
+            C::TransformDistort => "Start a transform first",
             C::SnapRulers => "Show rulers first",
             C::DeleteRuler => "Select a ruler first",
             C::CompleteSelection

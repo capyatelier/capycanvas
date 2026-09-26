@@ -79,7 +79,7 @@ fn aspect(w: &Workspace) -> bool {
     state(w)
         .commands
         .iter()
-        .any(|c| c.id == CommandId::TransformAspect && c.selected)
+        .any(|c| c.id == CommandId::TransformUniform && c.selected)
 }
 
 #[test]
@@ -147,15 +147,22 @@ fn native_canvas_bar_input() {
         "the bar registers its glass region",
     );
     let before = revision();
-    let uniform = bar_widget(&w, "canvas-bar-TransformAspect");
-    let was = aspect(&w);
-    native.events(json!([{"point": center(&w, &uniform)}, {"down": true}, {"down": false}]));
-    until(|| aspect(&w) != was, "a mouse click on Uniform toggles proportions");
-    let point = center(&w, &uniform);
+    let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
+    let segment = |index: usize| {
+        let mut child = modes.first_child();
+        for _ in 0..index {
+            child = child.and_then(|c| c.next_sibling());
+        }
+        child.expect("mode segment")
+    };
+    assert!(!aspect(&w));
+    native.events(json!([{"point": center(&w, &segment(1))}, {"down": true}, {"down": false}]));
+    until(|| aspect(&w), "a mouse click on Uniform keeps proportions");
+    let point = center(&w, &segment(0));
     native.events(json!([
         {"touch": "down", "point": point}, {"wait_ms": 40}, {"touch": "up"}
     ]));
-    until(|| aspect(&w) == was, "a finger tap on the bar toggles back");
+    until(|| !aspect(&w), "a finger tap on Free releases them");
     assert!(transforming(&w));
     assert_eq!(revision(), before, "bar taps never paint or commit");
     let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
@@ -211,7 +218,7 @@ fn native_canvas_bar_input() {
         command: CommandId::ScaleRotate,
     });
     until(|| (w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()), "completion stays available while the bar is off");
-    assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-TransformAspect").is_none());
+    assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-choice-transform-mode").is_none());
     let cancel = bar_widget(&w, "canvas-bar-CancelTransform");
     native.events(json!([{"point": center(&w, &cancel)}, {"down": true}, {"down": false}]));
     until(|| !transforming(&w), "Cancel from the completion-only bar");
