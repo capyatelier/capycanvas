@@ -1,3 +1,4 @@
+use super::test_support::rows;
 use super::*;
 use layer_core::{ImageResolution, ResolutionUnit};
 use std::io::Cursor;
@@ -10,8 +11,6 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
     };
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         let mut source = super::tests::fixture(depth, ColorProfile::Builtin(RgbSpace::ProPhoto));
-        let mut before = vec![0; source.row_bytes()];
-        let mut after = before.clone();
         source.resolution = Some(density);
         for tiff in [false, true] {
             let mut bytes = Cursor::new(Vec::new());
@@ -33,13 +32,7 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
             {
                 assert!((a - e).abs() <= if tiff { 1e-10 } else { 0.01271 });
             }
-            let mut expected = source.rows();
-            let mut rows = image.rows();
-            for y in 0..source.extent[1] {
-                expected.read(y, &mut before).unwrap();
-                rows.read(y, &mut after).unwrap();
-                assert_eq!(before, after);
-            }
+            assert_eq!(rows(&image), rows(&source));
         }
     }
     let mut builder = SourceBuilder::new(
@@ -72,15 +65,7 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
     let b = read_photo(Cursor::new(&tagged), Default::default()).unwrap();
     assert!(a.resolution.is_none());
     assert_eq!(b.resolution, Some(density));
-    let mut ar = a.rows();
-    let mut br = b.rows();
-    let mut av = vec![0; a.row_bytes()];
-    let mut bv = av.clone();
-    for y in 0..19 {
-        ar.read(y, &mut av).unwrap();
-        br.read(y, &mut bv).unwrap();
-        assert_eq!(av, bv);
-    }
+    assert_eq!(rows(&a), rows(&b));
     // Read the actual JFIF segment directly; Exif above retains fractional PPI.
     let marker = tagged.windows(5).position(|w| w == b"JFIF\0").unwrap();
     assert_eq!(tagged[marker + 7], 1);

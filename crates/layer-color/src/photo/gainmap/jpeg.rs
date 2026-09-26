@@ -311,6 +311,7 @@ pub(super) fn preview(
 mod tests {
     use super::super::test_guide;
     use super::*;
+    use crate::photo::test_support::hdr_pixels;
     const EXTENT: [u32; 2] = [48, 32];
     fn pixel(x: u32, y: u32) -> [f32; 4] {
         match x / 16 {
@@ -350,27 +351,19 @@ mod tests {
     fn assert_hdr(source: SourceImage) {
         assert_eq!(source.extent, EXTENT);
         assert_eq!(source.interpretation.depth, SampleDepth::F16);
-        let mut rows = source.rows();
-        let mut bytes = vec![0; source.row_bytes()];
         let mut largest = 0f32;
-        for y in 0..EXTENT[1] {
-            rows.read(y, &mut bytes).unwrap();
-            for (x, p) in bytes.chunks_exact(8).enumerate() {
-                let actual = hdr::decode_pixel(std::array::from_fn(|c| {
-                    u16::from_le_bytes([p[c * 2], p[c * 2 + 1]])
-                }))
-                .unwrap();
-                let expected = pixel(x as u32, y);
-                for c in 0..3 {
-                    let error = (actual[c] - expected[c]).abs();
-                    largest = largest.max(error);
-                    assert!(
-                        error < 0.13 + 0.035 * expected[c],
-                        "({x},{y}) {actual:?} != {expected:?}"
-                    );
-                }
-                assert_eq!(actual[3], 1.);
+        for (i, actual) in hdr_pixels(&source).into_iter().enumerate() {
+            let (x, y) = (i as u32 % EXTENT[0], i as u32 / EXTENT[0]);
+            let expected = pixel(x, y);
+            for c in 0..3 {
+                let error = (actual[c] - expected[c]).abs();
+                largest = largest.max(error);
+                assert!(
+                    error < 0.13 + 0.035 * expected[c],
+                    "({x},{y}) {actual:?} != {expected:?}"
+                );
             }
+            assert_eq!(actual[3], 1.);
         }
         eprintln!("portable JPEG largest HDR error: {largest}");
     }

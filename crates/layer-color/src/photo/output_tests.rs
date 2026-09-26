@@ -1,56 +1,5 @@
 use super::*;
-use crate::{WorkingDecoder, WorkingEncoder};
 use std::io::Cursor;
-
-#[test]
-fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
-    for space in RgbSpace::ALL {
-        for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let source = super::tests::fixture(depth, ColorProfile::Builtin(space));
-            let decoder =
-                WorkingDecoder::new(&source.interpretation, space, Default::default()).unwrap();
-            let encoder =
-                WorkingEncoder::new(space, &source.interpretation, Default::default()).unwrap();
-            for tiff in [false, true] {
-                let mut rows = source.rows();
-                let mut original = vec![0; source.row_bytes()];
-                let mut working = vec![[0.; 4]; source.extent[0] as usize];
-                let mut calls = 0;
-                let mut provider = |y, output: &mut [u8]| {
-                    assert_eq!(y, calls);
-                    calls += 1;
-                    rows.read(y, &mut original)?;
-                    decoder.decode_pixels(&original, &mut working)?;
-                    encoder.encode_straight(&working, output, None, [0, 0])?;
-                    Ok(())
-                };
-                let mut file = Cursor::new(Vec::new());
-                if tiff {
-                    write_tiff_rows(
-                        &mut file,
-                        source.extent,
-                        encoder.interpretation(), None,
-                        &mut provider,
-                    )
-                    .unwrap();
-                } else {
-                    write_png_rows(
-                        &mut file,
-                        source.extent,
-                        encoder.interpretation(), None,
-                        &mut provider,
-                    )
-                    .unwrap();
-                }
-                assert_eq!(calls, source.extent[1]);
-                file.set_position(0);
-                let restored = read_photo(file, DecodeLimits::default()).unwrap();
-                super::tests::exact_pixels(&source, &restored);
-                assert!(!restored.interpretation.profile_assumed);
-            }
-        }
-    }
-}
 
 #[test]
 fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {

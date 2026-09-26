@@ -1,3 +1,4 @@
+use super::test_support::rows;
 use super::*;
 use std::io::Cursor;
 
@@ -45,13 +46,7 @@ fn camera_mpf_preview_does_not_replace_primary_pixels_or_profile() {
         let actual = read_photo(Cursor::new(camera), DecodeLimits::default()).unwrap();
         assert_eq!(actual.extent, expected.extent);
         assert_eq!(actual.interpretation, expected.interpretation);
-        let mut a = vec![0; actual.row_bytes()];
-        let mut b = a.clone();
-        for y in 0..actual.extent[1] {
-            actual.rows().read(y, &mut a).unwrap();
-            expected.rows().read(y, &mut b).unwrap();
-            assert_eq!(a, b);
-        }
+        assert_eq!(rows(&actual), rows(&expected));
     }
 }
 
@@ -77,16 +72,13 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                     profile_bytes(&decoded.interpretation.profile).unwrap(),
                     profile_bytes(&profile).unwrap()
                 );
-                let mut expected = source.rows();
-                let mut actual = decoded.rows();
-                let mut a = vec![0; source.row_bytes()];
-                let mut b = a.clone();
-                let mut max = 0;
-                for y in 0..17 {
-                    expected.read(y, &mut a).unwrap();
-                    actual.read(y, &mut b).unwrap();
-                    max = max.max(a.iter().zip(&b).map(|(a, b)| a.abs_diff(*b)).max().unwrap());
-                }
+                let max = rows(&source)
+                    .concat()
+                    .iter()
+                    .zip(rows(&decoded).concat())
+                    .map(|(a, b)| a.abs_diff(b))
+                    .max()
+                    .unwrap();
                 assert!(
                     max <= if quality == 100 { 3 } else { 8 },
                     "{channels:?} {space:?} q={quality}, max={max}"
@@ -242,13 +234,7 @@ fn external_cmyk_jpeg_variants_match_reference_ink_samples() {
         )
         .unwrap();
         assert_eq!(decoded.interpretation.channels, SourceChannels::Cmyk);
-        let mut actual = Vec::new();
-        let mut row = vec![0; decoded.row_bytes()];
-        let mut rows = decoded.rows();
-        for y in 0..decoded.extent[1] {
-            rows.read(y, &mut row).unwrap();
-            actual.extend_from_slice(&row);
-        }
+        let actual = rows(&decoded).concat();
         assert_eq!(actual.len(), expected.len());
         assert!(
             actual
@@ -287,19 +273,13 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
         assert_eq!(decoded.interpretation.profile_assumed, assumed);
         let expected = std::fs::read(dir.join(format!("{name}.raw"))).unwrap();
         assert_eq!(expected.len(), decoded.row_bytes() * extent[1] as usize);
-        let mut rows = decoded.rows();
-        let mut row = vec![0; decoded.row_bytes()];
-        let mut maximum = 0;
-        for (y, reference) in expected.chunks_exact(row.len()).enumerate() {
-            rows.read(y as u32, &mut row).unwrap();
-            maximum = maximum.max(
-                row.iter()
-                    .zip(reference)
-                    .map(|(a, b)| a.abs_diff(*b))
-                    .max()
-                    .unwrap(),
-            );
-        }
+        let maximum = rows(&decoded)
+            .concat()
+            .iter()
+            .zip(&expected)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
         assert!(maximum <= 1, "{name}: maximum code difference {maximum}");
         let error = read_photo(
             Cursor::new(&bytes),

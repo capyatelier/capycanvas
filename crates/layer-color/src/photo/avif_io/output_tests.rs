@@ -1,5 +1,6 @@
 use super::*;
 use crate::photo::gainmap::test_guide;
+use crate::photo::test_support::{hdr_pixels, rows as source_rows};
 use std::io::Cursor;
 use std::sync::atomic::Ordering;
 
@@ -59,43 +60,33 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
             assert_eq!(hdr.interpretation.depth, SampleDepth::F16);
             assert_eq!(base.interpretation.depth, SampleDepth::U16);
             assert_eq!(hdr.resolution, Some(layer_core::ImageResolution::ppi(300)));
-            let mut hdr_rows = hdr.rows();
-            let mut base_rows = base.rows();
-            let mut decoded = vec![0; hdr.row_bytes()];
-            let mut sdr = vec![0; base.row_bytes()];
+            let sdr = source_rows(&base).concat();
             let mut maximum = 0f32;
             let mut squared = 0f64;
             let mut samples = 0u64;
-            for y in 0..extent[1] {
-                hdr_rows.read(y, &mut decoded).unwrap();
-                base_rows.read(y, &mut sdr).unwrap();
-                for (x, p) in decoded.chunks_exact(8).enumerate() {
-                    let actual = hdr::decode_pixel(std::array::from_fn(|c| {
-                        u16::from_le_bytes([p[c * 2], p[c * 2 + 1]])
-                    }))
-                    .unwrap();
-                    let expected = sample(x as u32, y);
-                    if expected[3] > 0. {
-                        for c in 0..3 {
-                            let error = (actual[c] - expected[c] / expected[3]).abs();
-                            maximum = maximum.max(error);
-                            squared += f64::from(error).powi(2);
-                            samples += 1;
-                            assert!(
-                                error < max_error,
-                                "{extent:?} q={quality} ({x},{y}) {actual:?} expected {expected:?}"
-                            );
-                        }
+            for (i, actual) in hdr_pixels(&hdr).into_iter().enumerate() {
+                let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);
+                let expected = sample(x, y);
+                if expected[3] > 0. {
+                    for c in 0..3 {
+                        let error = (actual[c] - expected[c] / expected[3]).abs();
+                        maximum = maximum.max(error);
+                        squared += f64::from(error).powi(2);
+                        samples += 1;
+                        assert!(
+                            error < max_error,
+                            "{extent:?} q={quality} ({x},{y}) {actual:?} expected {expected:?}"
+                        );
                     }
-                    assert!((actual[3] - expected[3]).abs() <= 0.00025);
-                    let code = (expected[3] * 4095.).round() as u32;
-                    let alpha = u16::from_le_bytes([sdr[x * 8 + 6], sdr[x * 8 + 7]]);
-                    assert_eq!(
-                        u32::from(alpha),
-                        (code * 65535 + 2047) / 4095,
-                        "lossless alpha"
-                    );
                 }
+                assert!((actual[3] - expected[3]).abs() <= 0.00025);
+                let code = (expected[3] * 4095.).round() as u32;
+                let alpha = u16::from_le_bytes([sdr[i * 8 + 6], sdr[i * 8 + 7]]);
+                assert_eq!(
+                    u32::from(alpha),
+                    (code * 65535 + 2047) / 4095,
+                    "lossless alpha"
+                );
             }
             assert!((squared / samples as f64).sqrt() < rms_error);
             eprintln!(
@@ -109,14 +100,11 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
                 let stem = format!("{}x{}-q{quality}", extent[0], extent[1]);
                 std::fs::write(directory.join(format!("{stem}.avif")), &bytes).unwrap();
                 for (name, source) in [("hdr", &hdr), ("base", &base)] {
-                    let mut full = Vec::new();
-                    let mut row = vec![0; source.row_bytes()];
-                    let mut rows = source.rows();
-                    for y in 0..extent[1] {
-                        rows.read(y, &mut row).unwrap();
-                        full.extend_from_slice(&row);
-                    }
-                    std::fs::write(directory.join(format!("{stem}.{name}")), full).unwrap();
+                    std::fs::write(
+                        directory.join(format!("{stem}.{name}")),
+                        source_rows(source).concat(),
+                    )
+                    .unwrap();
                 }
             }
         }

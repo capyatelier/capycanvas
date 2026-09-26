@@ -1,5 +1,6 @@
 //! The supported interchange subset is deliberate; unsupported layouts fail
 //! before pixel adoption instead of being partially decoded as another image.
+use super::test_support::rows;
 use super::*;
 use std::io::Cursor;
 use tiff::{
@@ -56,16 +57,12 @@ fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() 
                 source.interpretation.profile,
                 ColorProfile::Icc(profile.clone().into())
             );
-            let mut rows = source.rows();
-            let mut row = vec![0; source.row_bytes()];
-            for y in 0..17 {
-                rows.read(y, &mut row).unwrap();
-                let decoded: Vec<_> = row
-                    .chunks_exact(2)
-                    .map(|v| u16::from_le_bytes(v.try_into().unwrap()))
-                    .collect();
-                assert_eq!(&decoded, &values[y as usize * 99..(y as usize + 1) * 99]);
-            }
+            let decoded: Vec<_> = rows(&source)
+                .concat()
+                .chunks_exact(2)
+                .map(|v| u16::from_le_bytes(v.try_into().unwrap()))
+                .collect();
+            assert_eq!(decoded, values);
         }
     }
 }

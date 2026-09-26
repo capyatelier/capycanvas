@@ -262,6 +262,7 @@ pub(super) use jpeg::read as read_jpeg;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::photo::test_support::hdr_pixels;
     fn read_gainmap(input: std::io::Cursor<impl AsRef<[u8]>>, format: GainMapFormat, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<SourceImage, String> {
         if format == GainMapFormat::Jpeg { let bytes = input.get_ref().as_ref(); return read_jpeg(bytes, bytes.len(), limits, cancelled); }
         Ok(super::super::avif_io::read(input, limits, cancelled)?.source)
@@ -481,15 +482,15 @@ mod tests {
                         read,
                     )
                     .unwrap();
-                    let original = read_gainmap(
-                        std::io::Cursor::new(&file),
-                        format,
-                        DecodeLimits::default(),
-                        &cancel,
-                    )
-                    .unwrap();
-                    let mut original_row = vec![0; original.row_bytes()];
-                    original.rows().read(0, &mut original_row).unwrap();
+                    let original = hdr_pixels(
+                        &read_gainmap(
+                            std::io::Cursor::new(&file),
+                            format,
+                            DecodeLimits::default(),
+                            &cancel,
+                        )
+                        .unwrap(),
+                    );
                     // Obscure one metadata signature without changing segment
                     // lengths or MPF offsets. The remaining schema must suffice.
                     for signature in [
@@ -506,18 +507,16 @@ mod tests {
                         for i in positions {
                             isolated[i] = b'x';
                         }
-                        let source = read_gainmap(
-                            std::io::Cursor::new(isolated),
-                            format,
-                            DecodeLimits::default(),
-                            &cancel,
-                        )
-                        .unwrap();
-                        let mut row = vec![0; source.row_bytes()];
-                        source.rows().read(0, &mut row).unwrap();
-                        for (a, b) in row.chunks_exact(2).zip(original_row.chunks_exact(2)) {
-                            let a = half_value(a);
-                            let b = half_value(b);
+                        let source = hdr_pixels(
+                            &read_gainmap(
+                                std::io::Cursor::new(isolated),
+                                format,
+                                DecodeLimits::default(),
+                                &cancel,
+                            )
+                            .unwrap(),
+                        );
+                        for (a, b) in source.iter().flatten().zip(original.iter().flatten()) {
                             assert!((a - b).abs() < 0.004, "metadata paths diverged: {a} {b}");
                         }
                     }
@@ -527,10 +526,6 @@ mod tests {
                 fallbacks[0] - fallbacks[1] > 0.1,
                 "SDR brightness must change the encoded base: {fallbacks:?}"
             );
-        }
-        fn half_value(b: &[u8]) -> f32 {
-            layer_core::color::hdr::decode_pixel([u16::from_le_bytes([b[0], b[1]]), 0, 0, 0x3c00])
-                .unwrap()[0]
         }
     }
     #[test]
@@ -581,18 +576,11 @@ mod tests {
                 Some(layer_core::ImageResolution::ppi(300))
             );
             assert_eq!(source.interpretation.depth, SampleDepth::F16);
-            let mut rows = source.rows();
-            let mut raw = vec![0u8; 64 * 8];
             let mut expected = vec![[0.; 4]; 64];
             let mut largest = 0f32;
-            for y in 0..48 {
-                rows.read(y, &mut raw).unwrap();
-                row(y, &mut expected, transparent).unwrap();
-                for (bytes, p) in raw.chunks_exact(8).zip(&expected) {
-                    let bits = std::array::from_fn(|c| {
-                        u16::from_le_bytes([bytes[c * 2], bytes[c * 2 + 1]])
-                    });
-                    let v = layer_core::color::hdr::decode_pixel(bits).unwrap();
+            for (y, actual) in hdr_pixels(&source).chunks_exact(64).enumerate() {
+                row(y as u32, &mut expected, transparent).unwrap();
+                for (v, p) in actual.iter().zip(&expected) {
                     assert!((v[3] - p[3]).abs() < 0.0005);
                     if p[3] > 0. {
                         for c in 0..3 {

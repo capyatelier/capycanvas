@@ -1,4 +1,5 @@
 use super::*;
+use crate::photo::test_support::{f16_pixels, rows};
 use layer_core::color::{SampleDepth, RgbSpace};
 
 #[test]
@@ -19,13 +20,11 @@ fn hdr_rasterization_retains_range_alpha_and_rejects_overflow() {
             let (raster, stats) = rasterize_source(&original,
                 DocumentColor { space: target, depth: SampleDepth::F16 }, 1024 * 1024, || false).unwrap();
             assert_eq!(stats.clipped_channels, 0);
-            let mut actual = vec![0; raster.row_bytes()];
-            raster.rows().read(0, &mut actual).unwrap();
+            let actual = rows(&raster).concat();
             if target == space { assert_eq!(actual, bytes); }
             let matrix = space.linear_transform(target);
-            for (input, output) in pixels.into_iter().zip(actual.chunks_exact(8)) {
+            for (input, output) in pixels.into_iter().zip(f16_pixels(&actual)) {
                 let expected = layer_core::color::rgb::apply(matrix, [input[0] as f64, input[1] as f64, input[2] as f64]);
-                let output = hdr::decode_pixel(std::array::from_fn(|c| u16::from_le_bytes([output[c * 2], output[c * 2 + 1]]))).unwrap();
                 for c in 0..3 { assert!((f64::from(output[c]) - expected[c]).abs() <= expected[c].abs() / 1024. + 1. / 16777216.); }
                 assert_eq!(output[3], input[3]);
             }
@@ -106,11 +105,8 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
             || false,
         )
         .unwrap();
-        let mut a = vec![0; original.row_bytes()];
-        let mut b = vec![0; promoted.row_bytes()];
-        original.rows().read(0, &mut a).unwrap();
-        promoted.rows().read(0, &mut b).unwrap();
-        for (a, b) in a.into_iter().zip(b.chunks_exact(2)) {
+        let promoted = rows(&promoted).concat();
+        for (a, b) in rows(&original).concat().into_iter().zip(promoted.chunks_exact(2)) {
             assert_eq!(
                 u16::from_le_bytes([b[0], b[1]]),
                 a as u16 * 257,
@@ -128,17 +124,9 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
             || false,
         )
         .unwrap();
-        let mut rows_a = original.rows();
-        let mut rows_b = reduced.rows();
-        let mut a = vec![0; original.row_bytes()];
-        let mut b = vec![0; reduced.row_bytes()];
-        for y in 0..256 {
-            rows_a.read(y, &mut a).unwrap();
-            rows_b.read(y, &mut b).unwrap();
-            for (a, b) in a.chunks_exact(2).zip(&b) {
-                let code = u16::from_le_bytes([a[0], a[1]]) as u32;
-                assert_eq!(*b as u32, (code + 128) / 257, "{space:?} {code}");
-            }
+        for (a, b) in rows(&original).concat().chunks_exact(2).zip(rows(&reduced).concat()) {
+            let code = u16::from_le_bytes([a[0], a[1]]) as u32;
+            assert_eq!(b as u32, (code + 128) / 257, "{space:?} {code}");
         }
         assert_eq!(stats.clipped_channels, 0);
     }

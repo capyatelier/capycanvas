@@ -80,6 +80,7 @@ pub(super) fn normalize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::photo::test_support::rows;
     #[test]
     fn all_eight_orientations_preserve_numbered_pixel_positions() {
         let interpretation = SourceInterpretation {
@@ -105,14 +106,7 @@ mod tests {
         for orientation in 1..=8 {
             let result =
                 normalize(source.clone(), source.resolution, orientation, 1024 * 1024).unwrap();
-            let mut rows = result.rows();
-            let mut values = Vec::new();
-            let mut row = vec![0; result.row_bytes()];
-            for y in 0..result.extent[1] {
-                rows.read(y, &mut row).unwrap();
-                values.extend_from_slice(&row);
-            }
-            assert_eq!(values, expected[orientation as usize - 1]);
+            assert_eq!(rows(&result).concat(), expected[orientation as usize - 1]);
         }
     }
 }

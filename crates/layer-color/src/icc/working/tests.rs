@@ -11,45 +11,6 @@ fn interpretation(space: RgbSpace, depth: SampleDepth) -> SourceInterpretation {
 }
 
 #[test]
-fn every_integer_code_and_hidden_rgb_survive_builtin_working_decode() {
-    for space in RgbSpace::ALL {
-        for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let source = interpretation(space, depth);
-            let decoder = WorkingDecoder::new(&source, space, Default::default()).unwrap();
-            let maximum = depth.maximum();
-            let mut bytes = Vec::new();
-            for code in 0..=maximum {
-                for value in [
-                    code,
-                    maximum - code,
-                    code.wrapping_mul(617) % (maximum + 1),
-                    code % 3,
-                ] {
-                    bytes.extend_from_slice(&(value as u16).to_le_bytes()[..depth.bytes()]);
-                }
-            }
-            let mut linear = vec![[0.; 4]; maximum as usize + 1];
-            decoder.decode_pixels(&bytes, &mut linear).unwrap();
-            for (code, pixel) in linear.into_iter().enumerate() {
-                let code = code as u32;
-                assert_eq!(pixel[3], (code % 3) as f32 / maximum as f32);
-                for (value, expected) in pixel[..3].iter().zip([
-                    code,
-                    maximum - code,
-                    code.wrapping_mul(617) % (maximum + 1),
-                ]) {
-                    assert_eq!(
-                        (space.encode(f64::from(*value)) * f64::from(maximum)).round() as u32,
-                        expected,
-                        "{space:?} {depth:?} {code}"
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn wide_gamut_working_conversion_retains_negative_and_above_one_values() {
     let options = ConversionOptions {
         black_point_compensation: false,

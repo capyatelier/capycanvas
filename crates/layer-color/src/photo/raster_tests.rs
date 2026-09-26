@@ -9,12 +9,7 @@ fn limits() -> DecodeLimits {
     }
 }
 fn pixels(source: &SourceImage) -> Vec<u8> {
-    let mut pixels = vec![0; source.row_bytes() * source.extent[1] as usize];
-    let mut rows = source.rows();
-    for (y, row) in pixels.chunks_exact_mut(source.row_bytes()).enumerate() {
-        rows.read(y as u32, row).unwrap();
-    }
-    pixels
+    super::test_support::rows(source).concat()
 }
 
 #[test]

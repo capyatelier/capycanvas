@@ -1,4 +1,5 @@
 use super::*;
+use crate::photo::test_support::{assert_rgba16_reference, f16_pixels, hdr_pixels};
 use std::io::Cursor;
 
 const SDR: &[u8] = include_bytes!("../../../tests/fixtures/avif/p3-12bit.avif");
@@ -162,12 +163,7 @@ fn rust_avif_synthetic_precision_and_geometry() {
             ColorProfile::Builtin(RgbSpace::DisplayP3)
         );
         assert!(!photo.source.interpretation.profile_assumed);
-        let mut rows = photo.source.rows();
-        let mut row = vec![0; photo.source.row_bytes()];
-        for (y, expected) in expected.chunks_exact(row.len()).enumerate() {
-            rows.read(y as u32, &mut row).unwrap();
-            assert_eq!(row, expected, "row {y}");
-        }
+        assert_rgba16_reference(&photo.source, expected, "synthetic");
     }
 }
 
@@ -202,36 +198,22 @@ fn rust_avif_synthetic_hdr_matches_libavif() {
             photo.source.interpretation.profile,
             ColorProfile::Builtin(RgbSpace::Srgb)
         );
-        let mut rows = photo.source.rows();
-        let mut row = vec![0; photo.source.row_bytes()];
+        let actual = hdr_pixels(&photo.source);
+        let expected = f16_pixels(expected);
+        assert_eq!(actual.len(), expected.len());
         let mut largest = 0f32;
-        for (y, expected) in expected.chunks_exact(row.len()).enumerate() {
-            rows.read(y as u32, &mut row).unwrap();
-            for (x, (actual, expected)) in row
-                .chunks_exact(8)
-                .zip(expected.chunks_exact(8))
-                .enumerate()
-            {
-                let pixel = |b: &[u8]| {
-                    layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| {
-                        u16::from_le_bytes(b[c * 2..c * 2 + 2].try_into().unwrap())
-                    }))
-                    .unwrap()
-                };
-                let actual = pixel(actual);
-                let expected = pixel(expected);
-                for c in 0..3 {
-                    // libavif's delivery utility clips negative RGB. The
-                    // editing source intentionally retains out-of-gamut values.
-                    let error = (actual[c].max(0.) - expected[c]).abs();
-                    largest = largest.max(error);
-                    assert!(
-                        error < 0.004,
-                        "{name} ({x},{y}) channel={c}: {actual:?} != {expected:?}"
-                    );
-                }
-                assert!((actual[3] - expected[3]).abs() < 0.001);
+        for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+            for c in 0..3 {
+                // libavif's delivery utility clips negative RGB. The
+                // editing source intentionally retains out-of-gamut values.
+                let error = (actual[c].max(0.) - expected[c]).abs();
+                largest = largest.max(error);
+                assert!(
+                    error < 0.004,
+                    "{name} pixel {i} channel={c}: {actual:?} != {expected:?}"
+                );
             }
+            assert!((actual[3] - expected[3]).abs() < 0.001);
         }
         eprintln!("{name}: native gain-map reference max error {largest}");
     }
@@ -280,20 +262,7 @@ fn rust_avif_lossless_stills_preserve_alpha_color_geometry_and_density() {
                 })
             );
             let expected = std::fs::read(root.join(format!("{name}.rgba16"))).unwrap();
-            let mut rows = photo.source.rows();
-            let mut row = vec![0; photo.source.row_bytes()];
-            assert_eq!(
-                expected.len(),
-                row.len() * photo.source.extent[1] as usize,
-                "{name}"
-            );
-            for (y, expected) in expected.chunks_exact(row.len()).enumerate() {
-                rows.read(y as u32, &mut row).unwrap();
-                if row != expected {
-                    let i = row.iter().zip(expected).position(|(a, b)| a != b).unwrap();
-                    panic!("{name} row={y} byte={i}: {} != {}", row[i], expected[i]);
-                }
-            }
+            assert_rgba16_reference(&photo.source, &expected, &name);
             println!("{name}: exact source samples retained");
         }
     }
@@ -320,30 +289,11 @@ fn rust_avif_grids_and_sequences_match_native_reference() {
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
         let expected = std::fs::read(root.join(format!("{name}.reference.rgba16"))).unwrap();
-        let mut rows = photo.source.rows();
-        let mut row = vec![0; photo.source.row_bytes()];
         assert_eq!(
             photo.first_frame,
             name.starts_with("colors-") || name.starts_with("sequence-")
         );
-        let wide = photo.source.interpretation.depth == SampleDepth::U16;
-        let expected_row = if wide { row.len() } else { row.len() * 2 };
-        assert_eq!(
-            expected.len(),
-            expected_row * photo.source.extent[1] as usize
-        );
-        for (y, expected) in expected.chunks_exact(expected_row).enumerate() {
-            rows.read(y as u32, &mut row).unwrap();
-            for (i, expected) in expected.chunks_exact(2).enumerate() {
-                let actual = if wide {
-                    u16::from_le_bytes(row[i * 2..i * 2 + 2].try_into().unwrap())
-                } else {
-                    row[i] as u16 * 257
-                };
-                let expected = u16::from_le_bytes(expected.try_into().unwrap());
-                assert_eq!(actual, expected, "{name} row={y} byte={i}");
-            }
-        }
+        assert_rgba16_reference(&photo.source, &expected, name);
         println!(
             "{name}: exact source samples and first-frame disclosure passed; density {:?}",
             photo.source.resolution

@@ -1,4 +1,5 @@
 use super::*;
+use crate::photo::test_support::rows;
 use std::io::Cursor;
 
 const RED: &[u8] = include_bytes!("../../../tests/fixtures/heif/flat-red-8bit.heic");
@@ -109,19 +110,14 @@ fn rust_heif_ten_bit_and_embedded_profile_preserve_source_samples() {
         ColorProfile::Builtin(RgbSpace::DisplayP3)
     );
     let expected = ((448f64 / 876. * 1023.).round() as u32 * 65535 + 511) / 1023;
-    let mut row = vec![0; source.row_bytes()];
-    let mut rows = source.rows();
-    for y in 0..64 {
-        rows.read(y, &mut row).unwrap();
-        for p in row.chunks_exact(8) {
-            for c in 0..3 {
-                assert_eq!(
-                    u16::from_le_bytes([p[c * 2], p[c * 2 + 1]]) as u32,
-                    expected
-                );
-            }
-            assert_eq!(&p[6..], &[255, 255]);
+    for p in rows(&source).concat().chunks_exact(8) {
+        for c in 0..3 {
+            assert_eq!(
+                u16::from_le_bytes([p[c * 2], p[c * 2 + 1]]) as u32,
+                expected
+            );
         }
+        assert_eq!(&p[6..], &[255, 255]);
     }
     let mut tile = item(1, "flat_red_64");
     tile.props.push((false, tb::colr_nclx(1, 13, 6, false)));
@@ -354,14 +350,9 @@ fn rust_heif_decodes_independent_lossless_red() {
         .source;
     assert_eq!(source.extent, [64, 64]);
     assert_eq!(source.interpretation.depth, SampleDepth::U8);
-    let mut row = vec![0; source.row_bytes()];
-    let mut rows = source.rows();
-    for y in 0..64 {
-        rows.read(y, &mut row).unwrap();
-        for p in row.chunks_exact(4) {
-            assert!(p[0] >= 250 && p[1] <= 2 && p[2] <= 2, "{p:?}");
-            assert_eq!(p[3], 255);
-        }
+    for p in rows(&source).concat().chunks_exact(4) {
+        assert!(p[0] >= 250 && p[1] <= 2 && p[2] <= 2, "{p:?}");
+        assert_eq!(p[3], 255);
     }
 }
 
