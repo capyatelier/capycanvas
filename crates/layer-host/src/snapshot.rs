@@ -312,10 +312,7 @@ impl NativeHost {
             "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(),
             "open_label": layer_ui::DocumentRequest::Open.accept_label(),
             "filter_label": layer_ui::DocumentRequest::Open.filter().0,
-            "extension": layer_ui::DocumentRequest::Open.filter().1,
-            "export_label": layer_ui::DocumentRequest::Export { name: String::new() }.accept_label(),
-            "export_filter_label": layer_ui::DocumentRequest::Export { name: String::new() }.filter().0,
-            "export_extension": layer_ui::DocumentRequest::Export { name: String::new() }.filter().1}))?;
+            "extension": layer_ui::DocumentRequest::Open.filter().1}))?;
         map.serialize_entry("preferences", &self.session.preferences())?;
         map.serialize_entry("picker", &self.session.tool_picker())?;
         map.serialize_entry("workspace_menu", &self.session.workspace_menu())?;

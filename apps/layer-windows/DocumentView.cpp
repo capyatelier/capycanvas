@@ -143,11 +143,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         {L"options",creationDraft},{L"preset",S(presetName.Text())},{L"defaults",B(remember.IsChecked().Value())}});
                 if(type==L"confirm_close")response.Insert(L"decision",S(choice==ContentDialogResult::Primary?L"save":
                     choice==ContentDialogResult::Secondary?L"discard":L"cancel"));
-            } else if(type==L"save"||type==L"open"||type==L"export") {
+            } else if(type==L"save"||type==L"open") {
                 auto path=str(object(request,L"location"),L"uri");
                 if(path.empty()) {
-                    bool exporting=type==L"export";
-                    auto extension=L"."+str(options,exporting?L"export_extension":L"extension");
+                    auto extension=L"."+str(options,L"extension");
                     if(type==L"open") {
                         Pickers::FileOpenPicker open(window.AppWindow().Id());
                         open.CommitButtonText(str(options,L"open_label"));
@@ -157,9 +156,9 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         for(uint32_t i=0;selected&&i<selected.Size();++i){if(i)queued.Append(S(selected.GetAt(i).Path()));else path=selected.GetAt(i).Path();}
                     } else {
                         Pickers::FileSavePicker save(window.AppWindow().Id());
-                        save.CommitButtonText(str(options,exporting?L"export_label":L"save_label"));
+                        save.CommitButtonText(str(options,L"save_label"));
                         save.DefaultFileExtension(extension);save.SuggestedFileName(str(request,L"name"));
-                        save.FileTypeChoices().Insert(str(options,exporting?L"export_filter_label":L"filter_label"),single_threaded_vector<hstring>({extension}));
+                        save.FileTypeChoices().Insert(str(options,L"filter_label"),single_threaded_vector<hstring>({extension}));
                         picker=save.PickSaveFileAsync();
                         auto selected=co_await picker;
                         if(selected)path=selected.Path();

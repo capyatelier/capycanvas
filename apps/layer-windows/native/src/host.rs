@@ -420,9 +420,6 @@ impl CapyHost {
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.gpu.check()?;
-        if let Some(service) = self.documents.as_mut() {
-            service.after_frame(&mut self.native)?;
-        }
         self.poll_services()?;
         Ok(i32::from(self.native.dirty))
     }

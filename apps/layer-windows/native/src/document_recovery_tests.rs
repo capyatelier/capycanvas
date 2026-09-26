@@ -1,5 +1,5 @@
 //! Actual process-owned device removal at document worker/adoption boundaries.
-use super::gpu_tests::{image, invoke, png_pixels, request};
+use super::gpu_tests::{image, invoke, request};
 use super::*;
 use crate::device::DeviceState;
 use crate::gpu_recovery_tests::{remove_device, renderer};
@@ -197,59 +197,6 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
             image(&mut f.host);
         }
     }
-    f.device.check().unwrap();
-}
-
-#[test]
-#[ignore = "Removes process-owned D3D12 hardware devices; run this module alone"]
-fn captured_export_after_removal_preserves_destination_and_allows_retry() {
-    let mut f = Fixture::new();
-    invoke(&mut f.host, CommandId::AddLayer);
-    let original = f.host.session.engine().document().clone();
-    let expected = image(&mut f.host).bytes;
-    let path = f.path("drawing.png");
-    std::fs::write(&path, b"Existing destination").unwrap();
-    invoke(&mut f.host, CommandId::ExportDocument);
-    let (id, _, _) = request(&f.host);
-    f.dispatch(DocumentAction::Export {
-        id,
-        path: path.clone(),
-    });
-    // Isolate the capture/worker boundary: remove the actual device after the
-    // owner obtains its ticket and before the worker receives that ticket.
-    let readback = f
-        .host
-        .session
-        .renderer_mut()
-        .0
-        .as_mut()
-        .unwrap()
-        .begin_export_readback(u64::from(id))
-        .unwrap();
-    let destination = f.service.export.take().unwrap();
-    f.remove_device();
-    f.retire_renderer();
-    f.service.worker.submit(Job::Export {
-        readback,
-        path: destination,
-    });
-    f.finish();
-    assert!(!f.host.session.state().document_file.busy);
-    assert!(f.host.session.state().document_file.modified);
-    assert_eq!(f.host.session.engine().document(), &original);
-    if f.host.session.state().host_error.is_some() {
-        assert_eq!(std::fs::read(&path).unwrap(), b"Existing destination");
-    } else {
-        // A ticket already mapped before removal may still finish losslessly.
-        assert_eq!(png_pixels(std::path::Path::new(&path)).bytes, expected);
-    }
-    f.restore_renderer();
-    assert_eq!(image(&mut f.host).bytes, expected);
-    super::gpu_tests::capture_export(&mut f.service, &mut f.host, std::path::Path::new(&path));
-    f.finish();
-    assert!(f.host.session.state().host_error.is_none());
-    assert_eq!(png_pixels(std::path::Path::new(&path)).bytes, expected);
-    assert!(f.host.session.state().document_file.modified);
     f.device.check().unwrap();
 }
 
