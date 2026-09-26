@@ -34,6 +34,9 @@ impl<B: CanvasRenderer> UiSession<B> {
             && !self.engine.has_active_stroke()
             && !self.engine.has_pending_document_edits()
     }
+    pub fn background_readback_idle(&self) -> bool {
+        self.filter_previews_idle() && !self.wants_continuous_frames()
+    }
     pub fn filter_preview_revision(&self) -> (u64, u64, u64) {
         let doc = self.engine.document();
         (

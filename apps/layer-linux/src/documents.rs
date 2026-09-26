@@ -978,7 +978,8 @@ impl Documents {
                 return Err(error);
             }
         };
-        let error = next.session.inherit_window_state(&previous.session).err();
+        let error = next.session.inherit_window_state(&previous.session).err()
+            .or_else(|| next.session.inherit_initial_drawing_tools(&previous.session).err());
         let recovery = Rc::new(Recovery::default());
         recovery.recovered.set(origin.is_some());
         if recovery.recovered.get() {

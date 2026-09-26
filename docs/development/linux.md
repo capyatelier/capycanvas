@@ -227,7 +227,7 @@ check covers these boundaries, reopen and continued painting.
 Edit → Assign Profile, Convert Color Space and Change Bit Depth prepare a complete
 Before/After comparison before changing the drawing. Assign retains committed RGB
 numbers; Convert transforms editable backing with the selected intent, or creates
-a separate flattened copy. Black point compensation is currently unavailable. Retained originals keep
+a separate flattened copy. Retained originals keep
 their independent profiles. Depth changes offer optional dithering for 8-bit RGB.
 The GPU prepares the destination configuration before the document and history
 change together. Cancel discards pending work; Undo/Redo restores exact backing and

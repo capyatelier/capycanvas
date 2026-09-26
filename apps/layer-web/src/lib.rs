@@ -401,7 +401,7 @@ impl WebApp {
         )
     }
     pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
-        if !self.startup.canvas_ready || !self.session.filter_previews_idle() {
+        if !self.startup.canvas_ready || !self.session.background_readback_idle() {
             return Ok(false);
         }
         self.prepare_ui_previews()?;
@@ -1253,32 +1253,7 @@ impl WebApp {
             .blank_presented;
         let mut change = layer_ui::UiChange::default();
         if first {
-            // Present paper before restoring the document's committed raster.
-            let view = self.session.state().camera.view();
-            let doc = self.session.engine().document();
-            let extent = [doc.width, doc.height];
-            let layers: Vec<_> = doc
-                .layers
-                .iter()
-                .filter(|l| l.kind == layer_core::LayerKind::Background)
-                .cloned()
-                .collect();
-            self.session
-                .renderer_mut()
-                .renderer()
-                .map_err(js)?
-                .submit(FramePacket {
-                    time_seconds: 0.,
-                    view,
-                    document_extent: extent,
-                    layers: &layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    restore_rasters: &[],
-                    reset_layers: true,
-                    composite_all: true,
-                })
-                .map_err(js)?;
+            self.session.submit_paper_frame().map_err(js)?;
         } else {
             self.prepare_startup()?;
             self.startup = self

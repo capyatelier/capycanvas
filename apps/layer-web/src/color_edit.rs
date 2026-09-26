@@ -248,7 +248,7 @@ pub async fn raster_worker_color(
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
     let project = raster_project::unpack(&request.project, buffers, false).await?;
     let converted =
-        layer_color::prepare_document_color(&project, request.change, 512 * 1024 * 1024, || false)
+        layer_color::prepare_document_color(&project, request.change, raster_project::photo_memory_budget().encode_bytes, || false)
             .map_err(js)?;
     let wire = raster_project::pack(converted.project).await?;
     js_sys::Reflect::set(

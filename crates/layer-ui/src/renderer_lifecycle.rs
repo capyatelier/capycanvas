@@ -39,6 +39,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(tiles)
     }
 
+    /// Present paper before restoring the document's committed raster.
+    pub fn submit_paper_frame(&mut self) -> Result<(), String> {
+        let view = self.state.camera.view();
+        let document = self.engine.document();
+        let extent = [document.width, document.height];
+        let layers: Vec<_> = document
+            .layers
+            .iter()
+            .filter(|l| l.kind == layer_core::LayerKind::Background)
+            .cloned()
+            .collect();
+        self.engine
+            .backend_mut()
+            .submit(layer_render::FramePacket {
+                time_seconds: 0.,
+                view,
+                document_extent: extent,
+                layers: &layers,
+                dabs: &[],
+                dab_batches: &[],
+                restore_rasters: &[],
+                reset_layers: true,
+                composite_all: true,
+            })
+            .map_err(error)
+    }
+
     pub fn retained_document_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
         let mut tiles = self.engine.retained_tiles();
         // Include the fixed native input queue/session structures and retained

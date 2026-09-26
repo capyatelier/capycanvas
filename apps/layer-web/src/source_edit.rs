@@ -222,7 +222,7 @@ pub async fn raster_worker_source_rasterize(
         .ok_or_else(|| js("No source"))?;
     let name = layer_color::profile_description(&source.interpretation.profile).map_err(js)?;
     let (converted, statistics) =
-        layer_color::rasterize_source(source, project.document.color, 512 * 1024 * 1024, || false)
+        layer_color::rasterize_source(source, project.document.color, raster_project::photo_memory_budget().encode_bytes, || false)
             .map_err(js)?;
     project.document.layers[0].source = Some(Arc::new(converted));
     let wire = raster_project::pack(project).await?;

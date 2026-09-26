@@ -410,9 +410,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         ],
     );
     advanced.add_row(&intent);
-    let bpc=adw::SwitchRow::builder().title("Black point compensation").build();
-    bpc.set_widget_name("export-bpc");advanced.add_row(&bpc);
-    intent.connect_selected_notify(glib::clone!(#[weak] bpc,move |intent|{bpc.set_sensitive(intent.selected()!=3);if intent.selected()==3{bpc.set_active(false);}}));
     let print_delivery=adw::ActionRow::builder().title("Use print profile").activatable(true).visible(snapshot.project.document.proof.is_some()).build();
     print_delivery.set_widget_name("export-print-profile");
     print_delivery.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
@@ -420,9 +417,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     if let Some(proof)=snapshot.project.document.proof.clone(){
         print_delivery.set_subtitle(&proof.name);
         let choose=profile.validated_selection();
-        print_delivery.connect_activated(glib::clone!(#[weak] intent, #[weak] bpc, move |_|{
+        print_delivery.connect_activated(glib::clone!(#[weak] intent, move |_|{
             intent.set_selected(match proof.conversion.intent {RenderingIntent::RelativeColorimetric=>0,RenderingIntent::Perceptual=>1,RenderingIntent::Saturation=>2,RenderingIntent::AbsoluteColorimetric=>3});
-            bpc.set_active(proof.conversion.black_point_compensation);
             choose(proof.profile.clone(),proof.name.clone());
         }));
         space.connect_subtitle_notify(glib::clone!(#[weak] print_delivery,#[strong] selected_profile,move |_|print_delivery.set_sensitive(selected_profile().is_ok())));
@@ -555,8 +551,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[weak]
             dither,
             #[weak]
-            bpc,
-            #[weak]
             enlarge,
             #[strong]
             updating,
@@ -592,7 +586,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                     RenderingIntent::AbsoluteColorimetric => 3,
                 });
                 dither.set_active(recipe.encoding.dither != OutputDither::None);
-                bpc.set_active(recipe.encoding.conversion.black_point_compensation);
                 match recipe.size {
                     ExportSize::Original => size.set_selected(0),
                     ExportSize::Fit {
@@ -658,7 +651,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     space.connect_subtitle_notify(glib::clone!(#[weak] preset, #[strong] updating, move |_| {
         if !updating.get() { updating.set(true); preset.set_selected(3); updating.set(false); }
     }));
-    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
+    for row in [&dither, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify(glib::clone!(
             #[weak]
             preset,
@@ -733,8 +726,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         intent,
         #[weak]
         dither,
-        #[weak]
-        bpc,
         #[strong]
         selected_profile,
         #[strong]
@@ -771,7 +762,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                             3 => RenderingIntent::AbsoluteColorimetric,
                             _ => RenderingIntent::RelativeColorimetric,
                         },
-                        black_point_compensation: bpc.is_active(),
+                        black_point_compensation: false,
                     },
                     dither: if depth.selected() == 0 && dither.is_active() {
                         OutputDither::Stochastic8
@@ -851,7 +842,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         });
     }
     space.connect_subtitle_notify({ let validate = validate.clone(); move |_| validate() });
-    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
+    for row in [&dither, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify({
             let validate = validate.clone();
             move |_| validate()
@@ -910,7 +901,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         });
     }
     space.connect_subtitle_notify({ let refresh = refresh_preview.clone(); move |_| refresh() });
-    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
+    for row in [&dither, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify({
             let refresh = refresh_preview.clone();
             move |_| refresh()

@@ -9,8 +9,6 @@ use std::{
 };
 mod flatten;
 
-const LIMIT: usize = 512 * 1024 * 1024;
-
 #[derive(Clone, Copy)]
 struct Choice {
     change: DocumentColorChange,
@@ -63,7 +61,7 @@ impl Conversion {
                 let result = gio::spawn_blocking(move || {
                     match plan {
                         ColorPreparation::Flatten { color, options } => flatten::prepare(gpu, source, color, options, background, time, worker_control),
-                        ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, LIMIT, || worker_control.is_cancelled()),
+                        ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || worker_control.is_cancelled()),
                         ColorPreparation::History => unreachable!(),
                     }
                 }).await.map_err(|_| "Color conversion worker failed".to_string()).and_then(|r| r);
@@ -188,15 +186,6 @@ pub(super) async fn run(
     );
     intent.set_visible(operation == DocumentColorOperation::Convert);
     group.add(&intent);
-    let bpc = adw::SwitchRow::builder()
-        .title("Black point compensation")
-        .subtitle("Currently unavailable")
-        .active(false)
-        .sensitive(false)
-        .visible(operation == DocumentColorOperation::Convert)
-        .build();
-    bpc.set_widget_name("document-color-bpc");
-    group.add(&bpc);
     let dither = adw::SwitchRow::builder()
         .title("Reduce banding")
         .subtitle("Dither 8-bit gradients")
@@ -251,8 +240,6 @@ pub(super) async fn run(
         #[weak]
         intent,
         #[weak]
-        bpc,
-        #[weak]
         dither,
         #[weak]
         dialog,
@@ -264,7 +251,6 @@ pub(super) async fn run(
                 RenderingIntent::Saturation,
                 RenderingIntent::AbsoluteColorimetric,
             ][intent.selected() as usize];
-            bpc.set_sensitive(false);
             dither.set_sensitive(depth == SampleDepth::U8);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
             dialog.set_response_label("apply", if flattened { "Create Copy" } else { "Apply" });
@@ -277,8 +263,7 @@ pub(super) async fn run(
                         space,
                         options: ConversionOptions {
                             intent,
-                            black_point_compensation: bpc.is_active()
-                                && intent != RenderingIntent::AbsoluteColorimetric,
+                            black_point_compensation: false,
                         },
                     },
                     DocumentColorOperation::Depth => DocumentColorChange::Depth {
@@ -299,12 +284,10 @@ pub(super) async fn run(
             move |_| refresh()
         });
     }
-    for row in [&bpc, &dither] {
-        row.connect_active_notify({
-            let refresh = refresh.clone();
-            move |_| refresh()
-        });
-    }
+    dither.connect_active_notify({
+        let refresh = refresh.clone();
+        move |_| refresh()
+    });
     refresh();
     let response = crate::alert::choose(dialog, &w.window).await;
     let compared = state.comparison.ready.get();

@@ -212,32 +212,7 @@ impl NativeHost {
                 self.apply_change(previous, change);
             }
         } else {
-            let view = self.session.state().camera.view();
-            let document = self.session.engine().document();
-            let extent = [document.width, document.height];
-            let layers: Vec<_> = document
-                .layers
-                .iter()
-                .filter(|l| l.kind == layer_core::LayerKind::Background)
-                .cloned()
-                .collect();
-            self.session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .ok_or("Missing native renderer")?
-                .submit(layer_render::FramePacket {
-                    time_seconds: 0.,
-                    view,
-                    document_extent: extent,
-                    layers: &layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    restore_rasters: &[],
-                    reset_layers: true,
-                    composite_all: true,
-                })
-                .map_err(|e| e.to_string())?;
+            self.session.submit_paper_frame()?;
         }
         self.dirty |= !self.startup.complete;
         Ok(())
@@ -264,8 +239,8 @@ impl NativeHost {
         // pixels settle. It must not starve visible thumbnails. Still yield to
         // active input, pending edits and shared editor background operations.
         if self.startup.canvas_ready
-            && !self.session.wants_continuous_frames()
-            && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.export_ready())
+            && self.session.background_readback_idle()
+            && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
         {
             for (request, target) in requests.into_iter().take(8) {
                 // Match GTK's bounded cold-photo work. The UI retries requests

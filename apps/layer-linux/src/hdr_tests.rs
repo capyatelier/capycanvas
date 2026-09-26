@@ -564,7 +564,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     pump(600);
     let dialog = w.window.visible_dialog().unwrap();
     assert!(!dialog.is::<adw::AlertDialog>());
-    assert!(!find_named(dialog.upcast_ref(), "export-bpc").unwrap().is_mapped());
+    assert!(!find_named(dialog.upcast_ref(), "export-intent").unwrap().is_mapped());
     let scroll = find_named(dialog.upcast_ref(), "export-main-scroll").unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
     let adjustment = scroll.vadjustment();
     assert!(adjustment.upper() <= adjustment.page_size() + 1., "main page requires scrolling: {} / {}", adjustment.upper(), adjustment.page_size());

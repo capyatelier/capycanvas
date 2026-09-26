@@ -831,7 +831,6 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     while !find_named(dialog.upcast_ref(),"export-print-profile").unwrap().is_sensitive(){pump(20);assert!(Instant::now()<deadline);}
     assert_eq!(super::new_photo::profile_name(&restored,"export-space"),restored.gpu.borrow().as_ref().unwrap().session.engine().document().proof.as_ref().unwrap().name);
     assert_eq!(combo(&restored,"export-format").selected(),1);
-    assert!(find_named(dialog.upcast_ref(),"export-bpc").unwrap().downcast::<adw::SwitchRow>().unwrap().is_active());
     super::new_photo::capture_ui(&restored,&output,"print-profile-delivery.png");response(&restored,"cancel");finish(&restored);
 
     restored.window.destroy();

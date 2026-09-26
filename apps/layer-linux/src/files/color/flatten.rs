@@ -13,5 +13,9 @@ pub(super) fn prepare(
 ) -> Result<layer_color::PreparedDocumentColor, String> {
     gpu.capture(project, background, time, Default::default(), control)
         .map_err(|e| e.to_string())?
-        .flattened_document(color, options, LIMIT)
+        .flattened_document(
+            color,
+            options,
+            layer_color::photo::PhotoMemoryBudget::current().encode_bytes,
+        )
 }

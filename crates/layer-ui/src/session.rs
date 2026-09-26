@@ -8551,6 +8551,31 @@ mod tests {
     }
 
     #[test]
+    fn background_readback_waits_for_contacts_and_pending_filters() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        let mut s = session();
+        s.frame(0, 0).unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
+        assert!(!s.background_readback_idle());
+        s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
+        s.frame(1, 1).unwrap();
+        assert!(s.background_readback_idle());
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
+        };
+        s.load_effect_package(
+            &serde_json::to_string(&package).unwrap(),
+            |_| panic!("inline sources"),
+            EffectInstallMode::Replace,
+        )
+        .unwrap();
+        assert!(s.state.filter_load.pending && s.filter_previews_idle());
+        assert!(!s.background_readback_idle());
+    }
+
+    #[test]
     fn runtime_filter_publication_is_atomic_and_uses_current_values() {
         use layer_core::{EffectInstallMode, EffectPackage, EffectValue};
         use std::sync::Arc;

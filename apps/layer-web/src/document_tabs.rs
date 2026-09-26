@@ -203,6 +203,9 @@ impl WebApp {
         if !self.documents.contains_parked(id) {
             return Err(js("Drawing tab is no longer open"));
         }
+        if !self.session.can_park_document() {
+            return Err(js("Finish the current operation before switching drawings"));
+        }
         let tiles = self.session.park_document().map_err(js)?;
         self.retire_document_gpu();
         let next = self.documents.parked_owner_mut(id).unwrap();

@@ -94,10 +94,10 @@ dark colors. Absolute intent applies media-white scaling at matrix endpoints;
 absolute conversions between two non-matrix profiles with different media
 whites fail explicitly.
 
-Black point compensation is unavailable in the new adapter. Defaults are off,
-GTK controls are disabled, and explicit requests return an error rather than
+Black point compensation is unavailable in the new adapter. Export and document
+conversion offer no toggle, and explicit requests return an error rather than
 silently ignoring the setting. The serialized option is retained for document
-and recipe compatibility. GTK loads old export recipes with that control off.
+and recipe compatibility; hosts send it as off.
 
 Different CMMs do not produce identical LUT/perceptual results. The independent
 CMYK fixture test uses a 2% ink/extended-linear-RGB tolerance across four intents;

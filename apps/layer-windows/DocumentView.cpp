@@ -281,7 +281,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
             auto text=[&](hstring value){TextBlock label;label.Text(value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);};
-            ComboBox space,depth,intent;CheckBox copy,dither,blackPoint;
+            ComboBox space,depth,intent;CheckBox copy,dither;
             auto spaces=array(request,L"spaces");
             if(!str(request,L"error").empty())text(str(request,L"error"));
             if(stage==L"error"&&kind!=L"proof"){
@@ -355,7 +355,6 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 }
                 if(kind==L"convert"){
                     intent.Header(box_value(L"Rendering intent"));for(auto name:{L"Relative colorimetric",L"Perceptual",L"Saturation",L"Absolute colorimetric"})intent.Items().Append(box_value(name));intent.SelectedIndex(0);body.Children().Append(intent);
-                    blackPoint.Content(box_value(L"Black point compensation"));body.Children().Append(blackPoint);
                     copy.Content(box_value(L"Save as a flattened converted copy"));body.Children().Append(copy);
                 }
                 if(kind==L"assign")text(L"Change the interpretation of existing values. Use Convert to preserve their color appearance.");
@@ -390,7 +389,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     V choice=JsonValue::CreateNullValue();
                     if(kind==L"assign")choice=O({{L"Assign",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)}});
                     if(kind==L"convert")choice=O({{L"Convert",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},
-                        {L"options",O({{L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()])},{L"black_point_compensation",B(blackPoint.IsChecked().Value())}})}})}});
+                        {L"options",O({{L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()])},{L"black_point_compensation",B(false)}})}})}});
                     if(kind==L"depth")choice=O({{L"Depth",O({{L"depth",S(depthValue(depth.SelectedIndex()))},{L"dither",S(depth.SelectedIndex()==0&&dither.IsChecked().Value()?L"Stochastic8":L"None")}})}});
                     if(kind==L"repair")choice=profileChoices.GetAt(space.SelectedIndex());
                     if(stage==L"interpret_image")action=O({{L"op",S(L"interpret_image")},{L"profile",profileChoices.GetAt(space.SelectedIndex())}});

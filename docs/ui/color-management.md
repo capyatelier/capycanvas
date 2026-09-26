@@ -171,7 +171,7 @@ visible choices; exporting never clears unsaved-master state.
 The preview represents the selected output, with an accessible before/after
 comparison. It need not re-encode a full-size JPEG on every interaction; disclose
 if the preview excludes compression artifacts. Advanced controls expose applicable
-intent, BPC and dithering. Do not put obscure conversion-engine choices in the
+intent and dithering. Do not put obscure conversion-engine choices in the
 normal flow. Remember per-destination presets without globally changing New/Open.
 
 For handoff, verify the result in another editor with its profile and 16-bit data

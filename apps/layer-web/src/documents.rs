@@ -422,6 +422,7 @@ impl WebApp {
         if project.recovered { candidate.mark_recovered(); }
         candidate.set_document_replacement(false);
         candidate.inherit_window_state(&self.session).map_err(js)?;
+        candidate.inherit_initial_drawing_tools(&self.session).map_err(js)?;
         let active = self.session.retained_document_tiles();
         self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(js)?;
         let old = self.session.renderer_mut().0.as_mut().unwrap();

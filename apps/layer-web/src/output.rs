@@ -438,7 +438,7 @@ pub async fn raster_worker_output(
                 color,
                 metadata.resolution,
                 target,
-                512 * 1024 * 1024,
+                raster_project::photo_memory_budget().encode_bytes,
                 rows,
             )?);
             return Ok(());
