@@ -1475,7 +1475,8 @@ animation frames. On the Huion, back-to-back synthetic queries measured about
 34ms query-to-draw p95 against about 26ms before glass. When the result count
 changes the card's height, the blur region changes and the presenter
 re-renders it before the next dispatch. Typed keystrokes arrive after that
-frame. The Apple and Windows presentations, and stages C–F, remain future work.
+frame. Windows gained its own bar concurrently; its glass fill and shared footer,
+the Apple presentation, and stages C–F remain future work.
 
 ## 8. Research limitations and maintenance
 

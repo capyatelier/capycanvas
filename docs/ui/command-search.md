@@ -58,7 +58,7 @@ The shared search model owns ranking, eight-result limits, five recent choices,
 selection, disabled reasons and numeric entry. Hosts own text/IME, focus,
 accessibility, popup capture and animation. A result contains its name, one
 effective shortcut and optional checked state. `CommandSearchView::detail` is
-the complete footer line and every host shows it verbatim. It holds the error or
+the complete footer line; GTK, Web and Android show it verbatim. It holds the error or
 unavailable reason when there is one. Otherwise it holds the selected command's
 concise behavior or scope description, falling back to its menu location.
 Numeric entries show their name, current value and hard input range, formatted
@@ -73,10 +73,13 @@ their compact layouts (below 600px/dp wide) keep a 16px edge margin. Escape
 returns from parameter entry to the query, then dismisses. Reopening starts
 with an empty query.
 
-The bar is panel glass on every host, as described in
+On GTK, Web and Android the bar is panel glass, as described in
 [panel transparency](panel-transparency.md): its body uses the panel glass fill
 and publishes its bounds, so the presenter blurs the artwork behind it. The
-search field stays opaque. Menus, popovers and tooltips remain opaque.
+search field stays opaque. Menus, popovers and tooltips remain opaque. The
+Windows bar still uses the opaque panel color and composes its own footer from
+the same fields; adopting the glass fill, `detail` and `CommandSearchStyle::top`
+there is Windows follow-up work.
 
 Hosts retain the meaningful editor focus before opening. Palette focus routes
 Undo/Redo to color reorder history; the search entry taking focus cannot switch
@@ -147,7 +150,7 @@ The general context resolver, tokenized held/continuous overrides, device
 adapters and compatibility presets remain the later C–F stages in the
 investigation. The command bar does not create Bluetooth support or reproduce
 other editors' held-modifier behavior by itself. The bar is implemented on GTK,
-Web and Android; Apple and Windows presentation is separate follow-up work.
+Web, Android and Windows; the Apple presentation is separate follow-up work.
 
 ## Reproducible checks
 

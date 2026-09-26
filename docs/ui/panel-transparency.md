@@ -6,7 +6,8 @@
 High. It is a shared setting (`Settings::transparency`) presented by GTK, Web,
 Android, macOS, iPadOS and Windows. The other levels show a blurred copy of the
 artwork behind panels, tab strips, drawers, their connectors, title-bar
-controls and the [command bar](command-search.md). Controls inside panels, such
+controls and the [command bar](command-search.md) on GTK, Web and Android.
+Controls inside panels, such
 as inputs, lists and sliders, stay opaque. Menus, popovers and tooltips stay
 opaque.
 

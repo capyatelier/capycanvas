@@ -9,7 +9,8 @@ Android. Menus stay opaque, at the user's direction. Web and Android show the
 shared footer and placement. Stage A's coverage ledger, identities and
 unavailable reasons are closed; see [command search](../ui/command-search.md)
 and audit §7.5. What remains is the keybinding project (stages C–F) and the
-Apple and Windows bars. The rest of this document is the original handoff.
+Apple bar, plus glass and the shared footer on the Windows bar that landed
+concurrently. The rest of this document is the original handoff.
 
 The shared catalog and command bars are implemented on GTK, Web and Android.
 The broader contextual shortcut, held-action, gesture, device and compatibility
