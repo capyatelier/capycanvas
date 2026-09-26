@@ -35,7 +35,7 @@ export async function checkLayoutDrops({call,evaluate,settle}) {
           {id:40,edge,extent:252,root:{kind:'split',id:41,axis:'vertical',fraction:.5,first:tabs(42,['brushes']),second:tabs(43,['sizes'])}},
           {id:44,edge:edge==='left'?'right':'left',extent:310,root:tabs(45,['layers','adjustments','properties'])},
           {id:46,edge:'top',extent:36,root:tabs(47,['toolbar'])},
-        ],floating:[],collapsed:[],column_stacks:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(50,fixture.layout.next_id)});
+        ],floating:[],collapsed:[],column_stacks:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],next_id:Math.max(50,fixture.layout.next_id)});
         fixture.zen_mode=false;
         await send({type:'restore_workspace',workspace:fixture});
         if(target==='stack-menubar')await send({type:'customize',action:{type:'set_column_collapsed',group:42,collapsed:true}});

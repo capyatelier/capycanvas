@@ -168,7 +168,7 @@ class AndroidHostTest {
             put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
@@ -261,7 +261,7 @@ class AndroidHostTest {
                     "panels" to JSONArray(listOf("brushes", "sizes")), "active" to "brushes", "tab_style" to "icon_name")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to obj("kind" to "tabs", "id" to 43,
                     "panels" to JSONArray(listOf("layers", "properties")), "active" to "layers", "tab_style" to "icon_name")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
@@ -312,7 +312,7 @@ class AndroidHostTest {
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to obj("kind" to "split", "id" to 43,
                     "axis" to "vertical", "fraction" to .5, "first" to tabs(44, "layers", "properties"), "second" to tabs(45, "adjustments"))),
                 obj("id" to 46, "edge" to "top", "extent" to 42, "root" to tabs(47, "toolbar")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(48, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
@@ -429,7 +429,7 @@ class AndroidHostTest {
             put("bands", JSONArray(listOf(
                 obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
@@ -544,7 +544,7 @@ class AndroidHostTest {
         fixture.getJSONObject("layout").apply {
             put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
@@ -1036,7 +1036,7 @@ class AndroidHostTest {
             fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id, "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "automatic")
             put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "sizes")),
                 obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("fit_tab_groups", JSONArray()); put("column_scroll", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray()); put("column_scroll", JSONArray())
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)

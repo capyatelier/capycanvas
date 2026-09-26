@@ -238,7 +238,7 @@ class AndroidInteractionTest {
                 obj("id" to 40, "edge" to "left", "extent" to 390, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                 obj("id" to 42, "edge" to "right", "extent" to 330, "root" to tabs(43, "navigator", "layers", "properties")),
                 obj("id" to 44, "edge" to "top", "extent" to 42, "root" to tabs(45, "toolbar")))))
-            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
             put("next_id", maxOf(46, getInt("next_id")))
         }
         fixture.put("zen_mode", false)

@@ -9,7 +9,7 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
   Object.assign(fixture.layout,{bands:[
     {id:40,edge:'left',extent:252,root:tabs(41,['sizes','properties'])},
     {id:42,edge:'top',extent:42,root:tabs(43,['toolbar'])},
-  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(44,fixture.layout.next_id)});
+  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(44,fixture.layout.next_id)});
   fixture.zen_mode=false;
   const ids=[fixture.layout.next_tile_id++,fixture.layout.next_tile_id++,fixture.layout.next_tile_id++];
   fixture.layout.panels.find(p=>p.id==='toolbar').content.tiles=ids.map((id,i)=>({id,control:i===2?{kind:'color'}:{kind:'command',command:i===0?'brush':'eraser'}}));
@@ -104,7 +104,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     {id:40,edge:'left',extent:252,root:tabs(41,['brushes','sizes'])},
     {id:42,edge:'right',extent:252,root:tabs(43,['layers','properties'])},
     {id:44,edge:'top',extent:42,root:tabs(45,['toolbar'])},
-  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
+  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(46,fixture.layout.next_id)});
   fixture.zen_mode=false;
   const toolbar=fixture.layout.panels.find(p=>p.id==='toolbar');
   const tile=toolbar.content.tiles[0].id;
@@ -257,7 +257,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
   const center=r=>({x:r.x+r.width/2,y:r.y+r.height/2});
   const tabs=(id,panels)=>({kind:"tabs",id,panels,active:panels[0],tab_style:"icon"});
   const fixture=structuredClone(saved);
-  Object.assign(fixture.layout,{bands:[{id:40,edge:"left",extent:252,root:tabs(41,["brushes","sizes","tool_settings"])},{id:42,edge:"right",extent:252,root:tabs(43,["layers","properties","adjustments"])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(44,fixture.layout.next_id)});
+  Object.assign(fixture.layout,{bands:[{id:40,edge:"left",extent:252,root:tabs(41,["brushes","sizes","tool_settings"])},{id:42,edge:"right",extent:252,root:tabs(43,["layers","properties","adjustments"])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(44,fixture.layout.next_id)});
   fixture.zen_mode=false;
   const drawer='.content-drawer[data-drawer="41"]';
   const group=panel=>evaluate(`(()=>{const l=layerApp.state().workspace.layout;function find(n){if(n.kind==='tabs')return n.panels.includes(${JSON.stringify(panel)})?n:null;return find(n.first)||find(n.second);}return [...l.bands.map(b=>b.root),...l.floating.map(f=>f.root)].map(find).find(Boolean)})()`);

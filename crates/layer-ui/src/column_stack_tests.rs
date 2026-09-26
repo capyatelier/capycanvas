@@ -901,31 +901,11 @@ fn stack_preferences_and_members_persist_but_open_state_does_not() {
     click_column(&mut s, Panel::Brushes);
     assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
     let json = serde_json::to_value(&s.state.workspace).unwrap();
-    assert!(json["layout"].get("column_settings").is_none());
     let restored: WorkspaceState = serde_json::from_value(json).unwrap();
     restored.validate().unwrap();
     let stack = restored.layout.column_stack(right);
     assert_eq!(stack.members, [left, right]);
     assert!(stack.auto_hide && !stack.drawers && stack.open_column.is_none());
-}
-
-#[test]
-fn legacy_group_panel_preferences_migrate_to_drawers_off() {
-    let (s, left, _) = stack_fixture();
-    let mut json = serde_json::to_value(&s.state.workspace).unwrap();
-    json["layout"]
-        .as_object_mut()
-        .unwrap()
-        .remove("column_stacks");
-    json["layout"]["column_settings"] = serde_json::json!([{
-        "column": left, "mode": "group_panel", "auto_hide": true,
-        "width": 380, "heights": [{"group": 5, "panel": "brushes", "weight": 12}]
-    }]);
-    let restored: WorkspaceState = serde_json::from_value(json).unwrap();
-    restored.validate().unwrap();
-    let stack = restored.layout.column_stack(left);
-    assert!(!stack.drawers && stack.auto_hide);
-    assert_eq!(stack.members, [left]);
 }
 
 #[test]
@@ -1273,9 +1253,9 @@ fn stack_validation_rejects_missing_overlapping_and_incomplete_members() {
         invalid.column_stack_mut(stack).members = members;
         assert!(invalid.validate().is_err());
     }
-    let mut legacy = layout;
-    legacy.column_stacks.push(ColumnStack::single(u32::MAX));
-    legacy.validate().unwrap();
+    let mut missing = layout;
+    missing.column_stacks.push(ColumnStack::single(u32::MAX));
+    assert!(missing.validate().is_err());
 }
 
 #[test]

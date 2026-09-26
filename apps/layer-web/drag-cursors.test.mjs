@@ -12,7 +12,7 @@ export async function checkDragCursors({ call, evaluate, settle }) {
   Object.assign(fixture.layout, { bands: [
     { id: 40, edge: "left", extent: 252, root: tabs(41, ["brushes", "sizes"]) },
     { id: 42, edge: "right", extent: 252, root: tabs(43, ["layers", "properties"]) },
-  ], floating: [], collapsed: [], column_scroll: [], fit_tab_groups: [], next_id: Math.max(44, fixture.layout.next_id) });
+  ], floating: [], collapsed: [], column_scroll: [], fit_tab_groups: [], fit_height_groups:[], column_stacks:[], next_id: Math.max(44, fixture.layout.next_id) });
   fixture.zen_mode = false;
   const center = b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
   const rect = selector => evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}})()`);

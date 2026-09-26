@@ -1126,13 +1126,6 @@ mod tests {
                 invalid_layout.fit_height_groups = invalid;
                 assert!(invalid_layout.validate().is_err());
             }
-            let mut saved = serde_json::to_value(&layout).unwrap();
-            for field in ["bands", "collapsed", "column_stacks"] {
-                saved[field] = serde_json::json!([]);
-            }
-            let restored: DockLayout = serde_json::from_value(saved).unwrap();
-            assert!(restored.fit_height_groups.is_empty());
-            restored.validate().unwrap();
             // Exercise the original fit-height arrangement; its exact shipped
             // default now includes the separately tested palette group.
             for stack in &mut layout.column_stacks {

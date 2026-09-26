@@ -7,7 +7,7 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
  const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
  await send({type:'preferences',action:{type:'edit',id:'transparency',value:0}});
  const tabs=(id,panels)=>({kind:'tabs',id,panels,active:panels[0],tab_style:'name'});
- Object.assign(fixture.layout,{bands:[{id:40,edge:'left',extent:252,root:tabs(41,['brushes','sizes'])},{id:42,edge:'right',extent:360,root:tabs(43,['layers','properties','adjustments'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(44,fixture.layout.next_id)});fixture.zen_mode=false;
+ Object.assign(fixture.layout,{bands:[{id:40,edge:'left',extent:252,root:tabs(41,['brushes','sizes'])},{id:42,edge:'right',extent:360,root:tabs(43,['layers','properties','adjustments'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(44,fixture.layout.next_id)});fixture.zen_mode=false;
  for(const dpr of [1,2]) {
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:dpr,mobile:false});
   await send({type:'restore_workspace',workspace:fixture});
@@ -83,7 +83,7 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
       dropped.layout.next_id = Math.max(48,dropped.layout.next_id);
     }
     if (established) {
-      dropped.layout.floating = [{root:dropped.layout.bands.pop().root,position:[550,220],width:360,default_width:360,height:320}];
+      dropped.layout.floating = [{root:dropped.layout.bands.pop().root,position:[550,220],width:360,default_width:360,height:320,toolbar_layout:"compact"}];
     }
     await send({type:"restore_workspace", workspace:dropped});
     const savedLayout = await evaluate("layerApp.state().workspace");

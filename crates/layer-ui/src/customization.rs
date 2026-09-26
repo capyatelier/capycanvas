@@ -273,9 +273,7 @@ pub enum PanelContent {
 #[serde(deny_unknown_fields)]
 pub struct PanelConfig {
     pub id: Panel,
-    #[serde(default)]
     pub hide_tab: bool,
-    #[serde(default)]
     pub tile_style: TileStyle,
     pub content: PanelContent,
 }
@@ -2294,10 +2292,6 @@ mod tests {
         let original = WorkspaceState::default();
         let mut legacy = serde_json::to_value(&original).unwrap();
         legacy["layout"].as_object_mut().unwrap().remove("panels");
-        legacy["layout"]
-            .as_object_mut()
-            .unwrap()
-            .remove("next_tile_id");
         let restored: WorkspaceState = serde_json::from_value(legacy).unwrap();
         assert_eq!(restored, original);
         let mut state = original;

@@ -21,7 +21,6 @@ pub struct CollapsedGroup {
     pub active: Panel,
     pub bounds: Bounds,
     /// Visible one-pixel line, in workspace coordinates, including its inset.
-    #[serde(default)]
     pub divider: Bounds,
     pub icons: Vec<ColumnIcon>,
 }
@@ -37,7 +36,6 @@ pub struct CollapsedColumnPlacement {
     /// Clip/scroll the groups in this area, leaving the grip fixed.
     pub content: Bounds,
     pub groups: Vec<CollapsedGroup>,
-    #[serde(default)]
     pub open: Option<OpenColumn>,
 }
 impl CollapsedColumnPlacement {
@@ -944,8 +942,6 @@ impl DockLayout {
                 return Err("Invalid column stack".into());
             }
             let Some(root) = self.node(stack.column) else {
-                // Legacy single-column preferences can outlive a hidden column.
-                if stack.members == [stack.column] { continue; }
                 return Err("Invalid column stack".into());
             };
             if !self.is_top_level_column(stack.column) {
@@ -979,20 +975,6 @@ impl DockLayout {
             self.is_top_level_column(s.column) && self.is_collapsed(s.column)
                 && s.members.contains(&column)
         })
-    }
-
-    /// Saved nested columns reopen as ordinary groups, preserving their tree,
-    /// selected tabs and splits. Invalid/missing IDs still reach validation.
-    pub(super) fn expand_saved_nested_columns(&mut self) {
-        let nested_stacks: Vec<_> = self.column_stacks.iter()
-            .filter(|s| self.node(s.column).is_some() && (!self.is_top_level_column(s.column)
-                || (s.members.len() > 1 && !self.is_collapsed(s.column))))
-            .map(|s| s.column).collect();
-        self.column_stacks.retain(|s| !nested_stacks.contains(&s.column));
-        let nested: Vec<_> = self.collapsed.iter()
-            .filter(|c| self.node(c.root).is_some() && !self.allowed_collapsed_column(c.root))
-            .map(|c| c.root).collect();
-        self.collapsed.retain(|c| !nested.contains(&c.root));
     }
 
     // Removing the final member of one branch can replace a split root with

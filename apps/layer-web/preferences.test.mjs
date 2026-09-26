@@ -29,7 +29,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     const workspace = structuredClone(layerApp.state().workspace), tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "icon" });
     Object.assign(workspace.layout, { bands: [{ id: 40, edge: "left", extent: 252, root: tabs(41, ["brushes"]) }, { id: 42, edge: "left", extent: 252, root: tabs(43, ["sizes"]) },
       { id: 44, edge: "right", extent: 252, root: tabs(45, ["layers", "properties"]) }, { id: 46, edge: "top", extent: 36, root: tabs(47, ["toolbar"]) }],
-      floating: [], collapsed: [], column_scroll: [], fit_tab_groups: [], next_id: Math.max(48, workspace.layout.next_id) });
+      floating: [], collapsed: [], column_scroll: [], fit_tab_groups: [], fit_height_groups:[], column_stacks:[], next_id: Math.max(48, workspace.layout.next_id) });
     workspace.zen_mode = false;
     return workspace;
   })()`) });

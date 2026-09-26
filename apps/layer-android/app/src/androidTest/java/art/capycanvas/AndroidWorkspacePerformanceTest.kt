@@ -103,10 +103,10 @@ class AndroidWorkspacePerformanceTest {
                 put("bands", JSONArray(listOf(
                     obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
                     obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties")))))
-                put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+                put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
                 put("next_id", maxOf(49, getInt("next_id")))
                 if (colorOverlap) put("floating", JSONArray(listOf(obj("root" to tabs(48, "color"),
-                    "position" to JSONArray(listOf(360, 120)), "width" to 360, "height" to 400))))
+                    "position" to JSONArray(listOf(360, 120)), "width" to 360, "default_width" to 360, "height" to 400, "toolbar_layout" to "compact"))))
             }
             fixture.put("zen_mode", false)
             val measuring = AtomicBoolean(false)

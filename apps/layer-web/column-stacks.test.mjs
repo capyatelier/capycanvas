@@ -26,7 +26,7 @@ export async function checkColumnStacks({call,evaluate,settle}) {
   Object.assign(fixture.layout,{bands:[
     {id:40,edge:'left',extent:42,root:split(41,split(42,tabs(43,['brushes','sizes']),tabs(44,['navigator'])),tabs(45,['color']))},
     {id:46,edge:'right',extent:252,root:split(47,tabs(48,['layers','properties','adjustments']),tabs(49,['toolbar']))},
-  ],floating:[],collapsed:[41,42,45].map(root=>({root,expanded_width:246})),column_stacks:[{column:41,members:[42,45],drawers:false,auto_hide:false}],column_scroll:[],fit_tab_groups:[],next_id:Math.max(50,fixture.layout.next_id)});
+  ],floating:[],collapsed:[41,42,45].map(root=>({root,expanded_width:246})),column_stacks:[{column:41,members:[42,45],drawers:false,auto_hide:false}],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],next_id:Math.max(50,fixture.layout.next_id)});
   fixture.zen_mode=false;
   const reset=()=>send({type:'restore_workspace',workspace:fixture});
   try {

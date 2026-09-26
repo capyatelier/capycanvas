@@ -13,7 +13,6 @@ pub struct Camera {
     pub zoom: f32,
     pub rotation: f32,
     /// Document-axis reflections; affect presentation and input, never pixels.
-    #[serde(default)]
     pub flipped: [bool; 2],
     pub translation: [f32; 2],
     /// Fitting bounds in physical full-window coordinates; updating these does

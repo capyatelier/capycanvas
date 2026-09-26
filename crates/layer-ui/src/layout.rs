@@ -869,7 +869,6 @@ pub enum DockNode {
         id: u32,
         panels: Vec<Panel>,
         active: Panel,
-        #[serde(default)]
         tab_style: crate::TabStyle,
     },
     Split {
@@ -975,13 +974,11 @@ pub struct FloatingGroup {
     pub position: [f32; 2],
     pub width: f32,
     /// Width inherited on tear-off, retained when manually resizing.
-    #[serde(default)]
     pub default_width: Option<f32>,
     /// None sizes to active content; a preserved tear-off size or manual resize
     /// supplies an explicit height.
     pub height: Option<f32>,
     /// Default-size cycle and flow direction for a standalone floating toolbar.
-    #[serde(default)]
     pub toolbar_layout: FloatingToolbarLayout,
 }
 
@@ -1030,7 +1027,6 @@ pub struct PanelMeasurement {
     /// excluding the workspace tab bar/footer grip. Zero means not yet measured.
     pub content_height: f32,
     /// None means the content should keep its natural height, e.g. a square picker.
-    /// Older hosts can omit this until they opt into content-aware drop sizing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PanelScrollMeasurement>,
 }
@@ -1054,7 +1050,7 @@ impl PanelMeasurement {
 #[path = "floating_drop_tests.rs"]
 mod floating_drop_tests;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
     pub header: crate::HeaderLayout,
     pub canvas_info: crate::CanvasInfoLayout,
@@ -1063,6 +1059,10 @@ pub struct DockLayout {
     pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
+    #[serde(
+        default = "PanelConfig::defaults",
+        deserialize_with = "read_panel_registry"
+    )]
     pub panels: Vec<PanelConfig>,
     pub floating: Vec<FloatingGroup>,
     /// Collapsing preserves the underlying dock tree and its expanded width.
@@ -1088,9 +1088,6 @@ pub struct DockLayout {
 #[path = "compact_edges.rs"]
 mod compact_edges;
 pub use compact_edges::EdgeAlignment;
-
-#[path = "layout_saved.rs"]
-mod saved;
 
 fn initial_tile_id() -> u32 {
     crate::TOOLBAR_CONTROLS.len() as u32 + 1
@@ -1353,7 +1350,6 @@ impl GroupPlacement {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Divider {
     /// Closed stacks have no body to resize; hosts omit the resize affordance.
-    #[serde(default)]
     pub fixed: bool,
     pub id: u32,
     pub band: bool,
@@ -2276,18 +2272,6 @@ impl DockLayout {
     }
 
     /// Upgrade existing empty toolbar groups without changing nonempty groups.
-    pub(crate) fn collapse_empty_toolbar_groups(&mut self) -> bool {
-        let mut changed = false;
-        for config in &mut self.panels {
-            if let PanelContent::Toolbar { tiles, .. } = &mut config.content {
-                let before = tiles.len();
-                collapse_toolbar_dividers(tiles);
-                changed |= before != tiles.len();
-            }
-        }
-        changed
-    }
-
     fn move_tile(&mut self, panel: Panel, tile: u32, target: DockTarget) -> Result<(), String> {
         let source = self
             .panel(panel)?
@@ -5659,16 +5643,6 @@ mod tests {
                         assert!(layout.floating[0].height.is_none());
                     }
                 }
-                // Older saved floats retain the compact default without a migration.
-                let mut json = serde_json::to_value(&layout).unwrap();
-                json["floating"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("toolbar_layout");
-                assert_eq!(
-                    serde_json::from_value::<DockLayout>(json).unwrap().floating[0].toolbar_layout,
-                    FloatingToolbarLayout::Compact
-                );
             }
         }
     }

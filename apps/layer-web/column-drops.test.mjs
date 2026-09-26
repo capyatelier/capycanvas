@@ -23,7 +23,7 @@ export async function checkColumnDrops({call,evaluate,settle}) {
       Object.assign(fixture.layout,{bands:[
         {id:40,edge,extent:252,root:{kind:'split',id:41,axis:'vertical',fraction:.5,first:tabs(42,['brushes']),second:tabs(43,['sizes'])}},
         {id:44,edge:edge==='left'?'right':'left',extent:252,root:tabs(45,['layers','properties','adjustments'])},
-      ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
+      ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(46,fixture.layout.next_id)});
       fixture.zen_mode=false;
       for(device of ['mouse','touch','pen']) {
         for(const mode of [-8,-5,0,5,8,'cancel']) {
@@ -69,7 +69,7 @@ export async function checkColumnDrops({call,evaluate,settle}) {
     }
     for(const edge of ['top','left']) {
       const fixture=structuredClone(saved);
-      Object.assign(fixture.layout,{bands:[{id:40,edge,extent:36,root:tabs(41,['toolbar'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(42,fixture.layout.next_id)});
+      Object.assign(fixture.layout,{bands:[{id:40,edge,extent:36,root:tabs(41,['toolbar'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(42,fixture.layout.next_id)});
       fixture.zen_mode=false;
       const ids=Array.from({length:5},()=>fixture.layout.next_tile_id++);
       const controls=[{kind:'command',command:'brush'},{kind:'command',command:'eraser'},{kind:'divider'},{kind:'command',command:'lasso'},{kind:'command',command:'hand'}];

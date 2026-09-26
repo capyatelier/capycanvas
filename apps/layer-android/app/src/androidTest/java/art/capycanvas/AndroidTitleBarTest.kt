@@ -168,7 +168,7 @@ class AndroidTitleBarTest {
         fixture = JSONObject(state().getJSONObject("workspace").toString())
         fixture.put("zen_mode", false)
         fixture.getJSONObject("layout").apply {
-            for (name in listOf("bands", "floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups")) put(name, JSONArray())
+            for (name in listOf("bands", "floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups", "fit_height_groups")) put(name, JSONArray())
             val left = JSONArray(listOf(
                 obj("id" to 1, "item" to obj("kind" to "capy")),
                 obj("id" to 2, "item" to obj("kind" to "menu_labels"))))

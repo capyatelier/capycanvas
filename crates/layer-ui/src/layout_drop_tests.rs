@@ -265,7 +265,7 @@ fn group_body_prepends_and_highlights_content_while_tabs_keep_insertion_lines() 
 }
 
 #[test]
-fn nested_columns_reject_collapse_and_saved_nested_stacks_reopen_as_groups() {
+fn nested_columns_reject_collapse() {
     let mut s = session();
     s.set_platform(PLATFORM);
     let layout = &mut s.state.workspace.layout;
@@ -331,24 +331,11 @@ fn nested_columns_reject_collapse_and_saved_nested_stacks_reopen_as_groups() {
         .column_stacks
         .push(crate::ColumnStack::single(nested));
     assert!(layout.validate().is_err());
-    let loaded: DockLayout = serde_json::from_str(&serde_json::to_string(layout).unwrap()).unwrap();
-    loaded.validate().unwrap();
-    assert_eq!(loaded.bands, before.bands);
-    assert!(loaded.collapsed.is_empty() && loaded.column_stacks.is_empty());
 }
 
 #[test]
-fn new_stacks_default_to_full_columns_and_preserve_explicit_drawer_preferences() {
+fn new_stacks_default_to_full_columns() {
     assert!(!crate::ColumnStack::single(4).drawers);
-    for (json, expected) in [
-        (r#"{"column":4}"#, false),
-        (r#"{"column":4,"mode":"group_panel"}"#, false),
-        (r#"{"column":4,"mode":"drawers"}"#, true),
-        (r#"{"column":4,"drawers":true}"#, true),
-    ] {
-        let stack: crate::ColumnStack = serde_json::from_str(json).unwrap();
-        assert_eq!(stack.drawers, expected);
-    }
 }
 
 #[test]
@@ -379,39 +366,6 @@ fn menubar_targets_follow_native_header_height_without_taking_the_tab_strip() {
             DockTarget::Tab { group: 5, .. }
         ));
     }
-}
-
-#[test]
-fn saved_nested_multi_member_stacks_expand_without_losing_their_tree() {
-    let mut layout = DockLayout::default();
-    layout.set_column_collapsed(5, true, VIEW).unwrap();
-    layout.set_column_collapsed(8, true, VIEW).unwrap();
-    layout
-        .move_item(
-            VIEW,
-            DockItem::Column { column: 8 },
-            DockTarget::StackColumn {
-                column: 4,
-                before: false,
-            },
-        )
-        .unwrap();
-    let mut saved = serde_json::to_value(&layout).unwrap();
-    let tree = saved["bands"][0]["root"].clone();
-    // Model the old legal arrangement: a collapsed stack above an ordinary group.
-    let toolbar = saved["bands"].as_array_mut().unwrap().remove(1)["root"].clone();
-    saved["bands"][0]["root"] = serde_json::json!({
-        "kind":"split", "id":100, "axis":"vertical", "fraction":0.5,
-        "first":tree, "second":toolbar
-    });
-    saved["next_id"] = 101.into();
-    let loaded: DockLayout = serde_json::from_value(saved.clone()).unwrap();
-    loaded.validate().unwrap();
-    assert!(loaded.collapsed.is_empty() && loaded.column_stacks.is_empty());
-    assert_eq!(
-        serde_json::to_value(&loaded).unwrap()["bands"],
-        saved["bands"]
-    );
 }
 
 #[test]

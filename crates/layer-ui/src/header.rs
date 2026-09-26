@@ -144,7 +144,6 @@ pub struct HeaderEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct HeaderLayout {
     pub size: HeaderSize,
     pub zones: [Vec<HeaderEntry>; 3],
@@ -445,7 +444,6 @@ impl HeaderLayout {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct CanvasInfoLayout {
     pub visible: bool,
 }
@@ -488,13 +486,12 @@ pub struct HeaderMetric {
     pub width: f32,
     pub compact: f32,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct HeaderGeometry {
     pub items: Vec<HeaderItemBounds>,
     pub zones: [Bounds; 3],
     pub overflow: [Option<Bounds>; 3],
     pub hidden: [Vec<u32>; 3],
-    #[serde(default)]
     pub bars: Vec<HeaderBar>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

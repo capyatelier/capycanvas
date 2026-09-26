@@ -3,7 +3,6 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StackWire")]
 pub struct ColumnStack {
     pub column: u32,
     pub members: Vec<u32>,
@@ -13,31 +12,6 @@ pub struct ColumnStack {
     pub open_column: Option<u32>,
 }
 
-// Read the old per-column preferences once. Obsolete width/height overrides
-// are ignored: expanded members use the width and splits of their dock tree.
-#[derive(Deserialize)]
-struct StackWire {
-    column: u32,
-    #[serde(default)]
-    members: Option<Vec<u32>>,
-    #[serde(default)]
-    drawers: Option<bool>,
-    #[serde(default)]
-    auto_hide: bool,
-    #[serde(default)]
-    mode: Option<String>,
-}
-impl From<StackWire> for ColumnStack {
-    fn from(w: StackWire) -> Self {
-        Self {
-            column: w.column,
-            members: w.members.unwrap_or_else(|| vec![w.column]),
-            drawers: w.drawers.unwrap_or_else(|| w.mode.as_deref().is_some_and(|m| m != "group_panel")),
-            auto_hide: w.auto_hide,
-            open_column: None,
-        }
-    }
-}
 impl ColumnStack {
     pub fn single(column: u32) -> Self {
         Self {

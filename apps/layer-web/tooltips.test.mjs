@@ -14,7 +14,7 @@ export async function checkTooltips({call,evaluate,settle}) {
   const viewportWidth=await evaluate("innerWidth");
   const shot=async name=>{const s=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${dir}/${name}.png`,Buffer.from(s.data,"base64"));};
   const fixture=structuredClone(saved.workspace),tabs=(id,panels)=>({kind:"tabs",id,panels,active:panels[0],tab_style:"icon"});
-  Object.assign(fixture.layout,{bands:[{id:40,edge:"left",extent:252,root:tabs(41,["brushes","sizes"])},{id:42,edge:"right",extent:252,root:tabs(43,["layers","properties"])},{id:44,edge:"top",extent:36,root:tabs(45,["toolbar"])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
+  Object.assign(fixture.layout,{bands:[{id:40,edge:"left",extent:252,root:tabs(41,["brushes","sizes"])},{id:42,edge:"right",extent:252,root:tabs(43,["layers","properties"])},{id:44,edge:"top",extent:36,root:tabs(45,["toolbar"])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(46,fixture.layout.next_id)});
   fixture.zen_mode=false;
   try {
     for(const theme of ["dark","light"])for(const device of ["mouse","pen"]) {

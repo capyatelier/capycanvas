@@ -9,7 +9,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
     {id:40,edge:"left",extent:252,root:tabs(41,["brushes","sizes"])},
     {id:42,edge:"right",extent:252,root:tabs(43,["layers","properties","adjustments"])},
     {id:44,edge:"top",extent:36,root:tabs(45,["toolbar"])},
-  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
+  ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(46,fixture.layout.next_id)});
   fixture.zen_mode=false;
   const wait=ms=>evaluate(`new Promise(r=>setTimeout(r,${ms}))`);
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();await wait(220);};
