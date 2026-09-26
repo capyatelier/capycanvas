@@ -41,6 +41,9 @@ pub use art_layers::{
 };
 #[path = "application_menu.rs"]
 mod application_menu;
+#[path = "command_catalog.rs"]
+mod command_catalog;
+pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
 #[path = "document_files.rs"]
 mod document_files;
 #[path = "workspace_session.rs"]
@@ -98,6 +101,7 @@ struct FloatingResize {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    command_search: command_catalog::CommandSearch,
     engine: CanvasEngine<R>,
     state: UiState,
     last_toolbar_context: Option<ToolbarContext>,
@@ -176,6 +180,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
+            command_search: Default::default(),
             engine,
             pen,
             input_pending: false,
@@ -258,6 +263,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 settings: Settings::default(),
                 theme: Theme::Light,
                 palette: Settings::default().palette(Theme::Light, Platform::Generic, None),
+                command_search: None,
                 settings_open: false,
                 preferences: PreferencesState::default(),
                 customization: CustomizationState::default(),
@@ -982,6 +988,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(reply);
                 }
                 let key = key.to_ascii_lowercase();
+                if self.state.command_search.is_some() {
+                    if !pressed {
+                        self.interaction.keys.remove(&key);
+                        if self.interaction.pan_key.as_deref() == Some(&key) { self.interaction.pan_key = None; }
+                    }
+                    // Native search entry/list owns text, IME and navigation.
+                    return Ok(reply);
+                }
                 if pressed && !editing && self.state.preferences.capture.is_none() && self.selection_key(&key)? {
                     self.refresh_commands();
                     reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
@@ -1058,6 +1072,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                         || self.state.settings_open
                         || self.state.customization.blocks_shortcuts()
                         || self.interaction.facts.popup_open;
+                    // Explicit application chords can open search from a
+                    // numeric/text editor. Plain typing still belongs to it.
+                    if editing && modifiers.command && self.command_flags(CommandId::SearchCommands).0
+                        && !self.interaction.facts.popup_open
+                        && self.state.settings.action_keys(&UiAction::Invoke { command: CommandId::SearchCommands }, self.state.platform).contains(&KeyChord::new(&key, modifiers))
+                    {
+                        if !repeat {
+                            self.set_command_focus(CommandFocus::Text);
+                            reply.change = self.dispatch(UiAction::Invoke { command: CommandId::SearchCommands })?;
+                        }
+                        reply.handled = true;
+                        return Ok(reply);
+                    }
                     if !blocked {
                         if let Some(id) = divider.filter(|_| {
                             matches!(
@@ -1928,6 +1955,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let idle = self.require_idle().is_ok();
 
         let enabled = match id {
+            CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
             CommandId::QuickMask | CommandId::NewSelectionLayer => idle && !self.operation.active(),
             CommandId::SaveSelectionLayer => idle && self.current_selection().is_some(),
             CommandId::ReturnToArtwork | CommandId::ResetMaskColors | CommandId::SwapMaskColors => idle && self.selection_masks.target().is_some(),
@@ -2092,6 +2120,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        match action {
+            UiAction::CommandSearch { action } => return self.command_search_action(action),
+            UiAction::ExecuteCommand { id, value } => return self.execute_catalog_command(&id, value),
+            _ => {}
+        }
         if let UiAction::ToolbarEdit { context, action } = action {
             if context != self.state.toolbar_context() || !self.state.toolbar_edit_allowed(&action) {
                 return Err("This toolbar control belongs to a previous tool or edit target".into());
@@ -2262,6 +2295,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::CommandSearch { .. } | UiAction::ExecuteCommand { .. } => unreachable!("handled above"),
             UiAction::ToolbarEdit { .. } => unreachable!("validated before dispatch"),
             UiAction::ToggleSliderBookmark { control } => {
                 let binding = control.slider().ok_or("Not a brush slider")?;
@@ -2651,12 +2685,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (LAYOUT | CUSTOMIZATION, false)
             }
             UiAction::Invoke { command } => {
-                if !self.command(command).enabled {
-                    return Err(format!(
-                        "{} is unavailable during this interaction",
-                        command.label()
-                    ));
-                }
+                if let Some(reason) = self.command_disabled_reason(command) { return Err(reason); }
                 self.invoke(command)?
             }
             UiAction::SelectBrush { id } => {
@@ -3876,6 +3905,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::SearchCommands => {
+                self.open_command_search()?;
+                Ok((COMMAND_SEARCH, false))
+            }
             CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => {
                 self.selection_mask_command(command)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
@@ -4671,7 +4704,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if regions != 0 {
             self.state.revision += 1;
-            if regions & !(regions::CAMERA | regions::COLOR_PREVIEW) != 0 {
+            if regions & !(regions::CAMERA | regions::COLOR_PREVIEW | regions::COMMAND_SEARCH) != 0 {
                 self.workspace_model_revision = self.state.revision;
                 self.workspace_content_revision = self.state.revision;
             }
@@ -5136,6 +5169,7 @@ mod tests {
     }
 
     include!("session_color_tests.rs");
+    include!("command_catalog_tests.rs");
     include!("palette_tests.rs");
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");

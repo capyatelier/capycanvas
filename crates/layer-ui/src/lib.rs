@@ -77,6 +77,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
+pub use session::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, CommandToolContext, ToolCategory};
 mod settings;
 mod shortcuts;
 mod theme;
@@ -219,10 +220,12 @@ pub const PRIMARY_MENU: &[&[CommandId]] = &[
         CommandId::About,
     ],
     &[CommandId::Drawings],
+    &[CommandId::SearchCommands],
 ];
 pub const EDIT_MENU: MenuSpec = MenuSpec {
     label: "Edit",
     sections: &[
+        &[CommandId::SearchCommands],
         &[CommandId::Undo, CommandId::Redo],
         &[CommandId::PasteImage],
         &[CommandId::RasterizeSource, CommandId::ClearLayer, CommandId::FillSelection],
@@ -288,6 +291,7 @@ pub struct BrushCategory {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
+    pub command_search_style: CommandSearchStyle,
     pub app_name: &'static str,
     pub text_size_pt: u8,
     pub zen_icon_size: u32,
@@ -312,6 +316,7 @@ pub struct UiCatalog {
 }
 pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
+        command_search_style: COMMAND_SEARCH_STYLE,
         zen_icon_size: ZEN_ICON_SIZE,
         app_name: APP_NAME,
         text_size_pt: UI_TEXT_PT,
@@ -519,6 +524,7 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    SearchCommands,
     DrawingBrush,
     Sculpt,
     SdrRendition,
@@ -652,6 +658,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::SearchCommands => matches!(platform, Platform::Gtk),
             Self::TonalSelect => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             // Decode saved shortcuts/layouts from the original tonal editor.
             // These controls are retired and must not be offered or dispatched.
@@ -741,6 +748,7 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::SearchCommands => "search",
             Self::DrawingBrush => "drawing-tools",
             Self::Sculpt => "sculpt",
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
@@ -856,7 +864,8 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 125] = [
+    pub const ALL: [Self; 126] = [
+        Self::SearchCommands,
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -1020,6 +1029,7 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::SearchCommands => "Search Commands…",
             Self::DrawingBrush => "Brush",
             Self::Sculpt => "Sculpt",
             Self::SdrRendition => "Proof SDR",
@@ -1229,6 +1239,7 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    pub command_search: Option<CommandSearchView>,
     /// Temporary viewing choices, excluded from document and workspace saving.
     pub soft_proof: bool,
     pub preview_sdr: bool,
@@ -1279,6 +1290,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    CommandSearch { action: CommandSearchAction },
+    /// Public semantic invocation; IDs come from the shared catalog.
+    ExecuteCommand { id: String, value: Option<String> },
     Selection { action: SelectionAction },
     Tonal { action: TonalAction },
     SetToolText { id: String, value: String },
@@ -1545,7 +1559,8 @@ pub mod regions {
     pub const HOST: u32 = 64;
     pub const CUSTOMIZATION: u32 = 128;
     pub const COLOR_PREVIEW: u32 = 256;
-    pub const ALL: u32 = 511;
+    pub const COMMAND_SEARCH: u32 = 512;
+    pub const ALL: u32 = 1023;
 }
 
 pub fn srgb_to_linear(value: f32) -> f32 {

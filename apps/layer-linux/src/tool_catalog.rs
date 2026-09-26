@@ -10,7 +10,7 @@ pub(super) struct ToolCatalog {
 }
 impl ToolCatalog {
     pub fn new() -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, COMMAND_SEARCH_STYLE.gap);
         root.set_vexpand(true);
         let search = gtk::SearchEntry::new();
         search.set_placeholder_text(Some("Search tools"));

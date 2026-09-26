@@ -1363,6 +1363,43 @@ Apple's command coverage tooling and native input tests, Android interaction
 tests, Windows input scripts and Web interaction tooling are useful host checks,
 but command enumeration alone cannot establish gesture correctness.
 
+### 7.2 Implementation checkpoint: shared catalog and GTK
+
+The first implementation milestone adds `SearchCommands`, bringing the current
+enum to 126 entries; the 125-entry inventory above remains the original research
+checkpoint. See [the current command-search contract](../ui/command-search.md)
+for the catalog providers, typed numeric step, focus/history handling, stable
+action identities, legacy shortcut compatibility and remaining input stages.
+
+GTK presents a native popup with shared 560-pixel width, 8/12-pixel spacing and
+44-pixel rows. The search entry, one shortcut per result and selected-only detail
+line were inspected in light and dark themes. Panel names are qualified and
+equivalent nested actions deduplicated. Native popup capture consumes outside
+dismissal; GTK owns animation and reduced-motion behavior.
+
+Validation at this milestone:
+
+- `cargo test --locked -p layer-ui -p layer-host`: 663 UI tests and 31 host tests
+  passed; one pre-existing hardware-specific host test remained ignored.
+- `cargo check --locked -p layer-web --target wasm32-unknown-unknown`: passed;
+  the additive state field is transported before enabling the Web opener.
+- `bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_input --native-storage`:
+  repeated keyboard opening, immediate query/submit, disabled commands, numeric
+  entry, arrows/Escape, touch activation and outside-dismissal without painting
+  passed under isolated Mutter.
+- On the isolated 120 Hz GTK run, 20 warm samples measured p95 **13.7 ms** from
+  opening to GTK after-paint and **24.6 ms** from query change to after-paint.
+  Synchronous query/model/widget updates were **0.56–0.63 ms**. These measure GTK
+  paint readiness, not physical display scanout or software-keyboard startup.
+
+The native journeys caught and fixed opener key releases owned by the popup,
+stale submit text, ambiguous tool-versus-panel names and irrelevant fuzzy path
+matches. Core tests cover active-layer retargeting, live validation, palette
+history focus, text-history protection and one-step artwork undo.
+
+Web and Android presentation follow this checkpoint. General held overrides,
+controller adapters and compatibility presets remain stages C–F above.
+
 ## 8. Research limitations and maintenance
 
 This checkpoint inspected shared code and all six host input paths; it did not

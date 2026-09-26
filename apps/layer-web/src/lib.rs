@@ -791,6 +791,7 @@ impl WebApp {
         // Exhaustive destructuring makes newly added UI fields a compile error
         // until this transport includes them.
         let layer_ui::UiState {
+            command_search,
             soft_proof,
             preview_sdr,
             hdr_display_available,
@@ -840,6 +841,7 @@ impl WebApp {
                 }
             }};
         }
+        field!(command_search);
         field!(soft_proof);
         field!(preview_sdr);
         field!(hdr_display_available);

@@ -676,6 +676,8 @@ impl NativeHost {
                 library: bool,
             },
             Catalog,
+            CommandCatalog,
+            CommandToolContext,
             ApplicationMenu {
                 menu: layer_ui::ApplicationMenu,
             },
@@ -799,6 +801,8 @@ impl NativeHost {
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::CommandCatalog => json!(self.session.command_catalog()),
+            Query::CommandToolContext => json!(self.session.command_tool_context()),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),

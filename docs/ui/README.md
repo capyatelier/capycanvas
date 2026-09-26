@@ -9,6 +9,9 @@ each frontend presents them using its native toolkit or the browser DOM.
 This lets tool commands, numeric rules and workspace configuration stay consistent
 while file dialogs, focus and accessibility follow the platform.
 
+[Command search](command-search.md) describes the shared catalog, native command
+bar, context-aware invocation and validation checks.
+
 ## Different workflows, shared tools
 
 The interface needs to serve digital painters, photographers and comic artists.

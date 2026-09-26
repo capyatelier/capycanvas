@@ -1,5 +1,7 @@
 //! Actual GTK widgets and Mutter-delivered input for the window-bar builder.
 use super::*;
+#[path = "command_bar_tests.rs"]
+mod command_bar_tests;
 
 #[path = "canvas_pen_button_tests.rs"]
 mod canvas_pen_buttons;

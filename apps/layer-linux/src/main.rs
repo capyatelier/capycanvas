@@ -33,6 +33,7 @@ mod panel_tabs;
 mod proof_dial;
 mod local_tone_view;
 mod preferences;
+mod command_bar;
 mod previews;
 mod recovery;
 mod render_thread;
@@ -54,8 +55,10 @@ use std::{cell::RefCell, rc::Rc};
 
 fn stylesheet() -> String {
     format!(
-        "window {{ --ui-text-size: {}pt; }}\n{}",
+        "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; }}\n{}",
         layer_ui::UI_TEXT_PT,
+        layer_ui::COMMAND_SEARCH_STYLE.inset,
+        layer_ui::COMMAND_SEARCH_STYLE.gap,
         include_str!("style.css")
     )
 }

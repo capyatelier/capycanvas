@@ -980,6 +980,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Command { command } => (
             command.label().into(),
             match command {
+                CommandId::SearchCommands => "Commands",
                 CommandId::DrawingBrush => "Draw with pens, pencils, pastels, paint and other brushes",
                 CommandId::Sculpt => "Shape existing strokes with Blend and Liquify",
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",

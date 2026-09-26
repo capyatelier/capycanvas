@@ -924,6 +924,7 @@ pub struct Workspace {
     status: gtk::Label,
     restart_canvas: gtk::Button,
     pub(crate) preferences: crate::preferences::Preferences,
+    pub(crate) command_bar: crate::command_bar::CommandBar,
     pub(crate) workspaces: manager::NativeWorkspaces,
     pub(crate) servicing: Cell<bool>,
     pub(crate) histogram: RefCell<Option<Rc<crate::histogram::Inspector>>>,
@@ -1184,6 +1185,7 @@ impl Workspace {
             status,
             restart_canvas,
             preferences: crate::preferences::Preferences::new(),
+            command_bar: crate::command_bar::CommandBar::new(),
             workspaces,
             servicing: Cell::new(false),
             histogram: RefCell::new(None),
@@ -1213,6 +1215,7 @@ impl Workspace {
         this.navigator_overviews.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
+        this.command_bar.bind(&this);
         this.workspaces.bind(&this);
         this.zen_capy.connect_clicked(glib::clone!(
             #[weak]
@@ -1340,6 +1343,7 @@ impl Workspace {
                 {
                     return glib::Propagation::Proceed;
                 }
+                if this.command_bar.is_open() { return glib::Propagation::Proceed; }
                 if this.documents.key(&this, key, modifiers) { return glib::Propagation::Stop; }
                 if gtk::prelude::GtkWindowExt::focus(&this.window)
                     .is_some_and(|focus| crate::color_library::owns_native_key(&focus, key))
@@ -1702,6 +1706,7 @@ impl Workspace {
     }
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
+        if matches!(input, UiInput::Key { pressed: true, .. } | UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.remember_command_focus(); }
         let finishing = matches!(
             &input,
             UiInput::Blur
@@ -1885,6 +1890,23 @@ impl Workspace {
         }
         description
     }
+    fn remember_command_focus(&self) {
+        if self.command_bar.is_open() || self.window.visible_dialog().is_some() { return; }
+        let Some(focus) = gtk::prelude::GtkWindowExt::focus(&self.window) else { return; };
+        if focus.native().is_some_and(|n| n.is::<gtk::Popover>()) { return; }
+        let mut ancestor = Some(focus.clone());
+        while let Some(widget) = ancestor {
+            if widget.has_css_class("window-bar") { return; }
+            ancestor = widget.parent();
+        }
+        let scope = if focus.is::<gtk::Text>() || focus.is::<gtk::Entry>() || focus.is::<gtk::TextView>() {
+            CommandFocus::Text
+        } else if focus == self.palette_panel.root || focus.is_ancestor(&self.palette_panel.root) {
+            CommandFocus::Palette
+        } else { CommandFocus::Canvas };
+        if let Some(g) = self.gpu.borrow_mut().as_mut() { g.session.set_command_focus(scope); }
+    }
+
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
         if self.documents.changing.get() && !matches!(&action,
             UiAction::CompleteRequest { .. } | UiAction::RestoreSettings { .. }
@@ -1892,6 +1914,7 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
+        self.remember_command_focus();
         // Display-wide settings arrive from the host, including while another
         // window owns this workspace or its layout is still loading.
         if !matches!(
@@ -2419,6 +2442,11 @@ impl Workspace {
         }
     }
     fn refresh(self: &Rc<Self>, regions: u32) {
+        if regions == regions::COMMAND_SEARCH {
+            let view = self.gpu.borrow().as_ref().and_then(|g| g.session.state().command_search.clone());
+            self.command_bar.refresh(self, view);
+            return;
+        }
         if regions == regions::COLOR_PREVIEW
             && self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().color_picker.preview.is_some()) {
             if self.color_preview_timer.borrow().is_none() {
@@ -2466,6 +2494,7 @@ impl Workspace {
             return;
         };
         self.refreshing.set(true);
+        self.command_bar.refresh(self, state.command_search.clone());
         if regions & (regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.proof_panel.refresh(self, &state);
         }
