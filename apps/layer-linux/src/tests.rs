@@ -15401,7 +15401,6 @@ async fn read_canvas_pixels(
     w: &Rc<Workspace>,
     id: u32,
 ) -> Result<layer_render::ReadbackImage, String> {
-    use layer_render::CanvasRenderer;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     // The ordered worker queue must receive the final document frame before
     // its readback. Merely changing the model does not update GPU pixels.
@@ -15423,35 +15422,14 @@ async fn read_canvas_pixels(
         w.wake();
         glib::timeout_future(std::time::Duration::from_millis(16)).await;
     }
-    w.gpu
-        .borrow_mut()
+    let mut gpu = w.gpu.borrow_mut();
+    let renderer = gpu
         .as_mut()
         .ok_or("Canvas unavailable")?
         .session
-        .renderer_mut()
-        .request_readback(id as u64)
-        .map_err(|e| e.to_string())?;
-    loop {
-        {
-            let mut gpu = w.gpu.borrow_mut();
-            let renderer = gpu
-                .as_mut()
-                .ok_or("Canvas unavailable")?
-                .session
-                .renderer_mut();
-            renderer.ready()?;
-            while let Some(image) = renderer.take_readback() {
-                let image = image.map_err(|e| e.to_string())?;
-                if image.request_id == id as u64 {
-                    return Ok(image);
-                }
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("The canvas could not be exported".into());
-        }
-        glib::timeout_future(std::time::Duration::from_millis(16)).await;
-    }
+        .renderer_mut();
+    renderer.ready()?;
+    renderer.document_pixels(u64::from(id))
 }
 
 #[path = "source_repair_tests.rs"]

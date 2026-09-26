@@ -958,7 +958,6 @@ pub struct WgpuRasterizer {
     scene_pipelines: scene::Pipelines,
     portable_blend: portable_blend::Renderer,
     last_submission: Option<wgpu::SubmissionIndex>,
-    pending_readback: Option<ReadbackImage>,
     metrics: GpuRasterMetrics,
     telemetry: telemetry::Telemetry,
 }
@@ -1350,7 +1349,6 @@ impl WgpuRasterizer {
             scene_pipelines,
             portable_blend,
             last_submission: None,
-            pending_readback: None,
             metrics: GpuRasterMetrics::default(),
         };
         if initialization == Initialization::Warm {
@@ -3250,7 +3248,7 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn readback_srgb_rgba8(&mut self) -> Result<Vec<u8>, GpuRasterError> {
+    pub fn readback_srgb_rgba8(&mut self) -> Result<Vec<u8>, GpuRasterError> {
         // Legacy synchronous inspection/tests. Interactive hosts transfer the
         // ticket returned by begin_export_readback to their file worker.
         self.pipelines.export.compile();
@@ -4891,25 +4889,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 .push(started.elapsed().as_secs_f32() * 1000.);
         }
         Ok(())
-    }
-
-    fn request_readback(&mut self, request_id: u64) -> Result<(), Self::Error> {
-        let [width, height] = self.document_extent;
-        let stride = width.checked_mul(4).ok_or(GpuRasterError::SizeOverflow)?;
-        let mut bytes = vec![0; stride as usize * height as usize];
-        self.copy_rgba8_srgb(&mut bytes, stride as usize)?;
-        self.pending_readback = Some(ReadbackImage {
-            request_id,
-            width,
-            height,
-            stride,
-            bytes,
-        });
-        Ok(())
-    }
-
-    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        self.pending_readback.take().map(Ok)
     }
 }
 

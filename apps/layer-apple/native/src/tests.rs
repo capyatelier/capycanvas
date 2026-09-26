@@ -1178,19 +1178,7 @@ impl App {
             .0
             .as_mut()
             .unwrap();
-        renderer.request_readback(1).unwrap();
-        renderer
-            .device()
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_secs(5)),
-            })
-            .unwrap();
-        renderer
-            .take_readback()
-            .expect("GPU readback completed")
-            .unwrap()
-            .bytes
+        renderer.readback_srgb_rgba8().unwrap()
     }
 }
 impl Drop for App {

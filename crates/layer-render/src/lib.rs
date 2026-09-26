@@ -690,8 +690,6 @@ pub trait CanvasRenderer {
     /// Abandon optional work and its completion channel without waiting for the
     /// GPU. Later completions must not be delivered as a replacement request.
     fn cancel_filter_previews(&mut self) {}
-    fn request_readback(&mut self, request_id: u64) -> Result<(), Self::Error>;
-    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

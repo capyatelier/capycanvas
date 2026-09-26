@@ -438,14 +438,8 @@ fn image(native: &mut NativeHost) -> Vec<u8> {
         assert!(Instant::now() < deadline, "Canvas did not become ready");
         std::thread::sleep(Duration::from_millis(1));
     }
-    native.session.renderer_mut().request_readback(1).unwrap();
-    native
-        .session
-        .renderer_mut()
-        .take_readback()
-        .unwrap()
-        .unwrap()
-        .bytes
+    let renderer = native.session.renderer_mut().0.as_mut().unwrap();
+    renderer.readback_srgb_rgba8().unwrap()
 }
 #[cfg(target_os = "windows")]
 fn radius(native: &NativeHost) -> layer_core::EffectValue {

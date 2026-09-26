@@ -2197,7 +2197,7 @@ mod tests {
     use super::*;
     use crate::input::{SampleFlags, ToolKind, input_queue};
     use layer_core::{AssetId, DefaultBrushPreset, Point, default_brush};
-    use layer_render::{BackendError, CanvasRenderer, FramePacket, HostImage, ReadbackImage};
+    use layer_render::{BackendError, CanvasRenderer, FramePacket, HostImage};
 
     #[derive(Default)]
     struct RecordingRenderer {
@@ -2331,14 +2331,6 @@ mod tests {
             }
             self.saw_reset |= packet.reset_layers;
             Ok(())
-        }
-
-        fn request_readback(&mut self, _request_id: u64) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
-        fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-            None
         }
     }
 

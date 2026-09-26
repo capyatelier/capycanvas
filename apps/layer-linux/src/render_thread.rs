@@ -101,7 +101,8 @@ enum Command {
     Frame(Box<Frame>),
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
-    Readback(u64),
+    #[cfg(test)]
+    DocumentPixels(u64, mpsc::Sender<Result<ReadbackImage, String>>),
     Capture(crate::display_color::ViewColor, mpsc::Sender<Result<ReadbackImage, String>>),
     Stop,
     #[cfg(test)]
@@ -124,7 +125,6 @@ enum Reply {
     FilterPreviews(u64, Result<layer_render::FilterPreviewImage, String>),
     DisplayHeadroom(f32, Option<layer_render_wgpu::SdrSurfaceColor>),
     Error(String),
-    Readback(ReadbackImage),
 }
 
 #[cfg(test)]
@@ -177,7 +177,6 @@ pub struct RenderWorker {
     pending_color: Option<color::Pending>,
     awaiting_color_adoption: Option<u64>,
     brush_sources: HashMap<AssetId, BrushSource>,
-    readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
     color_sample: Option<Result<layer_render::ColorSample, String>>,
     color_sample_pending: bool,
@@ -221,6 +220,12 @@ impl RenderWorker {
         let (tx, rx) = mpsc::channel();
         self.send(Command::Proof(lut, enabled, gamut, tx)).map_err(error)?;
         Ok(rx)
+    }
+    #[cfg(test)]
+    pub(super) fn document_pixels(&self, request_id: u64) -> Result<ReadbackImage, String> {
+        let (tx, rx) = mpsc::channel();
+        self.send(Command::DocumentPixels(request_id, tx)).map_err(error)?;
+        rx.recv_timeout(Duration::from_secs(30)).map_err(error)?
     }
     pub(super) fn capture(&self) -> Result<ReadbackImage, String> {
         self.capture_in(crate::display_color::ViewColor::Srgb)
@@ -346,7 +351,6 @@ impl RenderWorker {
             pending_color: None,
             awaiting_color_adoption: None,
             brush_sources: HashMap::new(),
-            readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
             color_sample: None,
             color_sample_pending: false,
@@ -477,7 +481,6 @@ impl RenderWorker {
                 }
                 Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
-                Reply::Readback(image) => self.readbacks.push_back(image),
             }
         }
         if self.thread.as_ref().is_some_and(|t| t.is_finished()) {
@@ -514,7 +517,6 @@ impl RenderWorker {
         }
         // Unconsumed initialization replies also own a device handle.
         for reply in self.replies.try_iter() { drop(reply); }
-        self.readbacks.clear();
         self.thumbnails.clear();
         self.filter_previews.clear();
         self.color_sample = None;
@@ -778,12 +780,6 @@ impl CanvasRenderer for RenderWorker {
         }
         Ok(())
     }
-    fn request_readback(&mut self, id: u64) -> Result<(), Self::Error> {
-        self.send(Command::Readback(id))
-    }
-    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        self.readbacks.pop_front().map(Ok)
-    }
 }
 
 struct Worker {
@@ -941,11 +937,6 @@ impl Worker {
             }
             #[cfg(test)]
             timing.presented(self.child.take_presented());
-            while let Some(image) = self.renderer.take_readback() {
-                reply
-                    .send(Reply::Readback(image.map_err(error)?))
-                    .map_err(error)?;
-            }
             while let Some(image) = self.renderer.take_thumbnail() {
                 reply
                     .send(Reply::Thumbnail(image.map_err(error)?))
@@ -1039,7 +1030,6 @@ impl Worker {
                         | Command::Thumbnail(..)
                         | Command::ColorSample(_)
                         | Command::FilterPreviews(..)
-                        | Command::Readback(_)
                 )
             {
                 deferred.push_back(command);
@@ -1210,7 +1200,18 @@ impl Worker {
                     .set_selection_outline(selection.as_ref())
                     .map_err(error)?,
                 Command::Release(id) => self.renderer.release_asset(&id),
-                Command::Readback(id) => self.renderer.request_readback(id).map_err(error)?,
+                #[cfg(test)]
+                Command::DocumentPixels(request_id, reply) => {
+                    let [width, height] = self.renderer.document_extent();
+                    let pixels = self.renderer.readback_srgb_rgba8().map_err(error);
+                    let _ = reply.send(pixels.map(|bytes| ReadbackImage {
+                        request_id,
+                        width,
+                        height,
+                        stride: width * 4,
+                        bytes,
+                    }));
+                }
                 Command::Capture(view, reply) => {
                     let _ = reply.send(self.capture(view));
                 }

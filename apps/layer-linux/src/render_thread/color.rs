@@ -126,7 +126,6 @@ impl RenderWorker {
         self.filter_previews.clear();
         self.filter_previews_pending = false;
         self.thumbnails.clear();
-        self.readbacks.clear();
         self.effect_validation = None;
         self.effect_validation_pending = false;
         self.brush_sources.clear();

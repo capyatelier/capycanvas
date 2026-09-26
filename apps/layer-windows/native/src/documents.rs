@@ -1880,9 +1880,16 @@ mod gpu_tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         // Explicit functional-test readback; project saving never reads the GPU.
-        let renderer = host.session.renderer_mut();
-        renderer.request_readback(1).unwrap();
-        renderer.take_readback().unwrap().unwrap()
+        let renderer = host.session.renderer_mut().0.as_mut().unwrap();
+        let [width, height] = renderer.document_extent();
+        let bytes = renderer.readback_srgb_rgba8().unwrap();
+        layer_render::ReadbackImage {
+            request_id: 1,
+            width,
+            height,
+            stride: width * 4,
+            bytes,
+        }
     }
 
     pub(super) fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {

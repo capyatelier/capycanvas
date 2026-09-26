@@ -269,12 +269,6 @@ mod tests {
         fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
             Ok(())
         }
-        fn request_readback(&mut self, _: u64) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-            None
-        }
         fn request_filter_previews(
             &mut self,
             request: FilterPreviewRequest,

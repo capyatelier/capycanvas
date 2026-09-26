@@ -165,12 +165,6 @@ impl CanvasRenderer for Renderer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         self.gpu()?.submit(packet)
     }
-    fn request_readback(&mut self, id: u64) -> Result<(), Self::Error> {
-        self.gpu()?.request_readback(id)
-    }
-    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        self.0.as_mut()?.take_readback()
-    }
 }
 
 #[test]

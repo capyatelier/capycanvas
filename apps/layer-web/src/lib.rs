@@ -243,12 +243,6 @@ impl CanvasRenderer for WebRenderer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         self.renderer()?.submit(packet)
     }
-    fn request_readback(&mut self, id: u64) -> Result<(), Self::Error> {
-        self.renderer()?.request_readback(id)
-    }
-    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        self.0.as_mut()?.renderer.take_readback()
-    }
 }
 
 fn js(value: impl std::fmt::Display) -> JsValue {

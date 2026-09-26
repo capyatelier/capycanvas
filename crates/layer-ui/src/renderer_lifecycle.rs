@@ -243,7 +243,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod tests {
     use super::*;
     use layer_core::{AssetId, ProjectAsset};
-    use layer_render::{BackendError, FramePacket, HostImage, ReadbackImage};
+    use layer_render::{BackendError, FramePacket, HostImage};
     use std::collections::BTreeMap;
 
     #[test]
@@ -369,12 +369,6 @@ mod tests {
         fn release_asset(&mut self, _: &AssetId) {}
         fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
             Ok(())
-        }
-        fn request_readback(&mut self, _: u64) -> Result<(), Self::Error> {
-            Ok(())
-        }
-        fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-            None
         }
         fn request_canvas_preview(&mut self, _: Option<u64>) -> Result<bool, Self::Error> {
             self.previews += 1;

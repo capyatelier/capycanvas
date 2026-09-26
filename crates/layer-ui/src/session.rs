@@ -5094,7 +5094,7 @@ mod tests {
     use super::*;
     use layer_core::{AssetId, Point};
     use layer_engine::{SampleFlags, ToolKind};
-    use layer_render::{BackendError, FramePacket, HostImage, ReadbackImage};
+    use layer_render::{BackendError, FramePacket, HostImage};
 
     /// Protocol recorder only: no canvas storage or software rasterization.
     #[derive(Default)]
@@ -5258,12 +5258,6 @@ mod tests {
             }
             self.composites += usize::from(packet.composite_all);
             Ok(())
-        }
-        fn request_readback(&mut self, _: u64) -> Result<(), Self::Error> {
-            Err(BackendError("Recorder has no pixels"))
-        }
-        fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-            None
         }
     }
     fn session() -> UiSession<Recorder> {
