@@ -10,6 +10,8 @@ const DOCUMENT: u8 = 2;
 pub(super) const BRUSH: u8 = 3;
 pub(super) const VALIDATION: u8 = 4;
 pub(super) const OTHER: u8 = 5;
+#[path = "shader_admission.rs"]
+mod admission;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "startup_native.rs"]
 mod platform;
@@ -19,12 +21,62 @@ mod platform;
 pub(super) use platform::Compiler;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::finish_shader_compiler_shutdown;
+#[cfg(not(target_arch = "wasm32"))]
+pub use platform::Activity as ShaderActivity;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartupProgress {
     pub canvas_ready: bool,
     pub brush_ready: bool,
     pub complete: bool,
+}
+/// Only changes that can require different pipelines invalidate readiness.
+/// Ordinary raster/parameter edits reuse their prepared dependencies. The
+/// revision memo avoids scanning layers on unchanged display callbacks.
+pub struct ShaderDocument {
+    id: Arc<str>,
+    revision: std::cell::Cell<layer_core::Revision>,
+    key: DocumentKey,
+}
+#[derive(PartialEq)]
+struct DocumentKey {
+    extent: [u32; 2],
+    color: layer_core::color::DocumentColor,
+    selection: bool,
+    mask: bool,
+    locked: bool,
+    source: bool,
+    operations: bool,
+    transform: bool,
+    chains: Vec<(Vec<Arc<layer_core::EffectProgram>>, effects::Execution)>,
+}
+impl DocumentKey {
+    fn new(document: &Document) -> Self {
+        Self {
+            extent: [document.width, document.height], color: document.color,
+            selection: document.selection.is_some(), mask: document.active_mask,
+            locked: document.layers.iter().any(|l| l.id == document.active_layer && l.properties.alpha_locked),
+            source: document.layers.iter().any(|l| l.source.is_some()),
+            operations: document.layers.iter().any(|l| l.mask.is_some() || !l.pending_operations.is_empty()),
+            transform: document.layers.iter().any(|l| l.pending_operations.iter()
+                .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
+                .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))),
+            chains: scene::startup_effect_chains(&document.layers).into_iter()
+                .map(|(layers, execution)| (layers.into_iter().filter_map(|l| l.effect.as_ref().map(|e| e.program.clone())).collect(), execution)).collect(),
+        }
+    }
+}
+impl ShaderDocument {
+    pub fn new(document: &Document) -> Self {
+        Self { id: document.id.clone(), revision: std::cell::Cell::new(document.revision), key: DocumentKey::new(document) }
+    }
+    pub fn matches(&self, document: &Document) -> bool {
+        if self.id != document.id { return false; }
+        if self.revision.get() == document.revision { return true; }
+        if self.key != DocumentKey::new(document) { return false; }
+        self.revision.set(document.revision);
+        true
+    }
 }
 #[derive(Default)]
 struct Requirements {
@@ -123,8 +175,9 @@ impl Requirements {
 }
 pub(super) struct Startup {
     pub compiler: Compiler,
+    pub demand: bool,
     masks: builtin_masks::Masks,
-    revision: Option<layer_core::Revision>,
+    document_key: Option<ShaderDocument>,
     brush: Option<BrushSnapshot>,
     transform: bool,
     document: Requirements,
@@ -145,10 +198,12 @@ impl Startup {
         };
         #[cfg(target_arch = "wasm32")]
         let compiler = Compiler::new(device)?;
+        if device.demand_shaders { compiler.enable_admission(); }
         Ok(Self {
             compiler,
+            demand: device.demand_shaders,
             masks: builtin_masks::Masks::new(),
-            revision: None,
+            document_key: None,
             brush: None,
             transform: false,
             document: Requirements::default(),
@@ -163,6 +218,28 @@ impl Startup {
     }
 }
 impl WgpuRasterizer {
+    /// Opt in before submitting paper. Apple/Windows retain their legacy warmup
+    /// until their hosts support continuing first-use readiness as well.
+    pub fn enable_demand_shaders(&mut self) {
+        self.device.demand_shaders = true;
+        if let Some(startup) = &mut self.startup {
+            startup.demand = true;
+            startup.compiler.enable_admission();
+        }
+    }
+    pub fn shader_input(&self) {
+        if let Some(startup) = &self.startup { startup.compiler.input(); }
+    }
+    pub fn shader_idle(&self, idle: bool) {
+        if let Some(startup) = &self.startup { startup.compiler.idle(idle); }
+    }
+    pub fn shader_wait_ms(&self) -> f64 {
+        self.startup.as_ref().map_or(0., |s| s.compiler.delay().as_secs_f64() * 1000.)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn shader_activity(&self) -> Option<ShaderActivity> {
+        self.startup.as_ref().map(|s| s.compiler.activity())
+    }
     #[cfg(target_arch = "wasm32")]
     pub fn compile_startup_step(
         &self,
@@ -208,8 +285,8 @@ impl WgpuRasterizer {
         transform: bool,
     ) -> bool {
         self.startup.as_ref().is_some_and(|s| {
-            (cfg!(target_arch = "wasm32") || !s.finished)
-                && (s.revision != Some(document.revision)
+            (s.demand || !s.finished)
+                && (s.document_key.as_ref().is_none_or(|key| !key.matches(document))
                     || s.brush.as_ref() != Some(brush)
                     || s.transform != transform)
         })
@@ -227,7 +304,7 @@ impl WgpuRasterizer {
             return Ok(());
         };
         startup.finished = false;
-        if startup.revision != Some(document.revision) {
+        if startup.document_key.as_ref().is_none_or(|key| !key.matches(document)) {
             let mut required = Requirements::default();
             required
                 .render
@@ -274,7 +351,7 @@ impl WgpuRasterizer {
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
-            startup.revision = Some(document.revision);
+            startup.document_key = Some(ShaderDocument::new(document));
             let chains = scene::startup_effect_chains(&document.layers);
             let cached = self.scene.as_ref().map(|s| &s.effects).or(self.validated_effects.as_ref());
             if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution))) {
@@ -289,6 +366,8 @@ impl WgpuRasterizer {
                     queue: self.queue.clone(),
                 };
                 let (tx, rx) = mpsc::channel();
+                let chains: Vec<_> = chains.into_iter().map(|(layers, execution)|
+                    (layers.into_iter().cloned().collect::<Vec<_>>(), execution)).collect();
                 let work = move || {
                     let result = (|| {
                         for (layers, execution) in chains {
@@ -371,10 +450,10 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.brush = Some(brush.clone());
         startup.transform = transform;
-        // Native hosts warm on a dedicated compiler thread. Browsers retain
-        // recipes and request only dependencies of the current document/tool.
+        // Legacy hosts warm everything. Demand-driven hosts retain recipes
+        // and request only dependencies of the current document/tool.
         #[cfg(not(target_arch = "wasm32"))]
-        if !startup.others_queued {
+        if !startup.demand && !startup.others_queued {
             startup.masks.remaining(&startup.compiler);
             if let Some(native) = &self.native_edit {
                 for p in native.pipelines() { startup.compiler.pipeline(p, OTHER); }
@@ -443,7 +522,7 @@ impl WgpuRasterizer {
             });
         };
         startup.compiler.check()?;
-        if !cfg!(target_arch = "wasm32") && startup.finished {
+        if !startup.demand && startup.finished {
             return Ok(StartupProgress {
                 canvas_ready: true,
                 brush_ready: true,
@@ -473,7 +552,7 @@ impl WgpuRasterizer {
                 }
             }
         }
-        let canvas_ready = startup.revision.is_some()
+        let canvas_ready = startup.document_key.is_some()
             && startup.effects_ready
             && startup.document.ready()
             && (!startup.transform || startup.current.ready())
@@ -524,6 +603,42 @@ fn style(brush: &BrushSnapshot, tool: StrokeTool, alpha_locked: bool) -> layer_r
 mod tests {
     use super::*;
     #[test]
+    fn shader_document_reuses_raster_and_parameter_edits_but_tracks_new_dependencies() {
+        let mut doc = Document::new("readiness", 128, 128);
+        let key = ShaderDocument::new(&doc);
+        doc.layers[0].opacity = 0.5;
+        doc.revision += 1;
+        assert!(key.matches(&doc));
+        doc.selection = Some(layer_core::Selection::polygon(vec![
+            layer_core::Point { x: 0., y: 0. }, layer_core::Point { x: 64., y: 0. },
+            layer_core::Point { x: 0., y: 64. },
+        ]).unwrap());
+        doc.revision += 1;
+        assert!(!key.matches(&doc));
+        let key = ShaderDocument::new(&doc);
+        doc.width *= 2;
+        doc.revision += 1;
+        assert!(!key.matches(&doc));
+        let mut layer = Layer::paint(LayerId(10), "curves");
+        layer.kind = LayerKind::Effect;
+        layer.effect = Some(Arc::new(layer_core::EffectInstance::new(
+            layer_core::bundled_effect_catalog().get("curves").unwrap().program(),
+        )));
+        doc.layers.insert(0, layer);
+        doc.revision += 1;
+        let key = ShaderDocument::new(&doc);
+        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).values[0] = layer_core::EffectValue::Number(0.5);
+        doc.revision += 1;
+        assert!(key.matches(&doc), "a parameter edit uses the same pipeline");
+        doc.layers[0].visible = false;
+        doc.revision += 1;
+        assert!(!key.matches(&doc), "visibility changes the fused chains");
+        let key = ShaderDocument::new(&doc);
+        doc.active_mask = true;
+        doc.revision += 1;
+        assert!(!key.matches(&doc));
+    }
+    #[test]
     fn dependencies_precede_speculation_and_promotions_compile_once() {
         let compiler = Compiler::new().unwrap();
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -567,6 +682,8 @@ mod gpu_tests {
             color,
         )
         .unwrap();
+        renderer.enable_demand_shaders();
+        renderer.finish_startup_cache();
         assert!(renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()));
         assert!(
             renderer
@@ -608,6 +725,23 @@ mod gpu_tests {
                 .for_style(&style(&brush, StrokeTool::Brush, false))[index].ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
+        while !renderer.poll_startup().unwrap().complete {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
+            "unused region recipes must remain uncompiled");
+        assert!(renderer.startup_needs_update(&document, &brush, true),
+            "demand readiness continues after initial completion");
+        renderer.prepare_startup(&document, &brush, true).unwrap();
+        while !renderer.poll_startup().unwrap().brush_ready {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(renderer.transforms.as_ref().unwrap().pipelines().iter().all(|p| p.ready()));
+        renderer.prepare_startup(&document, &brush, false).unwrap();
+        assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
+
     }
     #[test]
     fn region_requests_wait_for_compilation_without_blocking_or_allocating_images() {

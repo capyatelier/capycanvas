@@ -97,6 +97,11 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.renderer.shader_input(); } }
+    fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.renderer.shader_idle(idle); } }
+    fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
+        self.0.as_ref().is_some_and(|gpu| gpu.renderer.startup_needs_update(document, brush, transform))
+    }
     fn document_color(&self) -> layer_core::color::DocumentColor {
         self.0.as_ref().map(|gpu| gpu.renderer.document_color()).unwrap_or_default()
     }
@@ -550,6 +555,10 @@ impl WebApp {
             .0
             .as_ref()
             .is_some_and(|g| g.renderer.shader_work_pending(allow_optional && self.session.filter_previews_idle()))
+    }
+    pub fn shader_input(&mut self) { self.session.renderer_mut().shader_input(); }
+    pub fn shader_wait_ms(&self) -> f64 {
+        self.session.engine().backend().0.as_ref().map_or(0., |g| g.renderer.shader_wait_ms())
     }
     pub fn wait_for_canvas(&self) -> Result<js_sys::Promise, JsValue> {
         let gpu = self

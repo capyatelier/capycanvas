@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 impl<B: CanvasRenderer> UiSession<B> {
+    pub(crate) fn update_shader_idle(&mut self) {
+        let idle = self.filter_previews_idle() && !self.state.settings_open;
+        self.engine.backend_mut().shader_idle(idle);
+    }
     pub(crate) fn filter_drawer_open(&self) -> bool {
         self.state.customization.drawer.as_ref().is_some_and(|d|
             d.columns.iter().flatten().any(|p| *p == Panel::FilterTypes))

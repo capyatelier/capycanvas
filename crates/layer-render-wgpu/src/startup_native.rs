@@ -14,6 +14,7 @@ struct Job {
 #[derive(Default)]
 struct Queue {
     jobs: VecDeque<Job>,
+    admission: admission::Admission,
     started: bool,
     stopped: bool,
 }
@@ -36,7 +37,25 @@ pub fn finish_shader_compiler_shutdown() {
 }
 
 pub(crate) struct Compiler(Arc<Shared>, Option<std::thread::JoinHandle<()>>);
+/// Thread-safe input admission only; this handle never accesses a live canvas.
+#[derive(Clone)]
+pub struct Activity(Arc<Shared>);
+impl Activity {
+    pub fn input(&self) { self.0.queue.lock().unwrap().admission.input(); }
+    pub fn idle(&self, idle: bool) {
+        let mut queue = self.0.queue.lock().unwrap();
+        if queue.admission.idle != idle {
+            queue.admission.idle = idle;
+            self.0.wake.notify_one();
+        }
+    }
+}
 impl Compiler {
+    pub fn activity(&self) -> Activity { Activity(self.0.clone()) }
+    pub fn enable_admission(&self) { self.0.queue.lock().unwrap().admission.enabled = true; }
+    pub fn input(&self) { self.activity().input(); }
+    pub fn idle(&self, idle: bool) { self.activity().idle(idle); }
+    pub fn delay(&self) -> std::time::Duration { self.0.queue.lock().unwrap().admission.delay() }
     pub fn new() -> Result<Self, GpuRasterError> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
@@ -51,20 +70,18 @@ impl Compiler {
                 loop {
                     let job = {
                         let mut queue = worker.queue.lock().unwrap();
-                        while !queue.stopped && (!queue.started || queue.jobs.is_empty()) {
-                            queue = worker.wake.wait(queue).unwrap();
+                        loop {
+                            if queue.stopped { return; }
+                            if queue.started && let Some(index) = queue.jobs.iter().enumerate()
+                                .filter(|(_, job)| queue.admission.allows(job.priority))
+                                .min_by_key(|(_, job)| job.priority).map(|(index, _)| index) {
+                                break queue.jobs.remove(index).unwrap();
+                            }
+                            let delay = queue.admission.delay();
+                            queue = if queue.started && queue.admission.idle && !delay.is_zero() {
+                                worker.wake.wait_timeout(queue, delay).unwrap().0
+                            } else { worker.wake.wait(queue).unwrap() };
                         }
-                        if queue.stopped {
-                            return;
-                        }
-                        let index = queue
-                            .jobs
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, job)| job.priority)
-                            .unwrap()
-                            .0;
-                        queue.jobs.remove(index).unwrap()
                     };
                     let _span = Span::new(job.priority);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.work))
@@ -198,6 +215,32 @@ unsafe extern "C" {
 mod tests {
     use super::*;
     use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn input_admission_resumes_without_polling_and_promoted_dependencies_run_once() {
+        let compiler = Compiler::new().unwrap();
+        compiler.enable_admission();
+        compiler.idle(false);
+        compiler.input();
+        let (ran, events) = mpsc::channel();
+        let promoted = {
+            let ran = ran.clone();
+            Deferred::new(move || { ran.send("required").unwrap(); 1 })
+        };
+        compiler.pipeline(&promoted, OTHER);
+        compiler.enqueue(OTHER, move || { ran.send("optional").unwrap(); Ok(()) });
+        compiler.start();
+        assert!(events.recv_timeout(Duration::from_millis(250)).is_err(), "a held gesture outlasts the quiet period");
+        compiler.pipeline(&promoted, BRUSH);
+        assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "required");
+        compiler.input();
+        compiler.idle(true);
+        assert!(events.recv_timeout(Duration::from_millis(100)).is_err());
+        assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "optional");
+        drop(compiler);
+        finish_shader_compiler_shutdown();
+        assert!(events.try_recv().is_err());
+    }
 
     #[test]
     fn surface_teardown_cancels_queue_and_final_shutdown_joins_inflight_work() {

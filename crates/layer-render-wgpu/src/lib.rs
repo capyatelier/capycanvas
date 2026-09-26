@@ -56,9 +56,11 @@ use pipeline_device::PipelineDevice;
 #[cfg(not(target_arch = "wasm32"))]
 mod shader_cache;
 mod startup;
-pub use startup::StartupProgress;
+pub use startup::{StartupProgress, ShaderDocument};
 #[cfg(not(target_arch = "wasm32"))]
 pub use startup::finish_shader_compiler_shutdown;
+#[cfg(not(target_arch = "wasm32"))]
+pub use startup::ShaderActivity;
 mod effect_validation;
 mod effects;
 mod flood;
@@ -3367,6 +3369,11 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn shader_input(&mut self) { WgpuRasterizer::shader_input(self); }
+    fn shader_idle(&mut self, idle: bool) { WgpuRasterizer::shader_idle(self, idle); }
+    fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
+        self.startup_needs_update(document, brush, transform)
+    }
     fn document_color(&self) -> layer_core::color::DocumentColor { self.document_color }
     fn supports_tiled_sources(&self) -> bool {
         self.native_edit.is_some()

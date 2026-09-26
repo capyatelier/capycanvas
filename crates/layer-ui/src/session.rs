@@ -552,6 +552,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Hover is presentation input, separate from the paint queue and UI state.
     pub fn cursor_input(&mut self, event: Option<PenEvent>) {
+        self.engine.backend_mut().shader_input();
         if event.is_some_and(|e| {
             ![
                 e.surface_position.x,
@@ -697,6 +698,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
+        self.engine.backend_mut().shader_input();
         // Tool routing and UI transitions may consume terminal events, but
         // must never keep their contacts alive in the camera gesture.
         if let UiInput::Pointer {
@@ -2120,6 +2122,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        self.engine.backend_mut().shader_input();
         match action {
             UiAction::CommandSearch { action } => return self.command_search_action(action),
             UiAction::ExecuteCommand { id, value } => return self.execute_catalog_command(&id, value),
@@ -3405,6 +3408,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        self.engine.backend_mut().shader_input();
         if event.phase == PenPhase::Down && self.layer_interaction.tool.selection_tool().is_some()
             && self.layer_interaction.path.is_empty() && self.selection_tools.gesture_mode.is_none() {
             self.selection_tools.gesture_mode = Some(self.effective_selection_mode());
@@ -3834,6 +3838,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.painted_selections.busy()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
+        self.update_shader_idle();
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
         changed |= self.poll_selection_paint()?;
@@ -4691,6 +4696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        self.update_shader_idle();
         self.update_toolbar_context();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
@@ -4712,7 +4718,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         UiChange {
             revision: self.state.revision,
             regions,
-            canvas_wake,
+            canvas_wake: canvas_wake || self.engine.backend().shaders_need_update(
+                self.engine.document(), self.engine.brush(), self.engine.transform_preview().is_some()),
         }
     }
     fn update_toolbar_context(&mut self) {
@@ -8376,25 +8383,27 @@ mod tests {
     #[test]
     fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        let mut s = session();
-        s.set_platform(Platform::Web);
-        s.frame(0, 0).unwrap();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: s.effect_catalog.filters().to_vec(),
-        };
-        let revision = s.state.filter_catalog_revision;
-        let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
-        let enabled = commands.map(|id| s.command(id).enabled);
-        let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
-            |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
-        assert!(!change.canvas_wake);
-        assert_eq!(s.state.filter_catalog_revision, revision);
-        assert!(!s.state.filter_load.pending);
-        assert!(s.renderer_mut().validation.is_none());
-        assert!(s.require_document_idle().is_ok());
-        assert_eq!(commands.map(|id| s.command(id).enabled), enabled);
+        for platform in [Platform::Web, Platform::Android, Platform::Gtk] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.frame(0, 0).unwrap();
+            let package = EffectPackage {
+                format: 1,
+                categories: s.effect_catalog.categories().to_vec(),
+                filters: s.effect_catalog.filters().to_vec(),
+            };
+            let revision = s.state.filter_catalog_revision;
+            let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
+            let enabled = commands.map(|id| s.command(id).enabled);
+            let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
+                |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
+            assert!(!change.canvas_wake);
+            assert_eq!(s.state.filter_catalog_revision, revision);
+            assert!(!s.state.filter_load.pending);
+            assert!(s.renderer_mut().validation.is_none());
+            assert!(s.require_document_idle().is_ok());
+            assert_eq!(commands.map(|id| s.command(id).enabled), enabled);
+        }
     }
 
     #[test]

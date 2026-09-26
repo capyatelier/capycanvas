@@ -65,6 +65,15 @@ impl NativeHost {
             .map(|()| bytes))
     }
 
+    fn shader_progress(&self) -> layer_render_wgpu::StartupProgress {
+        let brush_ready = self.paint_ready();
+        layer_render_wgpu::StartupProgress {
+            brush_ready,
+            complete: self.startup.complete && brush_ready,
+            ..self.startup
+        }
+    }
+
     pub(super) fn take_snapshot_with<S: Serializer>(
         &mut self,
         serializer: S,
@@ -81,7 +90,7 @@ impl NativeHost {
             keep_zen_button: self.keep_zen_button,
             pan_cursor: self.pan_cursor,
             gpu_ready: self.session.engine().backend().0.is_some(),
-            startup: self.startup,
+            startup: self.shader_progress(),
             error: self.error.clone(),
         };
         let camera = &self.session.state().camera;
@@ -301,9 +310,10 @@ impl NativeHost {
         map.serialize_entry("hide_floating_panels", &self.hide_floating_panels)?;
         map.serialize_entry("keep_zen_button", &self.keep_zen_button)?;
         map.serialize_entry("pan_cursor", &self.pan_cursor)?;
-        map.serialize_entry("canvas_ready", &(gpu_ready && self.startup.canvas_ready))?;
-        map.serialize_entry("brush_ready", &(gpu_ready && self.startup.brush_ready))?;
-        map.serialize_entry("shaders_ready", &(gpu_ready && self.startup.complete))?;
+        let progress = self.shader_progress();
+        map.serialize_entry("canvas_ready", &(gpu_ready && progress.canvas_ready))?;
+        map.serialize_entry("brush_ready", &(gpu_ready && progress.brush_ready))?;
+        map.serialize_entry("shaders_ready", &(gpu_ready && progress.complete))?;
         map.serialize_entry("error", &self.error)?;
         if let Some(workspace) = workspace {
             map.serialize_entry("workspace_persistence", workspace)?;

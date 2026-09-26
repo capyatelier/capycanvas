@@ -291,7 +291,7 @@ impl App {
             device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
                 errors.get_or_init(|| error.to_string());
             }));
-            let renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
+            let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
                 adapter,
                 device,
                 queue,
@@ -299,6 +299,7 @@ impl App {
                 self.host.session.engine().document().color,
             )
             .map_err(error)?;
+            renderer.enable_demand_shaders();
             let previous = self.host.session.state().revision;
             let (_, change) = self
                 .host
@@ -720,6 +721,12 @@ pub extern "system" fn Java_art_capycanvas_Native_finishStartupCache(
 ) {
     if let Some(gpu) = &mut unsafe { app(handle) }.host.session.renderer_mut().0 {
         gpu.finish_startup_cache();
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_shaderInput(_: JNIEnv, _: JClass, handle: jlong) {
+    if let Some(gpu) = &unsafe { app(handle) }.host.session.engine().backend().0 {
+        gpu.shader_input();
     }
 }
 /// Instrumentation removes only this window's device, never a driver/global GPU.

@@ -57,12 +57,9 @@ impl WgpuRasterizer {
             self.scene_pipelines.effects(self)
         };
         if let Some(startup) = &self.startup {
-            // Web has asynchronous first-use readiness. Native hosts still
-            // rely on their worker's cold catalog warmup for later use.
-            #[cfg(target_arch = "wasm32")]
-            let programs = request.programs.clone();
-            #[cfg(not(target_arch = "wasm32"))]
-            let programs = if startup.finished { request.programs.clone() } else { request.namespace.clone() };
+            // Demand-driven hosts compile only the programs being installed;
+            // legacy hosts still warm their initial catalog here.
+            let programs = if startup.demand || startup.finished { request.programs.clone() } else { request.namespace.clone() };
             let state = Arc::new(std::sync::Mutex::new(BackgroundValidation {
                 effects: Some(candidate),
                 errors: Vec::new(),

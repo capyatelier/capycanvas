@@ -196,7 +196,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var surfaceGeneration = 0
     @Volatile private var firstUiDraw = 0L
     @Volatile private var firstSurfaceReady = 0L
-    private var filterResources: JSONObject? = null
     private var disposed = false
     private var frameInterval = 8_333_333L
     private var snapshotAt = 0L
@@ -257,18 +256,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
                 main.post { catalog = value }
                 publish(true)
-                // Publish the native UI before reading shader resources. Rust determines
-                // which files the package may read and owns publication policy.
-                attempt(canvas = false) {
-                    val assets = application.assets
-                    val manifest = assets.open("filters/manifest.json").bufferedReader().use { it.readText() }
-                    val names = JSONArray(Native.query(handle, obj("type" to "filter_package_modules", "manifest" to manifest).toString()))
-                    val modules = JSONObject()
-                    for (name in names.values().map { it as String }) {
-                        modules.put(name, assets.open("filters/$name").bufferedReader().use { it.readText() })
-                    }
-                    filterResources = obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to "merge")
-                }
             }
         }
     }
@@ -283,6 +270,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     private fun post(canvas: Boolean = false, block: () -> Unit) {
         worker.post { if (!disposed && handle != 0L) attempt(canvas, block) }
+    }
+    // Coalesce window UI traffic without serializing another input/model batch.
+    private val shaderInputPending = java.util.concurrent.atomic.AtomicBoolean()
+    internal fun shaderInput() {
+        if (shaderInputPending.compareAndSet(false, true)) worker.post {
+            shaderInputPending.set(false)
+            if (!disposed && handle != 0L) Native.shaderInput(handle)
+        }
     }
     internal suspend fun <T> withNative(block: (Long) -> T): T = kotlin.coroutines.suspendCoroutine { continuation ->
         if (!worker.post {
@@ -584,9 +579,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 if (again || awaitingSurfaceFrame) wake(if (lastStartupStage < 2) (frameInterval / 1_000_000).coerceAtLeast(1L) else 1L)
                 publish(!again)
                 if (!startupCacheFinished && lastCanvasReady) {
-                    val resources = filterResources
-                    filterResources = null
-                    if (resources != null) attempt(canvas = false) { Native.query(handle, resources.toString()) }
                     Native.finishStartupCache(handle)
                     startupCacheFinished = true
                     wake()

@@ -25,6 +25,7 @@ impl Drop for CompileTrace<'_> {
 }
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
+    pub demand_shaders: bool,
     device: wgpu::Device,
     working_format: wgpu::TextureFormat,
     working_space: layer_core::color::RgbSpace,
@@ -38,6 +39,7 @@ pub(crate) struct PipelineDevice {
 impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
         Self {
+            demand_shaders: cfg!(target_arch = "wasm32"),
             device,
             tone_pipelines: Default::default(),
             blend_pipelines: Default::default(),
@@ -122,6 +124,7 @@ impl PipelineDevice {
         Self {
             device,
             cache,
+            demand_shaders: false,
             tone_pipelines: Default::default(),
             blend_pipelines: Default::default(),
             working_format: super::SRGB8_FORMAT,

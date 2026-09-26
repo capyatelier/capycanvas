@@ -531,6 +531,12 @@ pub fn remap_document_colors(
 /// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Input postpones optional shader work. Shared editor state separately
+    /// holds admission during a stroke/gesture or unfinished document edit.
+    fn shader_input(&mut self) {}
+    fn shader_idle(&mut self, _idle: bool) {}
+    /// UI-only tool changes may still need a first-use preparation callback.
+    fn shaders_need_update(&self, _document: &layer_core::Document, _brush: &layer_core::BrushSnapshot, _transform: bool) -> bool { false }
     /// Native interpretation configured on this renderer. Adoption/recovery
     /// rejects a document with different coordinates or depth before resize or
     /// input consumption. Hosts explicitly prepare a qualified mode to change it.

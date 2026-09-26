@@ -84,7 +84,7 @@ pub(super) struct Effects {
     pub compilations: u64,
 }
 impl Effects {
-    pub(super) fn chain_ready(&self, layers: &[Layer], execution: Execution) -> bool {
+    pub(super) fn chain_ready(&self, layers: &[&Layer], execution: Execution) -> bool {
         let programs: Vec<_> = layers.iter().filter_map(|l| l.effect.as_ref().map(|e| &e.program)).collect();
         self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == execution
             && chain.iter().eq(programs.iter().copied()) && pipeline.ready())

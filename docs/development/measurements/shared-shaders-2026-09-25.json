@@ -1,0 +1,438 @@
+{
+  "date": "2026-09-25",
+  "baseline_commit": "741a7f6095e3c003960450d87c9f03a11ad9e350",
+  "final_build": "Measured implementation before integration of origin/main 35518698; post-integration verification is recorded separately below.",
+  "build_profile": "dev-perf; Android benchmark additionally R8 optimized",
+  "android": {
+    "device": "Huion Kamvas Pad 12 KP1202, Android 16, ARM Valhall Vulkan",
+    "thermal_status_before_and_after": [
+      0,
+      0
+    ],
+    "cache": "Run 1 after installing each build with incompatible app pipeline-cache generation; runs 2/3 reuse caches. App data retained. No cold-device or cold-driver claim.",
+    "measurement": "milliseconds since instrumentation began launching MainActivity; settings are dispatch-to-observed-draw, not physical scanout",
+    "runs": {
+      "baseline": [
+        {
+          "run": 1,
+          "ui_first_draw_ms": 565.017,
+          "workspace_ms": 10338.666,
+          "shader_stages_ms": {
+            "gpu": 1415.212,
+            "canvas": 2066.403,
+            "brush": 3118.875,
+            "complete": 27729.599
+          },
+          "settings_during_startup_ms": [
+            334.905,
+            56.183
+          ],
+          "settings_steady_ms": [
+            64.452,
+            75.339,
+            74.141,
+            76.716
+          ]
+        },
+        {
+          "run": 2,
+          "ui_first_draw_ms": 671.551,
+          "workspace_ms": 4060.885,
+          "shader_stages_ms": {
+            "gpu": 795.923,
+            "canvas": 1135.602,
+            "brush": 1311.138,
+            "complete": 4627.611
+          },
+          "settings_during_startup_ms": [
+            202.246,
+            83.721
+          ],
+          "settings_steady_ms": [
+            71.545,
+            82.747,
+            84.715,
+            65.738
+          ]
+        },
+        {
+          "run": 3,
+          "ui_first_draw_ms": 634.989,
+          "workspace_ms": 4063.954,
+          "shader_stages_ms": {
+            "gpu": 745.352,
+            "canvas": 1080.423,
+            "brush": 1182.073,
+            "complete": 4520.755
+          },
+          "settings_during_startup_ms": [
+            246.58,
+            71.237
+          ],
+          "settings_steady_ms": [
+            75.038,
+            69.514,
+            63.019,
+            57.788
+          ]
+        }
+      ],
+      "final": [
+        {
+          "run": 1,
+          "ui_first_draw_ms": 605.011,
+          "workspace_ms": 2342.762,
+          "shader_stages_ms": {
+            "gpu": 1373.631,
+            "canvas": 1986.588,
+            "brush": 3379.063,
+            "complete": 3504.749
+          },
+          "settings_during_startup_ms": [
+            215.033,
+            52.82
+          ],
+          "settings_steady_ms": [
+            77.983,
+            71.994,
+            74.222,
+            56.53
+          ]
+        },
+        {
+          "run": 2,
+          "ui_first_draw_ms": 570.056,
+          "workspace_ms": 1711.979,
+          "shader_stages_ms": {
+            "gpu": 694.444,
+            "canvas": 788.473,
+            "brush": 960.22,
+            "complete": 1013.749
+          },
+          "settings_during_startup_ms": [
+            110.393,
+            41.333
+          ],
+          "settings_steady_ms": [
+            83.193,
+            84.508,
+            75.181,
+            59.619
+          ]
+        },
+        {
+          "run": 3,
+          "ui_first_draw_ms": 594.919,
+          "workspace_ms": 1885.985,
+          "shader_stages_ms": {
+            "gpu": 736.759,
+            "canvas": 949.139,
+            "brush": 985.025,
+            "complete": 1016.349
+          },
+          "settings_during_startup_ms": [
+            161.562,
+            77.176
+          ],
+          "settings_steady_ms": [
+            85.644,
+            73.348,
+            79.957,
+            64.927
+          ]
+        }
+      ]
+    },
+    "apk_sha256": {
+      "baseline": "c6dc422639f4e1d92851adecb53b486cd0572b4b712af877dfafda0ea9ef75d6",
+      "final": "f26c6125d73c4e9bd6eb7ca6e0a91057cc097e5a0a5d6a5e13504a910b3f093d"
+    },
+    "first_use_functional_ms": {
+      "Pencil": 1154.456,
+      "WatercolorWash": 1509.515,
+      "cached_GPen": 173.639,
+      "cached_WatercolorWash": 204.771,
+      "scope": "unminified benchmark build, native stylus strokes and undo between selections; includes UI dispatch/publication"
+    },
+    "packaged_apk_sha256": "91d76d807f662014e522207e6af95e6a9d953ca802dd527fd923d8e777d3cb42",
+    "packaging_verification": "Final packaging removes redundant assets/filters; all DEX and native libraries are byte-identical to the measured final APK."
+  },
+  "gtk": {
+    "device": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition, Vulkan 610.57.04; isolated Mutter/Wayland",
+    "measurement": "milliseconds since Workspace::new; early contact suppressed, next contact commits before catalog completion",
+    "cache": "Three paired cold/warm runs per build; each pair has a fresh XDG_CACHE_HOME. Cold includes driver/compositor caches under that directory. Warm immediately repeats the same executable and directory. No reboot or system driver cache reset.",
+    "runs": {
+      "baseline": [
+        {
+          "run": 1,
+          "cache": "cold",
+          "ui_built_ms": 16.02,
+          "present_returned_ms": 362.77,
+          "first_canvas_feedback_ms": 1280.489,
+          "max_event_loop_slice_ms": 782.221,
+          "shader_stages_ms": {
+            "document": 1350.093,
+            "brush": 2083.797,
+            "complete": 7891.551
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 3910549
+        },
+        {
+          "run": 1,
+          "cache": "warm",
+          "ui_built_ms": 18.099,
+          "present_returned_ms": 404.621,
+          "first_canvas_feedback_ms": 644.117,
+          "max_event_loop_slice_ms": 197.172,
+          "shader_stages_ms": {
+            "document": 646.194,
+            "brush": 665.375,
+            "complete": 940.112
+          },
+          "cache_load_bytes": 3910517,
+          "cache_saved_bytes": 3910549
+        },
+        {
+          "run": 2,
+          "cache": "cold",
+          "ui_built_ms": 18.75,
+          "present_returned_ms": 410.767,
+          "first_canvas_feedback_ms": 1628.694,
+          "max_event_loop_slice_ms": 1031.689,
+          "shader_stages_ms": {
+            "document": 1735.276,
+            "brush": 2578.63,
+            "complete": 9603.047
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 3910567
+        },
+        {
+          "run": 2,
+          "cache": "warm",
+          "ui_built_ms": 20.794,
+          "present_returned_ms": 364.829,
+          "first_canvas_feedback_ms": 571.014,
+          "max_event_loop_slice_ms": 170.569,
+          "shader_stages_ms": {
+            "document": 572.524,
+            "brush": 583.736,
+            "complete": 787.011
+          },
+          "cache_load_bytes": 3910535,
+          "cache_saved_bytes": 3910567
+        },
+        {
+          "run": 3,
+          "cache": "cold",
+          "ui_built_ms": 20.07,
+          "present_returned_ms": 433.834,
+          "first_canvas_feedback_ms": 1698.054,
+          "max_event_loop_slice_ms": 1074.444,
+          "shader_stages_ms": {
+            "document": 1827.122,
+            "brush": 2518.172,
+            "complete": 8701.121
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 3910587
+        },
+        {
+          "run": 3,
+          "cache": "warm",
+          "ui_built_ms": 15.461,
+          "present_returned_ms": 379.473,
+          "first_canvas_feedback_ms": 607.224,
+          "max_event_loop_slice_ms": 188.265,
+          "shader_stages_ms": {
+            "document": 607.224,
+            "brush": 637.023,
+            "complete": 853.32
+          },
+          "cache_load_bytes": 3910555,
+          "cache_saved_bytes": 3910587
+        }
+      ],
+      "final": [
+        {
+          "run": 1,
+          "cache": "cold",
+          "ui_built_ms": 19.39,
+          "present_returned_ms": 409.74,
+          "first_canvas_feedback_ms": 1631.287,
+          "max_event_loop_slice_ms": 1031.15,
+          "shader_stages_ms": {
+            "document": 1725.17,
+            "brush": 2508.866,
+            "complete": 2508.866
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 813673
+        },
+        {
+          "run": 1,
+          "cache": "warm",
+          "ui_built_ms": 19.808,
+          "present_returned_ms": 418.351,
+          "first_canvas_feedback_ms": 660.374,
+          "max_event_loop_slice_ms": 200.21,
+          "shader_stages_ms": {
+            "document": 661.921,
+            "brush": 674.384,
+            "complete": 916.77
+          },
+          "cache_load_bytes": 813641,
+          "cache_saved_bytes": 813673
+        },
+        {
+          "run": 2,
+          "cache": "cold",
+          "ui_built_ms": 14.659,
+          "present_returned_ms": 378.397,
+          "first_canvas_feedback_ms": 1317.822,
+          "max_event_loop_slice_ms": 793.726,
+          "shader_stages_ms": {
+            "document": 1403.604,
+            "brush": 2060.91,
+            "complete": 2060.91
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 813655
+        },
+        {
+          "run": 2,
+          "cache": "warm",
+          "ui_built_ms": 20.854,
+          "present_returned_ms": 385.765,
+          "first_canvas_feedback_ms": 616.064,
+          "max_event_loop_slice_ms": 185.059,
+          "shader_stages_ms": {
+            "document": 616.065,
+            "brush": 629.521,
+            "complete": 845.744
+          },
+          "cache_load_bytes": 813623,
+          "cache_saved_bytes": 813655
+        },
+        {
+          "run": 3,
+          "cache": "cold",
+          "ui_built_ms": 15.494,
+          "present_returned_ms": 406.083,
+          "first_canvas_feedback_ms": 1441.355,
+          "max_event_loop_slice_ms": 880.18,
+          "shader_stages_ms": {
+            "document": 1518.375,
+            "brush": 2152.742,
+            "complete": 2152.742
+          },
+          "cache_load_bytes": 0,
+          "cache_saved_bytes": 813671
+        },
+        {
+          "run": 3,
+          "cache": "warm",
+          "ui_built_ms": 19.208,
+          "present_returned_ms": 395.039,
+          "first_canvas_feedback_ms": 616.916,
+          "max_event_loop_slice_ms": 181.941,
+          "shader_stages_ms": {
+            "document": 618.409,
+            "brush": 631.669,
+            "complete": 865.157
+          },
+          "cache_load_bytes": 813639,
+          "cache_saved_bytes": 813671
+        }
+      ]
+    }
+  },
+  "web": {
+    "device": "same Huion; Chrome 143.0.7499.192; ARM Valhall WebGPU; desktop-site UA",
+    "origin": "dedicated localhost:44197",
+    "cache": "normal browser and driver caches reused; three refreshes; no production-network claim",
+    "median_ms": {
+      "ui_ms": 506.2,
+      "workspace_ms": 712.5,
+      "settings_ms": 56.6,
+      "settings_during_startup_ms": 52.5,
+      "panels_ms": 43.6
+    },
+    "startup_stages_ms": [
+      {
+        "module": 264,
+        "wasm": 400.2,
+        "model": 417.1,
+        "controls": 463.5,
+        "ui": 522.8,
+        "workspace": 715.6,
+        "gpu": 716,
+        "canvas": 954.9,
+        "document": 1353.4,
+        "brush": 1678.5,
+        "complete": 1678.6
+      },
+      {
+        "module": 253,
+        "wasm": 380.9,
+        "model": 397.7,
+        "controls": 436.5,
+        "ui": 500.4,
+        "workspace": 712.5,
+        "gpu": 713,
+        "canvas": 937.7,
+        "document": 1308.6,
+        "brush": 1624.8,
+        "complete": 1624.8
+      },
+      {
+        "module": 252.7,
+        "wasm": 393.2,
+        "model": 409.2,
+        "controls": 446.9,
+        "ui": 506.2,
+        "workspace": 682.7,
+        "gpu": 683.1,
+        "canvas": 896.5,
+        "document": 1232.7,
+        "brush": 1470.2,
+        "complete": 1470.4
+      }
+    ],
+    "tests": [
+      "staged startup: required async promise gate, paper/menus/navigation/painting, first-use effects and reuse, device restart after shader rejection",
+      "filter previews: zero optional pipeline calls during held contact, resume after release, rendered pixels, hide/reopen reuse, source/category/device changes"
+    ]
+  },
+  "post_integration": {
+    "origin_main": "35518698",
+    "shared_ui_tests_passed": 663,
+    "native_host_tests_passed": 31,
+    "gtk_command_search": "native_command_bar_input --native-storage passed",
+    "gtk_warm_startup_ms": {
+      "document": 508.052,
+      "brush": 528.711,
+      "complete": 753.043
+    },
+    "huion_web_targets_passed": true,
+    "huion_web_ms": {
+      "ui_ms": 494.8,
+      "workspace_ms": 678.7,
+      "settings_ms": 57.6,
+      "settings_during_startup_ms": 54.3,
+      "panels_ms": 45.3
+    },
+    "huion_android_ms": {
+      "ui_first_draw": 608.817,
+      "workspace": 1723.579,
+      "shader_stages": {
+        "gpu": 746.636,
+        "canvas": 991.692,
+        "brush": 1025.113,
+        "complete": 1452.03
+      }
+    },
+    "optimized_apk_sha256": "3b7dd6dd18d872809be1fae6b3ad25c8eabb609099077bf7668d55da5fd7db35"
+  }
+}

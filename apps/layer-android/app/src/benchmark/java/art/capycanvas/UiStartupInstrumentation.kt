@@ -112,7 +112,9 @@ class UiStartupInstrumentation : Instrumentation() {
             val directory = File(targetContext.getExternalFilesDir(null), "ui-startup-audit").apply { mkdirs() }
             File(directory, "$label.json").writeText(report.toString(2))
             result.putString("stream", "\nUI startup audit saved $label.json\n")
-            result.putString("report", report.toString())
+            // Frame/input samples can exceed Binder's transaction budget.
+            // The complete report is already durable; transport only its path.
+            result.putString("report", File(directory, "$label.json").absolutePath)
         } catch (error: Throwable) {
             result.putString("stream", "\n${error.stackTraceToString()}\n")
             finish(Activity.RESULT_CANCELED, result)

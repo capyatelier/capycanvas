@@ -178,6 +178,7 @@ impl Worker {
             request.project.document.color,
         )
         .map_err(error)?;
+        renderer.enable_demand_shaders();
         renderer.configure_ui_previews(self.view_color.space()).map_err(error)?;
         for (id, asset) in &request.project.assets {
             check()?;
@@ -190,7 +191,7 @@ impl Worker {
             .prepare_startup(&request.project.document, &request.brush, false)
             .map_err(error)?;
         renderer.finish_startup_cache();
-        while !renderer.poll_startup().map_err(error)?.complete {
+        while !renderer.poll_startup().map_err(error)?.brush_ready {
             check()?;
             renderer
                 .device()

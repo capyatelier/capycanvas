@@ -76,20 +76,9 @@ impl GpuCanvas {
                 layer_ui::Platform::Gtk,
             )),
         })?;
-        // Prefer installed/development resources. The same runtime loader can
-        // replace these files without recompiling the executable.
-        let filters = std::env::var_os("CAPY_FILTERS_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| exe.parent().map(|p| p.join("filters")))
-                    .filter(|p| p.is_dir())
-            })
-            .or_else(|| {
-                let p = std::path::PathBuf::from("assets/filters");
-                p.is_dir().then_some(p)
-            });
+        // The bundled catalog is already embedded. Honor explicit external
+        // packages without loading identical installed resources again.
+        let filters = std::env::var_os("CAPY_FILTERS_DIR").map(std::path::PathBuf::from);
         if let Some(directory) = filters {
             let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "merge".into());
             let result = serde_json::from_value(serde_json::Value::String(mode))

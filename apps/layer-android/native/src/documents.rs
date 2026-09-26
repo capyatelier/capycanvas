@@ -260,6 +260,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         project.document.color,
     )
     .map_err(error)?;
+    gpu.enable_demand_shaders();
     gpu.finish_startup_cache();
     let mut programs = Vec::new();
     for effect in project

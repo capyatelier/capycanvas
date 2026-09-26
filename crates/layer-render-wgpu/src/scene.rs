@@ -2331,7 +2331,7 @@ fn descriptor<'a>(
 
 /// Compile only programs referenced by this document, including the fused
 /// sibling chains used by compose_group. Catalog previews are a later stage.
-pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effects::Execution)> {
+pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effects::Execution)> {
     let mut result = Vec::new();
     let mut parents = Vec::new();
     for layer in layers {
@@ -2344,10 +2344,10 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
         if let Some(effect) = &layer.effect {
             if effect.program.image_boundary() {
                 for pass in 0..effect.program.passes.len().max(1) {
-                    result.push((vec![layer.clone()], effects::Execution::Image(pass)));
+                    result.push((vec![layer], effects::Execution::Image(pass)));
                 }
             } else {
-                result.push((vec![layer.clone()], effects::Execution::Fused));
+                result.push((vec![layer], effects::Execution::Fused));
             }
         }
     }
@@ -2367,7 +2367,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
             {
                 continue;
             }
-            let mut chain = vec![layer.clone()];
+            let mut chain = vec![layer];
             while let Some(next) = siblings.peek() {
                 if !next.visible
                     || next.properties.clipped != layer.properties.clipped
@@ -2381,7 +2381,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
                 {
                     break;
                 }
-                chain.push((*next).clone());
+                chain.push(*next);
                 siblings.next();
             }
             if chain.len() > 1 {

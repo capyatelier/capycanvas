@@ -89,24 +89,16 @@ fn native_contact_brushes() {
             preset != layer_core::DefaultBrushPreset::Spray
         );
         w.dispatch(UiAction::SetBrushSize { value: 54. });
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .engine()
-            .backend()
-            .startup
-            .brush_ready
-        {
-            assert!(
-                Instant::now() < deadline,
-                "{preset:?}: brush startup timed out"
-            );
+        let prepare_started = Instant::now();
+        let deadline = prepare_started + Duration::from_secs(20);
+        while !w.gpu.borrow().as_ref().is_some_and(|g| {
+            let engine = g.session.engine();
+            engine.backend().paint_ready(engine.document(), engine.brush(), false)
+        }) {
+            assert!(Instant::now() < deadline, "{preset:?}: brush preparation timed out");
             pump(20);
         }
+        eprintln!("brush_ready preset={preset:?} elapsed_ms={:.3}", prepare_started.elapsed().as_secs_f64() * 1000.);
         pump(100);
         let camera = state(&w).camera;
         let m = camera.document_to_surface();

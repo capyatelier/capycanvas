@@ -15,6 +15,7 @@ struct Job {
 #[derive(Default)]
 struct Queue {
     jobs: VecDeque<Job>,
+    admission: admission::Admission,
     started: bool,
     busy: Option<u8>,
     error: Option<String>,
@@ -24,6 +25,10 @@ pub(crate) struct Compiler {
     device: PipelineDevice,
 }
 impl Compiler {
+    pub fn enable_admission(&self) { self.queue.borrow_mut().admission.enabled = true; }
+    pub fn input(&self) { self.queue.borrow_mut().admission.input(); }
+    pub fn idle(&self, idle: bool) { self.queue.borrow_mut().admission.idle = idle; }
+    pub fn delay(&self) -> std::time::Duration { self.queue.borrow().admission.delay() }
     pub fn new(device: &PipelineDevice) -> Result<Self, GpuRasterError> {
         Ok(Self {
             queue: Rc::default(),
@@ -64,7 +69,8 @@ impl Compiler {
         queue.jobs.len() + usize::from(queue.busy.is_some())
     }
     pub fn has_work(&self, allow_optional: bool) -> bool {
-        self.queue.borrow().jobs.iter().any(|job| allow_optional || job.priority < OTHER)
+        let queue = self.queue.borrow();
+        queue.jobs.iter().any(|job| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority))
     }
     pub fn ready_through(&self, priority: u8) -> bool {
         let queue = self.queue.borrow();
@@ -91,7 +97,7 @@ impl Compiler {
                     .jobs
                     .iter()
                     .enumerate()
-                    .filter(|(_, job)| allow_optional || job.priority < OTHER)
+                    .filter(|(_, job)| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority))
                     .min_by_key(|(_, j)| j.priority)
                     .map(|(index, _)| index) else { return Ok(()); };
                 let job = queue.jobs.remove(index).unwrap();

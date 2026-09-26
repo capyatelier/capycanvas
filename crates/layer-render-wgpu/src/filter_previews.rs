@@ -168,7 +168,7 @@ impl FilterPreviews {
             let source_layers = source_scope(&request.layers, request.target)
                 .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
             for (layers, execution) in scene::startup_effect_chains(&source_layers) {
-                self.source_scene.effects.prepare(r, &layers.iter().collect::<Vec<_>>(), execution, 0.)?;
+                self.source_scene.effects.prepare(r, &layers, execution, 0.)?;
             }
             let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
             ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);

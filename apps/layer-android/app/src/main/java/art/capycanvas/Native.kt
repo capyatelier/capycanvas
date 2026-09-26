@@ -4,6 +4,7 @@ import android.view.Surface
 
 /** Only CanvasHost's render Looper can access a native session handle. */
 internal object Native {
+    @JvmStatic external fun shaderInput(handle: Long)
     init { System.loadLibrary("layer_android") }
     @JvmStatic external fun create(profiling: Boolean): Long
     @JvmStatic external fun destroy(handle: Long)

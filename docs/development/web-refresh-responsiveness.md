@@ -12,8 +12,9 @@ also waited for a 15-second autosave tick. The image was decoded only **after**
 accepting recovery; it did not explain the long pre-prompt delay.
 
 Web now prepares dependencies of the current document and tool, and visible
-previews when idle. It does not warm the unused catalog. Native hosts retain
-existing compiler-worker warmup. No broad document-idle guard was weakened.
+previews when idle. It does not warm the unused catalog. Android and GTK now
+share this policy through the [shared shader framework](shared-shader-readiness.md);
+Apple/Windows host adoption is separate. No broad document-idle guard was weakened.
 
 ## Refresh sequence and changed dependencies
 

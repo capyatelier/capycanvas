@@ -54,7 +54,7 @@ const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
 let compilerScheduled = false, compilerFailed = false, compilerEpoch = 0;
-let compilerResumeAt = 0, compilerResumeTimer;
+let compilerResumeTimer;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
 installTooltips();
 installPenScrolling();
@@ -389,16 +389,16 @@ function refreshStartup() {
 // strokes, gestures and unfinished edits. Required jobs always retain priority.
 const compilerContacts = new Set();
 function deferOptionalCompiler() {
-  compilerResumeAt = performance.now() + 200;
-  compilerResumeTimer ??= setTimeout(resumeOptionalCompiler, 200);
+  app.shader_input();
+  compilerResumeTimer ??= setTimeout(resumeOptionalCompiler, Math.ceil(app.shader_wait_ms()));
 }
 function resumeOptionalCompiler() {
-  const remaining = compilerResumeAt - performance.now();
-  compilerResumeTimer = remaining > 0 ? setTimeout(resumeOptionalCompiler, remaining) : null;
+  const remaining = app.shader_wait_ms();
+  compilerResumeTimer = remaining > 0 ? setTimeout(resumeOptionalCompiler, Math.ceil(remaining)) : null;
   if (compilerResumeTimer === null) wake();
 }
 function optionalCompilerReady() {
-  return !compilerContacts.size && !pending.length && performance.now() >= compilerResumeAt
+  return !compilerContacts.size && !pending.length
     && !documents?.busy()
     && !document.querySelector('dialog[open],#header details[open],:popover-open:not(.hover-tooltip)');
 }

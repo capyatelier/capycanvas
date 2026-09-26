@@ -28,7 +28,7 @@ class AndroidStartupTest {
         CanvasHost.workspaceDirectoryForTest = null
         RecoveryController.directoryForTest = null
     }
-    @Test fun drawingAndNavigationWorkBeforeSpeculativeShadersFinish() {
+    @Test fun drawingNavigationAndFirstUseShadersRemainResponsive() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var host: CanvasHost
             scenario.onActivity { host = it.host }
@@ -55,15 +55,12 @@ class AndroidStartupTest {
             }
             val ready = waitFor { it.optBoolean("brush_ready") && workspaceReady() }
             assertTrue(ready.getBoolean("canvas_ready"))
-            // Timing thresholds stay in the device benchmark. This assertion
-            // verifies that ready drawing is not gated on all shaders.
-            org.junit.Assume.assumeFalse("Device completed speculative work before the test could observe it", ready.getBoolean("shaders_ready"))
             fun canvas(view: View): CanvasSurfaceView? {
                 if (view is CanvasSurfaceView) return view
                 if (view is ViewGroup) for (i in 0 until view.childCount) canvas(view.getChildAt(i))?.let { return it }
                 return null
             }
-            val down = SystemClock.uptimeMillis()
+            var down = SystemClock.uptimeMillis()
             fun event(action: Int, positions: List<Pair<Float, Float>>, tool: Int) {
                 scenario.onActivity { activity ->
                     val view = canvas(activity.window.decorView)!!
@@ -96,6 +93,30 @@ class AndroidStartupTest {
             event(MotionEvent.ACTION_UP, listOf(.43f to .5f), MotionEvent.TOOL_TYPE_FINGER)
             waitFor { it.getJSONObject("state").getJSONObject("camera").getDouble("zoom") > zoom * 1.1 }
             waitFor { it.getBoolean("shaders_ready") }
+            fun canUndo(s: JSONObject) = s.getJSONObject("state").array("commands").objects()
+                .first { it.getString("id") == "undo" }.getBoolean("enabled")
+            scenario.onActivity { host.invoke("undo") }
+            waitFor { !canUndo(it) }
+            // Previously unused dry/material tools, then reuse the same variants.
+            for (preset in listOf(2, 20, 1, 20)) {
+                val started = SystemClock.elapsedRealtimeNanos()
+                scenario.onActivity {
+                    host.dispatch(obj("type" to "select_brush", "id" to preset))
+                    host.dispatch(obj("type" to "set_brush_size", "value" to 36))
+                }
+                waitFor { it.optBoolean("brush_ready") && it.getJSONObject("state").getJSONObject("brush").getInt("preset") == preset }
+                android.util.Log.i("CapyStartupTest", "brush_ready preset=$preset elapsed_ms=${(SystemClock.elapsedRealtimeNanos()-started)/1e6}")
+                down = SystemClock.uptimeMillis()
+                event(MotionEvent.ACTION_DOWN, listOf(.45f to .5f), MotionEvent.TOOL_TYPE_STYLUS)
+                for (i in 1..12) {
+                    event(MotionEvent.ACTION_MOVE, listOf((.45f + i * .005f) to .5f), MotionEvent.TOOL_TYPE_STYLUS)
+                    SystemClock.sleep(8)
+                }
+                event(MotionEvent.ACTION_UP, listOf(.51f to .5f), MotionEvent.TOOL_TYPE_STYLUS)
+                waitFor { canUndo(it) }
+                scenario.onActivity { host.invoke("undo") }
+                waitFor { !canUndo(it) }
+            }
             val done = CountDownLatch(1)
             var report: JSONObject? = null
             host.measurements { data -> report = data; done.countDown() }
@@ -107,7 +128,7 @@ class AndroidStartupTest {
             assertTrue(times.getLong(0) > 0)
             assertTrue(times.getLong(0) <= times.getLong(1))
             assertTrue(times.getLong(1) <= times.getLong(2))
-            assertTrue(times.getLong(2) < times.getLong(3))
+            assertTrue(times.getLong(2) <= times.getLong(3))
         }
     }
 }

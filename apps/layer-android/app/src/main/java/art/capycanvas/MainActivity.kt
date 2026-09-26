@@ -85,11 +85,20 @@ class MainActivity : ComponentActivity() {
     // superclass carries a class-wide restriction that lint also inherits here.
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        host.shaderInput()
         if (host.headerKeyHandler?.invoke(event) == true) return true
         if (host.drawingTabs.key(event)) return true
         if (host.palettes.key(event)) return true
         host.key(event)
         return super.dispatchKeyEvent(event)
+    }
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        host.shaderInput()
+        return super.dispatchTouchEvent(event)
+    }
+    override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        host.shaderInput()
+        return super.dispatchGenericMotionEvent(event)
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)

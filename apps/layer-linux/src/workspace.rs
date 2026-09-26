@@ -3679,6 +3679,13 @@ impl Workspace {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |controller, event| {
+                if matches!(event.event_type(), gdk::EventType::MotionNotify | gdk::EventType::ButtonPress
+                    | gdk::EventType::ButtonRelease | gdk::EventType::TouchBegin | gdk::EventType::TouchUpdate
+                    | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel | gdk::EventType::Scroll
+                    | gdk::EventType::KeyPress | gdk::EventType::KeyRelease)
+                    && let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                    layer_render::CanvasRenderer::shader_input(gpu.session.renderer_mut());
+                }
                 let (phase, touch) = match event.event_type() {
                     gdk::EventType::ButtonPress | gdk::EventType::ButtonRelease => {
                         if event

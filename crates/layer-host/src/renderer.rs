@@ -13,6 +13,11 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.shader_input(); } }
+    fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.shader_idle(idle); } }
+    fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
+        self.0.as_ref().is_some_and(|gpu| gpu.startup_needs_update(document, brush, transform))
+    }
     fn document_color(&self) -> layer_core::color::DocumentColor {
         self.0.as_deref().map(CanvasRenderer::document_color).unwrap_or_default()
     }

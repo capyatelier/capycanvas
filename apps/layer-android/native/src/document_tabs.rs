@@ -294,6 +294,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeWork(
             job.color,
         )
         .map_err(error)?;
+        gpu.enable_demand_shaders();
         gpu.finish_startup_cache();
         job.renderer = Some(gpu.into());
         Ok(())

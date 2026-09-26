@@ -108,8 +108,8 @@ enum Command {
     FailNextFrame,
 }
 enum Reply {
-    ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu),
-    Initialized(crate::display_color::ViewColor, layer_render_wgpu::snapshot::SnapshotGpu),
+    ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
+    Initialized(crate::display_color::ViewColor, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
     Startup(
         u64,
         layer_render_wgpu::StartupProgress,
@@ -140,6 +140,7 @@ pub(crate) fn pause_next_startup() -> Arc<AtomicBool> {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    shader_activity: Option<layer_render_wgpu::ShaderActivity>,
     #[cfg(test)]
     startup_pause: Option<Arc<AtomicBool>>,
     pub(crate) proof_owner: u64,
@@ -153,7 +154,7 @@ pub struct RenderWorker {
     first_frame_sent: bool,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
-    startup_key: Option<(layer_core::Revision, layer_core::BrushSnapshot, bool)>,
+    startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_core::BrushSnapshot, bool)>,
     selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
@@ -307,6 +308,7 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
+            shader_activity: None,
             #[cfg(test)]
             startup_pause,
             proof_owner,
@@ -383,13 +385,9 @@ impl RenderWorker {
         brush: &layer_core::BrushSnapshot,
         transform: bool,
     ) -> bool {
-        !self.startup.complete
-            && self
-                .startup_key
-                .as_ref()
-                .is_none_or(|(revision, old, previous)| {
-                    *revision != document.revision || old != brush || *previous != transform
-                })
+        self.startup_key.as_ref().is_none_or(|(key, old, previous)| {
+            !key.matches(document) || old != brush || *previous != transform
+        })
     }
     pub(super) fn prepare_startup(
         &mut self,
@@ -398,7 +396,7 @@ impl RenderWorker {
         transform: bool,
     ) -> Result<(), String> {
         self.startup_generation += 1;
-        self.startup_key = Some((document.revision, brush.clone(), transform));
+        self.startup_key = Some((layer_render_wgpu::ShaderDocument::new(&document), brush.clone(), transform));
         self.startup = Default::default();
         self.send(Command::Startup(
             self.startup_generation,
@@ -422,7 +420,8 @@ impl RenderWorker {
         while let Ok(reply) = self.replies.try_recv() {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {
-                    Reply::ColorAdopted(current, brush_sources, gpu) if current == id => {
+                    Reply::ColorAdopted(current, brush_sources, gpu, activity) if current == id => {
+                        self.shader_activity = activity;
                         // Keep the new renderer's pipeline/cache context. Exact
                         // source samples remain shared with existing file jobs.
                         self.awaiting_color_adoption = None;
@@ -437,7 +436,8 @@ impl RenderWorker {
             }
             match reply {
                 Reply::ColorAdopted(..) => (),
-                Reply::Initialized(color, gpu) => {
+                Reply::Initialized(color, gpu, activity) => {
+                    self.shader_activity = activity;
                     self.initialized = true;
                     self.view_color = color;
                     self.snapshot_gpu = Some(gpu);
@@ -530,6 +530,11 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn shader_input(&mut self) { if let Some(activity) = &self.shader_activity { activity.input(); } }
+    fn shader_idle(&mut self, idle: bool) { if let Some(activity) = &self.shader_activity { activity.idle(idle); } }
+    fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
+        self.startup_needs_update(document, brush, transform)
+    }
     fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> { self.adopt_color(color) }
     fn supports_tiled_sources(&self) -> bool { true }
@@ -856,7 +861,7 @@ impl Worker {
         count: &AtomicUsize,
         #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
     ) -> Result<(), String> {
-        if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu())).is_err() {
+        if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu(), self.renderer.shader_activity())).is_err() {
             return Ok(());
         }
         self.report_display(reply)?;
@@ -886,8 +891,7 @@ impl Worker {
                 self.update_hdr_view()?;
                 self.report_display(reply)?;
             }
-            if !startup_progress.complete
-                && self.paper_ready.load(Ordering::Acquire)
+            if self.paper_ready.load(Ordering::Acquire)
                 && let Some((generation, document, brush, transform)) = &startup_input
             {
                 if self
@@ -1074,7 +1078,7 @@ impl Worker {
                     startup_input = None;
                     startup_progress = color::complete();
                     document_drawn = true;
-                    reply.send(Reply::ColorAdopted(id, self.renderer.brush_sources(), self.renderer.snapshot_gpu())).map_err(error)?;
+                    reply.send(Reply::ColorAdopted(id, self.renderer.brush_sources(), self.renderer.snapshot_gpu(), self.renderer.shader_activity())).map_err(error)?;
                 }
                 Command::DiscardColor(id, reply) => {
                     self.discard_color(id);
@@ -1308,6 +1312,7 @@ impl Worker {
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
             adapter, device, queue, &cache, color,
         ).map_err(error)?;
+        renderer.enable_demand_shaders();
         renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))
