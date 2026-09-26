@@ -898,19 +898,28 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
             .unwrap();
             let pixels = r.readback_srgb_rgba8().unwrap();
             let inverse = affine.inverse().unwrap();
+            let [a, b, c, d, _, _] = inverse.0;
+            // A minified pixel averages a grid of bilinear taps over its area.
+            let count = [a.hypot(b), c.hypot(d)].map(|reach| ((reach + 0.5).floor() as u32).clamp(1, 4));
+            let bilinear = |p: Point| {
+                let (sx, sy) = (p.x - 0.5, p.y - 0.5);
+                let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
+                let (tx, ty) = (sx - sx.floor(), sy - sy.floor());
+                (alpha(ix, iy) * (1. - tx) + alpha(ix + 1, iy) * tx) * (1. - ty)
+                    + (alpha(ix, iy + 1) * (1. - tx) + alpha(ix + 1, iy + 1) * tx) * ty
+            };
             for y in 0..canvas[1] {
                 for x in 0..canvas[0] {
-                    let p = inverse.map(Point {
-                        x: x as f32 + 0.5,
-                        y: y as f32 + 0.5,
-                    });
-                    let (sx, sy) = (p.x - 0.5, p.y - 0.5);
-                    let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
-                    let (tx, ty) = (sx - sx.floor(), sy - sy.floor());
-                    let expected = ((alpha(ix, iy) * (1. - tx) + alpha(ix + 1, iy) * tx)
-                        * (1. - ty)
-                        + (alpha(ix, iy + 1) * (1. - tx) + alpha(ix + 1, iy + 1) * tx) * ty)
-                        * 255.;
+                    let mut expected = 0.;
+                    for j in 0..count[1] {
+                        for i in 0..count[0] {
+                            expected += bilinear(inverse.map(Point {
+                                x: x as f32 + (i as f32 + 0.5) / count[0] as f32,
+                                y: y as f32 + (j as f32 + 0.5) / count[1] as f32,
+                            }));
+                        }
+                    }
+                    let expected = expected / (count[0] * count[1]) as f32 * 255.;
                     let actual = pixels[((y * canvas[0] + x) * 4 + 3) as usize] as f32;
                     assert!(
                         (actual - expected).abs() <= 1.1,

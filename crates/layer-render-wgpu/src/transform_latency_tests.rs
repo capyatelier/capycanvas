@@ -68,6 +68,39 @@ fn cases() -> Vec<(&'static str, Box<dyn Fn(f32) -> ImageTransform>)> {
                 interpolation: Interpolation::Linear,
             }),
         ),
+        (
+            "affine bicubic",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Affine(affine(t)),
+                interpolation: Interpolation::Bicubic,
+            }),
+        ),
+        (
+            "perspective bicubic",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Projective(quad(t, 0.3)),
+                interpolation: Interpolation::Bicubic,
+            }),
+        ),
+        (
+            "deep perspective bicubic",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Projective(quad(t, 0.9)),
+                interpolation: Interpolation::Bicubic,
+            }),
+        ),
+        (
+            "quarter scale bicubic",
+            Box::new(move |t| ImageTransform {
+                map: TransformMap::Affine(Affine::around(
+                    center(),
+                    [0.25 + t.sin() * 0.01; 2],
+                    t.cos() * 0.02,
+                    Point::default(),
+                )),
+                interpolation: Interpolation::Bicubic,
+            }),
+        ),
     ]
 }
 
@@ -119,7 +152,9 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
     for (transaction, (name, transform)) in cases().into_iter().enumerate() {
         let mut cpu = Vec::new();
         let mut completed = Vec::new();
+        r.telemetry = telemetry::Telemetry::new(r.device(), r.queue());
         for i in 0..FRAMES {
+            r.set_telemetry_enabled(i >= WARMUP);
             let start = Instant::now();
             r.set_transform_preview(Some(&layer_render::TransformPreview {
                 transaction: transaction as u64 + 1,
@@ -139,9 +174,16 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
                 completed.push(elapsed);
             }
         }
-        let (cpu, completed) = (percentiles(cpu), percentiles(completed));
+        let gpu = r
+            .telemetry()
+            .gpu
+            .ordered()
+            .into_iter()
+            .map(f64::from)
+            .collect();
+        let (cpu, gpu, completed) = (percentiles(cpu), percentiles(gpu), percentiles(completed));
         eprintln!(
-            "{label} {name} 6000x4000, full selection: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU completion {completed:.3?}ms"
+            "{label} {name} 6000x4000, full selection: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms"
         );
         worst = worst.max(completed[2]);
         r.set_transform_preview(None).unwrap();

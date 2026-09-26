@@ -6,8 +6,22 @@ use std::sync::Arc;
 #[serde(rename_all = "snake_case")]
 pub enum Interpolation {
     Nearest,
+    /// Bilinear, averaging a grid of taps where the map minifies.
     #[default]
     Linear,
+    /// Catmull-Rom with overshoot clamped to the nearest taps, averaging a
+    /// grid of bilinear taps where the map minifies.
+    Bicubic,
+}
+impl Interpolation {
+    /// Source pixels beyond a sample position that the filter can read.
+    pub fn support(self) -> u32 {
+        match self {
+            Self::Nearest => 0,
+            Self::Linear => 1,
+            Self::Bicubic => 2,
+        }
+    }
 }
 
 /// Source-to-destination geometry of one layer-local pixel transform.
@@ -120,7 +134,7 @@ impl ImageTransform {
         if source.is_empty() || self.is_identity() {
             return [Rect::EMPTY; 2];
         }
-        let padding = f32::from(self.interpolation == Interpolation::Linear);
+        let padding = self.interpolation.support() as f32;
         let support = Rect {
             min: Point {
                 x: source.min.x - padding,

@@ -96,14 +96,15 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
                         x: (x + rect[0]) as f32 + 0.5,
                         y: (y + rect[1]) as f32 + 0.5,
                     });
-                    // The independent constant-color oracle excludes bilinear edge
-                    // footprints, but includes both sides of source/tile boundaries.
+                    // The independent constant-color oracle excludes the edge
+                    // footprints of a minified pixel's bilinear taps, but includes
+                    // both sides of source/tile boundaries.
                     if [0., 768., 1024., 1025.]
                         .iter()
-                        .any(|v| (local.x - v).abs() < 2.)
+                        .any(|v| (local.x - v).abs() < 3.)
                         || [0., 512., 768., 769.]
                             .iter()
-                            .any(|v| (local.y - v).abs() < 2.)
+                            .any(|v| (local.y - v).abs() < 3.)
                     {
                         continue;
                     }

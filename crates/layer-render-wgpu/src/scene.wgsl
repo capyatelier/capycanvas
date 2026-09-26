@@ -45,10 +45,7 @@ fn scene_image_texel(p:vec2<i32>)->vec4<f32> {
     if any(p<vec2(0)) || any(p>=vec2<i32>(textureDimensions(front))) {return vec4(0.);}
     return textureLoad(front,p,0);
 }
-// The same transparent-edge bilinear kernel as pixel_transform.wgsl, fused
-// with ordinary source-over composition when the source occupies one image.
-fn scene_image(v:Vertex)->vec4<f32> {
-    let world=(v.position.xy-settings.rect.xy)+settings.color.xy;
+fn scene_image_bilinear(world:vec2<f32>)->vec4<f32> {
     let m=settings.operation_linear;
     let local=vec2(m.x*world.x+m.z*world.y,m.y*world.x+m.w*world.y)+settings.operation_offset.xy;
     if any(local<vec2(-.5)) || any(local>vec2<f32>(textureDimensions(front))+vec2(.5)) {return vec4(0.);}
@@ -61,6 +58,21 @@ fn scene_image(v:Vertex)->vec4<f32> {
     }
     return mix(mix(scene_image_texel(base),scene_image_texel(base+vec2(1,0)),t.x),
         mix(scene_image_texel(base+vec2(0,1)),scene_image_texel(base+vec2(1,1)),t.x),t.y);
+}
+// The same transparent-edge bilinear kernel and minification grid as
+// pixel_transform.wgsl, fused with ordinary source-over composition when the
+// source occupies one image.
+fn scene_image(v:Vertex)->vec4<f32> {
+    let world=(v.position.xy-settings.rect.xy)+settings.color.xy;
+    let m=settings.operation_linear;
+    let count=vec2<u32>(clamp(floor(vec2(length(m.xy),length(m.zw))+.5),vec2(1.),vec2(4.)));
+    var sum=vec4(0.);
+    for (var j=0u;j<count.y;j++) {
+        for (var i=0u;i<count.x;i++) {
+            sum+=scene_image_bilinear(world+(vec2(f32(i),f32(j))+.5)/vec2<f32>(count)-.5);
+        }
+    }
+    return sum/f32(count.x*count.y);
 }
 fn luminance(c: vec3<f32>) -> f32 { return dot(c,vec3<f32>(.3,.59,.11)); }
 fn set_luminance(c: vec3<f32>, l: f32) -> vec3<f32> {

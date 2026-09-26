@@ -484,7 +484,7 @@ impl PixelTransform {
                     [0, 1].map(|axis| {
                         (job.target[axis] * super::PAGE_SIZE) as f32 - job.slot[axis] as f32
                     }),
-                    f32::from(transform.interpolation == Interpolation::Linear)
+                    filter_flags(transform.interpolation)
                         + 2. * f32::from(unmoved || identity)
                         + 4. * f32::from(self.placement),
                     background,
@@ -620,6 +620,14 @@ impl PixelTransform {
         self.capacity + 48 + self.source_capacity
     }
 }
+fn filter_flags(interpolation: Interpolation) -> f32 {
+    match interpolation {
+        Interpolation::Nearest => 0.,
+        Interpolation::Linear => 1.,
+        Interpolation::Bicubic => 9.,
+    }
+}
+
 /// Rows mapping a destination pixel to homogeneous source coordinates. An
 /// affine map keeps w' = 1, so its perspective form draws identically.
 fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {

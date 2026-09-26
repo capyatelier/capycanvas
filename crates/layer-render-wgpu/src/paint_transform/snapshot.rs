@@ -134,9 +134,6 @@ impl TileSnapshot {
     }
 }
 
-/// Source pixels on each side of a sample that interpolation can read.
-const SUPPORT: u32 = 1;
-
 /// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
 pub(crate) fn region_jobs(
     bounds: PixelRect,
@@ -163,7 +160,7 @@ pub(crate) fn region_jobs(
                 required.push(coordinate);
             }
             if let Some([x0, y0, x1, y1]) = map.footprint(region) {
-                let support = f64::from(SUPPORT);
+                let support = map.support;
                 let footprint = PixelRect::new(
                     (x0 - support).floor().max(0.) as u32,
                     (y0 - support).floor().max(0.) as u32,
@@ -234,7 +231,16 @@ pub(crate) fn region_jobs(
 
 /// How a destination region reaches back into its source, for choosing the
 /// source pages its samples read.
-enum SourceMap {
+struct SourceMap {
+    kind: SourceKind,
+    /// Source pixels beyond a sample that its filter reads, at least one to
+    /// cover rounding at page edges.
+    support: f64,
+    /// Samples lie at pixel centers, or anywhere in the pixel when filtered
+    /// samples spread over a minified pixel.
+    inset: f64,
+}
+enum SourceKind {
     Identity,
     Affine([f32; 6]),
     /// The destination-to-source matrix, and the smallest w' that can still
@@ -251,8 +257,19 @@ impl SourceMap {
         bounds: PixelRect,
     ) -> Result<Self, GpuRasterError> {
         let invalid = GpuRasterError::InvalidTransform("Transform must be finite and invertible");
+        let support = f64::from(transform.interpolation.support().max(1));
+        let inset = if transform.interpolation == layer_core::Interpolation::Nearest {
+            0.5
+        } else {
+            0.
+        };
+        let map = |kind| Self {
+            kind,
+            support,
+            inset,
+        };
         if transform.is_identity() {
-            return Ok(Self::Identity);
+            return Ok(map(SourceKind::Identity));
         }
         let projective = match &transform.map {
             layer_core::TransformMap::Affine(affine) => {
@@ -264,11 +281,11 @@ impl SourceMap {
             }
         };
         if let Some(affine) = projective.as_affine() {
-            return Ok(Self::Affine(affine.inverse().ok_or(invalid)?.0));
+            return Ok(map(SourceKind::Affine(affine.inverse().ok_or(invalid)?.0)));
         }
         let forward = projective.0.map(f64::from);
         let inverse = invert(forward).ok_or(invalid)?;
-        let reach = f64::from(SUPPORT) + 1.;
+        let reach = support + 1.;
         let bounds = [
             f64::from(bounds.min_x()) - reach,
             f64::from(bounds.min_y()) - reach,
@@ -279,7 +296,7 @@ impl SourceMap {
             .map(|[x, y]| forward[6] * bounds[x] + forward[7] * bounds[y] + forward[8])
             .into_iter()
             .fold(f64::NEG_INFINITY, f64::max);
-        Ok(Self::Projective {
+        Ok(map(SourceKind::Projective {
             inverse,
             floor: if largest > 0. {
                 1. / largest
@@ -287,21 +304,21 @@ impl SourceMap {
                 f64::INFINITY
             },
             bounds,
-        })
+        }))
     }
 
     /// Conservative source bounds of every sample the region's pixels take,
     /// including Float32 evaluation error but not interpolation support.
     fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
         let centers = [
-            region.min_x() as f64 + 0.5,
-            region.min_y() as f64 + 0.5,
-            region.max_x() as f64 - 0.5,
-            region.max_y() as f64 - 0.5,
+            region.min_x() as f64 + self.inset,
+            region.min_y() as f64 + self.inset,
+            region.max_x() as f64 - self.inset,
+            region.max_y() as f64 - self.inset,
         ];
-        match self {
-            Self::Identity => None,
-            Self::Affine(inverse) => {
+        match &self.kind {
+            SourceKind::Identity => None,
+            SourceKind::Affine(inverse) => {
                 let mut low = [f64::INFINITY; 2];
                 let mut high = [f64::NEG_INFINITY; 2];
                 for x in [centers[0], centers[2]] {
@@ -324,7 +341,7 @@ impl SourceMap {
                 }
                 Some([low[0], low[1], high[0], high[1]])
             }
-            Self::Projective {
+            SourceKind::Projective {
                 inverse: m,
                 floor,
                 bounds,

@@ -652,6 +652,95 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
 }
 
 #[test]
+fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
+    use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
+    let extent = [256, 256];
+    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+        let peak = if matches!(depth, SampleDepth::F16 | SampleDepth::F32) { 8. } else { 1. };
+        let mut builder = SourceBuilder::new(
+            [64, 64],
+            SourceInterpretation {
+                channels: SourceChannels::Rgba,
+                depth,
+                profile: ColorProfile::Builtin(RgbSpace::Srgb),
+                profile_assumed: false,
+            },
+            8 * 1024 * 1024,
+        )
+        .unwrap();
+        for y in 0..64u32 {
+            let row: Vec<u8> = (0..64u32)
+                .flat_map(|x| {
+                    let pixel: [f32; 4] = match (x / 3 + y / 5) % 3 {
+                        0 => [peak, peak, peak, 1.],
+                        1 => [0., 0., 0., 1.],
+                        _ => [0.; 4],
+                    };
+                    match depth {
+                        SampleDepth::U8 => pixel.map(|v| (v * 255.) as u8).to_vec(),
+                        SampleDepth::U16 => {
+                            pixel.into_iter().flat_map(|v| ((v * 65535.) as u16).to_le_bytes()).collect()
+                        }
+                        SampleDepth::F16 => layer_core::color::hdr::encode_pixel(pixel)
+                            .unwrap()
+                            .into_iter()
+                            .flat_map(u16::to_le_bytes)
+                            .collect(),
+                        SampleDepth::F32 => pixel.into_iter().flat_map(f32::to_le_bytes).collect(),
+                    }
+                })
+                .collect();
+            builder.push_row(&row).unwrap();
+        }
+        let mut layer = Layer::paint(LayerId(1), "overshoot");
+        layer.source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+        let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
+        let frame = |r: &mut WgpuRasterizer| {
+            r.submit(FramePacket {
+                view: ViewState {
+                    width_px: extent[0],
+                    height_px: extent[1],
+                    ..view()
+                },
+                document_extent: extent,
+                layers: std::slice::from_ref(&layer),
+                dabs: &[],
+                dab_batches: &[],
+                restore_rasters: &[],
+                reset_layers: false,
+                time_seconds: 0.,
+                composite_all: true,
+            })
+            .unwrap();
+        };
+        frame(&mut r);
+        r.set_transform_preview(Some(&layer_render::TransformPreview {
+            transaction: 1,
+            layer: layer.id,
+            selection: None,
+            transform: ImageTransform {
+                map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
+                interpolation: Interpolation::Bicubic,
+            },
+        }))
+        .unwrap();
+        frame(&mut r);
+        let mut brightest = 0f32;
+        for page in &r.paint_layers[0].pages {
+            let bytes = page_bytes(&r, &page.active().texture);
+            for texel in bytes.chunks_exact(16) {
+                let v: [f32; 4] = std::array::from_fn(|k| f32::from_le_bytes(texel[k * 4..k * 4 + 4].try_into().unwrap()));
+                assert!(v.iter().all(|c| c.is_finite() && *c >= 0.), "{depth:?}: negative lobe {v:?}");
+                assert!(v[3] <= 1., "{depth:?}: coverage overshoot {v:?}");
+                assert!(v[..3].iter().all(|c| *c <= peak * v[3] + 1e-5), "{depth:?}: color overshoot {v:?}");
+                brightest = brightest.max(v[0]);
+            }
+        }
+        assert!(brightest > peak * 0.99, "{depth:?}: bright texels survive, {brightest}");
+    }
+}
+
+#[test]
 fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
     use layer_core::DefaultBrushPreset::*;
     use layer_core::Projective;
