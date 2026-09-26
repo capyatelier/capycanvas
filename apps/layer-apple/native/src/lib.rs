@@ -327,14 +327,6 @@ pub unsafe extern "C" fn capy_apple_request(
                 _ => a.host.query(value)?,
             }),
             6 => Some(workspaces::session_request(&mut a.host, value)?),
-            4 => Some(
-                serde_json::to_value(
-                    serde_json::from_value::<layer_ui::NumericRequest>(value)
-                        .map_err(|e| e.to_string())?
-                        .resolve()?,
-                )
-                .map_err(|e| e.to_string())?,
-            ),
             _ => return Err("Unknown Apple host request".into()),
         };
         result

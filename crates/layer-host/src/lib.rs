@@ -18,7 +18,6 @@ struct SnapshotKey {
     command_search_revision: u64,
     logical: [f32; 2],
     chrome_hidden: bool,
-    hide_floating_panels: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
     gpu_ready: bool,
@@ -46,7 +45,6 @@ pub struct NativeHost {
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
-    hide_floating_panels: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
     pub error: Option<String>,
@@ -105,7 +103,6 @@ impl NativeHost {
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,
-            hide_floating_panels: false,
             keep_zen_button: false,
             pan_cursor: false,
             error: None,
@@ -266,7 +263,6 @@ impl NativeHost {
                 // Match GTK's bounded cold-photo work. The UI retries requests
                 // that are not yet accepted, leaving input/frame opportunities
                 // between batches instead of scanning an entire photo here.
-                #[cfg(not(target_arch = "wasm32"))]
                 if !self.session.renderer_mut().0.as_mut().unwrap()
                     .prepare_thumbnail_batch(layer_core::LayerId(target))
                     .map_err(|e| e.to_string())? {
@@ -322,7 +318,6 @@ impl NativeHost {
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
-        self.hide_floating_panels = reply.hide_floating_panels;
         self.keep_zen_button = reply.keep_zen_button;
         self.pan_cursor = reply.pan_cursor;
         self.apply_change(previous, reply.change);
@@ -661,7 +656,6 @@ impl NativeHost {
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
             ProofPanel { action: Option<layer_ui::color_management::ProofAction> },
-            RecoveryDocument,
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
@@ -677,8 +671,6 @@ impl NativeHost {
                 library: bool,
             },
             Catalog,
-            CommandCatalog,
-            CommandToolContext,
             ApplicationMenu {
                 menu: layer_ui::ApplicationMenu,
             },
@@ -802,8 +794,6 @@ impl NativeHost {
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
-            Query::CommandCatalog => json!(self.session.command_catalog()),
-            Query::CommandToolContext => json!(self.session.command_tool_context()),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
@@ -816,7 +806,6 @@ impl NativeHost {
                 layer_ui::color_management::proof_view(&self.session)
             },
             Query::DocumentColor => json!(self.session.engine().document().color),
-            Query::RecoveryDocument => json!(self.session.recovery_document()),
             Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft(action)),
             Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
@@ -1136,28 +1125,6 @@ mod tests {
                     link.url()
                 );
             }
-        }
-    }
-    #[test]
-    fn zen_snapshot_has_no_alternative_toolbar_projection() {
-        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        app.resize(2880, 1800, 1.75).unwrap();
-        let layout = app.session.state().workspace.layout.clone();
-        for active in [true, false] {
-            app.dispatch(UiAction::Invoke {
-                command: layer_ui::CommandId::ZenMode,
-            })
-            .unwrap();
-            let snapshot = app.take_snapshot().unwrap();
-            assert_eq!(app.session.state().workspace.zen_mode, active);
-            assert_eq!(snapshot["partial_zen"], false);
-            assert!(
-                snapshot["zen_toolbars"]["sections"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
-            );
-            assert_eq!(app.session.state().workspace.layout, layout);
         }
     }
     #[test]
@@ -1512,8 +1479,6 @@ mod tests {
         assert!(app.take_snapshot().is_none());
         app.chrome_hidden = true;
         assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
-        app.hide_floating_panels = true;
-        assert_eq!(app.take_snapshot().unwrap()["hide_floating_panels"], true);
         app.keep_zen_button = true;
         app.pan_cursor = true;
         let snapshot = app.take_snapshot().unwrap();

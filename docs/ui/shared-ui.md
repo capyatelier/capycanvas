@@ -273,8 +273,6 @@ Rust owns these decisions through `Settings.zen_show_capy`/`zen_reveal_at_edges`
 and `InputReply`'s `chrome_hidden` and `keep_zen_button` flags. Hosts only apply
 visibility, hit-testing and styling. Android carries both flags in its
 change-detected snapshot, including updates without a document revision.
-The retired `partial_zen`, `zen_toolbars` and `hide_floating_panels` wire fields
-are always false or empty.
 The button is a sibling of the header with a same-sized spacer, preserving its
 36×36px size and 6px inset. Its active background is subtle grey while the full UI
 is visible, but neutral when only the button remains.

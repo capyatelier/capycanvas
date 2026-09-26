@@ -111,9 +111,6 @@ pub struct InputReply {
     pub canvas_bar_hidden: bool,
     /// Whether to show the standalone top-left Capy while chrome is hidden.
     pub keep_zen_button: bool,
-    /// Retired partial-Zen wire fields; current interaction always leaves these false.
-    pub hide_floating_panels: bool,
-    pub partial_zen: bool,
     pub pan_cursor: bool,
 }
 

@@ -49,7 +49,7 @@ export async function checkWorkspaceResize({call,evaluate,settle}) {
         const app=layerApp.app,p=window.resizeProbe={original:{},counts:{},cpu:{},frames:[],widths:[],running:true,clones:0,added:0,removed:0,allocations:0,scaledFrames:0};
         p.node=document.querySelector('.dock-group[data-group="${group}"]');p.content=p.node.querySelector('.panel');p.surface=p.node.querySelector('.navigator-surface');
         if(p.surface){p.allocationObserver=new MutationObserver(records=>{p.allocations+=records.length;});p.allocationObserver.observe(p.surface,{attributes:true,attributeFilter:["width","height"]});}
-        for(const name of ["state","layout","layout_update","workspace_update","dispatch","frame","reflow_navigators","editor_models","panel_view","workspace_projection","navigator_size","navigator_surface"]){
+        for(const name of ["state","layout","layout_update","workspace_update","dispatch","frame","reflow_navigators","editor_models","panel_view","navigator_size","navigator_surface"]){
           if(typeof app[name]!=="function")continue;
           p.original[name]=app[name].bind(app);app[name]=(...args)=>{const t=performance.now(),v=p.original[name](...args);const key=name==="dispatch"?"dispatch:"+args[0].type:name;(p.cpu[key]??=[]).push(performance.now()-t);p.counts[key]=(p.counts[key]||0)+1;return v;};
         }

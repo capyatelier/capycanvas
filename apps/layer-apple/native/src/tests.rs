@@ -1696,13 +1696,17 @@ fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
                 for setting in state["tool_settings"].as_array().unwrap() {
                     // Re-select to prevent a previous edit changing the schema.
                     app.action(json!({"type":"select_brush","id":brush["id"]}));
-                    let resolved = app
-                        .request(
-                            4,
-                            json!({"control":setting["numeric"],
-                        "value":setting["value"],"operation":{"type":"position","position":0.37}}),
-                        )
-                        .unwrap();
+                    let request = CString::new(
+                        json!({"control":setting["numeric"],
+                        "value":setting["value"],"operation":{"type":"position","position":0.37}})
+                        .to_string(),
+                    )
+                    .unwrap();
+                    let output = unsafe { capy_apple_numeric(request.as_ptr()) };
+                    assert!(!output.is_null());
+                    let resolved: Value =
+                        serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
+                    unsafe { capy_apple_string_free(output) };
                     app.action(json!({"type":"set_tool_setting","id":setting["id"],"value":resolved["value"]}));
                     let after = app.state();
                     let actual = after["tool_settings"]

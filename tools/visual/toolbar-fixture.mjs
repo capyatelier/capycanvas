@@ -31,7 +31,7 @@ export async function captureToolbarFixture({fixture, width, height, scale, outp
         bounds:{x:6,y,width:row.panel.tiles.length*(w+2)-2,height:h},
         tiles:row.panel.tiles.map((t,i)=>[t.id,{x:i*(w+2),y:0,width:w,height:h}])};y+=h+6;return result;
     });
-    const chrome=createWorkspaceChrome({app:{workspace_projection:()=>[true,{sections}]},
+    const chrome=createWorkspaceChrome({app:{},
       state:()=>({customization:{column_drawers:[]},workspace:{layout:{panels:[]}}}),workspace,element,
       button:(text,action)=>{const b=element('button',null,text);b.onclick=action;return b;},
       icon:name=>icons.get(name).cloneNode(true),

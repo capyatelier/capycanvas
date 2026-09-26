@@ -34,8 +34,6 @@ impl WebApp {
         let state = self.session.state();
         js_sys::JSON::parse(&serde_json::to_string(&json!({
             "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition()),
-            "partial_zen": false,
-            "zen_toolbars": {"sections": []},
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
             "document_options": json!({
                 "extent": state.settings.new_document.defaults.extent,
@@ -82,10 +80,6 @@ impl WebApp {
             "rendition":(self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition())})).map_err(js)
     }
 
-    // Legacy host contract: Zen no longer projects an alternative layout.
-    pub fn workspace_projection(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
-        serialize(&(false, json!({"sections": []})))
-    }
     pub fn workspace_persistence(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.durable_workspace())
     }

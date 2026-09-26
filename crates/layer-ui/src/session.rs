@@ -1039,7 +1039,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         reply.change = self.changed(regions::SETTINGS, false);
                         reply.handled = true;
-                        reply.chrome_hidden = reply.hide_floating_panels;
+                        reply.chrome_hidden = false;
                         return Ok(reply);
                     }
                     if key == "escape" {
@@ -10284,9 +10284,7 @@ mod tests {
                     ChromeFacts::default(),
                 );
                 assert!(reply.chrome_hidden);
-                assert!(!reply.hide_floating_panels);
                 assert!(reply.keep_zen_button);
-                assert!(!reply.partial_zen);
                 let reply = chrome(
                     &mut s,
                     ChromeEvent::Motion {
@@ -10297,12 +10295,7 @@ mod tests {
                 assert!(reply.chrome_hidden);
                 assert!(reply.keep_zen_button);
                 let exit = key(&mut s, "Tab", true, false, false);
-                assert!(
-                    exit.handled
-                        && !exit.chrome_hidden
-                        && !exit.hide_floating_panels
-                        && !exit.partial_zen
-                );
+                assert!(exit.handled && !exit.chrome_hidden);
                 assert!(!s.state.workspace.zen_mode);
                 assert_eq!(s.state.workspace.layout, layout);
             }

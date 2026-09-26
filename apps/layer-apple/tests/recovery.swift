@@ -275,7 +275,7 @@ import QuartzCore
             // Let the observation reply enter MainActor and issue its storage
             // ticket before accepting close; the file executor stays blocked.
             await withCheckedContinuation { done in
-                reopened.native!.submit(2, JSON(["type": "recovery_document"])) { _ in
+                reopened.native!.submit(2, JSON(["type": "document_tabs", "op": "recovery", "id": reopened.snapshot["document_tabs"]["selected"].uint])) { _ in
                     DispatchQueue.main.async { done.resume() }
                 }
             }

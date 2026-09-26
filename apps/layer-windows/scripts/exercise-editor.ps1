@@ -160,7 +160,7 @@ function Check-Editor {
 }
 function Check-Zen {
     $model=Model
-    if(!$model.state.workspace.zen_mode -or !$model.chrome_hidden -or $model.partial_zen -or $model.zen_toolbars.sections.Count){throw 'Full Zen projection differs from the shared model'}
+    if(!$model.state.workspace.zen_mode -or !$model.chrome_hidden){throw 'Full Zen projection differs from the shared model'}
     $elements=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
     foreach($element in $elements){
         $id=$element.Current.AutomationId
@@ -239,7 +239,7 @@ try{
     $retained=(Control 'Drawing canvas' -Name).GetRuntimeId() -join ':'
     $generation=(Model).windows_gpu_generation
     Set-Zen
-    Wait-Until {(Model).chrome_hidden -and !(Model).partial_zen} 'Full Zen did not hide workspace chrome'
+    Wait-Until {(Model).chrome_hidden} 'Full Zen did not hide workspace chrome'
     Check-Zen
     Capture 'zen-dark'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 720
@@ -262,7 +262,7 @@ try{
     Check-Header
     Capture 'editor-light'
     Set-Zen
-    Wait-Until {(Model).chrome_hidden -and !(Model).partial_zen} 'Light full Zen did not activate'
+    Wait-Until {(Model).chrome_hidden} 'Light full Zen did not activate'
     Start-Sleep -Milliseconds 300
     Check-Zen
     Capture 'zen-light'

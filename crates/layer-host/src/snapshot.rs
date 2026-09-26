@@ -87,7 +87,6 @@ impl NativeHost {
             command_search_revision: self.session.command_search_revision(),
             logical: self.logical,
             chrome_hidden: self.chrome_hidden,
-            hide_floating_panels: self.hide_floating_panels,
             keep_zen_button: self.keep_zen_button,
             pan_cursor: self.pan_cursor,
             gpu_ready: self.session.engine().backend().0.is_some(),
@@ -289,9 +288,6 @@ impl NativeHost {
             "filter_preview_revision",
             &self.session.filter_preview_revision(),
         )?;
-        // Compatibility with older clients; Zen has no alternate projection.
-        map.serialize_entry("partial_zen", &false)?;
-        map.serialize_entry("zen_toolbars", &json!({"sections": []}))?;
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
@@ -338,7 +334,6 @@ impl NativeHost {
         map.serialize_entry("chrome_hidden", &self.chrome_hidden)?;
         let gpu_ready = self.session.engine().backend().0.is_some();
         map.serialize_entry("gpu_ready", &gpu_ready)?;
-        map.serialize_entry("hide_floating_panels", &self.hide_floating_panels)?;
         map.serialize_entry("keep_zen_button", &self.keep_zen_button)?;
         map.serialize_entry("pan_cursor", &self.pan_cursor)?;
         let progress = self.shader_progress();

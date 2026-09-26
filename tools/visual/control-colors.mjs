@@ -48,7 +48,7 @@ export async function captureControlColors({fixture, width, height, scale, outpu
     const sections=rows.map((row,index)=>({panel:String(index),edge:'top',style:fixture.panel.tile_style,
       bounds:{x:row.cells[0].bounds.x,y:row.cells[0].bounds.y,width:156,height:36},
       tiles:row.cells.map((cell,id)=>[id,{x:id*40,y:0,width:36,height:36}])}));
-    const chrome=createWorkspaceChrome({app:{workspace_projection:()=>[true,{sections}]},
+    const chrome=createWorkspaceChrome({app:{},
       state:()=>({customization:{column_drawers:[]},workspace:{layout:{panels:[]}}}),workspace,element,button,icon,place,
       dispatch(){},customization:{view:id=>views[Number(id)],target(){}},editor:{queuePositions(){}},draggable:node=>node});
     chrome.arrange({collapsed:[]});

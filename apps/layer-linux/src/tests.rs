@@ -5992,7 +5992,7 @@ fn native_zen_behaviors() {
                 let reply = w.chrome_event(ChromeEvent::Motion {
                     position: [600., 450.],
                 });
-                assert!(reply.chrome_hidden && !reply.partial_zen && !reply.hide_floating_panels);
+                assert!(reply.chrome_hidden);
                 assert_eq!(w.zen_capy.is_visible(), show);
                 assert!(!w.header.root.can_target());
                 for (slot, widget) in w.surface.imp().children.borrow().iter() {
