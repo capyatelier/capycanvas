@@ -18,10 +18,7 @@ use layer_ui::UiSession;
 pub(crate) type Window = DocumentWindow<UiSession<Renderer>>;
 impl App {
     pub(crate) fn document_retired(&mut self) {
-        if let Some(control) = self.tone.pending.take() {
-            control.cancel();
-        }
-        self.tone = Default::default();
+        self.tone.clear();
         self.proof = Default::default();
         // Navigator placements belong to the window, not the retiring document.
         // The host publishes them again only when layout changes.

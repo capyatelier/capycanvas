@@ -39,7 +39,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
     fun registerInspection(control: Long, job: Job) { inspections[control] = job }
     fun releaseInspection(control: Long) { inspections.remove(control) }
     private suspend fun drain() {
-        host.proof.pauseAndDrain(); host.hdr.pauseAndDrain(); host.filterPreviewCache.pause()
+        host.proof.pauseAndDrain(); host.hdr.pause(); host.filterPreviewCache.pause()
         val pending=inspections.toMap(); pending.keys.forEach(Native::captureCancel); pending.values.forEach { it.join() }
     }
     private fun resume() { host.filterPreviewCache.resume(); host.proof.resume(); host.hdr.resume(); host.documentChanged(); refresh() }

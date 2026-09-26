@@ -65,6 +65,10 @@ impl ToneService {
             .flatten()
     }
 
+    pub fn publications(&self) -> u64 {
+        self.publications
+    }
+
     pub fn status(&self) -> serde_json::Value {
         serde_json::json!({
             "ready": self.wanted.is_some() && self.published == self.wanted,

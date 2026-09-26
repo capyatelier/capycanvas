@@ -833,8 +833,6 @@ class AndroidRasterTest {
         assertEquals(first.getJSONArray("blobs").toString(),manifest.getJSONArray("blobs").toString())
         assertEquals(first.getJSONObject("document").getJSONArray("layers").toString(),manifest.getJSONObject("document").getJSONArray("layers").toString())
         open(File(files,"hdr-master.capy"));refresh();ready();assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString())
-        val cancel=Native.captureControl();var task=0L
-        try{task=native{Native.toneTask(it,cancel)};Native.captureCancel(cancel);assertTrue(runCatching{Native.toneWork(task)}.isFailure);assertFalse(native{Native.toneApply(it,task)})}finally{Native.toneRelease(task);Native.captureFree(cancel)}
         File(activity.getExternalFilesDir(null),"hdr-sdr-rendition.json").writeText(form().getJSONObject("rendition").toString())
         val sdr=png("hdr-sdr.png")
         val basic=builtinRecipe(0);val recipe=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
@@ -856,43 +854,7 @@ class AndroidRasterTest {
         open(File(files,"hdr-exact.exr"));refresh();ready();val exact=JSONObject(histogram());assertEquals("F32",exact.getJSONObject("color").getString("depth"));assertTrue(exact.getJSONArray("channels").objects().any{it.getLong("below")>0})
         open(File(files,"hdr-pq.png"));refresh();ready();assertEquals("F16",JSONObject(histogram()).getJSONObject("color").getString("depth"))
         open(File(files,"hdr-sdr.png"));refresh();assertEquals("U8",JSONObject(histogram()).getJSONObject("color").getString("depth"))
-        println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; cancelled analysis; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
-    }
-
-    @Test fun gpuToneRetainsPreviewAndRejectsLatePublication() {
-        val source=InstrumentationRegistry.getArguments().getString("hdrFile")
-        Assume.assumeTrue("Supply -e hdrFile",source!=null)
-        val automation=instrumentation.uiAutomation
-        val input=File(files,"gpu-tone-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
-        fun status()=native{JSONObject(Native.toneStatus(it))}
-        fun ready(){compose.waitUntil(120_000){val s=status();s.getBoolean("ready")||!s.isNull("error")};assertTrue(status().isNull("error"))}
-        open(input)
-        native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())};refresh();ready()
-        assertFalse("Exercise the mapped SDR presenter on HDR-capable devices too",status().getBoolean("hdr_output"))
-        native{Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString());Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString())};refresh()
-        val first=status().getInt("publications")
-        val control=Native.captureControl();val task=native{Native.toneTask(it,control)}
-        try {
-            Native.toneWork(task)
-            val extent=native{state(it).getJSONArray("tabs").getJSONObject(0)}
-            val motion=motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,60,extent.getDouble("width")/2 to extent.getDouble("height")/2) {
-                val held=status()
-                assertFalse("Stroke must own the document",held.getBoolean("idle"))
-                assertTrue("Previous GPU guide stays bound",held.getBoolean("retained"))
-                assertEquals(first,held.getInt("publications"))
-                assertTrue("Pen down cancels immediately",Native.captureCancelled(control))
-                assertFalse("Late candidate cannot publish",native{Native.toneApply(it,task)})
-            }
-            val released=SystemClock.uptimeMillis();ready()
-            assertTrue(status().getInt("publications")>first)
-            val report=obj("pen_up_wait_ms" to (SystemClock.uptimeMillis()-released),"status" to status(),"motion" to motion)
-            File(activity.getExternalFilesDir(null),"gpu-tone-retention.json").writeText(report.toString(2))
-            println("GPU_TONE "+report)
-            val second=status().getInt("publications")
-            native{Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};refresh();ready()
-            assertTrue(status().getInt("publications")>second)
-        } finally {Native.toneRelease(task);Native.captureFree(control)}
-        assertNull(host.failure)
+        println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
     }
 
     @Test fun hdrDisplayNegotiation() {
@@ -955,7 +917,7 @@ class AndroidRasterTest {
         }
         open(input);mode("off")
         compose.waitUntil(30_000){tone().getBoolean("ready")}
-        compose.waitUntil(5_000){native{JSONObject(Native.displayStatus(it)).optInt("presented_tone_generation",-1)}==tone().getInt("generation")}
+        compose.waitUntil(5_000){native{JSONObject(Native.displayStatus(it)).optLong("presented_tone_publications",-1)}==tone().getLong("publications")}
         val supports=tone().getBoolean("display_hdr")
         fun awaitSurface(hdr:Boolean) {
             compose.waitUntil(10_000){native{JSONObject(Native.displayStatus(it)).let{s->

@@ -1,7 +1,7 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
     pub window: crate::document_tabs::Window,
-    pub tone: crate::hdr::ToneState,
+    pub tone: layer_host::tone::ToneService,
     pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
     pub workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,

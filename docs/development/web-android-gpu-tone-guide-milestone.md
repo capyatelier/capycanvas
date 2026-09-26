@@ -148,9 +148,9 @@ ANDROID_HOME=/home/babymastodon/Android/Sdk \
 
 Install both APKs on the Huion, supply an independently encoded PQ PNG as
 `-e hdrFile /data/local/tmp/capy-gpu-tone-pq.png`, and select
-`AndroidRasterTest#gpuToneRetainsPreviewAndRejectsLatePublication` or
-`AndroidRasterTest#hdrEditingProofDeliveryAndRecovery`. The retention test
-explicitly selects SDR proof, including on HDR-capable displays.
+`AndroidRasterTest#hdrEditingProofDeliveryAndRecovery`. Guide retention and
+late-publication rules are covered by the shared layer-host test
+`tone_service_publishes_only_the_current_key_and_retains_compatible_guides`.
 
 Build Web with `bash apps/layer-web/build.sh`. Serve `apps/layer-web`, reverse
 that local port to the Huion with ADB, and forward its Chrome DevTools socket.

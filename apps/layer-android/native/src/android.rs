@@ -37,7 +37,7 @@ pub(crate) struct Surface {
     color: SdrSurfaceColor,
     hdr_capable: bool,
     presented_hdr: Option<bool>,
-    presented_tone_generation: Option<u32>,
+    presented_tone_publications: Option<u64>,
     submitted_frames: u64,
     trace_timings: bool,
     // One surface-owned completion source for startup and update admission.
@@ -128,7 +128,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "hdr_capable": a.hdr_capable(),
                 "hdr_output": a.hdr_output(),
                 "presented_hdr": surface.presented_hdr,
-                "presented_tone_generation": surface.presented_tone_generation,
+                "presented_tone_publications": surface.presented_tone_publications,
                 "formats": caps.format_capabilities.iter().map(|f| serde_json::json!({
                     "format": format!("{:?}", f.format),
                     "color_spaces": format!("{:?}", f.color_spaces),
@@ -176,6 +176,19 @@ pub(crate) struct OverviewSlot {
 impl App {
     fn sync_hdr_display(&mut self) {
         self.host.session.set_hdr_display_available(self.hdr_capable());
+    }
+    pub(crate) fn tick_tone(&mut self) -> bool {
+        match self.tone.tick(&self.host) {
+            Ok(changed) => {
+                self.host.dirty |= changed;
+                changed
+            }
+            Err(e) => {
+                let changed = self.tone.error.as_ref() != Some(&e);
+                self.tone.error = Some(e);
+                changed
+            }
+        }
     }
     pub(crate) fn hdr_capable(&self) -> bool {
         self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.hdr_capable)
@@ -332,7 +345,7 @@ impl App {
             color,
             hdr_capable,
             presented_hdr: None,
-            presented_tone_generation: None,
+            presented_tone_publications: None,
             submitted_frames: 0,
             trace_timings: false,
             completed_frames: Arc::new(AtomicU64::new(0)),
@@ -438,6 +451,7 @@ impl App {
             .map(WgpuRasterizer::prioritize_raster_presentation);
         self.host
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
+        self.tick_tone();
         let view = self.host.session.state().camera.view();
         let picker = self.host.session.color_picker_overlay();
         let zoom_milli_percent = (self.host.session.state().camera.zoom * 100_000.0).round() as i64;
@@ -485,7 +499,7 @@ impl App {
             .collect();
         let glass = self.host.session.state().palette.glass;
         let ready = glass.transparency.enabled() && self.blank_presented && self.host.startup.canvas_ready;
-        self.tone.clear_incompatible(&self.host.session, self.gpu_generation);
+        let tone = self.tone.current(&self.host);
         let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
@@ -508,7 +522,8 @@ impl App {
         } else {
             surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
         }
-        surface.presenter.set_gpu_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
+        let presented_tone = tone.is_some().then(|| self.tone.publications());
+        surface.presenter.set_gpu_local_tone_guide(gpu,tone).map_err(error)?;
         let trace_timings = unsafe { ndk_sys::ATrace_isEnabled() };
         if trace_timings || surface.trace_timings {
             for sample in surface.presenter.gpu_timings(gpu, trace_timings) {
@@ -595,7 +610,7 @@ impl App {
             ndk_sys::ATrace_setCounter(c"Capy canvas zoom milli-percent".as_ptr(), zoom_milli_percent);
         }
         surface.presented_hdr = Some(hdr_output);
-        surface.presented_tone_generation = self.tone.published_generation;
+        surface.presented_tone_publications = presented_tone;
         self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         // Poll once before resource use, not again after submission. The next
@@ -831,9 +846,6 @@ pub extern "system" fn Java_art_capycanvas_Native_input(
         .and_then(|s| serde_json::from_str(&s).map_err(error))
         .and_then(|input| {
             let a = unsafe { app(handle) };
-            if matches!(&input, layer_ui::UiInput::Pointer { phase: layer_ui::ContactPhase::Down, .. }) {
-                if let Some(control) = a.tone.pending.take() { control.cancel(); }
-            }
             a.host.input(input)
         })
         .and_then(|reply| serde_json::to_string(&reply).map_err(error));
@@ -877,9 +889,6 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
-                if predicted == 0 && data.chunks_exact(9).any(|sample| sample[8] == 1.) {
-                    if let Some(control) = app.tone.pending.take() { control.cancel(); }
-                }
                 app.host.pointer(
                     id.max(0) as u64,
                     tool as u8,
