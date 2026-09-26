@@ -836,6 +836,65 @@ fn native_compact_toolbar_edges_pen_input() {
 }
 
 #[test]
+#[ignore = "private Mutter: --native-test=native_compact_toolbar_presentation_input"]
+fn native_compact_toolbar_presentation_input() {
+    let d = Driver::new("art.capycanvas.CompactPresentation");
+    restore(&d, WorkspacePreset::Painter);
+    let panel = brush_panel(&d);
+    let undo = state(&d.w)
+        .workspace
+        .layout
+        .panel(panel)
+        .unwrap()
+        .tiles()
+        .iter()
+        .find(|t| {
+            t.control
+                == ToolbarControl::Command {
+                    command: CommandId::Undo,
+                }
+        })
+        .unwrap()
+        .id;
+    d.w.window.unmaximize();
+    for (width, height, style) in [
+        (960, 600, TileStyle::Small),
+        (1400, 950, TileStyle::Medium),
+        (960, 600, TileStyle::Small),
+        (1400, 950, TileStyle::Medium),
+    ] {
+        d.w.window.set_default_size(width, height);
+        pump(600);
+        let resolved = d.w.resolved();
+        let group = resolved.groups.iter().find(|g| g.active == panel).unwrap();
+        assert_eq!(group.tiles.as_ref().unwrap().presentation.tile_style, style);
+        assert_eq!(
+            group.bounds.width,
+            style.size()[0],
+            "{width}x{height}: one column"
+        );
+        assert!(!d.w.customization.presentation_stale(&resolved));
+        let button = d.named(&format!("tile-{undo}"));
+        assert_eq!(button.parent().unwrap().width(), style.size()[0] as i32);
+        assert_eq!(
+            descendant::<gtk::Image>(&button).unwrap().pixel_size(),
+            style.icon_size() as i32
+        );
+        assert_eq!(
+            state(&d.w)
+                .workspace
+                .layout
+                .panel(panel)
+                .unwrap()
+                .tile_style,
+            TileStyle::Medium,
+            "the configured style is unchanged"
+        );
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "private Mutter: --native-test=native_toolbar_value_controls_input"]
 fn native_toolbar_value_controls_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarValues");

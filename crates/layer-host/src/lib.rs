@@ -1034,7 +1034,11 @@ impl NativeHost {
                             group.axis,
                             config.tiles(),
                             !group.tabs_visible,
-                            config.tile_style,
+                            group
+                                .tiles
+                                .as_ref()
+                                .filter(|_| group.active == panel)
+                                .map_or(config.tile_style, |t| t.presentation.tile_style),
                         ));
                     }
                     value

@@ -322,6 +322,7 @@ mod allocation {
                     }
                 }
                 owner.queue_panel_measurements();
+                owner.queue_toolbar_presentation(&resolved);
                 owner.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
@@ -926,6 +927,7 @@ pub struct Workspace {
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
     publication: workspace_update::Publication,
     measuring_panels: Cell<bool>,
+    presenting_toolbars: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
     panels: Vec<(Panel, gtk::Widget)>,
@@ -1170,6 +1172,7 @@ impl Workspace {
             publication: workspace_update::Publication::default(),
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
+            presenting_toolbars: Cell::new(false),
             toolbar: toolbar.clone(),
             groups: RefCell::new(Vec::new()),
             panels: vec![
@@ -2870,10 +2873,37 @@ impl Workspace {
             self.dispatch(UiAction::MeasurePanels { measurements });
         }
     }
+    fn queue_toolbar_presentation(self: &Rc<Self>, resolved: &ResolvedLayout) {
+        if !self.customization.presentation_stale(resolved)
+            || self.presenting_toolbars.replace(true)
+        {
+            return;
+        }
+        glib::idle_add_local_once(glib::clone!(
+            #[weak(rename_to = w)]
+            self,
+            move || {
+                w.presenting_toolbars.set(false);
+                let Some(layout) = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .map(|g| g.session.state().workspace.layout.clone())
+                else {
+                    return;
+                };
+                w.refreshing.set(true);
+                w.reconcile_layout(&layout);
+                w.customization.refresh(&w);
+                w.refreshing.set(false);
+            }
+        ));
+    }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
-        self.customization.reconcile_toolbars(self, layout);
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
+        self.customization
+            .reconcile_toolbars(self, layout, &resolved);
         let same_groups = self.groups.borrow().len() == resolved.groups.len()
             && self.groups.borrow().iter().all(|view| {
                 resolved.groups.iter().any(|g| {
@@ -3106,7 +3136,15 @@ impl Workspace {
             }
             tiles::set_size_class(
                 &view.root,
-                layout.panel(group.active).expect("validated panel").tile_style,
+                group.tiles.as_ref().map_or_else(
+                    || {
+                        layout
+                            .panel(group.active)
+                            .expect("validated panel")
+                            .tile_style
+                    },
+                    |t| t.presentation.tile_style,
+                ),
                 "tiles",
             );
             let name = format!("{:?}", group.active);

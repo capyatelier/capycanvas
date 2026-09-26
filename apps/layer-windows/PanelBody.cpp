@@ -76,7 +76,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item,false,{},WorkspaceGestures::Pickup::Hold);
                 };
                 if(object(tile,L"component").Size()){
-                    auto component=std::make_shared<ToolbarComponent>(data,panel,tile,gestures);
+                    auto component=std::make_shared<ToolbarComponent>(data,panel,tile,tileGeometry,gestures);
                     auto element=component->Root();auto bounds=rects.GetObjectAt(i);
                     tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));components.emplace(uint32_t(id),component);
                     place(element,bounds);component->Layout(bounds,vertical);tiles.Children().Append(element);
@@ -115,30 +115,31 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 Border slot;slot.Background(clear());slot.Child(pick);attach(slot);
                 tileControls.emplace(uint32_t(id),pick);
                 pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
-                {double r=num(panel,L"tile_corner_radius",SurfaceRadius)*CornerFit;pick.CornerRadius({r,r,r,r});}
+                double radius=num(tileGeometry,L"tile_corner_radius",SurfaceRadius);
+                {double r=radius*CornerFit;pick.CornerRadius({r,r,r,r});}
                 AutomationProperties::SetAutomationId(slot,L"tile-hit-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
-                auto tileIcon=icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16));
+                auto tileIcon=icon(str(tile,L"icon",L"brush"),data->theme(),num(tileGeometry,L"tile_icon_size",16));
                 auto tileIconName=std::make_shared<hstring>(str(tile,L"icon",L"brush"));pick.Content(tileIcon);
                 tooltip(pick,str(tile,L"tooltip"));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
                 if(kind==L"color"){
                     auto pair=std::make_shared<ColorPair>(data);pick.Content(pair->root);
-                    bindings.emplace_back([data=data,pair,size=num(panel,L"tile_icon_size",16)]{pair->Update(data,size);});
+                    bindings.emplace_back([data=data,pair,size=num(tileGeometry,L"tile_icon_size",16)]{pair->Update(data,size);});
                 }
-                if(num(panel,L"tile_label_lines")>0){
+                if(num(tileGeometry,L"tile_label_lines")>0){
                     auto image=pick.Content();pick.Content(nullptr);
                     Grid content;ColumnDefinition mark;mark.Width({36,GridUnitType::Pixel});content.ColumnDefinitions().Append(mark);
                     ColumnDefinition caption;caption.Width({1,GridUnitType::Star});content.ColumnDefinitions().Append(caption);
                     ContentPresenter glyph;glyph.Content(image);glyph.HorizontalAlignment(HorizontalAlignment::Center);
                     glyph.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(glyph);
-                    auto text=label(data,str(tile,L"label"),flag(panel,L"tile_label_bold"));text.TextWrapping(TextWrapping::Wrap);
-                    text.MaxLines(int(num(panel,L"tile_label_lines")));text.TextTrimming(TextTrimming::CharacterEllipsis);text.Margin({0,0,4,0});
+                    auto text=label(data,str(tile,L"label"),flag(tileGeometry,L"tile_label_bold"));text.TextWrapping(TextWrapping::Wrap);
+                    text.MaxLines(int(num(tileGeometry,L"tile_label_lines")));text.TextTrimming(TextTrimming::CharacterEllipsis);text.Margin({0,0,4,0});
                     text.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(text,1);content.Children().Append(text);
                     pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.Content(content);
                 }
-                bindings.emplace_back([data=data,pick,panelId,id,picker,tileIcon,tileIconName]{
+                bindings.emplace_back([data=data,pick,panelId,id,picker,tileIcon,tileIconName,radius]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
                     if(auto name=str(current,L"icon",L"brush");name!=*tileIconName){
@@ -148,7 +149,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
                     auto facing=drawerFacing(data,O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                     pick.Background(flag(current,L"selected")?selected(data):!facing.empty()?data->glass(L"open_tile"):clear());
-                    pick.CornerRadius(facingCorners(num(currentPanel,L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
+                    pick.CornerRadius(facingCorners(radius*CornerFit,facing));
                     auto hint=str(current,L"tooltip");
                     tooltip(pick,picker?pickerTooltip(hint):hint);
                 });

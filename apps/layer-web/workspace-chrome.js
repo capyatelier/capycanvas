@@ -29,20 +29,13 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   }
   function toolbar(panel,tiles,axis='vertical') {
     const view=customization.view(panel),root=element("div","toolbar-controls");
-    root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;root.dataset.axis=axis;
-    root.style.setProperty("--tile-icon-size",`${view.tile_icon_size}px`);
-    root.style.setProperty("--tile-radius",`${view.tile_corner_radius}px`);
-    root.dataset.labeled=String(view.tile_label_lines>0);
-    root.style.setProperty("--tile-label-lines",view.tile_label_lines);
-    root.style.setProperty("--tile-label-weight",view.tile_label_bold?700:400);
+    root.dataset.panel=panel;root.dataset.axis=axis;customization.present(root,view);
     for(const tile of view.tiles) {
       const node=customization.tileWidget(panel,view,tile);root.append(node);
       if(tiles){const bounds=tiles.find(([id])=>id===tile.id)?.[1];customization.layoutTile(node,bounds,axis);}
     }
     root.refreshPanel=()=>{
-      const current=customization.view(panel);
-      root.style.setProperty("--tile-icon-size",`${current.tile_icon_size}px`);
-      root.style.setProperty("--tile-radius",`${current.tile_corner_radius}px`);
+      const current=customization.view(panel);customization.present(root,current);
       for(const tile of current.tiles) {
         customization.refreshTile([...root.children].find(n=>Number(n.dataset.tile)===tile.id),tile);
       }
@@ -175,7 +168,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         for(const strip of body.querySelectorAll("[data-drawer-toolbar]")) {
           const geometry=app.drawer_toolbar(strip.dataset.drawerToolbar,width);
           strip.style.height=`${geometry.content_height}px`;
-          [...strip.children].forEach((tile,i)=>customization.layoutTile(tile,geometry.tiles[i],strip.dataset.axis));
+          [...strip.children].forEach((tile,i)=>customization.layoutTile(tile,geometry.tiles[i],strip.dataset.axis,geometry.tile_style));
         }
       }
       const heights=r.bodies.map(body=>body.scrollHeight+(r.drawer.tabs?resolved.tab_bar_height:0));

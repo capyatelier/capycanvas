@@ -59,7 +59,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   const item = { kind: 'tile', panel, tile: tile.id };
   target(root, item);
   let model, schema = '', fields = [], vertical = false, extent = [0, 0], measured = '', popup;
-  const style = app.toolbar_ui({ type: 'style', style: view.tile_style });
+  let tileStyle = view.tile_style, style = app.toolbar_ui({ type: 'style', style: tileStyle });
   const preferences = tile.control.style || { text: true, sliders: true };
   const standalone = tile.control.kind !== 'tool_options';
   const more = button('', () => dispatch({ type: 'activate_tile', panel, tile: tile.id }), 'toolbar-more');
@@ -120,7 +120,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     function paintPreview() {
       if (!popup || popup !== preview) return;
-      const geometry = app.toolbar_ui({ type: 'slider_preview', control: tile.control, style: view.tile_style, value: current, length: Math.max(...extent), extent: stamp.extent });
+      const geometry = app.toolbar_ui({ type: 'slider_preview', control: tile.control, style: tileStyle, value: current, length: Math.max(...extent), extent: stamp.extent });
       popup.style.width = popup.style.height = `${geometry.side}px`; popup.style.setProperty('--tile-radius', `${geometry.radius}px`);
       for (const [node, b] of [[caption, geometry.caption], [bookmark, geometry.bookmark]]) Object.assign(node.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.width}px`, height: `${b.height}px` });
       bookmark.style.setProperty('--preview-icon', `${geometry.icon}px`);
@@ -235,7 +235,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       if (!faceFont && row.isConnected) { const f = getComputedStyle(faceValue); faceFont = `${f.fontWeight} ${f.fontSize} ${f.fontFamily}`; }
       if (faceFont) textMeasure.font = faceFont;
       const format = units => app.toolbar_ui({ type: 'number', request: { control: field.numeric, value: current, operation: { type: 'format' } }, compact: true, units }).text;
-      let text = format(view.tile_style !== 'small');
+      let text = format(tileStyle !== 'small');
       const available = Math.min(style.size[0], extent[0] || style.size[0]) - (style.labeled ? 38 : 4);
       if (textMeasure.measureText(text.replace(/\d/g, '8')).width + 2 > available) text = format(false);
       faceValue.textContent = text;
@@ -267,7 +267,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     });
     row.append(label, glyph, number, face);
     function orient() {
-      units = !vertical || view.tile_style !== 'small'; number.format(); updateFace();
+      units = !vertical || tileStyle !== 'small'; number.format(); updateFace();
       label.hidden = vertical || !preferences.text; glyph.style.display = !vertical && !preferences.text ? '' : 'none';
       face.hidden = !vertical; number.hidden = vertical;
       face.classList.toggle('labeled', style.labeled); faceLabel.hidden = !style.labeled;
@@ -294,7 +294,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   }
   function layout() {
     if (!model || !root.isConnected || !extent[0] || !extent[1]) return;
-    root.classList.toggle('vertical-component', vertical); root.dataset.tileStyle = view.tile_style;
+    root.classList.toggle('vertical-component', vertical); root.dataset.tileStyle = tileStyle;
     fields.forEach(f => f.orient?.());
     if (standalone) return;
     const fieldHeight = 24;
@@ -329,9 +329,10 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     else fields.forEach((f, i) => f.update(value.options[i]));
     if (!measured) { layout(); measured = schema; }
   };
-  root.layoutComponent = (bounds, axis) => {
-    const next = key([bounds.width, bounds.height, axis]);
+  root.layoutComponent = (bounds, axis, presented = tileStyle) => {
+    const next = key([bounds.width, bounds.height, axis, presented]);
     if (next === root.dataset.componentBounds) return;
+    if (presented !== tileStyle) { tileStyle = presented; style = app.toolbar_ui({ type: 'style', style: tileStyle }); }
     root.dataset.componentBounds = next; extent = [bounds.width, bounds.height]; vertical = axis === 'vertical'; closePopup(); layout();
   };
   root.disposeComponent = () => { closePopup(); fields.forEach(f => f.dispose?.()); };

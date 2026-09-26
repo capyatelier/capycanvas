@@ -13,11 +13,16 @@ pub(super) enum TileWidget {
     Component(Rc<Component>),
 }
 impl TileWidget {
-    pub fn new(w: &Rc<Workspace>, config: &PanelConfig, tile: &ToolbarTile) -> Self {
+    pub fn new(
+        w: &Rc<Workspace>,
+        config: &PanelConfig,
+        tile: &ToolbarTile,
+        style: TileStyle,
+    ) -> Self {
         if tile.control.is_component() {
             return Self::Component(Component::new(w, config.id, tile));
         }
-        let button = customization::tile_button(w, config, tile);
+        let button = customization::tile_button(w, config, tile, style);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         button.add_css_class("tile-button");
         button.set_hexpand(true);

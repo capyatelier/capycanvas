@@ -1752,7 +1752,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .position(|g| g.id == expansion.group)?;
             let mut group = resolved.groups.remove(index);
             group.bounds = preview;
-            if group.tiles.is_some() {
+            if let Some(tiles) = &group.tiles {
                 group.tiles = Some(toolbar_tile_layout(
                     preview.width,
                     group.body().height,
@@ -1764,12 +1764,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .ok()?
                         .tiles(),
                     !group.tabs_visible,
-                    self.state
-                        .workspace
-                        .layout
-                        .panel(group.active)
-                        .ok()?
-                        .tile_style,
+                    tiles.presentation.tile_style,
                 ));
             }
             resolved.groups.push(group);

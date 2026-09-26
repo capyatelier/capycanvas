@@ -96,7 +96,7 @@ impl ToolbarBody {
             self.strip.set_tiles(config.tiles());
             self.strip.set_style(config.tile_style);
             *self.items.borrow_mut() = config.tiles().iter().map(|tile| {
-                let item = toolbar_components::TileWidget::new(w, config, tile);
+                let item = toolbar_components::TileWidget::new(w, config, tile, config.tile_style);
                 self.strip.append(&item.root());
                 item
             }).collect();

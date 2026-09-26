@@ -1610,6 +1610,12 @@ class AndroidInteractionTest {
             waitFor("slider $device") { state().getJSONObject("brush").number("diameter") > 5f }
         }
         captureToolbar("sketch-sliders")
+        val presented = group(size.first).getJSONObject("tiles")
+        val undo = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+            .first { it.getString("id") == size.first }.getJSONObject("content").array("tiles").objects()
+            .first { it.getJSONObject("control").optString("command") == "undo" }.getInt("id")
+        assertEquals("Tile icons follow the presented tile size", presented.number("tile_icon_size") * density,
+            bounds("tile-icon-${size.first}-$undo").width, 1f)
         val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
         for (device in pointerTools) for (edge in listOf("left", "right", "top", "bottom")) for (alignment in listOf("start", "center", "end")) {
             tool = device

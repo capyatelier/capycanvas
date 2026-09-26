@@ -82,13 +82,14 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
 
 /** One host view for docked/floating toolbars and retained drawers. */
 @Composable internal fun ToolbarComponent(host: CanvasHost, panel: JSONObject, tile: JSONObject,
-    bounds: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier) {
+    bounds: JSONObject, presentation: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier) {
     val model = tile.getJSONObject("component")
     val context = model.getJSONObject("context")
     val control = tile.getJSONObject("control")
     val id = tile.getInt("id")
     val item = obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to id)
-    val style = panel.getString("tile_style")
+    val style = presentation.getString("tile_style")
+    val iconSize = presentation.getInt("tile_icon_size")
     val dimensions = remember(style) { toolbarUi(obj("type" to "style", "style" to style)) }
     val tileWidth = dimensions.array("size").getDouble(0).toFloat()
     val tileHeight = dimensions.array("size").getDouble(1).toFloat()
@@ -162,7 +163,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     layout.array("fields").optJSONObject(index)?.let { rect ->
                         Box(Modifier.placed(rect, density), contentAlignment = Alignment.Center) {
                             ToolOptionField(option, rect.number("width"), vertical, style, labeled, preferences, tileWidth,
-                                panel.getInt("tile_icon_size"), ::edit)
+                                iconSize, ::edit)
                         }
                     }
                 }
@@ -170,7 +171,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 Box(Modifier.placed(layout.getJSONObject("more"), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
                     .clip(drawerButtonShape(source?.direction))
                     .testTag("toolbar-more-$id").clickable { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to id)) }, contentAlignment = Alignment.Center) {
-                    SharedIcon("more", "More tool options", Modifier.size(panel.getInt("tile_icon_size").dp))
+                    SharedIcon("more", "More tool options", Modifier.size(iconSize.dp))
                 }
             }
         }

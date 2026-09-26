@@ -312,8 +312,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
                         ?.let { expandedShape(it, density) } ?: dock.drawerContainerShape(bounds,
-                            radius = if (group.objectOrNull("tiles") != null && !group.getBoolean("tabs_visible"))
-                                panels[group.getString("active")]?.number("tile_corner_radius") ?: SurfaceRadius.value else SurfaceRadius.value)
+                            radius = group.objectOrNull("tiles")?.takeIf { !group.getBoolean("tabs_visible") }
+                                ?.number("tile_corner_radius") ?: SurfaceRadius.value)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .then(if (expansion != null) Modifier.shadow(16.dp, shape) else Modifier.panelShadow(6.dp, shape)).clip(shape)

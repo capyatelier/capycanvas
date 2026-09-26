@@ -43,6 +43,67 @@ fn along(bounds: Bounds, axis: Axis) -> f32 {
         bounds.height
     }
 }
+
+struct CompactToolbar<'a> {
+    node: &'a DockNode,
+    config: &'a PanelConfig,
+    style: TileStyle,
+    length: f32,
+}
+impl CompactToolbar<'_> {
+    fn along(&self, axis: Axis) -> f32 {
+        self.style.size()[usize::from(axis == Axis::Vertical)]
+    }
+    fn lanes(&self, axis: Axis) -> usize {
+        toolbar_lanes(
+            self.length,
+            self.config.tiles(),
+            self.along(axis),
+            self.style.gap(),
+            axis,
+        )
+    }
+    fn cross(&self, axis: Axis) -> f32 {
+        toolbar_cross_extent(self.length, self.config.tiles(), self.style, axis)
+    }
+}
+
+fn allocate_compact_runs(
+    runs: &mut [(EdgeAlignment, Vec<CompactToolbar>)],
+    axis: Axis,
+    length: f32,
+    gap: f32,
+) -> [f32; 3] {
+    let inner_gaps = |toolbars: &[CompactToolbar]| toolbars.len().saturating_sub(1) as f32;
+    for toolbar in runs.iter_mut().flat_map(|(_, toolbars)| toolbars) {
+        toolbar.length = toolbar_span(
+            toolbar.config.tiles(),
+            toolbar.along(axis),
+            toolbar.style.gap(),
+            axis,
+        ) + TOOLBAR_GRIP_SIZE;
+    }
+    let total: f32 = runs
+        .iter()
+        .map(|(_, toolbars)| {
+            toolbars.iter().map(|t| t.length).sum::<f32>() + gap * inner_gaps(toolbars)
+        })
+        .sum();
+    let available = (length - gap * runs.len().saturating_sub(1) as f32).max(0.);
+    let scale = (available / total.max(1.)).min(1.);
+    let mut sizes = [0.; 3];
+    for (alignment, toolbars) in runs {
+        let natural = toolbars.iter().map(|t| t.length).sum::<f32>();
+        let size = (natural + gap * inner_gaps(toolbars)) * scale;
+        let inner_gap = gap.min(size / (toolbars.len() as f32 * 2.).max(1.));
+        let factor = (size - inner_gap * inner_gaps(toolbars)).max(0.) / natural.max(1.);
+        for toolbar in toolbars.iter_mut() {
+            toolbar.length *= factor;
+        }
+        sizes[alignment.index()] = size;
+    }
+    sizes
+}
 impl DockLayout {
     pub(crate) fn compact_band(&self, group: u32) -> Option<&DockBand> {
         self.bands
@@ -137,46 +198,41 @@ impl DockLayout {
             .map(|b| {
                 let mut nodes = Vec::new();
                 toolbar_nodes(&b.root, &mut nodes);
-                let lengths: Vec<_> = nodes
-                    .iter()
-                    .map(|n| {
-                        let DockNode::Tabs { active, .. } = n else {
+                let toolbars: Vec<_> = nodes
+                    .into_iter()
+                    .map(|node| {
+                        let DockNode::Tabs { active, .. } = node else {
                             unreachable!()
                         };
                         let config = self.panel(*active).unwrap();
-                        toolbar_span(
-                            config.tiles(),
-                            config.tile_style.size()[usize::from(axis == Axis::Vertical)],
-                            config.tile_style.gap(),
-                            axis,
-                        ) + TOOLBAR_GRIP_SIZE
+                        CompactToolbar {
+                            node,
+                            config,
+                            style: config.tile_style,
+                            length: 0.,
+                        }
                     })
                     .collect();
-                (b.alignment.unwrap(), nodes, lengths)
+                (b.alignment.unwrap(), toolbars)
             })
             .collect();
         runs.sort_by_key(|r| r.0.index());
         let gap = WORKSPACE_SPACING.min(length / (runs.len() as f32 * 2.).max(1.));
-        let total: f32 = runs
-            .iter()
-            .map(|(_, nodes, lengths)| {
-                lengths.iter().sum::<f32>() + gap * nodes.len().saturating_sub(1) as f32
-            })
-            .sum();
-        let available = (length - gap * runs.len().saturating_sub(1) as f32).max(0.);
-        let scale = (available / total.max(1.)).min(1.);
-        let mut sizes = [0.; 3];
-        for (alignment, nodes, lengths) in &mut runs {
-            let natural = lengths.iter().sum::<f32>();
-            let size = (natural + gap * nodes.len().saturating_sub(1) as f32) * scale;
-            let inner_gap = gap.min(size / (nodes.len() as f32 * 2.).max(1.));
-            let factor =
-                (size - inner_gap * nodes.len().saturating_sub(1) as f32).max(0.) / natural.max(1.);
-            for l in lengths {
-                *l *= factor;
+        let sizes = loop {
+            let sizes = allocate_compact_runs(&mut runs, axis, length, gap);
+            let mut reduced = false;
+            for toolbar in runs.iter_mut().flat_map(|(_, toolbars)| toolbars) {
+                if let Some(smaller) = toolbar.style.smaller()
+                    && toolbar.lanes(axis) > 1
+                {
+                    toolbar.style = smaller;
+                    reduced = true;
+                }
             }
-            sizes[alignment.index()] = size;
-        }
+            if !reduced {
+                break sizes;
+            }
+        };
         let start_end = sizes[0] + if sizes[0] > 0. { gap } else { 0. };
         let end_start = length - sizes[2] - if sizes[2] > 0. { gap } else { 0. };
         let offsets = [
@@ -186,17 +242,10 @@ impl DockLayout {
                 .min((end_start - sizes[1]).max(start_end)),
             length - sizes[2],
         ];
-        let cross_size = |node: &DockNode, length: f32| {
-            let DockNode::Tabs { active, .. } = node else {
-                unreachable!()
-            };
-            let config = self.panel(*active).unwrap();
-            toolbar_cross_extent(length, config.tiles(), config.tile_style, axis)
-        };
         let cross = runs
             .iter()
-            .flat_map(|(_, nodes, lengths)| nodes.iter().zip(lengths))
-            .map(|(n, l)| cross_size(n, *l))
+            .flat_map(|(_, toolbars)| toolbars)
+            .map(|t| t.cross(axis))
             .fold(TILE_SIZE, f32::max);
         let capacity = if axis == Axis::Horizontal {
             remaining.height
@@ -220,13 +269,13 @@ impl DockLayout {
         if !result.reveal_edges.contains(&edge) {
             result.reveal_edges.push(edge);
         }
-        for (alignment, nodes, lengths) in runs {
+        for (alignment, toolbars) in runs {
             let size = sizes[alignment.index()];
-            let gap = gap.min(size / (nodes.len() as f32 * 2.).max(1.));
+            let gap = gap.min(size / (toolbars.len() as f32 * 2.).max(1.));
             let mut offset = offsets[alignment.index()];
-            for (node, length) in nodes.into_iter().zip(lengths) {
-                let mut b = strip.slice(axis, offset, length);
-                let cross = cross_size(node, length);
+            for toolbar in toolbars {
+                let mut b = strip.slice(axis, offset, toolbar.length);
+                let cross = toolbar.cross(axis);
                 if axis == Axis::Vertical {
                     let width = b.width.min(cross);
                     if edge == Edge::Right {
@@ -240,8 +289,10 @@ impl DockLayout {
                     }
                     b.height = height;
                 }
-                resolve_node(node, b, axis, self, result, false);
-                offset += length + gap;
+                result
+                    .groups
+                    .push(tabs_placement(toolbar.node, b, axis, self, toolbar.style));
+                offset += toolbar.length + gap;
             }
         }
     }
@@ -795,6 +846,206 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+    fn presented(r: &ResolvedLayout, panel: Panel) -> (TileStyle, Bounds) {
+        let g = r.groups.iter().find(|g| g.active == panel).unwrap();
+        (g.tiles.as_ref().unwrap().presentation.tile_style, g.bounds)
+    }
+    fn one_lane(style: TileStyle, bounds: Bounds, edge: Edge) -> bool {
+        let cross = if ribbon_axis(edge) == Axis::Horizontal {
+            bounds.height
+        } else {
+            bounds.width
+        };
+        cross <= style.size()[usize::from(ribbon_axis(edge) == Axis::Horizontal)] + 0.01
+    }
+    fn viewport_for(edge: Edge, length: f32) -> [f32; 2] {
+        if ribbon_axis(edge) == Axis::Horizontal {
+            [length, 700.]
+        } else {
+            [1000., length]
+        }
+    }
+    #[test]
+    fn compact_toolbars_present_smaller_square_tiles_instead_of_wrapping() {
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            for alignment in [
+                EdgeAlignment::Start,
+                EdgeAlignment::Center,
+                EdgeAlignment::End,
+            ] {
+                let mut l = layout();
+                let p = add(&mut l, 10, edge, alignment);
+                l.set_tile_style(p, TileStyle::Large, VIEWPORT).unwrap();
+                let configured = l.clone();
+                for (length, expected) in [
+                    (1000., TileStyle::Large),
+                    (700., TileStyle::Medium),
+                    (500., TileStyle::Small),
+                ] {
+                    let r = resolved(&l, viewport_for(edge, length));
+                    let (style, bounds) = presented(&r, p);
+                    assert_eq!(style, expected, "{edge:?} {alignment:?} {length}");
+                    assert!(
+                        one_lane(style, bounds, edge),
+                        "{edge:?} {length}: {bounds:?}"
+                    );
+                    let g = r.groups.iter().find(|g| g.active == p).unwrap();
+                    let tiles = g.tiles.as_ref().unwrap();
+                    assert_eq!(tiles.presentation, TilePresentation::from(style));
+                    assert!(tiles.tiles.iter().all(|t| t.width == style.size()[0]));
+                }
+                assert_eq!(l, configured, "presentation never rewrites the tile style");
+                let menu = l.toolbar_options(p).unwrap();
+                assert!(
+                    menu.iter()
+                        .flatten()
+                        .any(|item| item.label == TileStyle::Large.label()
+                            && item.selected == Some(true))
+                );
+                let r = resolved(&l, viewport_for(edge, 300.));
+                let (style, bounds) = presented(&r, p);
+                assert_eq!(style, TileStyle::Small);
+                assert!(!one_lane(style, bounds, edge), "small tiles still wrap");
+            }
+        }
+    }
+    #[test]
+    fn only_compact_medium_and_large_toolbars_shrink() {
+        for style in [
+            TileStyle::Small,
+            TileStyle::MediumLabeled,
+            TileStyle::Labeled,
+        ] {
+            let mut l = layout();
+            let p = add(&mut l, 10, Edge::Top, EdgeAlignment::Center);
+            l.set_tile_style(p, style, VIEWPORT).unwrap();
+            assert_eq!(presented(&resolved(&l, [400., 700.]), p).0, style);
+        }
+        let mut l = DockLayout::default();
+        let p = l
+            .add_toolbar(None, "Full edge", &[ToolbarControl::Color; 10])
+            .unwrap();
+        l.move_panel(
+            VIEWPORT,
+            p,
+            DockTarget::Edge {
+                edge: Edge::Bottom,
+                outer: true,
+            },
+        )
+        .unwrap();
+        l.set_tile_style(p, TileStyle::Large, VIEWPORT).unwrap();
+        assert_eq!(
+            presented(&resolved(&l, [500., 700.]), p).0,
+            TileStyle::Large
+        );
+        l.move_panel(
+            VIEWPORT,
+            p,
+            DockTarget::Float {
+                position: [100., 300.],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            presented(&resolved(&l, [500., 700.]), p).0,
+            TileStyle::Large
+        );
+    }
+    #[test]
+    fn compact_presentation_changes_once_per_threshold_while_resizing() {
+        for edge in [Edge::Top, Edge::Left] {
+            let mut l = layout();
+            let p = add(&mut l, 3, edge, EdgeAlignment::Center);
+            l.insert_tools(
+                p,
+                None,
+                &[ToolbarControl::BrushSizeSlider, ToolbarControl::Divider],
+            )
+            .unwrap();
+            l.set_tile_style(p, TileStyle::Large, VIEWPORT).unwrap();
+            let q = add(&mut l, 4, edge, EdgeAlignment::End);
+            l.set_tile_style(q, TileStyle::Medium, VIEWPORT).unwrap();
+            let mut previous = [TileStyle::Small; 2];
+            let rank = |s: TileStyle| s.size()[0];
+            for length in (200..1400).step_by(3) {
+                let viewport = viewport_for(edge, length as f32);
+                let r = resolved(&l, viewport);
+                assert_eq!(
+                    serde_json::to_value(&r).unwrap(),
+                    serde_json::to_value(resolved(&l, viewport)).unwrap()
+                );
+                for (i, panel) in [p, q].into_iter().enumerate() {
+                    let (style, bounds) = presented(&r, panel);
+                    assert!(rank(style) >= rank(previous[i]), "{edge:?} {length}");
+                    assert!(style == TileStyle::Small || one_lane(style, bounds, edge));
+                    previous[i] = style;
+                }
+            }
+            assert_eq!(previous, [TileStyle::Large, TileStyle::Medium]);
+        }
+    }
+    #[test]
+    fn crowded_compact_edges_shrink_each_wrapping_toolbar_without_overlap() {
+        let mut l = layout();
+        let panels: Vec<_> = [
+            EdgeAlignment::Start,
+            EdgeAlignment::Center,
+            EdgeAlignment::End,
+        ]
+        .into_iter()
+        .map(|alignment| {
+            let p = add(&mut l, 4, Edge::Bottom, alignment);
+            l.set_tile_style(p, TileStyle::Large, VIEWPORT).unwrap();
+            p
+        })
+        .collect();
+        let small = add(&mut l, 2, Edge::Bottom, EdgeAlignment::Center);
+        let r = resolved(&l, [800., 700.]);
+        for (i, g) in r.groups.iter().enumerate() {
+            for o in &r.groups[i + 1..] {
+                assert!(g.bounds.intersection(o.bounds).is_none());
+            }
+        }
+        for &p in panels.iter().chain([&small]) {
+            let (style, bounds) = presented(&r, p);
+            assert!(
+                one_lane(style, bounds, Edge::Bottom),
+                "{p:?} {style:?} {bounds:?}"
+            );
+        }
+        for p in panels {
+            assert_eq!(presented(&r, p).0, TileStyle::Small);
+            assert_eq!(
+                presented(&resolved(&l, [1400., 700.]), p).0,
+                TileStyle::Large
+            );
+        }
+    }
+
+    #[test]
+    fn sketch_brush_controls_fit_one_column_on_small_tablets() {
+        for platform in [crate::Platform::Android, crate::Platform::Web] {
+            let l = crate::WorkspacePreset::Painter.layout(platform);
+            let panel = l
+                .panels
+                .iter()
+                .find(|p| {
+                    p.tiles()
+                        .iter()
+                        .any(|t| t.control == ToolbarControl::BrushSizeSlider)
+                })
+                .unwrap();
+            assert_eq!(panel.tile_style, TileStyle::Medium);
+            let (style, bounds) = presented(&resolved(&l, [960., 600.]), panel.id);
+            assert_eq!(style, TileStyle::Small);
+            assert!(one_lane(style, bounds, Edge::Left), "{bounds:?}");
+            assert_eq!(
+                presented(&resolved(&l, [1600., 1000.]), panel.id).0,
+                TileStyle::Medium
+            );
         }
     }
     #[test]

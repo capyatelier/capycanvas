@@ -810,9 +810,11 @@ impl WebApp {
         height: f32,
         axis: JsValue,
         standalone: bool,
+        style: JsValue,
     ) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
         let axis = serde_wasm_bindgen::from_value(axis).map_err(js)?;
+        let style = serde_wasm_bindgen::from_value(style).map_err(js)?;
         let config = self
             .session
             .state()
@@ -826,7 +828,7 @@ impl WebApp {
             axis,
             config.tiles(),
             standalone,
-            config.tile_style,
+            style,
         ))
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {

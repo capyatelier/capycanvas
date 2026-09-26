@@ -553,7 +553,7 @@ function arrange(nextLayout, layoutOnly = false) {
     }
     node.classList.toggle("floating-panel", group.floating);
     node.classList.toggle("tool-strip", !!group.tiles && !group.tabs_visible);
-    if (group.tiles) node.style.setProperty("--tile-radius", `${customization.view(group.active).tile_corner_radius}px`);
+    if (group.tiles) node.style.setProperty("--tile-radius", `${group.tiles.tile_corner_radius}px`);
     node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "1";
     if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     place(node, group.bounds);

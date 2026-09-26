@@ -545,7 +545,13 @@ impl ContentDrawer {
         let options = self.anchor.tile().and_then(|a| {
             let panel = layout.panel(a.panel).ok()?;
             panel.tiles().iter().find(|t| t.id == a.tile)?.control.options_style()?;
-            Some(panel.tile_style.size())
+            let presented = resolved
+                .groups
+                .iter()
+                .find(|g| g.active == a.panel)
+                .and_then(|g| g.tiles.as_ref())
+                .map_or(panel.tile_style, |t| t.presentation.tile_style);
+            Some(presented.size())
         });
         if let Some([w, h]) = options {
             if axis == Axis::Horizontal {

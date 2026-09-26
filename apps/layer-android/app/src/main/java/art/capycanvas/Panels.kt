@@ -28,7 +28,7 @@ import kotlin.math.roundToInt
 @Composable internal fun ToolRibbon(host: CanvasHost, panel: JSONObject, geometry: JSONObject, dock: DockInteraction, modifier: Modifier, vertical: Boolean = false) {
     val density = LocalDensity.current.density
     Box(modifier.chromeRegion(dock)) {
-        val labelLines = panel.getInt("tile_label_lines")
+        val labelLines = geometry.getInt("tile_label_lines")
         val tiles = panel.array("tiles").objects()
         geometry.array("tiles").objects().forEachIndexed { index, bounds ->
             tiles.getOrNull(index)?.let { tile ->
@@ -38,7 +38,7 @@ import kotlin.math.roundToInt
                     ?: when (kind) { "color" -> "colors"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
                 val placement = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}")
                 if (tile.has("component")) {
-                    ToolbarComponent(host, panel, tile, bounds, dock, vertical, placement)
+                    ToolbarComponent(host, panel, tile, bounds, geometry, dock, vertical, placement)
                     return@forEachIndexed
                 }
                 val modifier = placement.dragSource(dock,
@@ -64,12 +64,12 @@ import kotlin.math.roundToInt
                         onClick = activate),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
-                        val glyph = Modifier.size(panel.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
+                        val glyph = Modifier.size(geometry.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
                         if (kind == "color") PaintPairIcon(host.panelContent?.getJSONObject("state"), tile.getString("label"), glyph)
                         else SharedIcon(icon, tile.getString("label"), glyph)
                     }
                     if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
-                        fontWeight = if (panel.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,
+                        fontWeight = if (geometry.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,
                         maxLines = labelLines, overflow = TextOverflow.Ellipsis)
                 }
                 }

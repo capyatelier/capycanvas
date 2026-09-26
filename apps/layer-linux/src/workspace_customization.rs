@@ -26,19 +26,20 @@ pub(super) fn tile_button(
     w: &Rc<Workspace>,
     config: &PanelConfig,
     tile: &ToolbarTile,
+    style: TileStyle,
 ) -> gtk::Button {
     let choice = tool_choice(tile.control);
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
     let icon: gtk::Widget = if tile.control == ToolbarControl::Color {
-        w.customization.color_pair(w, config.tile_style.icon_size() as i32)
+        w.customization.color_pair(w, style.icon_size() as i32)
     } else {
         let image = crate::icons::image(&format!("layer-{}-symbolic", choice.icon));
-        image.set_pixel_size(config.tile_style.icon_size() as i32);
+        image.set_pixel_size(style.icon_size() as i32);
         image.upcast()
     };
-    let label_lines = config.tile_style.label_lines();
+    let label_lines = style.label_lines();
     if label_lines > 0 {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         icon.set_size_request(TILE_SIZE as i32, -1);
@@ -52,7 +53,7 @@ pub(super) fn tile_button(
         label.set_margin_end(4);
         let attributes = gtk::pango::AttrList::new();
         attributes.insert(gtk::pango::AttrInt::new_weight(
-            if config.tile_style == TileStyle::Labeled {
+            if style == TileStyle::Labeled {
                 gtk::pango::Weight::Bold
             } else {
                 gtk::pango::Weight::Normal
@@ -801,7 +802,23 @@ impl Customization {
         }
     }
 
-    pub fn reconcile_toolbars(&self, w: &Rc<Workspace>, layout: &DockLayout) {
+    pub fn presentation_stale(&self, resolved: &ResolvedLayout) -> bool {
+        self.toolbars.borrow().iter().any(|toolbar| {
+            resolved.groups.iter().any(|g| {
+                g.active == toolbar.id
+                    && g.tiles
+                        .as_ref()
+                        .is_some_and(|t| t.presentation.tile_style != toolbar.style)
+            })
+        })
+    }
+
+    pub fn reconcile_toolbars(
+        &self,
+        w: &Rc<Workspace>,
+        layout: &DockLayout,
+        resolved: &ResolvedLayout,
+    ) {
         self.toolbars
             .borrow_mut()
             .retain(|t| layout.panels.iter().any(|p| p.id == t.id));
@@ -835,14 +852,20 @@ impl Customization {
                 }
             };
             let toolbar = &mut toolbars[index];
-            if toolbar.tiles == config.tiles() && toolbar.style == config.tile_style {
+            let style = resolved
+                .groups
+                .iter()
+                .find(|g| g.active == config.id)
+                .and_then(|g| g.tiles.as_ref())
+                .map_or(config.tile_style, |t| t.presentation.tile_style);
+            if toolbar.tiles == config.tiles() && toolbar.style == style {
                 continue;
             }
             toolbar.strip.clear();
-            toolbar.strip.set_style(config.tile_style);
-            toolbar.style = config.tile_style;
+            toolbar.strip.set_style(style);
+            toolbar.style = style;
             toolbar.items = config.tiles().iter().map(|tile| {
-                let item = toolbar_components::TileWidget::new(w, config, tile);
+                let item = toolbar_components::TileWidget::new(w, config, tile, style);
                 toolbar.strip.append(&item.root());
                 item
             }).collect();

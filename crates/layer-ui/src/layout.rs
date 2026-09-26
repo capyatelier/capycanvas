@@ -1,7 +1,10 @@
 //! Semantic docking topology. Coordinates are logical UI units, never pixels
 //! belonging to the raster document. Earlier bands own shared corners.
 
-use crate::{PanelConfig, PanelContent, TileStyle, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
+use crate::{
+    PanelConfig, PanelContent, TilePresentation, TileStyle, ToolbarControl, ToolbarTile,
+    WORKSPACE_SPACING,
+};
 use serde::{Deserialize, Serialize};
 
 #[path = "column_stacks.rs"]
@@ -209,7 +212,8 @@ fn toolbar_grid_layout(
         }
         y += row_height + gap;
     }
-    let mut layout = allocated_toolbar_layout(bounds, width, height, Axis::Vertical, standalone);
+    let mut layout =
+        allocated_toolbar_layout(bounds, width, height, Axis::Vertical, standalone, style);
     if let Some(last) = layout.tiles.last() {
         insertion.push(Bounds {
             x: last.x,
@@ -324,7 +328,7 @@ pub fn toolbar_tile_layout(
             x += width + gap;
         }
     }
-    allocated_toolbar_layout(bounds, width, height, axis, standalone)
+    allocated_toolbar_layout(bounds, width, height, axis, standalone, style)
 }
 
 fn allocated_toolbar_layout(
@@ -333,6 +337,7 @@ fn allocated_toolbar_layout(
     height: f32,
     axis: Axis,
     standalone: bool,
+    style: TileStyle,
 ) -> TileLayout {
     let horizontal = axis == Axis::Horizontal;
     let line = |b: Bounds, after: bool| {
@@ -359,6 +364,7 @@ fn allocated_toolbar_layout(
     TileLayout {
         tiles: bounds,
         insertion,
+        presentation: style.into(),
         grip: standalone.then_some(if horizontal {
             Bounds {
                 x: (width - TOOLBAR_GRIP_SIZE).max(0.0),
@@ -390,6 +396,8 @@ pub struct TileLayout {
     pub grip: Option<Bounds>,
     /// One insertion marker per slot, including append. Same order as tiles.
     pub insertion: Vec<Bounds>,
+    #[serde(flatten)]
+    pub presentation: TilePresentation,
 }
 
 impl TileLayout {
@@ -534,6 +542,7 @@ pub fn tile_layout(
         tiles,
         grip,
         insertion,
+        presentation: style.into(),
     }
 }
 
@@ -3905,7 +3914,7 @@ impl ResolvedLayout {
             }
             let config = config.panel(group.active).ok()?;
             let axis = usize::from(group.axis == Axis::Vertical);
-            let size = config.tile_style.size()[axis] / 3.;
+            let size = tiles.presentation.tile_style.size()[axis] / 3.;
             let clip = Bounds {
                 width: body.width,
                 height: body.height,
@@ -4469,6 +4478,50 @@ fn nearest_edge(b: Bounds, x: f32, y: f32) -> (f32, Edge) {
 fn edge_line(mut b: Bounds, edge: Edge) -> Bounds {
     b.strip(edge, 3.0)
 }
+fn tabs_placement(
+    node: &DockNode,
+    bounds: Bounds,
+    orientation: Axis,
+    layout: &DockLayout,
+    style: TileStyle,
+) -> GroupPlacement {
+    let DockNode::Tabs {
+        id, panels, active, ..
+    } = node
+    else {
+        unreachable!()
+    };
+    let standalone = panels.len() == 1;
+    let config = layout.panel(*active).expect("validated panel");
+    let tabs_visible = !standalone || (active.kind() != PanelKind::Tiles && !config.hide_tab);
+    GroupPlacement {
+        id: *id,
+        bounds,
+        panels: panels.clone(),
+        active: *active,
+        axis: orientation,
+        tabs_visible,
+        footer_grip: (!tabs_visible && active.kind() == PanelKind::Content).then_some(Bounds {
+            x: 0.0,
+            y: (bounds.height - PANEL_GRIP_HEIGHT).max(0.0),
+            width: bounds.width,
+            height: PANEL_GRIP_HEIGHT.min(bounds.height),
+        }),
+        floating: false,
+        resize_handles: Vec::new(),
+        tiles: (active.kind() == PanelKind::Tiles).then(|| {
+            toolbar_tile_layout(
+                bounds.width,
+                bounds.height - if tabs_visible { TAB_BAR_HEIGHT } else { 0.0 },
+                orientation,
+                config.tiles(),
+                standalone,
+                style,
+            )
+        }),
+    }
+}
+
 fn resolve_node(
     node: &DockNode,
     bounds: Bounds,
@@ -4482,44 +4535,11 @@ fn resolve_node(
         return;
     }
     match node {
-        DockNode::Tabs {
-            id, panels, active, ..
-        } => {
-            let standalone = panels.len() == 1;
-            let config = layout.panel(*active).expect("validated panel");
-            let tabs_visible =
-                !standalone || (active.kind() != PanelKind::Tiles && !config.hide_tab);
-            result.groups.push(GroupPlacement {
-                id: *id,
-                bounds,
-                panels: panels.clone(),
-                active: *active,
-                axis: orientation,
-                tabs_visible,
-                footer_grip: (!tabs_visible && active.kind() == PanelKind::Content).then_some(
-                    Bounds {
-                        x: 0.0,
-                        y: (bounds.height - PANEL_GRIP_HEIGHT).max(0.0),
-                        width: bounds.width,
-                        height: PANEL_GRIP_HEIGHT.min(bounds.height),
-                    },
-                ),
-                floating: false,
-                resize_handles: Vec::new(),
-                tiles: (active.kind() == PanelKind::Tiles).then(|| {
-                    toolbar_tile_layout(
-                        bounds.width,
-                        bounds.height - if tabs_visible { TAB_BAR_HEIGHT } else { 0.0 },
-                        orientation,
-                        config.tiles(),
-                        standalone,
-                        layout
-                            .panel(*active)
-                            .map(|p| p.tile_style)
-                            .unwrap_or_default(),
-                    )
-                }),
-            });
+        DockNode::Tabs { active, .. } => {
+            let style = layout.panel(*active).expect("validated panel").tile_style;
+            result
+                .groups
+                .push(tabs_placement(node, bounds, orientation, layout, style));
         }
         DockNode::Split {
             id,

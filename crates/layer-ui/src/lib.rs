@@ -102,7 +102,7 @@ pub use cursor::{CanvasCursor, CursorMode};
 pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
     PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabPresentation,
-    TabStyle, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarManagerView, ToolbarTile,
+    TabStyle, TilePresentation, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarManagerView, ToolbarTile,
     tool_choice,
 };
 pub use interaction::{

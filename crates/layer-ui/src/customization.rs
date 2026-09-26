@@ -142,6 +142,33 @@ impl TileStyle {
         let columns = if self.label_lines() > 0 { 2.0 } else { 3.0 };
         columns * (self.size()[0] + self.gap()) - self.gap()
     }
+    pub(crate) fn smaller(self) -> Option<Self> {
+        match self {
+            Self::Large => Some(Self::Medium),
+            Self::Medium => Some(Self::Small),
+            Self::Small | Self::MediumLabeled | Self::Labeled => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TilePresentation {
+    pub tile_style: TileStyle,
+    pub tile_icon_size: u32,
+    pub tile_corner_radius: f32,
+    pub tile_label_lines: u32,
+    pub tile_label_bold: bool,
+}
+impl From<TileStyle> for TilePresentation {
+    fn from(style: TileStyle) -> Self {
+        Self {
+            tile_style: style,
+            tile_icon_size: style.icon_size(),
+            tile_corner_radius: style.corner_radius(),
+            tile_label_lines: style.label_lines(),
+            tile_label_bold: style == TileStyle::Labeled,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1223,11 +1250,8 @@ pub struct PanelView {
     pub title: String,
     pub icon: &'static str,
     pub tab: TabPresentation,
-    pub tile_style: TileStyle,
-    pub tile_icon_size: u32,
-    pub tile_corner_radius: f32,
-    pub tile_label_lines: u32,
-    pub tile_label_bold: bool,
+    #[serde(flatten)]
+    pub tile: TilePresentation,
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
     pub expanded: bool,
     pub configuration_title: String,
@@ -1297,11 +1321,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         title: config.title().into(),
         icon: config.icon(),
         tab: state.workspace.layout.tab_presentation(panel),
-        tile_style: config.tile_style,
-        tile_icon_size: config.tile_style.icon_size(),
-        tile_corner_radius: config.tile_style.corner_radius(),
-        tile_label_lines: config.tile_style.label_lines(),
-        tile_label_bold: config.tile_style == TileStyle::Labeled,
+        tile: config.tile_style.into(),
         toolbar_options: if panel.kind() == PanelKind::Tiles {
             let mut options = state
                 .workspace

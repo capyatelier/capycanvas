@@ -93,7 +93,7 @@ private struct WorkspacePanelGroup: View {
     private func panel(_ id: JSON) -> JSON { store.panel(id.string) }
     private var active: JSON { panel(group["active"]) }
     private var radius: CGFloat {
-        !group["tiles"].isNull && !group["tabs_visible"].bool ? active["tile_corner_radius"].number : SquircleShape.surfaceRadius
+        !group["tiles"].isNull && !group["tabs_visible"].bool ? group["tiles"]["tile_corner_radius"].number : SquircleShape.surfaceRadius
     }
     var body: some View {
         let sources = Array(store.contentDrawers.sources.values)
@@ -175,8 +175,17 @@ struct WorkspaceToolbar: View {
     let panel: JSON
     let geometry: JSON
     var vertical = false
+    private var presented: JSON {
+        guard !geometry["tile_style"].isNull else { return panel }
+        var merged = panel.object
+        for key in ["tile_style", "tile_icon_size", "tile_corner_radius", "tile_label_lines", "tile_label_bold"] {
+            merged[key] = geometry[key].raw
+        }
+        return JSON(merged)
+    }
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        let panel = presented
+        return ZStack(alignment: .topLeading) {
             Color.clear
             ForEach(panel["tiles"].array.indices, id: \.self) { index in
                 let tile = panel["tiles"][index], bounds = geometry["tiles"][index]

@@ -11,7 +11,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     for (const { target: strip } of entries) {
       if (!strip.isConnected || !strip.dataset.axis) continue;
       layoutTiles(strip, app.panel_tiles(strip.dataset.panel, strip.clientWidth, strip.clientHeight,
-        strip.dataset.axis, strip.dataset.standalone === "true"));
+        strip.dataset.axis, strip.dataset.standalone === "true", strip.dataset.tileStyle));
     }
   });
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
@@ -249,9 +249,18 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
     const glyph = node.querySelector('svg'); if (glyph?.dataset.asset !== tile.icon) glyph?.replaceWith(icon(tile.icon));
   }
-  function layoutTile(tile, bounds, axis) {
+  function layoutTile(tile, bounds, axis, style) {
     tile.hidden = !bounds || bounds.width <= 0 || bounds.height <= 0;
-    if (!tile.hidden) { place(tile, bounds); tile.layoutComponent?.(bounds, axis); }
+    if (!tile.hidden) { place(tile, bounds); tile.layoutComponent?.(bounds, axis, style); }
+  }
+  function present(strip, tiles) {
+    if (strip.dataset.tileStyle === tiles.tile_style) return;
+    strip.dataset.tileStyle = tiles.tile_style;
+    strip.style.setProperty("--tile-icon-size", `${tiles.tile_icon_size}px`);
+    strip.style.setProperty("--tile-radius", `${tiles.tile_corner_radius}px`);
+    strip.dataset.labeled = String(tiles.tile_label_lines > 0);
+    strip.style.setProperty("--tile-label-lines", tiles.tile_label_lines);
+    strip.style.setProperty("--tile-label-weight", tiles.tile_label_bold ? 700 : 400);
   }
   function refreshPanels() {
     views.clear();
@@ -275,12 +284,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           const old = panel.querySelector(".toolbar-controls"); if (old) { tileResize.unobserve(old); discardFields(old); }
           const strip = element("div", "toolbar-controls");
           strip.dataset.panel = config.id;
-          strip.dataset.tileStyle = view.tile_style;
-          strip.style.setProperty("--tile-icon-size", `${view.tile_icon_size}px`);
-          strip.style.setProperty("--tile-radius", `${view.tile_corner_radius}px`);
-          strip.dataset.labeled = String(view.tile_label_lines > 0);
-          strip.style.setProperty("--tile-label-lines", view.tile_label_lines);
-          strip.style.setProperty("--tile-label-weight", view.tile_label_bold ? 700 : 400);
+          present(strip, view);
           for (const tile of view.tiles) strip.append(tileWidget(config.id, view, tile));
           strip.append(grip({ kind: "panel", panel: config.id }));
           panel.replaceChildren(strip);
@@ -453,7 +457,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     expanded.join.hidden = !e.concave_join;
     place(expanded.join, { x: e.configuration.x + e.configuration.width - 8, y: e.configuration.y - 8, width: 8, height: 8 });
     const strip = panels.get(expanded.panel).querySelector(".toolbar-controls");
-    if (strip) layoutTiles(strip, app.panel_tiles(expanded.panel, e.preview.width, e.preview.height - expanded.headerHeight, expanded.axis, !expanded.headerHeight));
+    if (strip) layoutTiles(strip, app.panel_tiles(expanded.panel, e.preview.width, e.preview.height - expanded.headerHeight, expanded.axis, !expanded.headerHeight, strip.dataset.tileStyle));
     if (p < 1) animation = requestAnimationFrame(renderExpansion);
     else if (!expanded.open) clearExpansion();
     else expanded.from = null;
@@ -497,9 +501,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     cancelAnimationFrame(animation); renderExpansion();
   }
   function layoutTiles(strip, geometry) {
+    present(strip, geometry);
     const handle = strip.querySelector(":scope > .panel-grip"); handle.hidden = !geometry.grip;
     if (geometry.grip) place(handle, geometry.grip);
-    [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => layoutTile(tile, geometry.tiles[i], strip.dataset.axis));
+    [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => layoutTile(tile, geometry.tiles[i], strip.dataset.axis, geometry.tile_style));
   }
   function refresh() {
     refreshPanels(); refreshPicker(); refreshManager(); refreshPrompt();
@@ -548,7 +553,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

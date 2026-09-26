@@ -80,7 +80,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     struct Contact {uint32_t id;Point start;bool moved=false;};
     std::shared_ptr<WorkspaceData> data;
     std::weak_ptr<WorkspaceGestures> gestures;
-    hstring panelId,tileStyle,tileLabel;double tileId=0,iconSize=16;
+    hstring panelId,tileStyle,tileLabel;double tileId=0,iconSize=16,tileRadius=SurfaceRadius;
     J control,style,item,model;
     Canvas root;Border blank;Button more{nullptr};
     std::wstring schema,boundsKey;
@@ -104,9 +104,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
 
     Flyout editor{nullptr};
 
-    void init(J const& panel,J const& tile){
-        panelId=str(panel,L"id");tileId=num(tile,L"id");tileStyle=str(panel,L"tile_style",L"small");
-        iconSize=num(panel,L"tile_icon_size",16);tileLabel=str(tile,L"label");
+    void init(J const& panel,J const& tile,J const& presentation){
+        panelId=str(panel,L"id");tileId=num(tile,L"id");tileStyle=str(presentation,L"tile_style",L"small");
+        iconSize=num(presentation,L"tile_icon_size",16);tileRadius=num(presentation,L"tile_corner_radius",SurfaceRadius);tileLabel=str(tile,L"label");
         control=object(tile,L"control");standalone=str(control,L"kind")!=L"tool_options";
         auto preferences=object(control,L"style");text=flag(preferences,L"text",true);sliders=flag(preferences,L"sliders",true);
         style=toolbarUi(O({{L"type",S(L"style")},{L"style",S(tileStyle)}})).GetObject();
@@ -207,7 +207,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         if(more){
             auto facing=drawerFacing(data,item);
             more.Background(facing.empty()?clear():data->glass(L"open_tile"));
-            more.CornerRadius(facingCorners(num(find(array(data->model,L"panels"),L"id",panelId),L"tile_corner_radius",SurfaceRadius)*CornerFit,facing));
+            more.CornerRadius(facingCorners(tileRadius*CornerFit,facing));
         }
     }
     void Layout(J const& bounds,bool axisVertical){
@@ -725,8 +725,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
 };
 
 ToolbarComponent::ToolbarComponent(std::shared_ptr<WorkspaceData> data,J const& panel,J const& tile,
-    std::shared_ptr<WorkspaceGestures> const& gestures):impl(std::make_shared<Impl>()){
-    impl->data=std::move(data);impl->gestures=gestures;impl->init(panel,tile);
+    J const& presentation,std::shared_ptr<WorkspaceGestures> const& gestures):impl(std::make_shared<Impl>()){
+    impl->data=std::move(data);impl->gestures=gestures;impl->init(panel,tile,presentation);
 }
 ToolbarComponent::~ToolbarComponent()=default;
 FrameworkElement ToolbarComponent::Root()const{return impl->root;}
