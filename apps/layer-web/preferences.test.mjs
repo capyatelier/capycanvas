@@ -37,22 +37,17 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await evaluate("document.querySelector('#header [data-command=settings] svg').dataset.asset"), "settings");
   const points = await evaluate("layerApp.app.catalog().text_size_pt");
   assert.equal(points, 11);
-  for (const legacySize of [9, 11, 13]) {
-    await evaluate(`layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,panel_text_pt:${legacySize}}})`);
-    await settle();
-    assert.equal(await evaluate("'panel_text_pt' in layerApp.state().settings"), false);
-    const metrics = await evaluate(`(() => {
-      const style = selector => getComputedStyle(document.querySelector(selector));
-      const height = selector => Math.max(...[...document.querySelectorAll(selector)].map(n => n.getBoundingClientRect().height));
-      return { fonts:['.dock-tab','.size-controls .number-title','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
-        step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.toolbar-controls .tile-button svg').width),
-        tile:height('.tile-button'), preview:height('.brush-preview'),
-        slider:height('.size-controls input[type=range]'), layerIconButton:height('.layer-flags button')};
-    })()`);
-    for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
-    assert.equal(metrics.step, 16);
-    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 24);
-  }
+  const metrics = await evaluate(`(() => {
+    const style = selector => getComputedStyle(document.querySelector(selector));
+    const height = selector => Math.max(...[...document.querySelectorAll(selector)].map(n => n.getBoundingClientRect().height));
+    return { fonts:['.dock-tab','.size-controls .number-title','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
+      step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.toolbar-controls .tile-button svg').width),
+      tile:height('.tile-button'), preview:height('.brush-preview'),
+      slider:height('.size-controls input[type=range]'), layerIconButton:height('.layer-flags button')};
+  })()`);
+  for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
+  assert.equal(metrics.step, 16);
+  assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 24);
   assert.ok(await evaluate("(() => { const button = document.querySelector('#zen-button'); return Math.abs(button.querySelector('svg').getBoundingClientRect().width - button.getBoundingClientRect().height * 440 / 512) < .02; })()"), 'Capy button uses the enlarged favicon proportions');
   assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), 'zen-looking-up');
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
@@ -110,7 +105,6 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await click('#close-settings');
     await click('#zen-button');
     assert.equal(await zenVisible(), false, 'Total Zen hides the Capy with the rest of the chrome');
-    assert.equal(await evaluate("document.querySelector('#setting-total-zen')"), null);
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
     assert.ok(await zenVisible(), 'Edge reveal restores controls');

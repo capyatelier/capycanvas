@@ -55,7 +55,7 @@ fn preference(id: layer_ui::PreferenceId, value: f32) -> UiAction {
 }
 
 #[test]
-fn settings_round_trip_uses_shared_validation_and_migration() {
+fn settings_round_trip_uses_shared_validation() {
     let directory = Directory::new();
     let mut file = directory.file();
     assert!(file.load().unwrap().is_none());
@@ -67,34 +67,12 @@ fn settings_round_trip_uses_shared_validation_and_migration() {
     assert_eq!(file.load().unwrap(), Some(second));
     fs::write(
         directory.path.join("settings.json"),
-        br#"{"pressure_gamma":1.5,"panel_text_pt":11}"#,
+        br#"{"pressure_gamma":1.5}"#,
     )
     .unwrap();
     assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
     assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
     assert!(SettingsFile::new(PathBuf::from("relative")).is_err());
-}
-
-#[test]
-fn retired_prediction_choices_load_as_optimized_without_recovery() {
-    for retired in ["previous", "trajectory"] {
-        let directory = Directory::new();
-        let path = directory.path.join("settings.json");
-        let saved = format!(
-            r#"{{"prediction_algorithm":"{retired}","prediction_ms":23,"platform_prediction":true}}"#
-        );
-        fs::write(&path, &saved).unwrap();
-        let mut file = directory.file();
-        let settings = file.load().unwrap().unwrap();
-        assert_eq!(
-            settings.prediction_algorithm,
-            layer_engine::PredictionAlgorithm::Optimized
-        );
-        assert_eq!(settings.prediction_ms, 23.0);
-        assert!(!file.preserve_existing);
-        assert_eq!(fs::read(&path).unwrap(), saved.as_bytes());
-        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
-    }
 }
 
 #[test]

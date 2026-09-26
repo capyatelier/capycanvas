@@ -358,12 +358,5 @@ mod tonal_checks {
                 assert_eq!(options.custom, [-6., 2.]);
             }
         }
-        for command in [
-            CommandId::ApplyTonalSelection,
-            CommandId::TonalDetails,
-            CommandId::TonalInvert,
-        ] {
-            assert!(!command.available_on(Platform::Gtk));
-        }
     }
 }

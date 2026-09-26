@@ -642,7 +642,7 @@ fn native_tonal_selection_input() {
     d.click_name("tool-choice-TonalSelect");wait_tonal(&d);
     assert!(selection(&d).is_none(),"opening the tool does not change the selection");
     let panel=d.named("drawer-panel-ToolSettings");
-    for absent in ["tool-action-ApplyTonalSelection","tool-action-CancelTonalSelection","tool-action-TonalInvert","tool-action-TonalDetails","tool-list-tonal-source","tool-info-tonal-status","selection-actions-menu"] {
+    for absent in ["tool-list-tonal-source","tool-info-tonal-status","selection-actions-menu"] {
         assert!(find_named(&panel,absent).is_none(),"obsolete control: {absent}");
     }
     assert!(panel.width() >= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);

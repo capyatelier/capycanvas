@@ -1446,11 +1446,7 @@ pub fn load() -> Result<Option<Settings>, String> {
     if file.metadata().map_err(|e| e.to_string())?.len() > 1_048_576 {
         return Err("Preferences file is too large".into());
     }
-    let mut reader = serde_json::Deserializer::from_reader(file);
-    let settings = Settings::deserialize_saved(&mut reader)
-        .map_err(|e| format!("Cannot read preferences: {e}"))?;
-    reader
-        .end()
+    let settings: Settings = serde_json::from_reader(file)
         .map_err(|e| format!("Cannot read preferences: {e}"))?;
     settings.validate()?;
     Ok(Some(settings))

@@ -2018,7 +2018,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
-            CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff | CommandId::TonalRemoveBand | CommandId::TonalNewBand => false,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
             CommandId::RemoveSelectionPoint => {
@@ -4058,9 +4057,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
-            }
-            CommandId::TonalDetails | CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalNewBand | CommandId::TonalRemoveBand | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff => {
-                return Err("This tonal control is no longer used".into());
             }
             CommandId::SelectionBrushPressure => {
                 self.selection_tools.options.brush.pressure_size = !self.selection_tools.options.brush.pressure_size;
@@ -10125,107 +10121,6 @@ mod tests {
             assert!(key(&mut s, "z", true, false, false).handled);
             assert!(s.state.workspace.zen_mode);
         }
-    }
-
-    #[test]
-    fn legacy_settings_use_the_same_total_zen_policy_on_every_host() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
-            for total in [false, true] {
-                let mut s = session();
-                s.set_platform(platform);
-                let saved =
-                    serde_json::json!({"type":"restore_settings", "settings":{"total_zen":total}});
-                s.dispatch(serde_json::from_value(saved).unwrap()).unwrap();
-                let layout = s.state.workspace.layout.clone();
-                invoke(&mut s, CommandId::ZenMode);
-                let reply = chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [600.0, 450.0],
-                    },
-                    ChromeFacts::default(),
-                );
-                assert!(reply.chrome_hidden);
-                assert!(reply.keep_zen_button);
-                let reply = chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [6.0, 6.0],
-                    },
-                    ChromeFacts::default(),
-                );
-                assert!(reply.chrome_hidden);
-                assert!(reply.keep_zen_button);
-                let exit = key(&mut s, "Tab", true, false, false);
-                assert!(exit.handled && !exit.chrome_hidden);
-                assert!(!s.state.workspace.zen_mode);
-                assert_eq!(s.state.workspace.layout, layout);
-            }
-        }
-    }
-
-    #[test]
-    fn retired_global_panel_toggle_does_not_break_saved_workspaces_or_settings() {
-        let mut s = session();
-        let mut saved = serde_json::to_value(&s.state.workspace).unwrap();
-        saved["layout"]["panels_visible"] = false.into();
-        saved["layout"]["panels"][0]["content"]["tiles"][0]["control"]["command"] =
-            "toggle_panels".into();
-        s.dispatch(UiAction::RestoreWorkspace {
-            workspace: Box::new(serde_json::from_value(saved).unwrap()),
-        })
-        .unwrap();
-        assert!(!s.layout([1200.0, 900.0]).groups.is_empty());
-        assert_eq!(
-            s.state
-                .workspace
-                .layout
-                .panel(Panel::Toolbar)
-                .unwrap()
-                .tiles()[0]
-                .control,
-            ToolbarControl::Command {
-                command: CommandId::ZenMode
-            }
-        );
-        let serialized = serde_json::to_string(&s.state.workspace).unwrap();
-        assert!(!serialized.contains("panels_visible") && !serialized.contains("toggle_panels"));
-        let saved = serde_json::json!({ "type": "restore_settings", "settings": {
-            "pressure_gamma": 1.5, "shortcuts": {
-                "command.TogglePanels": [{"key":"h","command":false,"alt":false,"shift":false}],
-                "command.Brush": []
-            }
-        }});
-        s.dispatch(serde_json::from_value(saved).unwrap()).unwrap();
-        assert_eq!(s.state.settings.pressure_gamma, 1.5);
-        assert_eq!(s.state.settings.shortcuts.len(), 1);
-        assert!(s.state.settings.shortcuts.contains_key("command.Brush"));
-        invoke(&mut s, CommandId::Settings);
-        assert!(
-            !s.preferences()
-                .unwrap()
-                .shortcuts
-                .iter()
-                .any(|r| r.id == "command.TogglePanels")
-        );
-        assert!(
-            !serde_json::to_string(&s.state.commands)
-                .unwrap()
-                .contains("toggle_panels")
-        );
-        assert!(
-            !serde_json::to_string(MENUS)
-                .unwrap()
-                .contains("toggle_panels")
-        );
     }
 
     #[test]
@@ -16394,12 +16289,6 @@ mod tests {
             assert_eq!(restored, s.state.settings);
             assert_eq!(restored.palette(s.state.theme, platform, None), s.state.palette);
             assert!(serde_json::from_str::<Settings>(&json.replace("#1c2c3c", "bad")).is_err());
-            let mut legacy = serde_json::to_value(&restored).unwrap();
-            legacy.as_object_mut().unwrap().remove("dark_base");
-            legacy.as_object_mut().unwrap().remove("light_base");
-            let legacy: Settings = serde_json::from_value(legacy).unwrap();
-            assert_eq!(legacy.dark_base, Theme::Dark.default_base());
-            assert_eq!(legacy.light_base, Theme::Light.default_base());
         }
     }
     #[test]
@@ -17359,31 +17248,12 @@ mod tests {
         );
     }
     #[test]
-    fn typography_is_fixed_and_retired_preferences_preserve_other_settings() {
+    fn typography_is_fixed() {
         assert_eq!(ui_catalog().text_size_pt, UI_TEXT_PT);
         assert_eq!(UI_TEXT_PT, 11);
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
             s.set_platform(platform);
-            for points in [9, 11, 13] {
-                let json = format!(
-                    r#"{{"panel_text_pt":{points},"zen_hide":200,"zen_reveal":120,"pressure_gamma":1.5}}"#
-                );
-                let native =
-                    Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(&json))
-                        .unwrap();
-                let action: UiAction = serde_json::from_str(&format!(
-                    r#"{{"type":"restore_settings","settings":{json}}}"#
-                ))
-                .unwrap();
-                s.dispatch(action).unwrap();
-                assert_eq!(s.state.settings, native);
-                assert_eq!(native.pressure_gamma, 1.5);
-                let saved = serde_json::to_value(native).unwrap();
-                assert!(saved.get("panel_text_pt").is_none());
-                assert!(saved.get("zen_hide").is_none());
-                assert!(saved.get("zen_reveal").is_none());
-            }
             invoke(&mut s, CommandId::Settings);
             assert!(
                 !s.preferences()
@@ -17398,12 +17268,6 @@ mod tests {
                     ))
             );
         }
-        assert!(
-            Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(
-                r#"{"unknown_setting":true}"#
-            ))
-            .is_err()
-        );
         assert!(
             serde_json::from_str::<UiAction>(
                 r#"{"type":"restore_settings","settings":{"unknown_setting":true}}"#

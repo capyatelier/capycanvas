@@ -3,30 +3,9 @@
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {
-      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable.",
-      "tonal_details": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "apply_tonal_selection": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "cancel_tonal_selection": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_new_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_remove_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_save_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_invert": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_lower_open": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_upper_open": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_link_falloff": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host."
+      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable."
     },
-    "mac": {
-      "tonal_details": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "apply_tonal_selection": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "cancel_tonal_selection": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_new_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_remove_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_save_band": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_invert": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_lower_open": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_upper_open": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host.",
-      "tonal_link_falloff": "Retired control from the original tonal editor; shared Rust only decodes it from saved shortcuts and layouts and offers it on no host."
-    }
+    "mac": {}
   },
   "groups": [
     {
@@ -167,7 +146,7 @@
     },
     {
       "name": "Selection tools and masks",
-      "commands": ["select", "rectangle_select", "ellipse_select", "polygon_select", "color_select", "selection_brush", "selection_brush_pressure", "quick_mask", "return_to_artwork", "new_selection_layer", "save_selection_layer", "reselect", "selection_outline", "mask_overlay", "mask_overlay_protected", "reset_mask_colors", "swap_mask_colors", "fill_selection_mask", "clear_selection_mask", "selection_new", "selection_add", "selection_subtract", "selection_intersect", "selection_antialias", "selection_constrain_angles", "selection_fixed_ratio", "selection_fixed_size", "selection_from_center", "complete_selection", "cancel_selection", "selection_visible", "selection_editing", "selection_reference", "tonal_select", "tonal_details", "apply_tonal_selection", "cancel_tonal_selection", "tonal_new_band", "tonal_remove_band", "tonal_save_band", "tonal_invert", "tonal_lower_open", "tonal_upper_open", "tonal_link_falloff"],
+      "commands": ["select", "rectangle_select", "ellipse_select", "polygon_select", "color_select", "selection_brush", "selection_brush_pressure", "quick_mask", "return_to_artwork", "new_selection_layer", "save_selection_layer", "reselect", "selection_outline", "mask_overlay", "mask_overlay_protected", "reset_mask_colors", "swap_mask_colors", "fill_selection_mask", "clear_selection_mask", "selection_new", "selection_add", "selection_subtract", "selection_intersect", "selection_antialias", "selection_constrain_angles", "selection_fixed_ratio", "selection_fixed_size", "selection_from_center", "complete_selection", "cancel_selection", "selection_visible", "selection_editing", "selection_reference", "tonal_select"],
       "checks": ["native/src/selection_tests.rs", "Shared/Tests/SelectionMaskChecks.swift", "../../crates/layer-ui/src/selection_tests.rs", "../../crates/layer-ui/src/painted_selection_tests.rs", "native/src/tonal_tests.rs", "Shared/Tests/TonalSelectionChecks.swift"],
       "ios": "partial: shared selection tools, Paint selection, Quick Mask, Selection Layers, Grow/Shrink and mask properties are available; both-policy bridge checks drive real pointer/key records through Metal for modifier latching, one-step history, Grow/Shrink apply/cancel, Quick Mask rows/thumbnails, independent mask colors and saved-layer load; the native Tool Set, connected mode group and Layers rows render on the physical iPad; the XCUITest journey awaits UI automation on the device and physical Pencil coverage remains; tonal range selection passes bridge checks for presets, one-step refinement history, clamped Custom ranges, stale toolbar contexts and artwork sampling inside Quick Mask, and testTonalSelection covers the tone bar, the two-handle range drag, typed endpoints and the compact drawer form; the ten retired tonal editor commands stay unavailable",
       "mac": "partial: same shared behavior and both-policy bridge checks; EditorLaunchTests/testSelectionMasks passes the Photo toolbar tools, connected mode group, Add combination, Selection Actions Grow dialog, Quick Mask row/thumbnail/Load and New Selection Layer through real AppKit input; Command-click thumbnail loading and physical tablet delivery remain manual checks; tonal range selection passes bridge checks for presets, one-step refinement history, clamped Custom ranges, stale toolbar contexts and artwork sampling inside Quick Mask, and testTonalSelection covers the tone bar, the two-handle range drag, typed endpoints and the compact drawer form; the ten retired tonal editor commands stay unavailable"

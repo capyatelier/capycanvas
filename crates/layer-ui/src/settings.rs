@@ -89,8 +89,6 @@ pub struct Settings {
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub zen_reveal_at_edges: bool,
-    /// Retained when reading/writing settings from the original tonal band editor.
-    pub tonal_bands: Vec<layer_core::tonal::TonalBand>,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_gamma: f32,
@@ -123,7 +121,6 @@ impl Default for Settings {
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             zen_reveal_at_edges: false,
-            tonal_bands: Vec::new(),
             selection_painting: Default::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
@@ -141,34 +138,7 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    /// Discard retired preferences, preserving strict validation of every
-    /// other field and all of the user's other settings.
-    pub fn deserialize_saved<'de, D: serde::Deserializer<'de>>(
-        reader: D,
-    ) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(reader)?;
-        if let Some(fields) = value.as_object_mut() {
-            if fields.get("prediction_algorithm").is_some_and(|v| {
-                !matches!(v.as_str(), Some("optimized"))
-            }) {
-                fields.remove("prediction_algorithm");
-            }
-            fields.remove("panel_text_pt");
-            fields.remove("zen_hide");
-            fields.remove("zen_reveal");
-            fields.remove("zen_behavior");
-            fields.remove("zen_reveal_mode");
-            fields.remove("zen_show_button");
-            fields.remove("total_zen");
-            if let Some(shortcuts) = fields.get_mut("shortcuts").and_then(|v| v.as_object_mut()) {
-                shortcuts.remove("command.TogglePanels");
-            }
-        }
-        serde_json::from_value(value).map_err(serde::de::Error::custom)
-    }
     pub fn validate(&self) -> Result<(), String> {
-        if self.tonal_bands.len() > 64 { return Err("At most 64 saved tonal bands are supported".into()); }
-        for band in &self.tonal_bands { band.validate().map_err(str::to_string)?; }
         for marks in self.slider_bookmarks.values() {
             marks.validate()?;
         }
@@ -288,8 +258,6 @@ pub enum PreferenceId {
     MissingProfile,
     Theme,
     Transparency,
-    /// Retired preference ID, retained to decode saved custom actions.
-    TotalZen,
     ZenIcon,
     ZenShowCapy,
     ZenRevealAtEdges,
@@ -323,7 +291,6 @@ impl PreferenceId {
             Self::MissingProfile => "missing-profile",
             Self::Theme => "theme",
             Self::Transparency => "transparency",
-            Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
             Self::ZenShowCapy => "zen-show-capy",
             Self::ZenRevealAtEdges => "zen-reveal-at-edges",
@@ -1175,7 +1142,6 @@ impl Settings {
             HideCursorWhileDrawing => {
                 self.hide_cursor_while_drawing = matches!(value, PreferenceValue::Bool(true))
             }
-            TotalZen => return Err("Zen mode no longer has a partial mode.".into()),
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             ZenShowCapy => self.zen_show_capy = matches!(value, PreferenceValue::Bool(true)),
             ZenRevealAtEdges => {
@@ -1848,7 +1814,7 @@ mod copy_tests {
                 if options == &["Smooth Motion (Optimized)"]));
             for (index, &(algorithm, _)) in PREDICTION_ALGORITHMS.iter().enumerate() {
                 settings.edit(id, PreferenceValue::Choice(index as u32), platform).unwrap();
-                let restored = Settings::deserialize_saved(serde_json::to_value(&settings).unwrap()).unwrap();
+                let restored: Settings = serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
                 assert_eq!(restored, settings);
                 for native in [false, true] {
                     assert_eq!(restored.feedback_config_for(platform, native).prediction_algorithm, algorithm);
@@ -1863,28 +1829,7 @@ mod copy_tests {
     }
 
     #[test]
-    fn retired_prediction_choices_do_not_change_any_platform_fallback() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows, Platform::Generic] {
-            for old in ["previous", "linear", "kalman", "trajectory", "trajectory_tapered", "trajectory_tapered_filtered", "local_acceleration", "local_acceleration_smooth"] {
-                let settings = Settings::deserialize_saved(serde_json::json!({
-                    "prediction_algorithm": old, "prediction_ms": 23.0, "platform_prediction": true,
-                })).unwrap();
-                assert_eq!(settings.prediction_ms, 23.0);
-                assert_eq!(settings.prediction_algorithm, StrokePrediction::Optimized);
-                let expected = Settings { prediction_ms: 23.0, platform_prediction: true, ..Default::default() };
-                assert_eq!(settings.feedback_config_for(platform, false), expected.feedback_config_for(platform, false));
-                let fallback = settings.feedback_config_for(platform, false);
-                assert!(fallback.use_engine_prediction && !fallback.use_platform_prediction);
-                assert_eq!(fallback.prediction_horizon_micros, 23_000);
-                let native = settings.feedback_config_for(platform, true);
-                assert!(native.use_engine_prediction && native.use_platform_prediction);
-                assert!(settings.field(PreferenceId::PredictionAlgorithm, platform).is_ok());
-            }
-        }
-    }
-
-    #[test]
-    fn zen_preferences_roundtrip_reset_and_retire_legacy_mode() {
+    fn zen_preferences_roundtrip_and_reset() {
         for platform in [
             Platform::Generic,
             Platform::Gtk,
@@ -1909,16 +1854,6 @@ mod copy_tests {
                     PreferenceId::ZenIcon
                 ]
             );
-            assert!(settings.field(PreferenceId::TotalZen, platform).is_err());
-            assert!(
-                settings
-                    .edit(
-                        PreferenceId::TotalZen,
-                        PreferenceValue::Bool(false),
-                        platform
-                    )
-                    .is_err()
-            );
             assert!(settings.zen_show_capy);
             assert!(!settings.zen_reveal_at_edges);
             for (id, value) in [
@@ -1941,7 +1876,6 @@ mod copy_tests {
                 .edit(PreferenceId::ZenIcon, PreferenceValue::Choice(3), platform)
                 .unwrap();
             let saved = serde_json::to_string(&settings).unwrap();
-            assert!(!saved.contains("total_zen"));
             assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
             let mut state = PreferencesState::default();
             state.edit(
@@ -1953,19 +1887,6 @@ mod copy_tests {
             );
             assert!(state.error.is_none());
             assert_eq!(settings, Settings::default());
-        }
-        for total in [false, true] {
-            let json = format!(
-                r#"{{"total_zen":{total},"zen_reveal_mode":"button","zen_show_button":false,"pan_speed":2.0}}"#
-            );
-            let mut reader = serde_json::Deserializer::from_str(&json);
-            let settings = Settings::deserialize_saved(&mut reader).unwrap();
-            assert_eq!(settings.pan_speed, 2.0);
-            assert!(
-                !serde_json::to_string(&settings)
-                    .unwrap()
-                    .contains("total_zen")
-            );
         }
     }
 

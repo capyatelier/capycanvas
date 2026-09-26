@@ -68,16 +68,8 @@ impl SettingsFile {
         if bytes.len() > MAX_BYTES {
             return Err("Saved preferences exceed the size limit.".into());
         }
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| "Saved preferences are not valid JSON.")?;
-        // Reuse the shared migration and validation policy, including retired fields.
-        let action: UiAction = serde_json::from_value(serde_json::json!({
-            "type": "restore_settings", "settings": value
-        }))
-        .map_err(|_| "Saved preferences use an unsupported or invalid format.")?;
-        let UiAction::RestoreSettings { settings } = action else {
-            unreachable!()
-        };
+        let settings: Settings = serde_json::from_slice(&bytes)
+            .map_err(|_| "Saved preferences use an unsupported or invalid format.")?;
         settings
             .validate()
             .map_err(|error| format!("Saved preferences are invalid: {error}"))?;

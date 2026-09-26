@@ -73,12 +73,11 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await pointer(".dock-group .navigator-overview",.5,.5,[20,10]);
   assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),pan,"Navigator moves the camera");
   assert.ok(await evaluate('!!document.querySelector(".navigator-surface")'),"Navigator uses a native GPU surface");
-  await evaluate('window.editorWorkspace=layerApp.app.workspace_persistence(); window.editorSettings=layerApp.state().settings; layerApp.dispatch({type:"restore_settings",settings:{...editorSettings,total_zen:false}})');
+  await evaluate('window.editorWorkspace=layerApp.app.workspace_persistence(); window.editorSettings=layerApp.state().settings; layerApp.dispatch({type:"restore_settings",settings:editorSettings})');
   await invoke("zen_mode");
   await call("Input.dispatchMouseEvent",{type:"mouseMoved",...await evaluate('({x:innerWidth/2,y:innerHeight/2})'),buttons:0});
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
-  assert.equal(await evaluate('"total_zen" in layerApp.state().settings'),false,"Legacy partial-Zen setting is discarded");
   await invoke("zen_mode");
   await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});const column=layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.group===group.id)).id;layerApp.dispatch({type:"customize",action:{type:"set_column_drawers",column,drawers:true}});})()`);
   await settle();
