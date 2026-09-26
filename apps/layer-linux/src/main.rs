@@ -96,12 +96,7 @@ fn main() -> gtk::glib::ExitCode {
 fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
     let app = adw::Application::builder()
         .application_id(id)
-        // Review instances keep desktop settings and accept application file opens.
-        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN | if std::env::var_os("CAPY_NEW_INSTANCE").is_some() {
-            gtk::gio::ApplicationFlags::NON_UNIQUE
-        } else {
-            gtk::gio::ApplicationFlags::FLAGS_NONE
-        })
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {

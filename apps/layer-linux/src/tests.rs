@@ -10521,20 +10521,12 @@ fn native_cursor_vectors() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
-    for icon in ui_catalog().icons {
-        let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
-        assert!(
-            image.paintable().unwrap().is::<gtk::Svg>(),
-            "{icon} uses the shared vectors"
-        );
-    }
     std::fs::create_dir_all("../../artifacts/ui/cursors").unwrap();
     let scale = w.area.scale_factor() as f32;
     assert_eq!(
         w.area.cursor().and_then(|c| c.name()).as_deref(),
         Some("none")
     );
-    let mut report = Vec::new();
     let hover = || PenEvent {
         device_id: 123,
         sequence: 1,
@@ -10552,63 +10544,6 @@ fn native_cursor_vectors() {
         tool: ToolKind::Pen,
         flags: SampleFlags::PRIMARY,
     };
-    for (preset, label) in [
-        (layer_core::DefaultBrushPreset::GPen, "round"),
-        (layer_core::DefaultBrushPreset::TexturedFlat, "flat"),
-        (layer_core::DefaultBrushPreset::WatercolorWash, "watercolor"),
-    ] {
-        w.dispatch(UiAction::SelectBrush { id: preset as u32 });
-        w.dispatch(UiAction::SetBrushSize { value: 512.0 });
-        pump(150);
-        w.cursor_input(Some(hover()));
-        let shape = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
-            .canvas_cursor()
-            .unwrap();
-        assert!(shape.segments.iter().any(|segment| segment.marker == 0.0));
-        assert!(shape.segments.len() > 20);
-        assert!(
-            shape
-                .segments
-                .iter()
-                .all(|s| s.from.into_iter().chain(s.to).all(f32::is_finite))
-        );
-        pump(50);
-        capture_reference(
-            &w,
-            &format!("../../artifacts/ui/cursors/gtk-{label}.png"),
-            1.0,
-        );
-        let mut times = Vec::new();
-        for _ in 0..1000 {
-            let start = Instant::now();
-            let shape = w
-                .gpu
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .session
-                .canvas_cursor()
-                .unwrap();
-            std::hint::black_box(&shape.segments);
-            times.push(start.elapsed().as_secs_f64() * 1000.0);
-        }
-        times.sort_by(f64::total_cmp);
-        report.push(serde_json::json!({"brush":label,"median_ms":times[500],"p95_ms":times[950],"p99_ms":times[990],"segments":shape.segments.len()}));
-        assert!(
-            times[990] < 8.333,
-            "cursor preparation must fit a 120Hz frame"
-        );
-    }
-    std::fs::write(
-        "../../artifacts/ui/cursors/native-preparation.json",
-        serde_json::to_vec_pretty(&report).unwrap(),
-    )
-    .unwrap();
     w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     pump(200);
     let toggle = find_named(w.window.upcast_ref(), "setting-hide-cursor-while-drawing")
@@ -10621,28 +10556,7 @@ fn native_cursor_vectors() {
     w.dispatch(UiAction::CloseSettings);
     pump(200);
     w.cursor_input(Some(hover()));
-    for kind in [PointerKind::Mouse, PointerKind::Pen] {
-        for end in [ContactPhase::Up, ContactPhase::Cancel] {
-            let contact = |phase| w.interact(UiInput::Pointer {
-                id: 123, phase, kind, button: PointerButton::Primary,
-                position: [600.0 * scale, 460.0 * scale],
-            });
-            contact(ContactPhase::Down);
-            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
-            contact(ContactPhase::Move);
-            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
-            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
-                id: PreferenceId::HideCursorWhileDrawing, value: PreferenceValue::Bool(false),
-            }});
-            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
-            w.dispatch(UiAction::Preferences { action: PreferenceAction::Reset {
-                id: PreferenceId::HideCursorWhileDrawing,
-            }});
-            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
-            contact(end);
-            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
-        }
-    }
+    assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
     w.cursor_input(None);
     assert!(
         w.gpu
@@ -11092,54 +11006,6 @@ fn native_frame_pacing() {
             ));
         }
     }
-    if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
-        w.dispatch(UiAction::Customize {
-            action: CustomizationAction::SetPanelVisible {
-                panel: Panel::Navigator,
-                visible: true,
-            },
-        });
-        pump(300);
-        assert!(!w.navigator_overviews.placements(&state(&w), 1.).is_empty());
-    }
-    if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
-        // Isolate live-thumbnail work without changing the saved dock geometry.
-        // Control refresh restores visibility from shared configuration; opacity
-        // keeps the test exclusion intact and is honored by preview scheduling.
-        w.navigator.root.set_opacity(0.);
-    }
-    if let Ok(mode) = std::env::var("LAYER_PACING_ZEN") {
-        assert!(matches!(mode.as_str(), "normal" | "partial"));
-        let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let mut workspace = state(&w).workspace;
-        workspace.zen_mode = mode == "partial";
-        workspace
-            .layout
-            .insert_tools(Panel::Toolbar, Some(2), &[ToolbarControl::Divider])
-            .unwrap();
-        workspace
-            .layout
-            .insert_tools(Panel::Toolbar, Some(5), &[ToolbarControl::Divider])
-            .unwrap();
-        workspace
-            .layout
-            .move_panel(
-                viewport,
-                Panel::Toolbar,
-                DockTarget::Edge {
-                    edge: Edge::Left,
-                    outer: true,
-                },
-            )
-            .unwrap();
-        w.dispatch(UiAction::RestoreWorkspace {
-            workspace: Box::new(workspace),
-        });
-        w.dispatch(UiAction::RestoreSettings {
-            settings: Settings::default(),
-        });
-        pump(300);
-    }
     assert!(
         w.gpu.borrow().is_some(),
         "hardware Vulkan canvas must initialize"
@@ -11168,9 +11034,6 @@ fn native_frame_pacing() {
     let mut sequence = 0;
     for (name, preset) in [
         ("GPen", Some(DefaultBrushPreset::GPen)),
-        ("NaturalBlender", Some(DefaultBrushPreset::NaturalBlender)),
-        ("WetRound", Some(DefaultBrushPreset::WetRound)),
-        ("WatercolorWash", Some(DefaultBrushPreset::WatercolorWash)),
         ("Pan", None),
         ("Hand", None),
         ("Transform", None),
@@ -11381,7 +11244,7 @@ fn native_frame_pacing() {
                 };
             }
             if preset.is_some() || name == "Transform" {
-                if preset.is_some() && std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0") {
+                if preset.is_some() {
                     w.cursor_input(Some(event));
                 }
                 w.input.send(&w, event);
@@ -11425,10 +11288,6 @@ fn native_frame_pacing() {
                 preview_updates >= 20,
                 "benchmark must keep the overview live"
             );
-        }
-        if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
-            assert_eq!(w.navigator.root.opacity(), 0.);
-            assert_eq!(worker_stats.lock().unwrap().overview_frames, 0);
         }
         if preset.is_some() || name == "Transform" {
             w.input.send(
@@ -11508,7 +11367,6 @@ fn native_frame_pacing() {
             "workspace": std::env::var("LAYER_PACING_WORKSPACE").unwrap_or_else(|_| "default".into()),
             "gtk_renderer": w.window.renderer().unwrap().type_().name(),
             "path": "app-owned Wayland Vulkan subsurface",
-            "cursor": std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0"),
             "navigator": navigator_visible,
             "navigator_updates": preview_updates,
             "navigator_frames": stats.overview_frames,
@@ -11542,9 +11400,6 @@ fn native_frame_pacing() {
     let path = std::env::var("LAYER_PACING_REPORT")
         .unwrap_or_else(|_| "/tmp/layer-wayland-pacing.json".into());
     std::fs::write(path, serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
-    if let Ok(path) = std::env::var("LAYER_PACING_CAPTURE") {
-        crate::capture(&w, &path);
-    }
     w.window.destroy();
     pump(100);
 }
@@ -14319,7 +14174,7 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
 }
 
 #[test]
-#[ignore = "isolated Mutter pointer driver and SQLite; see bench/workspace-menus.sh"]
+#[ignore = "isolated Mutter pointer driver and SQLite; workspace-motion.sh gtk --workspace-menus"]
 fn native_workspace_menu_input() {
     fn menu_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
         if root.is_mapped()

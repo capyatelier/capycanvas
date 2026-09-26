@@ -290,7 +290,7 @@ customized layouts, durable publication, and repeated initialization.
 
 The integrated shared suite passes 331 tests (278 `layer-ui`, 53 `layer-workspace`).
 
-Run `bash apps/layer-linux/bench/workspace-switcher.sh` for isolated real mouse,
+Run `bash tools/performance/workspace-motion.sh gtk --workspace-switcher` for isolated real mouse,
 touch, and keyboard verification. The test covers whole-row and handle dragging,
 narrow grips on every row, immediate touch handles, held touch rows, right-click
 and hold menus, same-contact menu-to-drag continuation, long-list scrolling, keyboard Move Up,

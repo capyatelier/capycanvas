@@ -94,14 +94,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     };
     if let Some(expected) = expected_renderer { assert_eq!(renderer, expected); }
     let view = w.view_color();
-    assert_eq!(
-        view,
-        if std::env::var_os("LAYER_TEST_VIEW_SRGB").is_some() {
-            ViewColor::Srgb
-        } else {
-            ViewColor::DisplayP3
-        }
-    );
+    assert_eq!(view, ViewColor::DisplayP3);
     let original = super::place_source::snapshot(&w);
     // GTK 4.22.4's Cairo render_texture() always draws into sRGB ARGB32;
     // its on-screen renderer instead uses the surface's color state. Compare

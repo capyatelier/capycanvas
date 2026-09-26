@@ -689,7 +689,7 @@ fn drag(
 }
 
 #[test]
-#[ignore = "isolated Mutter mouse/touch driver and SQLite; bench/workspace-switcher.sh"]
+#[ignore = "isolated Mutter mouse/touch driver and SQLite; workspace-motion.sh gtk --workspace-switcher"]
 fn native_workspace_switcher_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.WorkspaceSwitcherInput");

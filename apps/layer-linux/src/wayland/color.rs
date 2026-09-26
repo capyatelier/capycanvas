@@ -31,19 +31,8 @@ pub(super) struct ColorSurface {
 }
 impl ColorSurface {
     pub(super) fn bind(globals: &GlobalList, qh: &QueueHandle<Events>) -> Option<Self> {
-        #[cfg(test)]
-        if std::env::var_os("LAYER_TEST_VIEW_UNMANAGED").is_some() {
-            return None;
-        }
-        let max_version = 2;
-        #[cfg(test)]
-        let max_version = if std::env::var_os("LAYER_TEST_VIEW_ICC").is_some() {
-            1
-        } else {
-            max_version
-        };
         Some(Self {
-            manager: globals.bind(qh, 1..=max_version, ()).ok()?,
+            manager: globals.bind(qh, 1..=2, ()).ok()?,
             surface: None,
             image: None,
         })
@@ -78,12 +67,6 @@ impl Child {
             return Err("The compositor does not support SDR perceptual presentation".into());
         }
         let choices = [ViewColor::DisplayP3, ViewColor::Srgb];
-        #[cfg(test)]
-        let choices = if std::env::var_os("LAYER_TEST_VIEW_SRGB").is_some() {
-            [ViewColor::Srgb; 2]
-        } else {
-            choices
-        };
         let mut last_error = "The compositor cannot describe SDR colors accurately".to_string();
         for view in choices {
             // ICC also handles v1 compositors and profiles not available as named

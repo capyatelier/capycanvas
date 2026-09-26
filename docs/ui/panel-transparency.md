@@ -294,6 +294,7 @@ LAYER_NATIVE_CAPTURE_DIR="$PWD/artifacts/glass" LAYER_GLASS_LEVEL=medium \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_backdrop_blur_capture
 LAYER_PACING_TRANSPARENCY=medium \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_frame_pacing
+node apps/layer-linux/bench/summarize.mjs /tmp/layer-wayland-pacing.json
 LAYER_MOTION_TRANSPARENCY=medium bash tools/performance/workspace-motion.sh gtk --workspace-motion
 bash tools/performance/workspace-motion.sh web --preferences
 cargo test --locked -p layer-windows --lib glass

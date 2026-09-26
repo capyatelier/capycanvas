@@ -174,6 +174,6 @@ refactor is a prerequisite to starting the host work.
 Run the shared UI/store suite and the host's relevant build and integration checks.
 For Web, run the store contract cases against IndexedDB itself. GTK reference
 checks are `native_named_workspace_manager_library_and_history` and
-`apps/layer-linux/bench/workspace-menus.sh`; their bodies show assertions and
+`tools/performance/workspace-motion.sh gtk --workspace-menus`; their bodies show assertions and
 safe isolation requirements. Record actual host test/build/screenshot evidence;
 GTK approval alone does not certify another platform implementation.
