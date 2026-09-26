@@ -412,8 +412,6 @@ mod tests {
         let encoded = serde_json::to_string(&pixels).unwrap();
         let restored: crate::SelectionPixels = serde_json::from_str(&encoded).unwrap();
         assert_eq!(pixels, restored);
-        let legacy: crate::SelectionPixels = serde_json::from_str(r#"{"extent":[8,1],"bounds":[0,0,8,1],"words":[1145324612]}"#).unwrap();
-        assert_eq!(legacy.coverage_format(), 1);
         let mut document = Document::new("selection", 5, 1);
         document.selection = Some(Selection::pixels(Arc::new(restored)));
         assert!(validate_document(&document, ProjectLimits::default()).is_ok());

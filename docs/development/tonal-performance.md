@@ -4,8 +4,8 @@
 
 A 9504 × 6336 selection contains 60,217,344 coverage bytes. Previously these
 packed words were serialized as JSON numbers, exceeding the 64 MiB project
-metadata limit. Version 7 stores them in indexed, compressed binary chunks;
-version 6 remains readable. Shared current/saved/initial masks retain one pixel
+metadata limit. Version 7 stores them in indexed, compressed binary chunks.
+Shared current/saved/initial masks retain one pixel
 allocation. Workspace admission and undo accounting charge that allocation once,
 without serializing its pixels or multiplying JSON size to estimate memory.
 

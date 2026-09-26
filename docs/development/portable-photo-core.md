@@ -11,7 +11,7 @@ Commit and push significant milestones to `origin/main`.
 GTK, Web and Android use the shared Rust photo/storage core. JPEG and AVIF
 gain-map export and encoded previews are built in. Native codec bundles,
 availability gates, unreachable fallback choices, vendored Zrip and old `.capy`
-readers are removed. `.capy` v6 uses one unmodified `lz4_flex` block codec.
+readers are removed. `.capy` v7 uses one unmodified `lz4_flex` block codec.
 The remaining codec vendor patches are necessary portability, source metadata,
 memory admission and cancellation fixes, documented in [vendor/README.md](../../vendor/README.md).
 
@@ -488,7 +488,7 @@ dependency are disabled. Painted and imported tiles share one encoder. The Zrip
 vendor trees, patches, decoder dependency, native Zstd oracle, old fixtures,
 frame parser and separate source-compression policy are removed.
 
-Only `.capy` version 6 is read or written. It fixes the tile codec to LZ4 blocks;
+Only `.capy` version 7 is read or written. It fixes the tile codec to LZ4 blocks;
 there is no migration reader or v4/v5 writer selection. Multibyte shuffling,
 SHA-256 sample verification, placement, source profiles and immutable backing
 remain. The descriptor sets the exact output allocation (at most 1 MiB); the

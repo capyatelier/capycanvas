@@ -399,14 +399,13 @@ pub struct LayerProperties {
     pub parent: Option<LayerId>,
     pub offset: Point,
     /// Persistent placement of local source AND raster pixels, before offset.
-    /// Missing in older projects means identity; Apply never resamples backing.
-    #[serde(default)]
+    /// Apply never resamples backing.
     pub placement: Affine,
     pub alpha_locked: bool,
     pub locked: bool,
     pub clipped: bool,
     pub blend: LayerBlend,
-    /// Absent in older documents: use the canvas's default paper color.
+    /// None uses the canvas's default paper color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paper_color: Option<color::RgbColor>,
     /// Only Selection Layers store these display and painting settings.
@@ -423,7 +422,6 @@ pub struct LayerMask {
     pub enabled: bool,
     pub linked: bool,
     /// Independent geometry preserves the visible mask when linking changes.
-    #[serde(default)]
     pub placement: Affine,
     pub offset: Point,
     pub initial: Option<Selection>,
@@ -442,7 +440,6 @@ pub struct LayerMask {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerOperation {
     /// Figure/gradient coordinates to local pixels. Coverage is already local.
-    #[serde(default)]
     pub placement: Affine,
     pub coverage: LayerMask,
     pub kind: LayerOperationKind,

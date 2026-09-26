@@ -16,21 +16,8 @@ struct PixelsRecord {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::rewrite_manifest;
     use super::*;
-
-    fn rewrite(bytes: &[u8], legacy: bool, edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
-        let size = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&bytes[52..52 + size]).unwrap();
-        edit(&mut manifest);
-        let json = serde_json::to_vec(&manifest).unwrap();
-        let mut output = if legacy { LEGACY_MAGIC } else { MAGIC }.to_vec();
-        output.extend_from_slice(&(json.len() as u64).to_le_bytes());
-        output.extend_from_slice(&Sha256::digest(&json));
-        output.extend_from_slice(&json);
-        output.extend_from_slice(&bytes[52 + size..]);
-        output
-    }
 
     #[test]
     fn photo_selection_roundtrips_shared_binary_coverage() {
@@ -135,39 +122,12 @@ mod tests {
             },
         ] {
             assert!(
-                Project::read(rewrite(&bytes, false, edit).as_slice(), Default::default()).is_err()
+                Project::read(rewrite_manifest(&bytes, edit).as_slice(), Default::default()).is_err()
             );
         }
         let last = bytes.len() - 1;
         bytes[last] ^= 0x80;
         assert!(Project::read(bytes.as_slice(), Default::default()).is_err());
-    }
-
-    #[test]
-    fn version_six_inline_pixels_migrate_without_precision_loss() {
-        for pixels in [
-            SelectionPixels::new([9, 1], [0, 0, 9, 1], vec![0x43210432, 4]).unwrap(),
-            SelectionPixels::bytes([5, 1], [0, 0, 5, 1], vec![0xff807f01, 128]).unwrap(),
-        ] {
-            let project = Project {
-                document: Document::new("Legacy", 9, 1),
-                assets: Default::default(),
-            };
-            let selection = Selection::pixels(Arc::new(pixels));
-            let mut bytes = Vec::new();
-            project.write(&mut bytes).unwrap();
-            let legacy = rewrite(&bytes, true, |v| {
-                v.as_object_mut().unwrap().remove("selections");
-                v["document"]["selection"] = serde_json::to_value(&selection).unwrap();
-            });
-            let restored = Project::read(legacy.as_slice(), Default::default()).unwrap();
-            assert_eq!(restored.document.selection, Some(selection));
-            let mut upgraded = Vec::new();
-            restored.write(&mut upgraded).unwrap();
-            assert_eq!(&upgraded[..12], MAGIC);
-            let reread = Project::read(upgraded.as_slice(), Default::default()).unwrap();
-            assert_eq!(reread.document.selection, restored.document.selection);
-        }
     }
 }
 impl PixelsRecord {
@@ -225,7 +185,7 @@ impl SelectionIndex {
         &self, document: &mut Document, limits: ProjectLimits,
         read: impl FnMut(usize) -> Result<Vec<u8>, String>,
     ) -> Result<(), String> {
-        self.check_version(document, false)?;
+        self.reject_inline_pixels(document)?;
         let mut chunks = BTreeSet::new();
         self.validate_index(document, limits, |id| {
             if !chunks.insert(id) || chunks.len() > limits.tiles {
@@ -236,16 +196,8 @@ impl SelectionIndex {
         self.restore_with(document, read)
     }
 
-    pub(super) fn check_version(
-        &self,
-        document: &mut Document,
-        legacy: bool,
-    ) -> Result<(), String> {
-        if legacy {
-            if !self.bindings.is_empty() || !self.pixels.is_empty() {
-                return Err("Selection index requires project version 7".into());
-            }
-        } else if selections(document).any(|(_, s)| matches!(s.shape, SelectionShape::Pixels(_))) {
+    pub(super) fn reject_inline_pixels(&self, document: &mut Document) -> Result<(), String> {
+        if selections(document).any(|(_, s)| matches!(s.shape, SelectionShape::Pixels(_))) {
             return Err("Selection pixels must use binary storage".into());
         }
         Ok(())

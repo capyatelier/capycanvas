@@ -45,9 +45,7 @@ impl<'de> Deserialize<'de> for SdrRendition {
             exposure: f32,
             contrast: f32,
             headroom: f32,
-            #[serde(default)]
             highlight_color: f32,
-            #[serde(default)]
             balance: f32,
         }
         let s = Stored::deserialize(d)?;

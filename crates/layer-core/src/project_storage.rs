@@ -12,9 +12,7 @@ pub use selections::SelectionIndex;
 #[cfg(test)]
 mod native_color;
 
-// Version 7 also stores selection coverage in the indexed LZ4 payload.
 const MAGIC: &[u8; 12] = b"CAPYRASTER\x07\0";
-const LEGACY_MAGIC: &[u8; 12] = b"CAPYRASTER\x06\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,7 +52,6 @@ struct Manifest<D = Document> {
     blobs: Vec<BlobRecord>,
     sources: Vec<SourceRecord>,
     tiled_sources: SourceIndex,
-    #[serde(default)]
     selections: SelectionIndex,
 }
 
@@ -177,7 +174,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
 pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Project, String> {
     let mut magic = [0; 12];
     input.read_exact(&mut magic).map_err(io_error)?;
-    if &magic != MAGIC && &magic != LEGACY_MAGIC {
+    if &magic != MAGIC {
         return Err("Unsupported Capy Canvas project version".into());
     }
     let mut length = [0; 8];
@@ -194,7 +191,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     }
     let mut manifest: Manifest =
         serde_json::from_slice(&json).map_err(|e| format!("Invalid project metadata: {e}"))?;
-    manifest.selections.check_version(&mut manifest.document, &magic == LEGACY_MAGIC)?;
+    manifest.selections.reject_inline_pixels(&mut manifest.document)?;
     validate_document(&manifest.document, limits)?;
     if manifest.tile_size != TILE_SIZE
         || manifest.blobs.len() > limits.tiles
@@ -506,7 +503,7 @@ mod tests {
         assert!(weak.upgrade().is_none(), "unused source is released");
     }
 
-    fn rewrite_manifest(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    pub(super) fn rewrite_manifest(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
         let length = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
         let mut value = serde_json::from_slice(&bytes[52..52 + length]).unwrap();
         edit(&mut value);
@@ -577,10 +574,6 @@ mod tests {
         assert!(Project::read(&invalid[..52 + length], Default::default()).unwrap_err().contains("interpretation differs"));
         let invalid = rewrite_manifest(&bytes, |v| v["tiled_sources"]["images"][0]["depth"] = "U8".into());
         assert!(Project::read(invalid.as_slice(), Default::default()).unwrap_err().contains("interpretation differs"));
-        for version in [0, 1, 2, 3, 4, 5, 8, 255] {
-            let mut obsolete = bytes.clone(); obsolete[10] = version;
-            assert!(Project::read(obsolete.as_slice(), Default::default()).unwrap_err().contains("Unsupported"));
-        }
     }
 
     #[test]

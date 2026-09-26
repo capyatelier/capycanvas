@@ -11,7 +11,6 @@ pub enum SelectionPaintBehavior {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
 pub struct SelectionMaskProperties {
     pub color: color::RgbColor,
     pub opacity: f32,
@@ -126,14 +125,12 @@ pub enum SelectionMode {
 }
 
 /// Immutable coverage survives subsequent edits, undo and renderer recreation.
-/// Legacy masks pack eight 0..4 coverage samples per word; refined masks pack
+/// Nibble masks pack eight 0..4 coverage samples per word; refined masks pack
 /// four 0..255 coverage bytes. Rows pad their final word with zero coverage.
 /// Pixels are produced by the GPU; this type validates and retains their data.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SelectionPixels {
-    /// Older projects store four coverage samples in each nibble. Feathered
-    /// selections retain full 8-bit coverage, four pixels per word.
-    #[serde(default)]
+    /// Feathered selections retain full 8-bit coverage, four pixels per word.
     byte_coverage: bool,
     extent: [u32; 2],
     bounds: [u32; 4],
@@ -361,16 +358,6 @@ impl Selection {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
-
-    #[test]
-    fn legacy_layer_mode_is_ignored_in_favor_of_global_preferences() {
-        let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"color_transparency","protected":true}"#).unwrap();
-        assert_eq!(p, SelectionMaskProperties::default());
-        let p: SelectionMaskProperties = serde_json::from_str(r#"{"painting":"black_white","protected":false}"#).unwrap();
-        assert_eq!(p, SelectionMaskProperties::default());
-        assert!(!serde_json::to_string(&p).unwrap().contains("painting"));
-        assert!(!serde_json::to_string(&p).unwrap().contains("protected"));
-    }
 
     fn soft_mask() -> Selection {
         Selection::pixels(Arc::new(
