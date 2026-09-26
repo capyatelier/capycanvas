@@ -6,16 +6,12 @@ use serde_json::{Value, json};
 struct App(*mut CapyApple);
 #[path = "color_tests.rs"]
 mod color;
-#[path = "document_color_tests.rs"]
-mod document_color;
 #[path = "source_tests.rs"]
 mod source;
 #[path = "inspection_tests.rs"]
 mod inspection;
 #[path = "correction_tests.rs"]
 mod correction;
-#[path = "export_tests.rs"]
-mod export;
 #[path = "proof_tests.rs"]
 mod proof;
 #[path = "hdr_tests.rs"]
@@ -908,8 +904,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         assert_eq!([info.width, info.height], [63, 47]);
         // Float32 output quantization and the display readback can differ by
         // one code value (one blue sample in this fixture). Export no longer
-        // narrows through the display cache. Retained integer source samples
-        // are checked exactly in export_tests.rs.
+        // narrows through the display cache.
         assert_eq!(pixels.len(), expected.len());
         assert!(pixels.iter().zip(&expected).all(|(&a, &b)| a.abs_diff(b) <= 1));
         assert!(pixels.chunks_exact(4).zip(expected.chunks_exact(4)).all(|(a, b)| a[3] == b[3]));

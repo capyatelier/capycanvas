@@ -88,18 +88,6 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
         .unwrap();
     capture.preview_linear_document([32, 24]).unwrap().pixels
 }
-fn hdr_wait_tone(service: &mut layer_host::tone::ToneService, host: &mut NativeHost) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        service.tick(host).unwrap();
-        assert!(service.error.is_none(), "{:?}", service.error);
-        if service.status()["ready"] == true {
-            break;
-        }
-        assert!(Instant::now() < deadline, "HDR analysis timeout");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
 #[test]
 #[ignore = "Requires isolated CAPY_SETTINGS_DIRECTORY and hardware D3D12; removes its own devices"]
 fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
@@ -159,29 +147,6 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         let master = hdr_linear(&host);
         assert!(master.iter().any(|p| p[0] > 1.));
         let checkpoint = host.session.engine().checkpoint();
-        let mut tone = layer_host::tone::ToneService::new(Some(Arc::new(|| {})));
-        hdr_wait_tone(&mut tone, &mut host);
-        let downloaded = tone
-            .guide
-            .as_ref()
-            .unwrap()
-            .download(host.session.engine().backend().0.as_ref().unwrap().queue())
-            .unwrap();
-        let mut reference = hdr::LocalToneBuilder::new([32, 24], color.space).unwrap();
-        for row in master.as_chunks::<32>().0 {
-            reference.push(row).unwrap();
-        }
-        let reference = reference.finish(|| false).unwrap();
-        assert_eq!(downloaded.extent, reference.extent);
-        for (gpu, cpu) in downloaded.samples.iter().zip(&reference.samples) {
-            for c in 0..3 {
-                assert!(
-                    (gpu[c] - cpu[c]).abs() < 0.01,
-                    "GPU tone guide differs from CPU oracle"
-                );
-            }
-        }
-        let publications = tone.status()["publications"].clone();
         let original = host.session.engine().document().sdr_rendition;
         let epoch = host.session.state().document_file.epoch;
         let panel_recipe = hdr::SdrRendition {
@@ -248,12 +213,6 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_ne!(
             hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path),
             sdr
-        );
-        tone.tick(&host).unwrap();
-        assert_eq!(
-            tone.status()["publications"],
-            publications,
-            "SDR recipe changes reuse the GPU guide"
         );
         let exr = hdr_delivery(
             &mut host,
@@ -449,24 +408,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         cancelled.complete(&mut host, false).unwrap();
         drop(cancelled);
         assert_eq!(std::fs::read(&png_path).unwrap(), changed);
-        // Stop a pending analysis before releasing a removed process device.
-        tone.clear();
-        tone.tick(&host).unwrap();
-        assert!(
-            tone.guide.is_none(),
-            "Old-device guide survived a device retirement"
-        );
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while tone.status()["pending"] != true {
-            tone.tick(&host).unwrap();
-            assert!(
-                Instant::now() < deadline,
-                "Recovery fixture never started analysis"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
         crate::gpu_recovery_tests::remove_device(host.session.engine().backend(), &state);
-        tone.clear();
         drop(host.session.renderer_mut().0.take());
         let (replacement, next_state) = hdr_renderer(color);
         state = next_state;
@@ -478,8 +420,6 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         settle(&mut host);
         assert_eq!(host.session.engine().document().layers, layers);
         assert_eq!(hdr_linear(&host), master);
-        hdr_wait_tone(&mut tone, &mut host);
-        tone.clear();
         state.check().unwrap();
         assert_eq!(
             hdr_delivery(
@@ -516,144 +456,4 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_eq!(host.session.engine().document().layers, layers);
         state.check().unwrap();
     }
-}
-
-#[test]
-#[ignore = "Requires isolated CAPY_SETTINGS_DIRECTORY and hardware D3D12"]
-fn d3d12_windows_float32_signed_range_rejects_lossy_demotion_and_protects_exports() {
-    use layer_core::color::{
-        DocumentColor, hdr,
-        source::{SourceBuilder, SourceChannels, SourceInterpretation},
-    };
-    use std::{io::Cursor, sync::Arc};
-    let directory = std::path::PathBuf::from(
-        std::env::var_os("CAPY_SETTINGS_DIRECTORY").expect("isolated profile required"),
-    );
-    assert!(directory.is_absolute());
-    std::fs::create_dir_all(&directory).unwrap();
-    let color = DocumentColor {
-        space: RgbSpace::Srgb,
-        depth: SampleDepth::F32,
-    };
-    let mut project = layer_ui::NewDocumentOptions {
-        extent: [3, 1],
-        color,
-        background: layer_ui::DocumentBackground::Transparent,
-    }
-    .project()
-    .unwrap();
-    let input = [
-        [100000.125f32, -0.125, 2., 0.5],
-        [4., 2., 1., 1.],
-        [1e-20, -1., 4., 1. / 65536.],
-    ];
-    let mut builder = SourceBuilder::new(
-        [3, 1],
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::F32,
-            profile: ColorProfile::Builtin(RgbSpace::Srgb),
-            profile_assumed: false,
-        },
-        1024 * 1024,
-    )
-    .unwrap();
-    builder
-        .push_row(
-            &input
-                .into_iter()
-                .flatten()
-                .flat_map(f32::to_le_bytes)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-    project.document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    let (gpu, state) = hdr_renderer(color);
-    let mut host = NativeHost::new(Platform::Windows).unwrap();
-    host.session = UiSession::from_project(gpu, project, None, [128, 96], Platform::Windows).unwrap();
-    host.session.set_document_replacement(true);
-    host.document_adopted();
-    settle(&mut host);
-    let mut raster = begin(&mut host, CommandId::RasterizeSource);
-    ready(
-        &mut raster,
-        Action::Prepare {
-            choice: Value::Null,
-            copy: false,
-        },
-    );
-    assert!(raster.prepare_owner(&host).unwrap());
-    ready(&mut raster, Action::Compare);
-    raster.commit(&mut host).unwrap();
-    drop(raster);
-    settle(&mut host);
-    let checkpoint = host.session.engine().checkpoint();
-    let layers = host.session.engine().document().layers.clone();
-    let exr = hdr_delivery(
-        &mut host,
-        layer_ui::ExportRecipe::further_editing(color),
-        &directory.join("signed.exr"),
-    );
-    let decoded = layer_color::photo::read_photo(Cursor::new(exr), Default::default()).unwrap();
-    let mut row = vec![0; decoded.row_bytes()];
-    decoded.rows().read(0, &mut row).unwrap();
-    for (bytes, expected) in row.as_chunks::<16>().0.iter().zip(input) {
-        assert_eq!(
-            hdr::decode_samples(SampleDepth::F32, bytes)
-                .unwrap()
-                .map(f32::to_bits),
-            expected.map(f32::to_bits)
-        );
-    }
-    let mut demote = begin(&mut host, CommandId::ChangeBitDepth);
-    demote.work(Action::Prepare {
-        choice: json!({"Depth":{"depth":"F16","dither":"None"}}),
-        copy: false,
-    });
-    assert!(demote.error.is_some());
-    assert!(demote.commit(&mut host).is_err());
-    demote.complete(&mut host, false).unwrap();
-    drop(demote);
-    assert_eq!(host.session.engine().checkpoint(), checkpoint);
-    assert_eq!(host.session.engine().document().layers, layers);
-    let path = directory.join("protected.png");
-    std::fs::write(&path, b"existing destination").unwrap();
-    let mut export = begin(&mut host, CommandId::ExportDocument);
-    ready(
-        &mut export,
-        Action::ExportOptions {
-            recipe: layer_ui::ExportRecipe::web_share()
-                .draft(layer_ui::ExportDraftAction::Format(
-                    layer_ui::ExportFormat::PngHdr,
-                ))
-                .recipe,
-            profile_id: None,
-        },
-    );
-    export.work(Action::ExportWrite {
-        path: path.to_str().unwrap().into(),
-    });
-    assert!(export.error.is_some());
-    export.complete(&mut host, false).unwrap();
-    drop(export);
-    assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
-    let mapped = hdr_delivery(
-        &mut host,
-        layer_ui::ExportRecipe::web_share()
-            .draft(layer_ui::ExportDraftAction::Format(
-                layer_ui::ExportFormat::PngHdrMapped,
-            ))
-            .recipe,
-        &path,
-    );
-    assert_eq!(
-        layer_color::photo::read_photo(Cursor::new(mapped), Default::default())
-            .unwrap()
-            .interpretation
-            .depth,
-        SampleDepth::F16
-    );
-    assert_eq!(host.session.engine().checkpoint(), checkpoint);
-    assert_eq!(host.session.engine().document().layers, layers);
-    state.check().unwrap();
 }

@@ -33,14 +33,14 @@
     {
       "name": "Document color and properties",
       "commands": ["document_properties", "assign_profile", "convert_color_space", "change_bit_depth"],
-      "checks": ["native/src/document_color_tests.rs", "tests/document-color-owner.swift", "Shared/Tests/DocumentColorChecks.swift"],
+      "checks": ["../../crates/layer-host/src/tasks.rs", "tests/document-color-owner.swift", "Shared/Tests/DocumentColorChecks.swift"],
       "ios": "partial: complete shared options/comparison models, atomic document/renderer publication, exact integer/color history, source-safe flattened copies, cancellation and stale/failure preservation pass on Mac Metal with iPad policy. Physical UIKit color forms and document properties remain open.",
       "mac": "partial: the same owner/Metal contracts and native document-property/profile/depth form workflows pass, including editable versus flattened publication and source-master preservation. Physical SDR appearance and full lifecycle acceptance remain open."
     },
     {
       "name": "Retained source editing",
       "commands": ["repair_source_profile", "rasterize_source"],
-      "checks": ["native/src/source_tests.rs", "tests/source-edit-owner.swift", "Shared/Tests/SourceEditChecks.swift"],
+      "checks": ["../../crates/layer-host/src/tasks.rs", "native/src/source_tests.rs", "tests/source-edit-owner.swift", "Shared/Tests/SourceEditChecks.swift"],
       "ios": "partial: source interpretation repair, ICC import, full-extent rasterization, comparison, cancellation and exact history/save/reopen pass on Mac Metal with iPad policy through the shared worker and native owner. Physical UIKit ICC picker and source-edit controls remain open.",
       "mac": "partial: matching shared/native-owner checks and native source-repair/rasterization/ICC file workflows pass; retained source samples, off-canvas extent and one-step history are preserved. Physical provider/lifecycle acceptance remains open."
     },

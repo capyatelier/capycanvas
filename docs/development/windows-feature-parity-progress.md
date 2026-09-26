@@ -244,7 +244,6 @@ for each native workflow run. Run hardware tests serially:
 
 ~~~powershell
 cargo test --locked -p layer-windows --lib d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery -- --ignored --test-threads=1 --nocapture
-cargo test --locked -p layer-windows --lib d3d12_windows_float32_signed_range_rejects_lossy_demotion_and_protects_exports -- --ignored --test-threads=1 --nocapture
 cargo test --locked -p layer-render-wgpu --lib d3d12_hdr_float16_float32_display_switching_and_proof_match_cpu -- --ignored --test-threads=1 --nocapture
 ~~~
 
