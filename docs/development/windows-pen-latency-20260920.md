@@ -239,11 +239,8 @@ For the historical native fallback comparison use the frozen baseline binary.
 node tools/performance/windows-pen-report.mjs FRESH_RESULT_DIRECTORY
 ```
 
-For experiments set `CAPY_WINDOWS_PRESENT_MODE` to `fifo`, `mailbox` or
-`immediate`; `CAPY_WINDOWS_NO_VSYNC_WAIT=1` additionally disables the acquisition
-wait. Both controls only take effect with tracing; `windows-pen-latency.ps1`
-clears them, so set them only for a manual `CAPY_LATENCY_TRACE=1` launch. Inspect `capture.json` for the
-actual selected mode rather than assuming support. Raw local evidence lives in
+Inspect `capture.json` for the actual selected mode rather than assuming
+support. Raw local evidence lives in
 `artifacts/windows/pen-latency-20260920/`; compact measured results accompany this
 report. Runs must be isolated from compiles and other GPU workloads.
 

@@ -112,10 +112,6 @@ impl CapyHost {
         descriptor.backends = wgpu::Backends::DX12;
         descriptor.backend_options.dx12.shader_compiler =
             wgpu::Dx12Compiler::from_env().unwrap_or_else(bundled_shader_compiler);
-        if std::env::var_os("CAPY_LATENCY_TRACE").is_some()
-            && std::env::var_os("CAPY_WINDOWS_NO_VSYNC_WAIT").is_some() {
-            descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
-        }
         // GPU optimization is independent of Rust/C++ debugging. DXC's -Od
         // fragment storage-buffer code can be rejected by drivers; retain API
         // validation while using the same optimized shaders as Release.
@@ -296,17 +292,6 @@ impl CapyHost {
             .contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate
         } else { wgpu::PresentMode::Fifo };
-        if std::env::var_os("CAPY_LATENCY_TRACE").is_some() {
-            let mode = match std::env::var("CAPY_WINDOWS_PRESENT_MODE").as_deref() {
-                Ok("immediate") => wgpu::PresentMode::Immediate,
-                Ok("mailbox") => wgpu::PresentMode::Mailbox,
-                Ok("fifo") => wgpu::PresentMode::Fifo,
-                _ => config.present_mode,
-            };
-            if self.surface.get_capabilities(&adapter).present_modes.contains(&mode) {
-                config.present_mode = mode;
-            }
-        }
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         // Keep scRGB across monitor moves; only viewing changes, never artwork.
@@ -1070,8 +1055,7 @@ pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
             "density": host.scale,
             "present_mode": format!("{:?}", config.present_mode),
             "format": format!("{:?}", config.format),
-            "maximum_frame_latency": config.desired_maximum_frame_latency,
-            "no_vsync_wait": std::env::var_os("CAPY_LATENCY_TRACE").is_some() && std::env::var_os("CAPY_WINDOWS_NO_VSYNC_WAIT").is_some()
+            "maximum_frame_latency": config.desired_maximum_frame_latency
         });
         result = CString::new(info.to_string()).map_err(err)?.into_raw();
         Ok(0)
