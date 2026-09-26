@@ -71,7 +71,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         | DefaultBrushPreset::BlottyInk
         | DefaultBrushPreset::BrushedInk => crate::contact_presets::contact_brush(preset),
         DefaultBrushPreset::Eraser => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             tip: BrushTip::AnalyticEllipse,
             color_rgba_linear: [0.0, 0.0, 0.0, 1.0],
@@ -85,7 +84,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Paintbrush => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.12, 0.025, 0.012, 1.0],
             diameter: 460.0,
@@ -108,7 +106,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Airbrush => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.04, 0.12, 0.42, 1.0],
             diameter: 320.0,
@@ -124,7 +121,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Chalk => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.62, 0.12, 0.045, 1.0],
             diameter: 110.0,
@@ -137,7 +133,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Marker => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.72, 0.06, 0.16, 0.82],
             diameter: 180.0,
@@ -176,7 +171,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::DualTexture => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.08, 0.025, 0.42, 1.0],
             diameter: 260.0,
@@ -279,7 +273,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::TexturedFlat => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 360.0,
             aspect: 0.62,
@@ -306,7 +299,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..Default::default()
         },
         DefaultBrushPreset::DryScumble => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 430.0,
             aspect: 0.72,
@@ -334,7 +326,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..Default::default()
         },
         DefaultBrushPreset::PastelBlock => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 280.0,
             aspect: 0.58,
@@ -364,7 +355,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..Default::default()
         },
         DefaultBrushPreset::TransparentGlaze => BrushSnapshot {
-            schema_version: 5,
             contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 520.0,
             aspect: 0.52,

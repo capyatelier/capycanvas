@@ -32,7 +32,6 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     let pencil = matches!(preset, Pencil | PointyPencil | ShadingPencil | Charcoal);
     let mut model = BrushContact::default();
     let mut brush = BrushSnapshot {
-        schema_version: 5,
         diameter: 18.0,
         color_rgba_linear: [0.006, 0.006, 0.006, 1.0],
         flow: 1.0,

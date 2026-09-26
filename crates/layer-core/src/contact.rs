@@ -9,7 +9,6 @@
 use crate::BrushError;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
 pub struct BrushContact {
     /// Strength of paper tooth in the contact threshold, 0 for a solid nib.
     pub paper: f32,
@@ -78,43 +77,5 @@ impl BrushContact {
             return Err(BrushError::InvalidAdvanced);
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::*;
-    #[test]
-    fn contact_snapshots_are_versioned_and_legacy_snapshots_keep_their_semantics() {
-        let old = BrushSnapshot::default();
-        let mut json = serde_json::to_value(&old).unwrap();
-        json["taper"]
-            .as_object_mut()
-            .unwrap()
-            .remove("tip_sharpness");
-        json["stabilization"]
-            .as_object_mut()
-            .unwrap()
-            .remove("pressure_fall_micros");
-        // Old experimental release fields are ignored, not reinterpreted.
-        json["taper"]["release_micros"] = serde_json::json!(16_000);
-        let restored: BrushSnapshot = serde_json::from_value(json).unwrap();
-        assert_eq!(old, restored);
-        restored.validate().unwrap();
-        let mut invalid = default_brush(DefaultBrushPreset::GPen);
-        assert_eq!(invalid.stabilization.pressure_fall_micros, 34_133);
-        invalid.stabilization.pressure_fall_micros = 1_000_001;
-        assert!(invalid.validate().is_err());
-        for preset in CONTACT_BRUSH_PRESETS {
-            let brush = default_brush(preset);
-            let decoded: BrushSnapshot =
-                serde_json::from_slice(&serde_json::to_vec(&brush).unwrap()).unwrap();
-            assert_eq!(decoded, brush);
-            assert_eq!(decoded.schema_version, 5);
-            decoded.validate().unwrap();
-            let mut incorrectly_versioned = brush;
-            incorrectly_versioned.schema_version = 4;
-            assert!(incorrectly_versioned.validate().is_err());
-        }
     }
 }

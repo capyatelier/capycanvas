@@ -516,7 +516,6 @@ pub struct BrushStabilization {
     /// Minimum time for modeled pressure to fall by one full unit. Its fall
     /// velocity eases with a 4 ms response to smooth repeated sensor values.
     /// Zero disables the limiter. Uses input time, independent of zoom and DPI.
-    #[serde(default)]
     pub pressure_fall_micros: u32,
     pub stabilization: f32,
     pub motion_filtering: f32,
@@ -537,7 +536,6 @@ impl Default for BrushStabilization {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
 pub struct BrushTaper {
     pub start_distance_diameters: f32,
     pub end_distance_diameters: f32,
@@ -784,7 +782,6 @@ impl Default for BrushBounds {
 /// preset creates a new snapshot; the active contact retains its own settings.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushSnapshot {
-    pub schema_version: u16,
     pub tip: BrushTip,
     /// Straight linear document RGB; coverage alpha is bounded independently.
     pub color_rgba_linear: [f32; 4],
@@ -816,15 +813,13 @@ pub struct BrushSnapshot {
     pub transport: Option<BrushTransport>,
     pub deform: BrushDeform,
     pub bounds: BrushBounds,
-    /// Optional coherent GPU contact model. Omitted in legacy snapshots.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional coherent GPU contact model.
     pub contact: Option<BrushContact>,
 }
 
 impl Default for BrushSnapshot {
     fn default() -> Self {
         Self {
-            schema_version: 4,
             tip: BrushTip::AnalyticEllipse,
             color_rgba_linear: [0.02, 0.02, 0.018, 1.0],
             diameter: 12.0,
@@ -869,9 +864,7 @@ impl BrushSnapshot {
             self.aspect,
             self.angle_radians,
         ];
-        if !matches!(self.schema_version, 4 | 5)
-            || (self.schema_version == 4 && self.contact.is_some())
-            || base.iter().any(|value| !value.is_finite())
+        if base.iter().any(|value| !value.is_finite())
             || !(0.0..=1.0).contains(&self.color_rgba_linear[3])
             || !(0.01..=MAX_BRUSH_DIAMETER).contains(&self.diameter)
             || !(0.0..=1.0).contains(&self.opacity)
@@ -1171,7 +1164,7 @@ pub enum BrushError {
 impl fmt::Display for BrushError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidBase => formatter.write_str("invalid brush base settings or schema"),
+            Self::InvalidBase => formatter.write_str("invalid brush base settings"),
             Self::InvalidAdvanced => formatter.write_str("invalid advanced brush settings"),
             Self::TooManyMappings => write!(
                 formatter,
