@@ -17335,24 +17335,10 @@ mod tests {
         assert_eq!(s.state.settings.keys(&target).len(), 1);
     }
     #[test]
-    fn arbitrary_typed_actions_and_momentary_pan_use_the_same_keymap() {
+    fn size_shortcuts_and_momentary_pan_use_the_same_keymap() {
         let mut s = session();
         invoke(&mut s, CommandId::KeyboardShortcuts);
-        preference(
-            &mut s,
-            PreferenceAction::RegisterAction {
-                definition: ShortcutDefinition {
-                    id: "custom.size-42".into(),
-                    label: "My drawing size".into(),
-                    repeat: false,
-                    action: ShortcutAction::Action {
-                        action: Box::new(UiAction::SetBrushSize { value: 42.0 }),
-                    },
-                    scope: BindingScope::Application,
-                },
-            },
-        );
-        record_shortcut(&mut s, "custom.size-42", "k", false);
+        record_shortcut(&mut s, "size.48", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         record_shortcut(&mut s, "canvas.pan", "g", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
@@ -17363,7 +17349,7 @@ mod tests {
         );
         key(&mut s, "k", false, false, true);
         assert!(key(&mut s, "k", true, false, false).handled);
-        assert_eq!(s.state.brush.diameter, 42.0);
+        assert_eq!(s.state.brush.diameter, 48.0);
         assert!(key(&mut s, " ", true, false, false).pan_cursor);
         key(&mut s, " ", false, false, false);
         assert!(key(&mut s, "g", true, false, false).pan_cursor);

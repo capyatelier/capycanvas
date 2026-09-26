@@ -312,14 +312,6 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), true);
   await click('.preferences-search-toggle');
   assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), false);
-  await preference({ type: "register_action", definition: {
-    id: "custom.test-size", label: "Test size", repeat: false,
-    action: { kind: "action", action: { type: "set_brush_size", value: 42 } },
-  } });
-  assert.equal(await evaluate("document.querySelectorAll('[data-shortcut=\"custom.test-size\"]').length"), 1);
-  await action({ type: "close_settings" });
-  await click('#header [data-command="settings"]');
-  assert.equal(await evaluate("document.querySelectorAll('[data-shortcut=\"custom.test-size\"]').length"), 1, "accepted custom actions survive closing settings");
   await evaluate("const emptySearch=document.querySelector('#settings-search');emptySearch.value='no-such-preference';emptySearch.dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelector('.preferences-empty').hidden"), false);
   await evaluate("const search=document.querySelector('#settings-search');search.value='pressure response';search.dispatchEvent(new Event('input'))");

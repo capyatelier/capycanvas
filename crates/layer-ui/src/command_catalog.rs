@@ -788,7 +788,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
         pan.action = None;
         entries.push(pan);
-        for (definition, _) in crate::shortcuts::definitions(settings, platform) {
+        for (definition, _) in crate::shortcuts::definitions(platform) {
             match definition.action {
                 crate::shortcuts::ShortcutAction::Hold { command } => {
                     let mut held = entry(

@@ -74,29 +74,6 @@ impl ZenIcon {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClockVisibility {
-    #[default]
-    Fullscreen,
-    Always,
-    Never,
-}
-impl ClockVisibility {
-    pub const CHOICES: [(Self, &'static str); 3] = [
-        (Self::Fullscreen, "In fullscreen mode"),
-        (Self::Always, "Always"),
-        (Self::Never, "Never"),
-    ];
-    pub const fn visible(self, fullscreen: bool) -> bool {
-        match self {
-            Self::Fullscreen => fullscreen,
-            Self::Always => true,
-            Self::Never => false,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -105,8 +82,6 @@ pub struct Settings {
     pub photo_open: PhotoOpenPolicy,
     pub theme: Option<Theme>,
     pub transparency: crate::Transparency,
-    // Keep the persisted key compatible with the original clock-only setting.
-    pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,8 +106,6 @@ pub struct Settings {
     pub tip_lock: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
-    /// Any typed UiAction can be registered, including parameterized controls.
-    pub custom_actions: Vec<ShortcutDefinition>,
     /// Per-preset slider values, shared by every placement of that slider.
     pub slider_bookmarks: BTreeMap<String, SliderBookmarks>,
 }
@@ -144,7 +117,6 @@ impl Default for Settings {
             photo_open: PhotoOpenPolicy::default(),
             theme: None,
             transparency: crate::Transparency::default(),
-            show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
             accent: None,
@@ -164,7 +136,6 @@ impl Default for Settings {
             prediction_ms: 16.0,
             tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
-            custom_actions: Vec::new(),
             slider_bookmarks: BTreeMap::new(),
         }
     }
@@ -317,7 +288,6 @@ pub enum PreferenceId {
     MissingProfile,
     Theme,
     Transparency,
-    ShowClock,
     /// Retired preference ID, retained to decode saved custom actions.
     TotalZen,
     ZenIcon,
@@ -353,7 +323,6 @@ impl PreferenceId {
             Self::MissingProfile => "missing-profile",
             Self::Theme => "theme",
             Self::Transparency => "transparency",
-            Self::ShowClock => "show-clock",
             Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
             Self::ZenShowCapy => "zen-show-capy",
@@ -649,9 +618,6 @@ pub enum PreferenceAction {
         id: String,
     },
     ResetAllShortcuts,
-    RegisterAction {
-        definition: ShortcutDefinition,
-    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -902,23 +868,6 @@ impl Settings {
                                 .unwrap() as u32,
                         },
                     ),
-                    row(
-                        ShowClock,
-                        "Show battery and clock",
-                        "",
-                        PreferenceKind::Choice {
-                            presentation: ChoicePresentation::Dropdown,
-                            icons: Vec::new(),
-                            options: ClockVisibility::CHOICES
-                                .iter()
-                                .map(|c| c.1.into())
-                                .collect(),
-                            selected: ClockVisibility::CHOICES
-                                .iter()
-                                .position(|c| c.0 == self.show_clock)
-                                .unwrap() as u32,
-                        },
-                    ),
                     self.base_row(crate::Theme::Dark, platform),
                     self.base_row(crate::Theme::Light, platform),
                 ],
@@ -1076,13 +1025,6 @@ impl Settings {
                 ),
             ],
         });
-        if crate::CommandId::CustomizeWorkspaceUi.available_on(platform) {
-            // Clock/battery visibility belongs to each workspace's window
-            // bar. Keep the legacy preference for hosts with the older chrome.
-            for group in &mut groups[0] {
-                group.rows.retain(|row| row.id != ShowClock);
-            }
-        }
         if !platform.transparency_preference() {
             for group in &mut groups[0] {
                 group.rows.retain(|row| row.id != Transparency);
@@ -1229,9 +1171,6 @@ impl Settings {
             Transparency => {
                 self.transparency = crate::Transparency::CHOICES[value.choice().unwrap() as usize].0
             }
-            ShowClock => {
-                self.show_clock = ClockVisibility::CHOICES[value.choice().unwrap() as usize].0
-            }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
             HideCursorWhileDrawing => {
                 self.hide_cursor_while_drawing = matches!(value, PreferenceValue::Bool(true))
@@ -1372,7 +1311,7 @@ impl PreferencesState {
             }
         }
         let shortcut_query = self.shortcut_query.trim().to_lowercase();
-        let shortcuts: Vec<_> = crate::shortcuts::definitions(settings, platform)
+        let shortcuts: Vec<_> = crate::shortcuts::definitions(platform)
             .into_iter()
             .map(|(definition, group)| {
                 let mut shortcut = settings.shortcut_label(&definition.id, platform);
@@ -1513,7 +1452,7 @@ impl PreferencesState {
                 settings.edit(id, settings.default_value(id, platform)?, platform)?;
             }
             PreferenceAction::EditShortcut { id } => {
-                if !crate::shortcuts::definitions(settings, platform)
+                if !crate::shortcuts::definitions(platform)
                     .iter()
                     .any(|(d, _)| d.id == id)
                 {
@@ -1541,7 +1480,7 @@ impl PreferencesState {
                 settings.shortcuts.insert(id, keys);
             }
             PreferenceAction::BeginShortcut { id } => {
-                let (definition, _) = crate::shortcuts::definitions(settings, platform)
+                let (definition, _) = crate::shortcuts::definitions(platform)
                     .into_iter()
                     .find(|(d, _)| d.id == id)
                     .ok_or("Unknown shortcut action")?;
@@ -1595,7 +1534,7 @@ impl PreferencesState {
                 self.capture = None;
             }
             PreferenceAction::ResetShortcut { id } => {
-                if !crate::shortcuts::definitions(settings, platform)
+                if !crate::shortcuts::definitions(platform)
                     .iter()
                     .any(|(d, _)| d.id == id)
                 {
@@ -1611,13 +1550,6 @@ impl PreferencesState {
             PreferenceAction::ResetAllShortcuts => {
                 settings.shortcuts.clear();
                 self.capture = None;
-            }
-            PreferenceAction::RegisterAction { definition } => {
-                let mut candidate = settings.clone();
-                candidate.custom_actions.retain(|a| a.id != definition.id);
-                candidate.custom_actions.push(definition);
-                candidate.validate()?;
-                *settings = candidate;
             }
         }
         Ok(())
@@ -1952,73 +1884,6 @@ mod copy_tests {
     }
 
     #[test]
-    fn clock_visibility_defaults_round_trips_and_resets() {
-        let original: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
-        for platform in [
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Windows,
-        ] {
-            assert!(original.field(PreferenceId::ShowClock, platform).is_err());
-        }
-        {
-            let platform = Platform::Generic;
-            let mut settings = original.clone();
-            let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
-            assert_eq!(row.title, "Show battery and clock");
-            assert!(matches!(
-                row.kind,
-                PreferenceKind::Choice { selected: 0, .. }
-            ));
-            for (index, policy) in [
-                ClockVisibility::Fullscreen,
-                ClockVisibility::Always,
-                ClockVisibility::Never,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                settings
-                    .edit(
-                        PreferenceId::ShowClock,
-                        PreferenceValue::Choice(index as u32),
-                        platform,
-                    )
-                    .unwrap();
-                let saved = serde_json::to_string(&settings).unwrap();
-                let restored =
-                    Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(&saved))
-                        .unwrap();
-                assert_eq!(restored.show_clock, policy);
-                assert_eq!(policy.visible(false), policy == ClockVisibility::Always);
-                assert_eq!(policy.visible(true), policy != ClockVisibility::Never);
-            }
-            assert!(
-                settings
-                    .edit(
-                        PreferenceId::ShowClock,
-                        PreferenceValue::Choice(3),
-                        platform
-                    )
-                    .is_err()
-            );
-            let mut preferences = PreferencesState::default();
-            preferences.edit(
-                &mut settings,
-                PreferenceAction::Reset {
-                    id: PreferenceId::ShowClock,
-                },
-                platform,
-            );
-            assert_eq!(settings, original);
-        }
-    }
-
-    #[test]
     fn zen_preferences_roundtrip_reset_and_retire_legacy_mode() {
         for platform in [
             Platform::Generic,
@@ -2276,7 +2141,7 @@ mod copy_tests {
                     }
                 }
             }
-            for (definition, group) in crate::shortcuts::definitions(&settings, platform) {
+            for (definition, group) in crate::shortcuts::definitions(platform) {
                 check(&definition.label);
                 check(group);
                 let mut state = PreferencesState::default();

@@ -508,10 +508,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     vec![chord]
 }
 
-pub(crate) fn definitions(
-    settings: &Settings,
-    platform: Platform,
-) -> Vec<(ShortcutDefinition, &'static str)> {
+pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'static str)> {
     let mut rows: Vec<_> = CommandId::ALL
         .into_iter()
         .filter(|c| c.available_on(platform))
@@ -613,18 +610,10 @@ pub(crate) fn definitions(
             "Brush sizes",
         )
     }));
-    rows.extend(
-        settings
-            .custom_actions
-            .iter()
-            .cloned()
-            .map(|a| (a, "Custom actions")),
-    );
     rows
 }
 impl Settings {
-    /// Resolve action identity, not translated labels or widget names. Custom
-    /// actions work in contextual menus too, including parameterized actions.
+    /// Resolve action identity, not translated labels or widget names.
     pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String {
         self.action_keys(action, platform)
             .iter()
@@ -658,16 +647,6 @@ impl Settings {
         } else {
             Vec::new()
         };
-        for definition in &self.custom_actions {
-            if matches!(&definition.action, ShortcutAction::Action { action: a } if canonical(a) == action)
-            {
-                for key in self.keys(&definition.id) {
-                    if !keys.contains(&key) {
-                        keys.push(key);
-                    }
-                }
-            }
-        }
         keys.retain(|key| key.available(platform));
         keys
     }
@@ -724,14 +703,14 @@ impl Settings {
         if !chord.available(platform) {
             return None;
         }
-        definitions(self, platform)
+        definitions(platform)
             .into_iter()
             .map(|(definition, _)| definition)
             .filter(|definition| definition.scope.applies(canvas) && self.keys(&definition.id).contains(chord))
             .max_by_key(|definition| definition.scope.specificity())
     }
     pub(crate) fn held_shortcut(&self, id: &str, platform: Platform) -> bool {
-        definitions(self, platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
+        definitions(platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
     }
     pub(crate) fn conflict(
         &self,
@@ -739,7 +718,7 @@ impl Settings {
         chord: &KeyChord,
         platform: Platform,
     ) -> Option<ShortcutDefinition> {
-        let all = definitions(self, platform);
+        let all = definitions(platform);
         let scope = all.iter().find(|(d, _)| d.id == id).map(|(d, _)| d.scope.clone()).unwrap_or_default();
         all.into_iter().find_map(|(definition, _)| {
             (definition.id != id
@@ -750,21 +729,7 @@ impl Settings {
         })
     }
     pub(crate) fn validate_shortcuts(&self) -> Result<(), String> {
-        let mut ids = std::collections::BTreeSet::new();
-        if self.custom_actions.len() > 128 {
-            return Err("Too many custom shortcut actions".into());
-        }
-        for action in &self.custom_actions {
-            if !action.id.starts_with("custom.")
-                || action.id.len() > 100
-                || action.label.is_empty()
-                || action.label.len() > 120
-                || !ids.insert(&action.id)
-            {
-                return Err("Use a unique custom.* ID and a short action name.".into());
-            }
-        }
-        let all = definitions(self, Platform::Gtk);
+        let all = definitions(Platform::Gtk);
         for (id, keys) in &self.shortcuts {
             if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {
                 return Err("Unknown action or too many shortcut alternatives".into());
@@ -869,27 +834,14 @@ mod tests {
     }
 
     #[test]
-    fn nested_context_menus_and_reset_preserve_hints_and_custom_action_keys() {
+    fn nested_context_menus_preserve_hints_and_keys() {
         let mut settings = Settings::default();
-        let action = UiAction::Preferences {
-            action: PreferenceAction::Reset {
-                id: PreferenceId::ZenIcon,
-            },
-        };
-        settings.custom_actions.push(ShortcutDefinition {
-            id: "custom.reset-icon".into(),
-            label: "Restore icon".into(),
-            action: ShortcutAction::Action {
-                action: Box::new(action.clone()),
-            },
-            repeat: false,
-            scope: BindingScope::Application,
-        });
+        let action = UiAction::SetBrushSize { value: 48. };
         settings
             .shortcuts
-            .insert("custom.reset-icon".into(), vec![key("i", true, true)]);
+            .insert("size.48".into(), vec![key("i", true, true)]);
         let item = ContextMenuItem {
-            label: "Translated reset".into(),
+            label: "Translated size".into(),
             hint: "Default icon".into(),
             bindings: Vec::new(),
             selected: Some(false),
@@ -918,16 +870,5 @@ mod tests {
             menu.sections[0][0].sections[0][0].bindings,
             [key("i", true, true)]
         );
-        let reset = settings
-            .pages(Platform::Gtk)
-            .into_iter()
-            .flat_map(|p| p.groups)
-            .flat_map(|g| g.rows)
-            .find(|r| r.id == PreferenceId::ZenIcon)
-            .unwrap()
-            .reset
-            .unwrap();
-        assert_eq!(reset.hint, format!("{} · Ctrl+Shift+I", reset.value));
-        assert!(!reset.enabled);
     }
 }

@@ -171,7 +171,7 @@ fn native_fullscreen_header_clock_and_battery() {
         .application(&app)
         .child(&native.root)
         .build();
-    native.set_visibility(true, layer_ui::ClockVisibility::Fullscreen);
+    native.set_visibility(true);
     probe.present();
     until(|| native.root.is_mapped());
     native.show_battery(Some(crate::system_status::Battery {
@@ -214,11 +214,9 @@ fn native_fullscreen_header_clock_and_battery() {
             battery.width() >= size.tile() as i32 && battery.height() >= size.tile() as i32
         });
     }
-    native.set_visibility(false, layer_ui::ClockVisibility::Always);
-    assert!(battery.is_visible());
-    native.set_visibility(true, layer_ui::ClockVisibility::Never);
+    native.set_visibility(false);
     assert!(!battery.is_visible() && !native.root.is_visible());
-    native.set_visibility(true, layer_ui::ClockVisibility::Fullscreen);
+    native.set_visibility(true);
     native.show_battery(Some(crate::system_status::Battery {
         percent: 8,
         charging: true,

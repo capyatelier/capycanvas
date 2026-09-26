@@ -1905,13 +1905,7 @@ impl Workspace {
         }
     }
     fn fullscreen_changed(self: &Rc<Self>, fullscreen: bool) {
-        let show_clock = self
-            .gpu
-            .borrow()
-            .as_ref()
-            .map(|g| g.session.state().settings.show_clock)
-            .unwrap_or_default();
-        self.system_status.set_visibility(fullscreen, show_clock);
+        self.system_status.set_visibility(fullscreen);
         self.dispatch(UiAction::WindowFullscreen { fullscreen });
     }
     pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
@@ -2632,8 +2626,7 @@ impl Workspace {
             }
         }
         if regions & regions::SETTINGS != 0 {
-            self.system_status
-                .set_visibility(self.window.is_fullscreen(), state.settings.show_clock);
+            self.system_status.set_visibility(self.window.is_fullscreen());
             self.apply_palette(state.palette);
             if state.theme == Theme::Light {
                 self.window.add_css_class("light-theme");

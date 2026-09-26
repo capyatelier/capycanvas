@@ -86,12 +86,8 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   assert.equal(await evaluate('layerApp.state().fullscreen'),false,"Maximized is not fullscreen");
   await call("Browser.setWindowBounds",{windowId,bounds:{windowState:"normal"}},null);
   await new Promise(resolve=>setTimeout(resolve,200));await settle();
-  // The old preference can remain in saved settings but the title-bar model
-  // owns positions, and status is visible only in fullscreen.
-  await evaluate('layerApp.dispatch({type:"restore_settings",settings:{...layerApp.state().settings,show_clock:"always"}})');
   assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),true);
   await click('#fullscreen');await wait('!!document.fullscreenElement');
-  await evaluate('layerApp.dispatch({type:"restore_settings",settings:{...layerApp.state().settings,show_clock:"never"}})');
   assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),false);
   await click('#fullscreen');await wait('!document.fullscreenElement');
   for (const mode of ["absent", "denied"]) {

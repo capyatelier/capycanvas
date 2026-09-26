@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkToolbarStylesAndActions(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"preferences","action":{"type":"edit","id":"show_clock","value":2}},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"zoom_in"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}},{"type":"customize","action":{"type":"set_tile_style","panel":"commands","style":"medium_labeled"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"zoom_in"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}},{"type":"customize","action":{"type":"set_tile_style","panel":"commands","style":"medium_labeled"}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)

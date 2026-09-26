@@ -65,21 +65,17 @@ export async function checkLayers({ call, evaluate, settle }) {
   await send({op:"select",id:2,mask:false});
   assert.equal(await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').disabled`),false,"Paper is deletable");
   await send({op:"select",id:1,mask:false});
-  // Menus and hover tips resolve typed actions, including remapped/custom keys.
+  // Menus and hover tips resolve typed actions, including remapped keys.
   await evaluate(`(() => {
     window.originalLayerTestSettings = layerApp.state().settings;
     layerApp.dispatch({type:'restore_settings',settings:{...originalLayerTestSettings,
-      custom_actions:[{id:'custom.alpha',label:'An unrelated action label',repeat:false,
-        action:{kind:'action',action:{type:'layer',action:{op:'alpha_lock',id:1,value:true}}}}],
       shortcuts:{...originalLayerTestSettings.shortcuts,
         'command.ZenMode':[{key:'j',command:true,alt:true,shift:false}],
-        'command.AddLayer':[{key:'n',command:true,alt:true,shift:false}],
-        'custom.alpha':[{key:'l',command:false,alt:true,shift:false}]}}});
+        'command.AddLayer':[{key:'n',command:true,alt:true,shift:false}]}}});
   })()`);
   assert.equal(await evaluate("document.querySelector('#zen-button').title"), "Zen mode (Ctrl+Alt+J)");
   await evaluate(`document.querySelector('.layer-footer [aria-label="New layer"]').dispatchEvent(new PointerEvent('pointerenter'))`);
   assert.equal(await evaluate(`document.querySelector('.layer-footer [aria-label="New layer"]').title`), "New layer (Ctrl+Alt+N)");
-  assert.deepEqual(await evaluate(`(() => { const items=section=>section.flat().flatMap(i=>[i,...items(i.sections)]),item=items(layerApp.app.layer_menu(1n,false).sections).find(i=>i.label==='Alpha lock'); return [item.hint,item.selected]; })()`), ["Alt+L", false]);
   await evaluate("layerApp.dispatch({type:'restore_settings',settings:originalLayerTestSettings}); delete window.originalLayerTestSettings");
   await evaluate(`layerApp.dispatch({type:'set_theme',theme:'dark'})`);
   const thumb = await evaluate(`new Promise((resolve,reject)=>{ const start=performance.now(); function check(){

@@ -23,7 +23,6 @@ pub(crate) struct SystemStatus {
     drawing: gtk::DrawingArea,
     value: Rc<Cell<Option<Battery>>>,
     fullscreen: Cell<bool>,
-    show_clock: Cell<layer_ui::ClockVisibility>,
     components: Cell<Option<[bool; 2]>>,
     header_size: Cell<Option<layer_ui::HeaderSize>>,
     settings: Option<gio::Settings>,
@@ -176,7 +175,6 @@ impl SystemStatus {
             drawing,
             value,
             fullscreen: Cell::new(false),
-            show_clock: Cell::new(layer_ui::ClockVisibility::default()),
             components: Cell::new(None),
             header_size: Cell::new(None),
             settings,
@@ -260,9 +258,8 @@ impl SystemStatus {
         ));
         this
     }
-    pub fn set_visibility(&self, fullscreen: bool, show_clock: layer_ui::ClockVisibility) {
+    pub fn set_visibility(&self, fullscreen: bool) {
         self.fullscreen.set(fullscreen);
-        self.show_clock.set(show_clock);
         self.update_visibility();
     }
     pub fn set_components(&self, clock: bool, battery: bool) {
@@ -309,7 +306,7 @@ impl SystemStatus {
             .components
             .get()
             .map(|components| components.map(|present| present && self.fullscreen.get()))
-            .unwrap_or_else(|| [self.show_clock.get().visible(self.fullscreen.get()); 2]);
+            .unwrap_or([self.fullscreen.get(); 2]);
         let battery = battery && self.value.get().is_some();
         self.clock.set_visible(clock);
         self.battery.set_visible(battery);
