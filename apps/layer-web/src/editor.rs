@@ -233,8 +233,10 @@ impl WebApp {
         let bg = state.palette.panel.linear();
         let document = self.session.engine().document();
         let extent = [document.width, document.height];
-        let gpu = self.session.renderer_mut().0.as_mut().unwrap();
-        let space = gpu.renderer.document_color().space;
+        let (Some(gpu), Some(window)) = (self.session.engine().backend().0.as_deref(), self.surface.as_ref()) else {
+            return Ok(false);
+        };
+        let space = gpu.document_color().space;
         let mut retry = false;
         for slot in self.overviews.values_mut() {
             let Some(g) = layer_ui::NavigatorGeometry::new(&camera, extent, slot.size) else {
@@ -243,37 +245,37 @@ impl WebApp {
             let scale = slot.scale;
             let [width, height] = slot.capacity;
             if slot.gpu.is_none() {
-                let surface = gpu
+                let surface = window
                     .instance
                     .create_surface(wgpu::SurfaceTarget::Canvas(slot.canvas.clone()))
                     .map_err(js)?;
-                let mut config = gpu.config.clone();
+                let mut config = window.config.clone();
                 config.width = width;
                 config.height = height;
                 config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
                 slot.canvas.set_width(width);
                 slot.canvas.set_height(height);
-                surface.configure(gpu.renderer.device(), &config);
-                let presenter = ViewportPresenter::for_overview_surface(&gpu.renderer, config.format, gpu.color).map_err(js)?;
+                surface.configure(gpu.device(), &config);
+                let presenter = ViewportPresenter::for_overview_surface(gpu, config.format, window.color).map_err(js)?;
                 slot.gpu = Some((surface, presenter, config, space));
             }
             let (surface, presenter, config, presented_space) = slot.gpu.as_mut().unwrap();
             // Retained DOM canvases can outlive document/color adoption. Their
             // display transform must follow the new renderer, including undo.
-            let output_changed = config.format != gpu.config.format || config.color_space != gpu.config.color_space;
+            let output_changed = config.format != window.config.format || config.color_space != window.config.color_space;
             if *presented_space != space || output_changed {
-                config.format = gpu.config.format;
-                config.color_space = gpu.config.color_space;
-                *presenter = ViewportPresenter::for_overview_surface(&gpu.renderer, config.format, gpu.color).map_err(js)?;
+                config.format = window.config.format;
+                config.color_space = window.config.color_space;
+                *presenter = ViewportPresenter::for_overview_surface(gpu, config.format, window.color).map_err(js)?;
                 *presented_space = space;
             }
-            presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
+            presenter.inherit_proof(gpu, &window.presenter);
             if output_changed || config.width != width || config.height != height {
                 config.width = width;
                 config.height = height;
                 slot.canvas.set_width(width);
                 slot.canvas.set_height(height);
-                surface.configure(gpu.renderer.device(), config);
+                surface.configure(gpu.device(), config);
             }
             let target = match surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(target)
@@ -284,7 +286,7 @@ impl WebApp {
                     continue;
                 }
                 wgpu::CurrentSurfaceTexture::Outdated => {
-                    surface.configure(gpu.renderer.device(), config);
+                    surface.configure(gpu.device(), config);
                     retry = true;
                     continue;
                 }
@@ -298,7 +300,7 @@ impl WebApp {
                 }
             };
             presenter.set_overviews(
-                &gpu.renderer,
+                gpu,
                 &[layer_render_wgpu::OverviewPlacement {
                     bounds: [
                         g.image.x * scale,
@@ -315,11 +317,11 @@ impl WebApp {
                 }],
             );
             presenter.present_overviews(
-                &gpu.renderer,
+                gpu,
                 &target.texture.create_view(&Default::default()),
                 [width, height],
             ).map_err(js)?;
-            gpu.renderer.queue().present(target);
+            gpu.queue().present(target);
         }
         Ok(retry)
     }

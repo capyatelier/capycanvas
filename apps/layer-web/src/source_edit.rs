@@ -53,14 +53,8 @@ impl WebSourceCandidate {
 }
 impl WebApp {
     fn validate_source_candidate(&self, c: &WebSourceCandidate) -> Result<(), JsValue> {
-        let s = &self.session;
-        let live = s
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        c.workflow.identity.validate(s, c.control.is_cancelled(), Arc::ptr_eq(&live.lost, &c.lost) && live.lost.lock().unwrap().is_none()).map_err(js)
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
+        c.workflow.identity.validate(&self.session, c.control.is_cancelled(), Arc::ptr_eq(&lost, &c.lost) && lost.lock().unwrap().is_none()).map_err(js)
     }
 }
 #[wasm_bindgen]
@@ -77,14 +71,14 @@ impl WebApp {
         workflow.validate_choice(&profile).map_err(js)?;
         let project = workflow.project.clone();
         let original = workflow.original.clone();
-        let live = s
+        let gpu = s
             .engine()
             .backend()
             .0
             .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        let gpu = live.renderer.snapshot_gpu();
-        let lost = live.lost.clone();
+            .ok_or_else(|| js("Canvas unavailable"))?
+            .snapshot_gpu();
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let control = control.inner.clone();
         let background = s.engine().view().background_rgba_linear;
         let time = s.engine().animation_time();

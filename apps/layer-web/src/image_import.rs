@@ -18,7 +18,7 @@ pub struct WebPreparedImages {
     control: layer_render_wgpu::snapshot::CaptureControl,
 }
 
-fn active(session: &UiSession<WebRenderer>, id: u32) -> Result<(), JsValue> {
+fn active(session: &UiSession<AttachedRenderer>, id: u32) -> Result<(), JsValue> {
     if session.state().requests.iter().any(|r| {
         r.id == id
             && matches!(
@@ -55,18 +55,8 @@ impl WebApp {
             .session
             .image_placement_context(screen, destination)
             .map_err(js)?;
-        let live = self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Wait for the canvas"))?;
-        Ok(WebImageImport {
-            id,
-            context,
-            lost: live.lost.clone(),
-        })
+        let lost = self.gpu_owner().ok_or_else(|| js("Wait for the canvas"))?;
+        Ok(WebImageImport { id, context, lost })
     }
     pub fn prepare_images(
         &self,
@@ -156,14 +146,8 @@ impl WebApp {
         self.session
             .validate_image_placement(&request.context)
             .map_err(js)?;
-        let live = self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        if !Arc::ptr_eq(&live.lost, &request.lost) || live.lost.lock().unwrap().is_some() {
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
+        if !Arc::ptr_eq(&lost, &request.lost) || lost.lock().unwrap().is_some() {
             return Err(js("The canvas changed while importing; try again"));
         }
         self.session

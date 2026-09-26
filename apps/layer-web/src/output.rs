@@ -76,7 +76,6 @@ impl WebApp {
             .0
             .as_ref()
             .ok_or_else(|| js("Canvas unavailable"))?
-            .renderer
             .snapshot_gpu();
         let control = control.inner.clone();
         Ok(future_to_promise(async move {
@@ -116,7 +115,6 @@ impl WebApp {
             .0
             .as_ref()
             .ok_or_else(|| js("Wait for the canvas"))?
-            .renderer
             .snapshot_gpu();
         let control = control.inner.clone();
         Ok(future_to_promise(render_output(

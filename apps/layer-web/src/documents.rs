@@ -18,7 +18,7 @@ pub(super) async fn yield_browser() -> Result<(), JsValue> {
 
 #[wasm_bindgen]
 pub struct WebProject {
-    session: Option<Box<UiSession<WebRenderer>>>,
+    session: Option<Box<UiSession<AttachedRenderer>>>,
     request: u32,
     epoch: u64,
     revision: u64,
@@ -169,14 +169,11 @@ impl WebApp {
             .as_ref()
             .ok_or_else(|| js("Wait for the canvas"))?;
         let (adapter, device, queue) = (
-            live.renderer.adapter().clone(),
-            live.renderer.device().clone(),
-            live.renderer.queue().clone(),
+            live.adapter().clone(),
+            live.device().clone(),
+            live.queue().clone(),
         );
-        let instance = live.instance.clone();
-        let lost = live.lost.clone();
-        let config = live.config.clone();
-        let (color, sdr_format, hdr_capable) = (live.color, live.sdr_format, live.hdr_capable);
+        let lost = self.gpu_owner().ok_or_else(|| js("Wait for the canvas"))?;
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
@@ -324,22 +321,13 @@ impl WebApp {
                     }
                 }
             }
-            let presenter = ViewportPresenter::for_surface(&renderer, config.format, color).map_err(js)?;
-            let gpu = WebGpu {
-                renderer,
-                instance,
-                config,
-                color,
-                sdr_format,
-                hdr_capable,
-                surface: None,
-                presenter,
-                blank_presented: true,
-                lost: lost.clone(),
-            };
-            let mut candidate =
-                UiSession::from_project(WebRenderer(Some(gpu)), project, None, viewport)
-                    .map_err(js)?;
+            let mut candidate = UiSession::from_project(
+                AttachedRenderer(Some(Box::new(renderer))),
+                project,
+                None,
+                viewport,
+            )
+            .map_err(js)?;
             candidate.frame(0, 0).map_err(js)?;
             Ok(WebProject {
                 session: Some(Box::new(candidate)),
@@ -363,15 +351,8 @@ impl WebApp {
     ) -> Result<JsValue, JsValue> {
         let location: Option<DocumentLocation> =
             serde_wasm_bindgen::from_value(location).map_err(js)?;
-        let live = self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        if !std::sync::Arc::ptr_eq(&live.lost, &project.lost) || live.lost.lock().unwrap().is_some()
-        {
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
+        if !std::sync::Arc::ptr_eq(&lost, &project.lost) || lost.lock().unwrap().is_some() {
             return Err(js(
                 "The canvas changed while preparing this image; try again",
             ));
@@ -422,21 +403,13 @@ impl WebApp {
         candidate.inherit_initial_drawing_tools(&self.session).map_err(js)?;
         let active = self.session.retained_document_tiles();
         self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(js)?;
-        let old = self.session.renderer_mut().0.as_mut().unwrap();
-        let next = candidate.renderer_mut().0.as_mut().unwrap();
-        // Both renderers share this device. Only the retired renderer is dropped;
-        // destroying the device here would also destroy the prepared drawing.
-        next.config = old.config.clone();
-        if next.color != old.color {
-            next.color = old.color;
-            next.presenter = ViewportPresenter::for_surface(&next.renderer, next.config.format, next.color).map_err(js)?;
-        }
-        next.renderer.resize_surface(next.config.width, next.config.height).map_err(js)?;
+        let config = &self.surface.as_ref().ok_or_else(|| js("Canvas unavailable"))?.config;
+        candidate.renderer_mut().resize_surface(config.width, config.height).map_err(js)?;
         // All fallible candidate preparation precedes retiring the live editor.
         // The host has completed its initiating request and drained captures.
         let tiles = self.session.park_document().map_err(js)?;
-        next.surface = self.session.renderer_mut().0.as_mut().unwrap().surface.take();
-        next.surface.as_ref().unwrap().configure(next.renderer.device(), &next.config);
+        // Both renderers share this device. Only the retired renderer is dropped;
+        // destroying the device here would also destroy the prepared drawing.
         self.session.renderer_mut().0.take();
         let previous = std::mem::replace(&mut self.session, candidate);
         self.documents.append(previous, tiles);

@@ -18,8 +18,8 @@ mod workspaces;
 
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
-use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
-use layer_render_wgpu::{GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
+use layer_render::{CanvasRenderer, HostImage};
+use layer_render_wgpu::{AttachedRenderer, GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -31,9 +31,10 @@ pub struct WebApp {
     tone: hdr::ToneState,
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
-    session: UiSession<WebRenderer>,
-    documents: layer_ui::DocumentSessions<UiSession<WebRenderer>>,
+    session: UiSession<AttachedRenderer>,
+    documents: layer_ui::DocumentSessions<UiSession<AttachedRenderer>>,
     document_gpu: Option<document_tabs::DocumentGpu>,
+    surface: Option<WebSurface>,
     canvas: web_sys::HtmlCanvasElement,
     viewport_scale: f32,
     cursor: layer_ui::CanvasCursor,
@@ -71,178 +72,20 @@ struct DropQuery {
 #[wasm_bindgen]
 pub struct WebGpu {
     renderer: WgpuRasterizer,
+    surface: WebSurface,
+}
+
+struct WebSurface {
     instance: wgpu::Instance,
-    surface: Option<wgpu::Surface<'static>>,
+    surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     sdr_format: wgpu::TextureFormat,
     color: SdrSurfaceColor,
     hdr_capable: bool,
     presenter: ViewportPresenter,
+    presenter_color: layer_core::color::DocumentColor,
     blank_presented: bool,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-}
-
-/// An unattached GPU, not a fallback rasterizer. Only viewport bookkeeping is
-/// permitted before attachment; pixel operations fail instead of losing work.
-#[derive(Default)]
-struct WebRenderer(Option<WebGpu>);
-
-impl WebRenderer {
-    fn renderer(&mut self) -> Result<&mut WgpuRasterizer, GpuRasterError> {
-        self.0
-            .as_mut()
-            .map(|gpu| &mut gpu.renderer)
-            .ok_or(GpuRasterError::AdapterUnavailable)
-    }
-}
-
-impl CanvasRenderer for WebRenderer {
-    fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.renderer.shader_input(); } }
-    fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.renderer.shader_idle(idle); } }
-    fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
-        self.0.as_ref().is_some_and(|gpu| gpu.renderer.startup_needs_update(document, brush, transform))
-    }
-    fn document_color(&self) -> layer_core::color::DocumentColor {
-        self.0.as_ref().map(|gpu| gpu.renderer.document_color()).unwrap_or_default()
-    }
-    fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
-        let changed = self.renderer()?.adopt_prepared_color(color)?;
-        if changed {
-            let gpu = self.0.as_mut().unwrap();
-            gpu.presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, gpu.color)?;
-        }
-        Ok(changed)
-    }
-    fn supports_tiled_sources(&self) -> bool {
-        self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_tiled_sources())
-    }
-    fn supports_raster_damage(&self) -> bool {
-        self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_raster_damage())
-    }
-    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
-        self.0
-            .as_ref()
-            .is_none_or(|gpu| gpu.renderer.raster_dependencies_ready(packet))
-    }
-    fn can_capture_raster(&self) -> bool {
-        self.0
-            .as_ref()
-            .is_none_or(|gpu| gpu.renderer.can_capture_raster())
-    }
-    fn request_color_sample(
-        &mut self,
-        request: layer_render::ColorSampleRequest,
-    ) -> Result<bool, Self::Error> {
-        self.renderer()?.request_color_sample(request)
-    }
-    fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
-        self.0.as_mut()?.renderer.take_color_sample()
-    }
-    fn set_transform_preview(
-        &mut self,
-        preview: Option<&layer_render::TransformPreview>,
-    ) -> Result<(), Self::Error> {
-        self.renderer()?.set_transform_preview(preview)
-    }
-    fn request_region(
-        &mut self,
-        request: layer_render::RegionRequest,
-    ) -> Result<bool, Self::Error> {
-        self.renderer()?.request_region(request)
-    }
-    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
-        self.0.as_mut()?.renderer.take_region()
-    }
-    fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
-        self.renderer()?.paint_selection(update)
-    }
-    fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
-        (&mut self.0.as_mut()?.renderer).take_selection_paint()
-    }
-    fn cancel_selection_paint(&mut self) {
-        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.cancel_selection_paint(); }
-    }
-    fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
-        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_quick_mask_thumbnail(selection); }
-    }
-    fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
-        if let Some(gpu) = self.0.as_mut().map(|g| &mut g.renderer) { gpu.set_selection_overlay(overlay); }
-    }
-    fn set_selection_outline(
-        &mut self,
-        selection: Option<&layer_core::Selection>,
-    ) -> Result<(), Self::Error> {
-        self.renderer()?.set_selection_outline(selection)
-    }
-    fn request_effect_validation(
-        &mut self,
-        request: layer_render::EffectValidationRequest,
-    ) -> Result<bool, Self::Error> {
-        self.renderer()?.request_effect_validation(request)
-    }
-    fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
-        self.0.as_mut()?.renderer.take_effect_validation()
-    }
-    fn set_telemetry_enabled(&mut self, enabled: bool) {
-        if let Some(gpu) = &mut self.0 {
-            gpu.renderer.set_telemetry_enabled(enabled);
-        }
-    }
-    fn telemetry(&self) -> layer_render::RendererTelemetry {
-        self.0
-            .as_ref()
-            .map(|g| g.renderer.telemetry())
-            .unwrap_or_default()
-    }
-    type Error = GpuRasterError;
-    fn request_filter_previews(
-        &mut self,
-        request: layer_render::FilterPreviewRequest,
-    ) -> Result<bool, Self::Error> {
-        self.renderer()?.request_filter_previews(request)
-    }
-    fn take_filter_previews(
-        &mut self,
-    ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
-        self.0.as_mut()?.renderer.take_filter_previews()
-    }
-    fn cancel_filter_previews(&mut self) {
-        if let Some(gpu) = &mut self.0 { gpu.renderer.cancel_filter_previews(); }
-    }
-    fn request_thumbnail(
-        &mut self,
-        id: u64,
-        target: layer_core::LayerId,
-    ) -> Result<(), Self::Error> {
-        self.renderer()?.request_thumbnail(id, target)
-    }
-    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
-        self.0.as_mut()?.renderer.take_thumbnail()
-    }
-    fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
-        self.0.as_ref()?.renderer.tip_outline(asset)
-    }
-    fn tip_mask(&self, asset: &AssetId) -> Option<HostImage<'_>> {
-        self.0.as_ref()?.renderer.tip_mask(asset)
-    }
-
-    fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
-        if let Some(gpu) = &mut self.0 {
-            gpu.renderer.resize_surface(width, height)?;
-        }
-        Ok(())
-    }
-    fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
-        self.renderer()?.prepare_asset(asset, image)
-    }
-    fn release_asset(&mut self, asset: &AssetId) {
-        if let Some(gpu) = &mut self.0 {
-            gpu.renderer.release_asset(asset);
-        }
-    }
-    fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
-        self.renderer()?.submit(packet)
-    }
 }
 
 fn js(value: impl std::fmt::Display) -> JsValue {
@@ -405,10 +248,10 @@ impl WebApp {
             return Ok(false);
         }
         self.prepare_ui_previews()?;
-        if !self.session.renderer_mut().renderer().map_err(js)?.ui_readback_ready() {
+        if !self.rasterizer()?.ui_readback_ready() {
             return Ok(false);
         }
-        if !self.session.renderer_mut().renderer().map_err(js)?
+        if !self.rasterizer()?
             .prepare_selection_thumbnail(layer_core::LayerId(target)).map_err(js)? {
             return Ok(false);
         }
@@ -482,7 +325,7 @@ impl WebApp {
     pub fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebApp, JsValue> {
         console_error_panic_hook::set_once();
         let mut session = UiSession::blank(
-            WebRenderer::default(),
+            AttachedRenderer::default(),
             [canvas.width().max(1), canvas.height().max(1)],
         )
         .map_err(js)?;
@@ -501,6 +344,7 @@ impl WebApp {
             session,
             documents: Default::default(),
             document_gpu: None,
+            surface: None,
             workspaces: None,
             canvas,
             viewport_scale: 1.,
@@ -527,7 +371,7 @@ impl WebApp {
                 .0
                 .as_ref()
                 .is_some_and(|gpu| {
-                    !gpu.renderer.startup_needs_update(
+                    !gpu.startup_needs_update(
                         self.session.engine().document(),
                         self.session.engine().brush(),
                         self.session.engine().transform_preview().is_some(),
@@ -535,12 +379,7 @@ impl WebApp {
                 })
     }
     pub fn canvas_presented(&self) -> bool {
-        self.session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .is_some_and(|g| g.blank_presented)
+        self.gpu_ready() && self.surface.as_ref().is_some_and(|s| s.blank_presented)
     }
     pub fn shader_work_pending(&self, allow_optional: bool) -> bool {
         self.session
@@ -548,11 +387,11 @@ impl WebApp {
             .backend()
             .0
             .as_ref()
-            .is_some_and(|g| g.renderer.shader_work_pending(allow_optional && self.session.filter_previews_idle()))
+            .is_some_and(|g| g.shader_work_pending(allow_optional && self.session.filter_previews_idle()))
     }
     pub fn shader_input(&mut self) { self.session.renderer_mut().shader_input(); }
     pub fn shader_wait_ms(&self) -> f64 {
-        self.session.engine().backend().0.as_ref().map_or(0., |g| g.renderer.shader_wait_ms())
+        self.session.engine().backend().0.as_ref().map_or(0., |g| g.shader_wait_ms())
     }
     pub fn wait_for_canvas(&self) -> Result<js_sys::Promise, JsValue> {
         let gpu = self
@@ -563,7 +402,6 @@ impl WebApp {
             .as_ref()
             .ok_or_else(|| js("GPU unavailable"))?;
         let queue = gpu
-            .renderer
             .queue()
             .as_webgpu()
             .ok_or_else(|| js("WebGPU queue unavailable"))?;
@@ -571,7 +409,7 @@ impl WebApp {
     }
     pub fn startup_progress(&mut self) -> Result<JsValue, JsValue> {
         if let Some(gpu) = &mut self.session.renderer_mut().0 {
-            self.startup = gpu.renderer.poll_startup().map_err(js)?;
+            self.startup = gpu.poll_startup().map_err(js)?;
         }
         serialize(&[
             self.startup.canvas_ready,
@@ -590,22 +428,14 @@ impl WebApp {
             .0
             .as_ref()
             .ok_or_else(|| js("GPU unavailable"))?;
-        let work = gpu.renderer.compile_startup_step(allow_optional);
+        let work = gpu.compile_startup_step(allow_optional);
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             work.await.map_err(js)?;
             Ok(JsValue::UNDEFINED)
         }))
     }
     pub fn gpu_failure(&self) -> Option<String> {
-        self.session
-            .engine()
-            .backend()
-            .0
-            .as_ref()?
-            .lost
-            .lock()
-            .ok()?
-            .clone()
+        self.gpu_owner()?.lock().ok()?.clone()
     }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
         if let Some(context) = self.document_gpu.take() { context.device.destroy(); }
@@ -615,30 +445,30 @@ impl WebApp {
             // the failed device explicitly before recovery allocates another
             // complete photo cache. Document adoption shares a device and must
             // not use this path; suspension ends all work on this device.
-            gpu.renderer.device().destroy();
+            gpu.device().destroy();
         }
+        self.surface = None;
         self.deferred_contacts.clear();
         // Retained DOM navigators keep their registration and geometry through
         // device replacement; only resources owned by the retired GPU expire.
         for slot in self.overviews.values_mut() { slot.gpu = None; }
         serialize(&change)
     }
-    pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
+    pub fn attach_gpu(&mut self, gpu: WebGpu) -> Result<(), JsValue> {
         if self.gpu_ready() {
             return Err(js("GPU is already attached"));
         }
-        gpu.config.width = self.canvas.width().max(1);
-        gpu.config.height = self.canvas.height().max(1);
-        gpu.renderer
-            .resize_surface(gpu.config.width, gpu.config.height)
+        let WebGpu { mut renderer, mut surface } = gpu;
+        surface.config.width = self.canvas.width().max(1);
+        surface.config.height = self.canvas.height().max(1);
+        renderer
+            .resize_surface(surface.config.width, surface.config.height)
             .map_err(js)?;
-        gpu.surface
-            .as_ref()
-            .unwrap()
-            .configure(gpu.renderer.device(), &gpu.config);
+        surface.surface.configure(renderer.device(), &surface.config);
         self.session
-            .replace_renderer(WebRenderer(Some(gpu)))
+            .replace_renderer(AttachedRenderer(Some(Box::new(renderer))))
             .map_err(js)?;
+        self.surface = Some(surface);
         self.session.set_hdr_display_available(false);
         self.startup = StartupProgress::default();
         Ok(())
@@ -701,31 +531,46 @@ impl WebGpu {
             .color_spaces(wgpu::TextureFormat::Rgba16Float)
             .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
         let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+        let presenter_color = renderer.document_color();
         raster_worker::install(&mut renderer);
         if let Some(error) = validation.pop().await {
             return Err(gpu_error("renderer", error));
         }
         Ok(Self {
             renderer,
-            instance,
-            surface: Some(surface),
-            sdr_format: config.format,
-            color: SdrSurfaceColor::Srgb,
-            hdr_capable,
-            config,
-            presenter,
-            blank_presented: false,
-            lost,
+            surface: WebSurface {
+                instance,
+                surface,
+                sdr_format: config.format,
+                color: SdrSurfaceColor::Srgb,
+                hdr_capable,
+                config,
+                presenter,
+                presenter_color,
+                blank_presented: false,
+                lost,
+            },
         })
     }
 }
 
 impl WebApp {
+    fn rasterizer(&mut self) -> Result<&mut WgpuRasterizer, JsValue> {
+        self.session
+            .renderer_mut()
+            .0
+            .as_deref_mut()
+            .ok_or_else(|| js(GpuRasterError::AdapterUnavailable))
+    }
+    pub(crate) fn gpu_owner(&self) -> Option<std::sync::Arc<std::sync::Mutex<Option<String>>>> {
+        self.session.engine().backend().0.as_ref()?;
+        Some(self.surface.as_ref()?.lost.clone())
+    }
     fn prepare_ui_previews(&mut self) -> Result<(), JsValue> {
         let rendition = self.session.engine().document().color.depth.is_float()
             .then(|| self.session.effective_sdr_rendition());
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
-            gpu.renderer.set_ui_rendition(rendition).map_err(js)?;
+            gpu.set_ui_rendition(rendition).map_err(js)?;
         }
         Ok(())
     }
@@ -759,21 +604,13 @@ impl WebApp {
         let Some(gpu) = &engine.backend().0 else {
             return Ok(());
         };
-        if !gpu.blank_presented {
+        if !self.surface.as_ref().is_some_and(|s| s.blank_presented) {
             return Ok(());
         }
         let transform = engine.transform_preview().is_some();
-        if gpu
-            .renderer
-            .startup_needs_update(engine.document(), engine.brush(), transform)
-        {
+        if gpu.startup_needs_update(engine.document(), engine.brush(), transform) {
             let (document, brush) = (engine.document().clone(), engine.brush().clone());
-            self.session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .unwrap()
-                .renderer
+            self.rasterizer()?
                 .prepare_startup(&document, &brush, transform)
                 .map_err(js)?;
         }
@@ -953,7 +790,7 @@ impl WebApp {
         serialize(&self.session.renderer_stats())
     }
     pub fn backdrop_frames(&self) -> Vec<f64> {
-        self.session.engine().backend().0.as_ref().map_or([0; 2], |gpu| gpu.presenter.backdrop_frames()).map(|v| v as f64).to_vec()
+        self.surface.as_ref().filter(|_| self.gpu_ready()).map_or([0; 2], |s| s.presenter.backdrop_frames()).map(|v| v as f64).to_vec()
     }
     pub fn panel_view(&self, panel: JsValue) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
@@ -1047,8 +884,7 @@ impl WebApp {
                 // fully prepared tool does not lose the next quick contact.
                 if !self.brush_ready() {
                     self.prepare_startup()?;
-                    self.startup = self.session.renderer_mut().renderer().map_err(js)?
-                        .poll_startup().map_err(js)?;
+                    self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
                 }
                 if !self.brush_ready()
                     && (*kind == layer_ui::PointerKind::Touch
@@ -1133,15 +969,12 @@ impl WebApp {
             region.radii = region.radii.map(|v| v * ratio);
         }
         self.viewport_scale = scale;
-        if let Some(gpu) = &mut self.session.renderer_mut().0
-            && [width, height] != [gpu.config.width, gpu.config.height]
+        if let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut())
+            && [width, height] != [surface.config.width, surface.config.height]
         {
-            gpu.config.width = width;
-            gpu.config.height = height;
-            gpu.surface
-                .as_ref()
-                .unwrap()
-                .configure(gpu.renderer.device(), &gpu.config);
+            surface.config.width = width;
+            surface.config.height = height;
+            surface.surface.configure(gpu.device(), &surface.config);
         }
         serialize(&change)
     }
@@ -1237,28 +1070,13 @@ impl WebApp {
         if !self.gpu_ready() {
             return serialize(&layer_ui::UiChange::default());
         }
-        let first = !self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .unwrap()
-            .blank_presented;
+        let first = !self.surface.as_ref().is_some_and(|s| s.blank_presented);
         let mut change = layer_ui::UiChange::default();
         if first {
             self.session.submit_paper_frame().map_err(js)?;
         } else {
             self.prepare_startup()?;
-            self.startup = self
-                .session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .unwrap()
-                .renderer
-                .poll_startup()
-                .map_err(js)?;
+            self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
             if self.startup.canvas_ready {
                 change = self
                     .session
@@ -1277,22 +1095,26 @@ impl WebApp {
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
         self.clear_incompatible_tone()?;
-        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+        if let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut()) {
             let color = if hdr_output { SdrSurfaceColor::ExtendedSrgb } else { SdrSurfaceColor::Srgb };
-            if gpu.color != color {
-                gpu.config.format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { gpu.sdr_format };
-                gpu.config.color_space = color.surface_color_space();
-                let mut presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, color).map_err(js)?;
-                presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
-                gpu.presenter = presenter;
-                gpu.color = color;
-                gpu.surface.as_ref().unwrap().configure(gpu.renderer.device(), &gpu.config);
+            if surface.color != color {
+                surface.config.format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { surface.sdr_format };
+                surface.config.color_space = color.surface_color_space();
+                let mut presenter = ViewportPresenter::for_surface(gpu, surface.config.format, color).map_err(js)?;
+                presenter.inherit_proof(gpu, &surface.presenter);
+                surface.presenter = presenter;
+                surface.presenter_color = gpu.document_color();
+                surface.color = color;
+                surface.surface.configure(gpu.device(), &surface.config);
+            } else if surface.presenter_color != gpu.document_color() {
+                surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, color).map_err(js)?;
+                surface.presenter_color = gpu.document_color();
             }
-            gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
+            surface.presenter.set_proof(gpu, lut, enabled, gamut).map_err(js)?;
             if hdr_output {
-                gpu.presenter.set_compositor_hdr_view(&gpu.renderer, rendition.unwrap()).map_err(js)?;
+                surface.presenter.set_compositor_hdr_view(gpu, rendition.unwrap()).map_err(js)?;
             } else {
-                gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;
+                surface.presenter.set_hdr_view(gpu, rendition, 1.).map_err(js)?;
             }
         }
         let view = self.session.state().camera.view();
@@ -1306,39 +1128,34 @@ impl WebApp {
         let stroke = self.session.engine().has_active_stroke();
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
-        let gpu = self.session.renderer_mut().0.as_mut().unwrap();
-        gpu.presenter
-            .set_cursor(gpu.renderer.device(), &self.cursor.segments, scale);
-        gpu.presenter.set_color_picker(&gpu.renderer, picker);
-        gpu.presenter.set_backdrop(
-            &gpu.renderer,
+        let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut()) else {
+            return serialize(&change);
+        };
+        surface.presenter
+            .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_color_picker(gpu, picker);
+        surface.presenter.set_backdrop(
+            gpu,
             if glass.transparency.enabled() { &self.glass } else { &[] },
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
             stroke,
         );
-        let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
+        let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
             wgpu::CurrentSurfaceTexture::Lost => {
-                gpu.surface = Some(
-                    gpu.instance
-                        .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
-                        .map_err(js)?,
-                );
-                gpu.surface
-                    .as_ref()
-                    .unwrap()
-                    .configure(gpu.renderer.device(), &gpu.config);
+                surface.surface = surface
+                    .instance
+                    .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
+                    .map_err(js)?;
+                surface.surface.configure(gpu.device(), &surface.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
                 });
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                gpu.surface
-                    .as_ref()
-                    .unwrap()
-                    .configure(gpu.renderer.device(), &gpu.config);
+                surface.surface.configure(gpu.device(), &surface.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -1355,16 +1172,16 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
-        gpu.presenter
+        surface.presenter
             .present(
-                &gpu.renderer,
+                gpu,
                 &target.texture.create_view(&Default::default()),
                 view,
                 surround,
             )
             .map_err(js)?;
-        gpu.renderer.queue().present(target);
-        gpu.blank_presented = true;
+        gpu.queue().present(target);
+        surface.blank_presented = true;
         serialize(&change)
     }
 }

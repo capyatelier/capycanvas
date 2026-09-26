@@ -1,18 +1,18 @@
+use crate::{GpuRasterError, WgpuRasterizer};
 use layer_core::AssetId;
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
-use layer_render_wgpu::{GpuRasterError, WgpuRasterizer};
 
 /// Not a CPU fallback: until a GPU device is attached, only UI/viewport
 /// bookkeeping is available. Pixel operations fail explicitly. Keep the large
 /// GPU owner on the heap so native render-thread stacks can replace it safely.
 #[derive(Default)]
-pub struct Renderer(pub Option<Box<WgpuRasterizer>>);
-impl Renderer {
+pub struct AttachedRenderer(pub Option<Box<WgpuRasterizer>>);
+impl AttachedRenderer {
     fn gpu(&mut self) -> Result<&mut WgpuRasterizer, GpuRasterError> {
         self.0.as_deref_mut().ok_or(GpuRasterError::AdapterUnavailable)
     }
 }
-impl CanvasRenderer for Renderer {
+impl CanvasRenderer for AttachedRenderer {
     fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.shader_input(); } }
     fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.shader_idle(idle); } }
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
@@ -163,5 +163,5 @@ impl CanvasRenderer for Renderer {
 
 #[test]
 fn renderer_replacement_keeps_native_stack_usage_bounded() {
-    assert_eq!(std::mem::size_of::<Renderer>(), std::mem::size_of::<usize>());
+    assert_eq!(std::mem::size_of::<AttachedRenderer>(), std::mem::size_of::<usize>());
 }

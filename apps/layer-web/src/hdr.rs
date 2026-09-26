@@ -44,7 +44,7 @@ pub struct WebTone {
 impl WebApp {
     /// The host verifies both the display media query and extended canvas mode.
     pub fn set_display_hdr(&mut self, available: bool) -> bool {
-        let available = available && self.session.engine().backend().0.as_ref().is_some_and(|g| g.hdr_capable);
+        let available = available && self.gpu_ready() && self.surface.as_ref().is_some_and(|s| s.hdr_capable);
         self.session.set_hdr_display_available(available)
     }
     pub fn proof_control(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
@@ -56,13 +56,7 @@ impl WebApp {
     }
     pub fn tone_status(&mut self) -> Result<JsValue, JsValue> {
         let key = ToneKey::current(&self.session);
-        let owner = self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .map(|g| g.lost.clone());
+        let owner = self.gpu_owner();
         let same_owner = match (&owner, &self.tone.owner) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
@@ -86,11 +80,7 @@ impl WebApp {
             self.tone.error = None;
             if !retain {
                 self.tone.published = None;
-                if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
-                    gpu.presenter
-                        .set_gpu_local_tone_guide(&gpu.renderer, None)
-                        .map_err(js)?;
-                }
+                self.set_tone_guide(None)?;
             }
         }
         let animated = self.session.engine().document().has_animated_effects()
@@ -116,15 +106,15 @@ impl WebApp {
         let key = ToneKey::current(&self.session)
             .ok_or_else(|| js("HDR analysis requires HDR artwork"))?;
         let project = self.session.capture_project_recovery().map_err(js)?;
-        let live = self
+        let gpu = self
             .session
             .engine()
             .backend()
             .0
             .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        let gpu = live.renderer.snapshot_gpu();
-        let owner = live.lost.clone();
+            .ok_or_else(|| js("Canvas unavailable"))?
+            .snapshot_gpu();
+        let owner = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let background = self.session.engine().view().background_rgba_linear;
         let time = self.session.engine().animation_time();
         let control = control.inner.clone();
@@ -161,18 +151,11 @@ impl WebApp {
         {
             return Ok(false);
         }
-        let gpu = self
-            .session
-            .renderer_mut()
-            .0
-            .as_mut()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        if !Arc::ptr_eq(&gpu.lost, &tone.owner) {
+        let owner = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
+        if !Arc::ptr_eq(&owner, &tone.owner) {
             return Ok(false);
         }
-        gpu.presenter
-            .set_gpu_local_tone_guide(&gpu.renderer, Some(tone.guide))
-            .map_err(js)?;
+        self.set_tone_guide(Some(tone.guide))?;
         self.tone.analysed_time = tone.time;
         self.tone.published = Some(tone.key);
         self.tone.publications = self.tone.publications.wrapping_add(1);
@@ -268,29 +251,25 @@ impl WebApp {
             .published
             .as_ref()
             .is_none_or(|key| key.can_preview_current(&self.session))
-            && self
-                .session
-                .engine()
-                .backend()
-                .0
-                .as_ref()
-                .is_some_and(|gpu| {
-                    self.tone
-                        .owner
-                        .as_ref()
-                        .is_some_and(|owner| Arc::ptr_eq(owner, &gpu.lost))
-                });
+            && self.gpu_owner().is_some_and(|lost| {
+                self.tone
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &lost))
+            });
         if !compatible {
             if let Some(control) = self.tone.pending.take() {
                 control.cancel();
             }
             self.tone.published = None;
             self.tone.ready = false;
-            if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
-                gpu.presenter
-                    .set_gpu_local_tone_guide(&gpu.renderer, None)
-                    .map_err(js)?;
-            }
+            self.set_tone_guide(None)?;
+        }
+        Ok(())
+    }
+    fn set_tone_guide(&mut self, guide: Option<Arc<GpuToneGuide>>) -> Result<(), JsValue> {
+        if let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut()) {
+            surface.presenter.set_gpu_local_tone_guide(gpu, guide).map_err(js)?;
         }
         Ok(())
     }

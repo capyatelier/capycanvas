@@ -3,34 +3,11 @@
 use super::*;
 
 /// The window keeps its device and surface through a switch. This contains no
-/// document textures, presenter, readback, renderer, preview or raster worker.
+/// document textures, readback, renderer, preview or raster worker.
 pub(super) struct DocumentGpu {
     adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     queue: wgpu::Queue,
-    instance: wgpu::Instance,
-    surface: Option<wgpu::Surface<'static>>,
-    config: wgpu::SurfaceConfiguration,
-    color: SdrSurfaceColor,
-    sdr_format: wgpu::TextureFormat,
-    hdr_capable: bool,
-    lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-}
-impl From<WebGpu> for DocumentGpu {
-    fn from(gpu: WebGpu) -> Self {
-        Self {
-            adapter: gpu.renderer.adapter().clone(),
-            device: gpu.renderer.device().clone(),
-            queue: gpu.renderer.queue().clone(),
-            instance: gpu.instance,
-            surface: gpu.surface,
-            config: gpu.config,
-            color: gpu.color,
-            sdr_format: gpu.sdr_format,
-            hdr_capable: gpu.hdr_capable,
-            lost: gpu.lost,
-        }
-    }
 }
 
 #[wasm_bindgen]
@@ -51,10 +28,11 @@ impl WebRecoveryCapture {
 #[wasm_bindgen]
 impl WebApp {
     pub fn resume_document_gpu(&mut self) -> Result<bool, JsValue> {
-        let Some(context) = self.document_gpu.as_mut() else {
+        let Some(context) = self.document_gpu.as_ref() else {
             return Ok(false);
         };
-        if context.lost.lock().unwrap().is_some() {
+        let surface = self.surface.as_ref().ok_or_else(|| js("Canvas surface unavailable"))?;
+        if surface.lost.lock().unwrap().is_some() {
             return Err(js("The window GPU device was lost; restart the canvas"));
         }
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
@@ -65,22 +43,9 @@ impl WebApp {
         )
         .map_err(js)?;
         raster_worker::install(&mut renderer);
-        let presenter =
-            ViewportPresenter::for_surface(&renderer, context.config.format, context.color)
-                .map_err(js)?;
-        let gpu = WebGpu {
-            renderer,
-            presenter,
-            instance: context.instance.clone(),
-            surface: context.surface.take(),
-            config: context.config.clone(),
-            color: context.color,
-            sdr_format: context.sdr_format,
-            hdr_capable: context.hdr_capable,
-            lost: context.lost.clone(),
-            blank_presented: false,
-        };
-        self.attach_gpu(gpu)?;
+        let mut surface = self.surface.take().unwrap();
+        surface.blank_presented = false;
+        self.attach_gpu(WebGpu { renderer, surface })?;
         self.document_gpu = None;
         Ok(true)
     }
@@ -231,7 +196,7 @@ impl WebApp {
             // Keep the existing browser window usable after its last drawing
             // closes, with a new identity and no retained discarded history.
             let mut next =
-                UiSession::blank(WebRenderer::default(), self.session.state().camera.viewport)
+                UiSession::blank(AttachedRenderer::default(), self.session.state().camera.viewport)
                     .map_err(js)?;
             next.inherit_window_state(&self.session).map_err(js)?;
             next.set_document_replacement(false);
@@ -246,7 +211,7 @@ impl WebApp {
 }
 
 impl WebApp {
-    fn document_session(&self, id: u64) -> Result<&UiSession<WebRenderer>, JsValue> {
+    fn document_session(&self, id: u64) -> Result<&UiSession<AttachedRenderer>, JsValue> {
         if id == self.documents.selected() {
             return Ok(&self.session);
         }
@@ -262,7 +227,11 @@ impl WebApp {
         self.tone = Default::default();
         self.proof = Default::default();
         if let Some(gpu) = self.session.renderer_mut().0.take() {
-            self.document_gpu = Some(gpu.into());
+            self.document_gpu = Some(DocumentGpu {
+                adapter: gpu.adapter().clone(),
+                device: gpu.device().clone(),
+                queue: gpu.queue().clone(),
+            });
         }
         self.reset_document_views();
     }

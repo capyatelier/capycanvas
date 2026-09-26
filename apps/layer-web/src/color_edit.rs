@@ -55,14 +55,14 @@ impl WebApp {
         let change: Option<layer_color::DocumentColorChange> = serde_wasm_bindgen::from_value(choice).map_err(js)?;
         let plan = workflow.select(change, copy).map_err(js)?;
         let original = workflow.original.clone();
-        let live = s
+        let gpu = s
             .engine()
             .backend()
             .0
             .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        let gpu = live.renderer.snapshot_gpu();
-        let lost = live.lost.clone();
+            .ok_or_else(|| js("Canvas unavailable"))?
+            .snapshot_gpu();
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let mut brush = s.engine().configured_brush().clone();
         let mut view = s.engine().view();
         let time = s.engine().animation_time();
@@ -205,14 +205,9 @@ impl WebApp {
         }))
     }
     pub fn adopt_color(&mut self, mut candidate: WebColorCandidate) -> Result<JsValue, JsValue> {
+        let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
+        let device_current = std::sync::Arc::ptr_eq(&lost, &candidate.lost) && lost.lock().unwrap().is_none();
         let s = &mut self.session;
-        let live = s
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?;
-        let device_current = std::sync::Arc::ptr_eq(&live.lost, &candidate.lost) && live.lost.lock().unwrap().is_none();
         let prepared = candidate.workflow.prepare_commit(s, candidate.control.is_cancelled(), device_current).map_err(js)?;
         let mut renderer = candidate
             .renderer
@@ -221,10 +216,8 @@ impl WebApp {
         let [width, height] = s.state().camera.viewport;
         renderer.resize_surface(width, height).map_err(js)?;
         s.commit_document_color_candidate(prepared, |live| {
-            std::mem::swap(&mut live.0.as_mut().unwrap().renderer, &mut renderer);
+            std::mem::swap(live.0.as_deref_mut().unwrap(), &mut renderer);
         }).map_err(js)?;
-        let live = s.renderer_mut().0.as_mut().unwrap();
-        live.presenter = ViewportPresenter::for_surface(&live.renderer, live.config.format, live.color).map_err(js)?;
         self.deferred_contacts.clear();
         self.prepare_startup()?;
         serialize(

@@ -1,6 +1,5 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
-mod renderer;
 pub mod gpu;
 mod header;
 mod snapshot;
@@ -12,7 +11,7 @@ use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;
 use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSession};
 pub use gpu::{DeviceWatch, GpuContext, RendererOptions, UiColor};
-pub use renderer::Renderer;
+pub use layer_render_wgpu::AttachedRenderer as Renderer;
 pub use snapshot::extend_update;
 use serde::Deserialize;
 use serde_json::{Value, json};

@@ -9,6 +9,8 @@
 pub mod native_tiles;
 pub mod snapshot;
 pub mod local_tone;
+mod attached;
+pub use attached::AttachedRenderer;
 mod portable_blend;
 mod target_geometry;
 mod pixel_rect;
