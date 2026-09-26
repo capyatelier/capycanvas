@@ -778,6 +778,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         entries.push(pan);
         let mut seen = std::collections::BTreeSet::new();
         entries.retain(|e| seen.insert(e.descriptor.id.clone()));
+        let mut labels = std::collections::BTreeMap::<String, usize>::new();
+        for e in &entries {
+            *labels.entry(e.descriptor.label.to_lowercase()).or_default() += 1;
+        }
+        for e in &mut entries {
+            let noun = match &e.action {
+                Some(UiAction::SelectBrush { .. }) => "brush",
+                Some(UiAction::Effect { action: EffectAction::Insert { .. } }) => "filter",
+                _ => continue,
+            };
+            if labels[&e.descriptor.label.to_lowercase()] > 1 {
+                e.descriptor.label = format!("{} {noun}", e.descriptor.label);
+                e.search = format!("{} {}", e.descriptor.label.to_lowercase(), e.search);
+            }
+        }
         // Use exactly the command's live predicate/reason even when its first
         // appearance was in a menu, and exclude the bar's own opener.
         for e in &mut entries {

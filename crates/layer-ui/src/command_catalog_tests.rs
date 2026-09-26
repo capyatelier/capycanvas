@@ -477,8 +477,13 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
         let id = command_catalog::identity(&UiAction::Layer { action });
         assert!(!catalog.iter().any(|d| d.id == id), "{id} is the command entry");
     }
-    let labels: Vec<_> = catalog.iter().map(|d| d.label.as_str()).collect();
+    let labels: Vec<_> = catalog.iter().map(|d| d.label.to_lowercase()).collect();
     assert!(!labels.iter().any(|l| l.ends_with("panel panel") || l.ends_with("toolbar panel")));
+    let unique: std::collections::BTreeSet<_> = labels.iter().collect();
+    assert_eq!(unique.len(), labels.len(), "every search result name is distinct");
+    for label in ["Pencil", "Pencil brush", "Pencil filter", "Eraser", "Eraser brush"] {
+        assert!(catalog.iter().any(|d| d.label == label), "{label}");
+    }
     let reason = |s: &UiSession<Recorder>, id: &str| {
         s.command_catalog()
             .into_iter()
