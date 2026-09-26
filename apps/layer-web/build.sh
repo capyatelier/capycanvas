@@ -25,7 +25,3 @@ if [[ "$layer_profile" == dev || "$layer_profile" == test ]]; then layer_directo
 "$layer_bindgen" --target web --out-dir "${1:-apps/layer-web/pkg}" \
   "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$layer_directory/layer_web.wasm"
 python3 tools/build/web-icons.py "$(dirname -- "${1:-apps/layer-web/pkg}")/icons.svg"
-if [[ $# == 0 ]]; then
-  mkdir -p apps/layer-web/filters
-  cp assets/filters/*.json assets/filters/*.wgsl apps/layer-web/filters/
-fi

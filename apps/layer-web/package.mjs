@@ -123,7 +123,7 @@ export function fingerprintAssets(directory) {
   let app = read(join(directory, "app.js"));
   for (const path of modules.slice(0, -1).filter(path => path !== "range-control.js" && path !== "toolbar-components.js" && path !== "workspace-store.js" && path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "stroke-recording.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
-  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path) || path === "icons.svg" || path === "pkg/layer_web_bg.wasm" || path === "workspace-worker.js"));
+  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews)\//.test(path) || path === "icons.svg" || path === "pkg/layer_web_bg.wasm" || path === "workspace-worker.js"));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
   publish("app.js", app);
   return names;
@@ -196,7 +196,6 @@ export function packageWeb() {
           cpSync(join(web, directory, path), join(runtime, directory, path));
       }
     }
-    cpSync(join(root,"assets/filters"),join(runtime,"filters"),{recursive:true});
     const brand = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"));
     for (const size of [32, 180, 192, 512]) {
       // Favicon and installation icons share the approved enlarged artwork.

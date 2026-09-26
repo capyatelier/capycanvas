@@ -17,7 +17,7 @@ import { createNumberField } from "./numeric.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createLayerPanel } from "./layers.js";
 import { createPalettes } from "./palettes.js";
-import { createEffectPanels, fetchFilterPackage } from "./effects.js";
+import { createEffectPanels } from "./effects.js";
 import { installTooltips } from "./tooltips.js";
 import { installPenScrolling } from "./pen-scroll.js";
 
@@ -1673,7 +1673,7 @@ try {
     arrange();
   }).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
-  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes, documents, restartGpu };
+  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, startupTimes, documents, restartGpu };
   performance.mark("capy.startup.ui");
   // Present the controls and let storage replies run before GPU setup starts.
   await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
@@ -1754,8 +1754,6 @@ async function startGpu() {
     document.body.dataset.gpu = "ready";
     notice.hidden = true;
     wake();
-    // The immutable application bundle already contains its filter catalog.
-    // Runtime imports still validate atomically through loadFilters().
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
     showGpuNotice({ container: notice, error, element, button });
@@ -1782,11 +1780,4 @@ async function gpuOperation(operation) {
   } finally {
     events.abort();
   }
-}
-
-async function loadFilters(url, mode="add", moduleUrl, libraryOnly=false) {
-  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl,libraryOnly);
-  update(change.regions);
-  if(change.canvas_wake)wake();
-  return app.state().filter_load.request_id;
 }

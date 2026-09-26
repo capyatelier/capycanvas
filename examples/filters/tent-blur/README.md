@@ -21,13 +21,6 @@ GPU validation and atomic publication. With an already-built GTK executable:
 CAPY_FILTERS_DIR=examples/filters/tent-blur CAPY_FILTERS_MODE=add ./target/debug/layer-linux
 ```
 
-On web, serve this directory and call
-`await layerApp.loadFilters('/tent-blur/manifest.json', 'add')`. Edit the WGSL or
-manifest, call with `'replace'`, and inspect `layerApp.state().filter_load` for
-completion. No application rebuild is needed. Android's matching host entry is
-`CanvasHost.loadFilters(manifest, modules, mode)`. These are programmatic loading
-interfaces, not a shader-editor UI.
-
 For an already-built Windows app, from the repository root:
 
 ```powershell

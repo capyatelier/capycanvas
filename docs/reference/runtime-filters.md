@@ -191,16 +191,8 @@ apply to final output, not independently to every intermediate pass.
 - The native packager ships editable resources in
   `dist/capycanvas-linux/bin/filters`; editing those resources does not require
   rebuilding `bin/capycanvas`.
-- Web ships fingerprinted JSON/WGSL in the PWA precache. Startup merges them;
-  loading failure retains the fallback. Call
-  `await layerApp.loadFilters('/my-filter/manifest.json', 'add')`,
-  `'replace'` or `'merge'`, then inspect
-  `layerApp.state().filter_load` for completion. Serve edited resources and call
-  again—no Wasm rebuild. Requests revalidate HTTP caches; normal CORS applies.
-- Android merges the same resources from APK assets after GPU attachment.
-  `CanvasHost.loadFilters(manifest, modules, mode)` accepts acquired package
-  bytes for live loading without rebuilding the native library. A file picker or
-  download UI is outside this task.
+- Web and Android ship only the built-in catalog; runtime packages load on GTK
+  and Windows (`CAPY_FILTERS_DIR`) and from the Apple bundle.
 
 See [the Tent Blur package](../../examples/filters/tent-blur/README.md) and
 [web packaging](../development/web-packaging.md). All shaders added here are original code;
@@ -216,8 +208,8 @@ the native bundle's forty definitions and WGSL files match the source resources.
 | Requirement | Evidence |
 | --- | --- |
 | Same format for all forty filters | Disk/bundled catalogs match; shared modules and self-contained document round trips |
-| Runtime non-Gaussian algorithm | Tent Blur loaded on GTK, Chrome/WebGPU and Android; box-kernel replacement on web/Android |
-| New IDs without rebuilding | Mixed existing/new catalog merge test; browser edits served JSON/WGSL with unchanged Wasm |
+| Runtime non-Gaussian algorithm | Tent Blur loaded on GTK |
+| New IDs without rebuilding | Mixed existing/new catalog merge test |
 | Last working program | Invalid WGSL/resource access/namespace or ID collision rejected; image, values and catalog retained |
 | Efficient preparation | Dependency-count tests: paint, pan, time, opacity and unrelated edits reuse; relevant/code edits run once |
 | Reuse across passes/fusion | Stable storage size, shared multipass tables, prepared pointwise fusion, accepted pipeline reuse |

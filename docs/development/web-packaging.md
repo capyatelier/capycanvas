@@ -45,13 +45,10 @@ The build:
    The shared SVG raises the capy by 3% of its view box (the approved B position).
 4. Fingerprints every runtime asset with the first 20 hex digits of its own
    SHA-256: `assets/app.<sha>.js`, `assets/style.<sha>.css`, and similarly for
-   imported JS, Wasm, SVGs, PNGs and filter JSON/WGSL. Dependencies are renamed first; rewritten
+   imported JS, Wasm, SVGs and PNGs. Dependencies are renamed first; rewritten
    JS/CSS is then hashed, so its filename covers its final bytes and dependency
    URLs, including the CSS checkbox mask. A build-time resource map handles
-   dynamic icon/brush-preview and runtime filter module lookups. The default
-   filter catalog is fetched from these resources; custom packages use the same
-   runtime format without rebuilding Wasm (see [runtime filters](../reference/runtime-filters.md)).
-   HTML and manifest references use the new names; no unversioned runtime
+   dynamic icon and brush-preview lookups. HTML and manifest references use the new names; no unversioned runtime
    copies remain. Relative URLs work at any hosting subpath. Identical rebuilds
    retain identical URLs; unrelated assets retain their hashes.
 5. Includes project/branding licenses, original notices for the Wasm dependency

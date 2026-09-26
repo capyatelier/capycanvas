@@ -120,8 +120,6 @@ function runtimeFixture(t, changes = {}) {
     "icons/pen.svg": "<svg/>",
     "icons.svg": '<svg><svg data-asset="pen"/></svg>',
     "brush-previews/1-dark.png": Buffer.from([137, 80, 78, 71]),
-    "filters/manifest.json": '{"format":1,"filters":[]}',
-    "filters/example.wgsl": "fn example() {}",
     ...changes,
   })) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
@@ -141,7 +139,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
   for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
     assert.ok(app.includes(`from "./${names[path]}"`));
-  for (const path of ["icons/pen.svg", "icons.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"])
+  for (const path of ["icons/pen.svg", "icons.svg", "brush-previews/1-dark.png"])
     assert.ok(app.includes(JSON.stringify(names[path])));
   for (const path of ["workspace-manager.js", "header.js"])
     assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));
@@ -168,7 +166,7 @@ test("production module imports and worker URLs resolve to packaged files", (t) 
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "range-control.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
+  for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "range-control.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);

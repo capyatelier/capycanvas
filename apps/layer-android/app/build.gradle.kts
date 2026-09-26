@@ -57,7 +57,6 @@ android {
     }
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/capy/assets").get().asFile)
-    sourceSets["androidTest"].assets.srcDir("../../../examples/filters")
     sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/res").get().asFile)
     packaging { jniLibs.useLegacyPackaging = false }
     testOptions { animationsDisabled = true }

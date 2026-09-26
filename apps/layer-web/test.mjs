@@ -57,7 +57,7 @@ import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
-import { checkAdjustments, checkDiagnostics, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
+import { checkAdjustments, checkDiagnostics, benchmarkFilters } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
@@ -421,10 +421,6 @@ try {
   } else if (process.argv.includes("--staged-startup")) {
     await checkStagedStartup({ call, evaluate, settle, canvasPixels });
     assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--runtime-filters")) {
-    assert.ok(packageHost,"Runtime package test requires --package");
-    await checkRuntimeFilters({call,evaluate,settle,host:packageHost});
-    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--filter-bench")) {
     await benchmarkFilters({ evaluate });
     assert.deepEqual(errors, []);
@@ -880,9 +876,6 @@ try {
         `Zen hover at ${x},${y}`,
       );
     }
-    await evaluate(
-      "new Promise((resolve,reject)=>{const end=performance.now()+60000;(function poll(){if(!layerApp.state().filter_load.pending)resolve();else if(performance.now()>end)reject(Error('Filter library load timed out'));else setTimeout(poll,20);})();})",
-    );
     const beforeReveal = await evaluate("String(layerApp.state().revision)");
     await call("Input.dispatchTouchEvent", {
       type: "touchStart",

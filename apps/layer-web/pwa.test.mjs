@@ -14,8 +14,6 @@ export async function servePackage() {
   assert.ok(readFileSync(join(source, ".capy-package"), "utf8").trim(), "Build the package first");
   const fixture = mkdtempSync(join(tmpdir(), "capy-pwa-test-"));
   const update = join(fixture, "update");
-  const filterFixture = join(fixture,"runtime-filter");
-  cpSync(resolve("examples/filters/tent-blur"),filterFixture,{recursive:true});
   cpSync(source, update, { recursive: true });
   let html = readFileSync(join(update, "index.html"), "utf8");
   // A real changed JS/CSS release, not merely a changed HTML comment. Old URLs
@@ -37,12 +35,11 @@ export async function servePackage() {
   const server = createServer((req, res) => {
     const pathname = decodeURIComponent(new URL(req.url, "http://local").pathname);
     const nested = pathname.startsWith("/nested/capy/");
-    let path = pathname.slice(nested ? "/nested/capy/".length : 1) || "index.html";
+    const path = pathname.slice(nested ? "/nested/capy/".length : 1) || "index.html";
     state.requests.push(pathname);
     if (path === "index.html") state.htmlRequests.push({pathname, cacheControl: req.headers["cache-control"]});
     if (!state.online) { res.writeHead(503); res.end(); return; }
-    let directory = state.update && !nested ? join(fixture, "update") : source;
-    if(path.startsWith("runtime-filter/")){directory=filterFixture;path=path.slice("runtime-filter/".length);}
+    const directory = state.update && !nested ? join(fixture, "update") : source;
     const file = resolve(directory, path);
     if (!file.startsWith(directory + "/")) { res.writeHead(403); res.end(); return; }
     try {
@@ -53,7 +50,7 @@ export async function servePackage() {
     } catch { res.writeHead(404); res.end(); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { state, url: `http://127.0.0.1:${server.address().port}/`, source, filterFixture,
+  return { state, url: `http://127.0.0.1:${server.address().port}/`, source,
     close: async () => {
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));

@@ -374,12 +374,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             refreshChrome(); publish(true); wake()
         }
     }
-    // Programmatic package import/replacement, without a shader-editor UI.
-    fun loadFilters(manifest: String, modules: JSONObject, mode: String = "add") = post {
-        Native.query(handle, obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to mode).toString())
-        publish(true)
-        wake()
-    }
     internal fun filterPreviews(query: JSONObject, reply: (FilterPreviewReply?) -> Unit) = post {
         try {
             val status = JSONObject(Native.query(handle, query.toString()))

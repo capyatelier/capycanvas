@@ -59,14 +59,10 @@ $env:CC_wasm32_unknown_unknown = Join-Path $wasiSdk 'bin/clang.exe'
 $env:AR_wasm32_unknown_unknown = Join-Path $wasiSdk 'bin/llvm-ar.exe'
 cargo build --locked --release -p layer-web --target wasm32-unknown-unknown
 wasm-bindgen --target web --out-dir apps/layer-web/pkg target/wasm32-unknown-unknown/release/layer_web.wasm
-New-Item -ItemType Directory -Force apps/layer-web/filters | Out-Null
-Copy-Item assets/filters/*.json,assets/filters/*.wgsl -Destination apps/layer-web/filters
 ~~~
 
 Use the wasm-bindgen version pinned in the Web manifest. These target-specific
-compiler variables apply to the Web reference build. The standard
-[Web build script](../../apps/layer-web/build.sh) also stages current filter
-assets. Follow the [matched editor capture commands](../../apps/layer-windows/README.md#matched-editor-captures)
+compiler variables apply to the Web reference build. Follow the [matched editor capture commands](../../apps/layer-windows/README.md#matched-editor-captures)
 for isolated profiles and native/Web evidence. The reviewed reference build used
 WASI SDK 34; an older generated Wasm bundle is not evidence for current source.
 

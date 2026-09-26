@@ -103,7 +103,6 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
   await checkFirstUse({ call, evaluate, waitFor });
   await checkLoadedDocument({ call, evaluate, waitFor });
   await checkCompilationFailure({ call, evaluate, waitFor });
-  await checkFilterRejection({ call, evaluate, waitFor });
 }
 
 // Cold first use must take the same asynchronous path even after startup has
@@ -222,39 +221,6 @@ async function checkCompilationFailure({call,evaluate,waitFor}) {
   } finally {
     await call('Page.removeScriptToEvaluateOnNewDocument',{identifier});
   }
-}
-
-async function checkFilterRejection({evaluate,waitFor}) {
-  const revision=await evaluate('String(layerApp.state().filter_catalog_revision)');
-  await evaluate(`(async()=>{
-    const app=layerApp.app;
-    const manifest=await (await fetch('./filters/manifest.json')).json();
-    // A fresh program identity forces GPU validation rather than cache reuse.
-    manifest.filters[0].program.label+=' async rejection fixture';
-    const text=JSON.stringify(manifest),names=app.filter_package_modules(text);
-    const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await(await fetch('./filters/'+name)).text()])));
-    window.filterRejectionTest={rejected:false,text,modules};
-    const original=GPUDevice.prototype.createRenderPipelineAsync;
-    filterRejectionTest.restore=()=>{GPUDevice.prototype.createRenderPipelineAsync=original;};
-    GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
-      if(descriptor.label==='pointwise effect chain'&&!filterRejectionTest.rejected){
-        filterRejectionTest.rejected=true;
-        return Promise.reject(new GPUPipelineError('injected filter compiler failure',{reason:'validation'}));
-      }
-      return original.call(this,descriptor);
-    };
-    app.load_filter_package(text,modules,'replace');layerApp.wake();
-  })()`);
-  try {
-    await waitFor('window.filterRejectionTest?.rejected && !layerApp.state().filter_load.pending');
-    assert.match(await evaluate('layerApp.state().filter_load.error'),/pointwise effect chain.*injected filter compiler failure/s);
-    assert.equal(await evaluate('String(layerApp.state().filter_catalog_revision)'),revision,'Rejected async pipelines never publish a replacement catalog');
-    assert.equal(await evaluate('layerApp.app.brush_ready()'),true,'Rejected filters leave the working canvas available');
-    await evaluate("filterRejectionTest.restore();layerApp.app.load_filter_package(filterRejectionTest.text,filterRejectionTest.modules,'replace');layerApp.wake()");
-    await waitFor('!layerApp.state().filter_load.pending');
-    assert.equal(await evaluate('layerApp.state().filter_load.error ?? null'),null,'A clean retry must not reuse a failed compilation');
-    console.log('Staged startup: async render rejection preserves the working catalog and clean retry succeeds');
-  } finally { await evaluate('filterRejectionTest.restore()'); }
 }
 
 async function activateForReload(call) {

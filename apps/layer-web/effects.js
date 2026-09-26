@@ -2,14 +2,6 @@ import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
-// Host I/O only: Rust validates the filenames, definitions, shaders and atomic
-// publication. This also accepts external packages without rebuilding Wasm.
-export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=>new URL(name,manifestUrl), libraryOnly=false) {
-  const read=async url=>{const response=await fetch(url,{cache:"no-cache"});if(!response.ok)throw new Error(`Filter package: HTTP ${response.status}`);return response.text();};
-  const manifest=await read(manifestUrl),names=app.filter_package_modules(manifest);
-  const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
-  return libraryOnly ? app.load_filter_library(manifest,modules,mode) : app.load_filter_package(manifest,modules,mode);
-}
 export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
