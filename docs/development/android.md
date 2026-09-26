@@ -208,6 +208,18 @@ the app debuggable. Reinstall the debug APK afterward for ordinary development.
 previous setting afterward. The same option applies to `continuousDragFrameTiming`
 and `continuousResizeFrameTiming`.
 
+`AndroidCanvasBarBenchmarkTest` measures the canvas action bar on a 6000 × 4000
+canvas with the same benchmark APKs: pen strokes, a 24-megapixel photo placement
+and a full-canvas selection transform, each with stylus handle drags, contact
+taps that hide and return the bar, and bar show/hide alone. Run it with
+`-e canvasBarBenchmark true`; `-e scenarios paint,photo,selection`, `durationMs`,
+`width`, `height` and `transparency` narrow or resize the run. Each scenario logs
+one `CapyBarPerf` line and writes `canvas-bar-benchmark/<label>.json` with the
+renderer frame rows, GPU completions and UI `FrameMetrics` percentiles.
+`AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's
+mouse, finger and stylus behavior and saves light and dark captures in
+`validation/canvas-bar`.
+
 The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
 records the shared source-probe texture reuse fix, tablet measurements, and
 remaining preview/display memory-budget work.

@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -231,6 +232,7 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
         Row(Modifier.fillMaxSize().testTag("$prefix-action-$id").clip(if (caption == null) TileShape else ControlShape)
             .background(when { accent && enabled -> colors.accent; command.getBoolean("selected") -> colors.active; else -> Color.Transparent })
             .alpha(if (enabled || caption == null) 1f else .4f)
+            .then(if (caption == null) Modifier else Modifier.focusProperties { canFocus = false })
             .clickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label")) { if (enabled) invoke(id) else reveal++ }
             .semantics { if (!enabled) disabled() }
             .padding(horizontal = if (caption == null) 0.dp else CaptionPadding.dp),
@@ -310,6 +312,7 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
             HoverTip(item.getString("label"), modifier) {
             Row(Modifier.fillMaxSize().testTag(if(prefix=="tool" && id=="selection-mode") "tool-action-${item.getJSONObject("action").getString("command")}" else "$prefix-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
+                .then(if (captions) Modifier.focusProperties { canFocus = false } else Modifier)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) },
                 horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
                 SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))

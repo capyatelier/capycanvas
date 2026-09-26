@@ -13,7 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -29,6 +29,7 @@ import androidx.compose.ui.zIndex
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 private const val BarGap = 4f
 private const val BarPadding = 6f
@@ -56,9 +57,9 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
     fun width(item: JSONObject) = toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight,
         BarItemStyle, ::textWidth, item.getString("label"))[0]
-    val itemWidths = items.map(::width)
-    val completionWidths = completion.map(::width)
-    val labelWidth = label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f
+    val itemWidths = remember(view, textStyle, density) { items.map(::width) }
+    val completionWidths = remember(view, textStyle, density) { completion.map(::width) }
+    val labelWidth = remember(label, textStyle, density) { label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f }
     val measure = obj("context" to context, "label" to labelWidth, "items" to JSONArray(itemWidths),
         "completion" to JSONArray(completionWidths), "more" to BarItemHeight, "height" to BarItemHeight + 2 * BarPadding,
         "gap" to BarGap, "padding" to BarPadding).toString()
@@ -66,27 +67,32 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     LaunchedEffect(measure, view.opt("anchor")?.toString(), layout) {
         placed = host.awaitQuery(obj("type" to "canvas_bar_layout", "measure" to JSONObject(measure)))
     }
-    val placement = placed ?: return
+    val glass = remember { Any() }
     var revealed by remember { mutableStateOf(false) }
+    DisposableEffect(host, glass) { onDispose { host.glassBox(glass, null) } }
+    val placement = placed ?: return
+    val shape = ControlShape
     LaunchedEffect(Unit) {
-        withFrameNanos { }
+        val bounds = placement.getJSONObject("bounds")
+        fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
+        val radius = ControlRadius.value * density
+        host.glassBox(glass, floatArrayOf(px("x"), px("y"), px("width"), px("height"), radius, radius, radius, radius))
         host.glassPresented()
         revealed = true
     }
+    if (!revealed) return
     DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.refresh() } }
     val shown = placement.optInt("items").coerceIn(0, items.size)
-    val shape = ControlShape
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
     fun reason(command: String, reply: (String) -> Unit) = host.query(obj("type" to "canvas_bar_reason", "context" to context, "command" to command)) {
         (it as? String)?.let(reply)
     }
     Box(Modifier.placed(placement.getJSONObject("bounds"), density).zIndex(198f).testTag("canvas-action-bar")
-        .graphicsLayer { alpha = if (revealed) 1f else 0f }
         .chromeRegion(dock).onGloballyPositioned {
             val bounds = it.boundsInRoot().translate(-dock.origin)
             if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
         }
-        .panelShadow(6.dp, shape).clip(shape).glass(shape)
+        .panelShadow(6.dp, shape).clip(shape).glass(shape, key = glass)
         .semantics { contentDescription = "Canvas actions" }) {
         CompositionLocalProvider(LocalPalette provides colors.onGlass) {
             Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
@@ -122,7 +128,7 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     var pressedAt by remember { mutableLongStateOf(0L) }
     PopupOwner(menu != null)
     HoverTip("More") {
-        Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape)
+        Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape).focusProperties { canFocus = false }
             .pointerInput(Unit) { awaitEachGesture { pressedAt = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).uptimeMillis } }
             .clickable(role = Role.Button, onClickLabel = "More") {
                 if (menu == null && closedAt < pressedAt) host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) {

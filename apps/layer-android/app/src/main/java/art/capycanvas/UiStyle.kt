@@ -112,10 +112,10 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val onGlass by lazy { Palette(dark, source, true) }
 }
 
-@Composable internal fun Modifier.glass(shape: Shape, color: Color = Color.Transparent, rootOffset: () -> Offset = { Offset.Zero }): Modifier {
+@Composable internal fun Modifier.glass(shape: Shape, color: Color = Color.Transparent, rootOffset: () -> Offset = { Offset.Zero },
+    key: Any = remember { Any() }): Modifier {
     val host = LocalCanvasHost.current
     val density = LocalDensity.current
-    val key = remember { Any() }
     DisposableEffect(host, key) { onDispose { host.glassBox(key, null) } }
     return background(color, shape).onGloballyPositioned { coords ->
         val origin = coords.positionInRoot() + rootOffset() - host.surfaceOrigin
