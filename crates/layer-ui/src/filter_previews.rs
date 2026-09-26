@@ -297,6 +297,7 @@ mod tests {
             Recorder::default(),
             Document::new("preview", 512, 512),
             [512, 512],
+            crate::Platform::Gtk,
         )
         .unwrap();
         session.frame(0, 0).unwrap();

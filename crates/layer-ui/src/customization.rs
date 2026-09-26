@@ -597,9 +597,6 @@ impl ContextMenu {
     }
 }
 impl DockLayout {
-    pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
-        self.context_menu_on(target, Platform::Generic)
-    }
     pub(crate) fn context_menu_on(
         &self,
         target: ContextTarget,
@@ -1142,8 +1139,7 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
-        .chain(platform.color_picker().then_some(ToolbarControl::ColorPicker))
-        .chain([ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])
+        .chain([ToolbarControl::ColorPicker, ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])
         .chain([ToolbarControl::Divider])
         .chain(
             Panel::ALL
@@ -1836,8 +1832,8 @@ impl CustomizationState {
                     ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
                     _ => unreachable!(),
                 };
-                drawer.configure_picker(layout, platform);
-                if Panel::palettes_presented_on(platform) && drawer.columns == [vec![Panel::Color]] {
+                drawer.configure_picker(layout);
+                if drawer.columns == [vec![Panel::Color]] {
                     drawer.columns[0].push(Panel::Palettes);
                 }
                 if self
@@ -2194,7 +2190,7 @@ mod tests {
         let contents = state.layout.panels.clone();
         state
             .layout
-            .reset_docking(crate::Platform::Generic)
+            .reset_docking(crate::Platform::Gtk)
             .unwrap();
         assert_eq!(state.layout.panels, contents);
         assert!(
@@ -2499,7 +2495,7 @@ mod tests {
             let mut state = CustomizationState::default();
             for (style, active, inactive) in styles {
                 let menu = layout
-                    .context_menu(ContextTarget::Group { group: 8 })
+                    .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
                     .unwrap();
                 assert_eq!(menu.sections[0].len(), TabStyle::ALL.len());
                 let item = menu.sections[0]
@@ -2525,7 +2521,7 @@ mod tests {
                     }
                 }
                 let menu = layout
-                    .context_menu(ContextTarget::Group { group: 8 })
+                    .context_menu_on(ContextTarget::Group { group: 8 }, Platform::Gtk)
                     .unwrap();
                 let checked: Vec<_> = menu.sections[0]
                     .iter()
@@ -2576,14 +2572,14 @@ mod tests {
             )
             .unwrap();
         assert!(
-            layout.context_menu(group).unwrap().sections[0]
+            layout.context_menu_on(group, Platform::Gtk).unwrap().sections[0]
                 .iter()
                 .any(|i| i.label == "Names only" && i.selected == Some(true))
         );
         let panel = layout
-            .context_menu(ContextTarget::Panel {
+            .context_menu_on(ContextTarget::Panel {
                 panel: Panel::Brushes,
-            })
+            }, Platform::Gtk)
             .unwrap();
         assert!(
             panel
@@ -2614,10 +2610,10 @@ mod tests {
         let tile = layout.panel(custom).unwrap().tiles()[0].id;
         assert_eq!(
             layout
-                .context_menu(ContextTarget::Tile {
+                .context_menu_on(ContextTarget::Tile {
                     panel: custom,
                     tile
-                })
+                }, Platform::Gtk)
                 .unwrap()
                 .sections[0]
                 .iter()
@@ -2627,7 +2623,7 @@ mod tests {
         );
         assert_eq!(
             layout
-                .context_menu(ContextTarget::Ribbon { panel: custom })
+                .context_menu_on(ContextTarget::Ribbon { panel: custom }, Platform::Gtk)
                 .unwrap()
                 .sections[0][0]
                 .label,
@@ -2635,9 +2631,9 @@ mod tests {
         );
         assert!(
             layout
-                .context_menu(ContextTarget::Ribbon {
+                .context_menu_on(ContextTarget::Ribbon {
                     panel: Panel::Layers
-                })
+                }, Platform::Gtk)
                 .is_err()
         );
     }

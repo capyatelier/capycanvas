@@ -156,12 +156,12 @@ pub struct UiSession<R: CanvasRenderer> {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub fn blank(renderer: R, viewport: [u32; 2]) -> Result<Self, String> {
+    pub fn blank(renderer: R, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
         let [width, height] = DEFAULT_DOCUMENT_EXTENT;
-        Self::new(renderer, Document::new("untitled", width, height), viewport)
+        Self::new(renderer, Document::new("untitled", width, height), viewport, platform)
     }
 
-    pub fn new(renderer: R, document: Document, viewport: [u32; 2]) -> Result<Self, String> {
+    pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
         if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
@@ -265,12 +265,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
-                palette: Settings::default().palette(Theme::Light, Platform::Generic, None),
+                palette: Settings::default().palette(Theme::Light, platform, None),
                 command_search: None,
                 settings_open: false,
                 preferences: PreferencesState::default(),
                 customization: CustomizationState::default(),
-                platform: Platform::Generic,
+                platform,
                 requests: Vec::new(),
                 host_error: None,
                 camera,
@@ -280,9 +280,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             canvas_bar: Default::default(),
             pending_filters: None,
         };
+        session.state.colors.library.ensure_starters();
+        session.refresh_feedback_config();
         session.apply_brush()?;
         session.refresh_document();
         session.refresh_commands();
+        session.refresh_shortcuts();
         session.update_toolbar_context();
         Ok(session)
     }
@@ -319,9 +322,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.platform_prediction_available = None;
         }
         self.state.platform = platform;
-        if Panel::palettes_presented_on(platform) {
-            self.state.colors.library.ensure_starters();
-        }
         self.refresh_feedback_config();
         self.state.palette = self
             .state
@@ -485,12 +485,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
-        if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) {
-            // Keep the editor entry reachable above the long panel list, also
-            // in the recovery menu on a short tablet-sized window.
-            menu.sections
-                .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
-        }
+        // Keep the editor entry reachable above the long panel list, also
+        // in the recovery menu on a short tablet-sized window.
+        menu.sections
+            .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
@@ -651,10 +649,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         true
     }
     pub(crate) fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
-        matches!(
-            self.state.platform,
-            Platform::Gtk | Platform::Android | Platform::Web | Platform::Windows | Platform::Mac | Platform::Ios
-        ) && self
+        self
             .state
             .customization
             .drawer
@@ -1542,12 +1537,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 source_is_icon: icon_source.is_some(),
                 torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
-                preview: (matches!(
-                    self.state.platform,
-                    Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-                ) && whole
-                    && source_floating)
-                    .then_some(source_bounds),
+                preview: (whole && source_floating).then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
                 chrome_revealed: !source_floating || !self.interaction.hidden,
@@ -1612,10 +1602,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // than its viewport, and a drawer is wider than its collapsed source.
             // Standalone toolbars still convert to their compact grid; an icon
             // has no visible panel size, so it keeps the measured/default size.
-            let preserve_size = matches!(
-                self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-            ) && !drag.source_is_icon
+            let preserve_size = !drag.source_is_icon
                 && !(drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
             if preserve_size {
@@ -1639,11 +1626,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .unwrap();
             drag.floating = Some(group);
             drag.torn_off = true;
-            drag.preview = matches!(
-                self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-            )
-            .then_some(floated.bounds);
+            drag.preview = Some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
             // bottom. Tabbed groups keep the original header grab offset.
@@ -1803,8 +1786,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let group_body = self.state.platform != Platform::Generic;
-        let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
+        let menubar = (!docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
         let compact_edge = (!docks_hidden)
             .then(|| self.state.workspace.layout.compact_edge_drop_hint(
@@ -1837,7 +1819,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (!docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
-                .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, group_body))?
+                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -1907,7 +1889,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn command_label(&self, id: CommandId) -> &'static str {
         if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
             "Restore Starting Layout…"
-        } else if id == CommandId::SoftProof && crate::color_management::enabled(self.state.platform) {
+        } else if id == CommandId::SoftProof {
             "Proof"
         } else {
             id.label()
@@ -1915,15 +1897,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
         match id {
-            CommandId::Select if CommandId::Select.available_on(self.state.platform) => {
-                self.selection_tools.options.tool.command().icon()
-            }
-            CommandId::DrawingBrush if CommandId::Select.available_on(self.state.platform) => {
-                Some(tools::group(self.tools.drawing()).icon())
-            }
-            CommandId::Sculpt if CommandId::Select.available_on(self.state.platform) => {
-                Some(tools::group(self.tools.sculpt()).icon())
-            }
+            CommandId::Select => self.selection_tools.options.tool.command().icon(),
+            CommandId::DrawingBrush => Some(tools::group(self.tools.drawing()).icon()),
+            CommandId::Sculpt => Some(tools::group(self.tools.sculpt()).icon()),
             CommandId::ZenMode => Some(self.state.settings.zen_icon.icon()),
             CommandId::Fullscreen if self.state.fullscreen => Some("fullscreen-exit"),
             _ => id.icon(),
@@ -1964,9 +1940,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProof if crate::color_management::enabled(self.state.platform) => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProof => document.proof.is_some()
-                || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
+            CommandId::SoftProof => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::GamutWarning => document.proof.is_some(),
             CommandId::ResetLayout if self.managed_workspace.is_some() => {
                 self.require_workspace_idle().is_ok()
@@ -2118,8 +2092,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar.visible)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::PreviewSdr && self.state.preview_sdr)
-            || (id == CommandId::SoftProof && (self.state.soft_proof
-                || (crate::color_management::enabled(self.state.platform) && self.state.preview_sdr)))
+            || (id == CommandId::SoftProof && (self.state.soft_proof || self.state.preview_sdr))
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
@@ -2229,8 +2202,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let choosing_drawing_set = matches!(&action, UiAction::SelectBrushSet { .. })
             && self.state.customization.drawer.as_ref().is_some_and(|drawer|
                 drawer.columns.iter().flatten().any(|p| matches!(p, Panel::BrushSets | Panel::SculptSets)));
-        let choosing_selection = CommandId::Select.available_on(self.state.platform)
-            && self.layer_interaction.tool.selection_tool().is_some()
+        let choosing_selection = self.layer_interaction.tool.selection_tool().is_some()
             && self.state.customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == [vec![Panel::Tools], vec![Panel::ToolSettings]])
             && matches!(&action, UiAction::Invoke { command } if SelectionTool::ALL.iter().any(|tool| tool.command() == *command)
                 || matches!(command, CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference));
@@ -2762,13 +2734,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 use layer_render::ColorSampleArea;
                 let area = match width {
                     1 => ColorSampleArea::Point,
-                    3 if self.state.platform.color_picker() => ColorSampleArea::Circle3,
-                    5 if self.state.platform.color_picker() => ColorSampleArea::Circle5,
-                    15 if self.state.platform.color_picker() => ColorSampleArea::Circle15,
-                    51 if self.state.platform.color_picker() => ColorSampleArea::Circle51,
-                    101 if self.state.platform.color_picker() => ColorSampleArea::Circle101,
-                    3 => ColorSampleArea::Average3,
-                    5 => ColorSampleArea::Average5,
+                    3 => ColorSampleArea::Circle3,
+                    5 => ColorSampleArea::Circle5,
+                    15 => ColorSampleArea::Circle15,
+                    51 => ColorSampleArea::Circle51,
+                    101 => ColorSampleArea::Circle101,
                     _ => return Err("Choose a supported sample size".into()),
                 };
                 self.eyedropper.area = area;
@@ -3223,10 +3193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             return None;
                         }
                         // These hosts draw the sidebar selection and connector at the visible tab.
-                        let origin = if matches!(
-                            self.state.platform,
-                            Platform::Gtk | Platform::Android | Platform::Web | Platform::Mac | Platform::Ios
-                        ) {
+                        let origin = if self.state.platform != Platform::Windows {
                             self.state.workspace.layout.active_panel(origin)?
                         } else {
                             origin
@@ -3365,8 +3332,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         let kind = if event.tool == layer_engine::ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen };
-        if self.state.platform.color_picker() && (self.eyedropper.picking.previous.is_some()
-            || self.eyedropper.picking.consumed.contains(&(kind, event.device_id))) {
+        if self.eyedropper.picking.previous.is_some()
+            || self.eyedropper.picking.consumed.contains(&(kind, event.device_id)) {
             if event.phase == PenPhase::Hover {
                 self.cursor_input(Some(event));
             } else {
@@ -3378,41 +3345,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     button: PointerButton::Primary,
                     position: [event.surface_position.x, event.surface_position.y],
                 });
-            }
-            return Ok(());
-        }
-        if self.layer_interaction.tool.picks_color() {
-            match event.phase {
-                PenPhase::Down => {
-                    self.eyedropper.cancel();
-                    self.eyedropper.contact = true;
-                }
-                PenPhase::Cancel => {
-                    self.eyedropper.cancel();
-                    return Ok(());
-                }
-                PenPhase::Hover => return Ok(()),
-                _ => (),
-            }
-            if self.eyedropper.contact {
-                let mut point = self
-                    .state
-                    .camera
-                    .input_transform()
-                    .map(event.surface_position);
-                let doc = self.engine.document();
-                let (source, extent) = if self.eyedropper.layer {
-                    let Some(inverse) = doc.layer_transform(doc.active_layer).inverse() else { return Ok(()); };
-                    point = inverse.map(point);
-                    (layer_render::ColorSampleSource::Layer(doc.active_layer), doc.target_extent(doc.active_layer))
-                } else { (layer_render::ColorSampleSource::Composite, [doc.width, doc.height]) };
-                if point.x.is_finite() && point.y.is_finite() && point.x >= 0. && point.y >= 0.
-                    && point.x < extent[0] as f32 && point.y < extent[1] as f32 {
-                    self.eyedropper.queue(source, [point.x as u32, point.y as u32]);
-                }
-                if event.phase == PenPhase::Up {
-                    self.eyedropper.contact = false;
-                }
             }
             return Ok(());
         }
@@ -3848,7 +3780,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request(HostRequestKind::SoftProofSetup)?;
                 Ok((HOST, false))
             }
-            CommandId::SoftProof if crate::color_management::enabled(self.state.platform) => {
+            CommandId::SoftProof => {
                 let change = self.toggle_proof()?;
                 let mut regions = change.regions;
                 if self.proof_panel_mode() != ProofMode::Off {
@@ -3861,14 +3793,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 Ok((regions, change.canvas_wake))
             }
-            CommandId::SoftProof if self.engine.document().proof.is_none() => {
-                self.request(HostRequestKind::SoftProofSetup)?;
-                Ok((HOST, false))
-            }
-            CommandId::SoftProof | CommandId::GamutWarning => {
+            CommandId::GamutWarning => {
                 if self.engine.document().proof.is_none() { return Err("Choose a proof target first".into()); }
-                if command == CommandId::SoftProof { self.state.soft_proof = !self.state.soft_proof; }
-                else { self.state.gamut_warning = !self.state.gamut_warning; }
+                self.state.gamut_warning = !self.state.gamut_warning;
                 Ok((COMMANDS, true))
             }
             CommandId::Histogram => {
@@ -4068,21 +3995,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, false))
             }
-            CommandId::Eyedropper if self.state.platform.color_picker() => {
+            CommandId::Eyedropper => {
                 if self.eyedropper.picking.previous.is_some() { self.cancel_picker(); }
                 else { self.start_picker()?; }
                 Ok((BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true))
             }
-            CommandId::Hand | CommandId::Eyedropper => {
-                self.layer_action(LayerAction::Tool {
-                    tool: if command == CommandId::Hand {
-                        LayerCanvasTool::Hand
-                    } else if self.eyedropper.layer {
-                        LayerCanvasTool::PickLayer
-                    } else {
-                        LayerCanvasTool::PickVisible
-                    },
-                })?;
+            CommandId::Hand => {
+                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Hand })?;
                 Ok((BRUSH | DOCUMENT, false))
             }
             CommandId::Lasso | CommandId::Move => {
@@ -4485,12 +4404,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
-        self.state.tool_set = if CommandId::Select.available_on(self.state.platform)
-            && let Some(tool) = self.layer_interaction.tool.selection_tool() {
+        self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             selection_tools::tool_set(tool)
         } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
         self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
-        if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
+        if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
             } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
@@ -4508,7 +4426,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
-        if self.state.platform.color_picker() && self.layer_interaction.tool.picks_color() {
+        if self.layer_interaction.tool.picks_color() {
             self.state.tool_set.groups.clear();
             self.state.tool_set.subtools = [
                 ("Color Picker", "color-picker", ColorPickerStyle::Glass),
@@ -4544,7 +4462,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
             if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
-            if !fill && CommandId::Select.available_on(self.state.platform) && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
+            if !fill && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
             if fill {
                 controls.extend(
                     tool_settings::controls(self.engine.configured_brush())
@@ -4564,7 +4482,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
-        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
+        if self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
             let mut edges=self.selection_tools.options.edge_controls();
             for field in &mut edges {
                 field.group="";
@@ -4974,7 +4892,7 @@ mod tests {
         source.push_row(&[0; 8]).unwrap();
         document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
         let project = layer_core::Project { document, assets: Default::default() };
-        let result = UiSession::from_project(Recorder::default(), project, None, [256, 256]);
+        let result = UiSession::from_project(Recorder::default(), project, None, [256, 256], Platform::Gtk);
         assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
     }
 
@@ -4982,8 +4900,7 @@ mod tests {
     fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
             for drawers in [false, true] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 customize(&mut s, CustomizationAction::SetPanelVisible {
                     panel: Panel::Stats,
                     visible: true,
@@ -5022,8 +4939,7 @@ mod tests {
 
     #[test]
     fn header_tool_picker_is_a_nested_preview_not_a_toolbar_transaction() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let original = s.capture_workspace().unwrap();
         let header = s.state.workspace.layout.header.clone();
         let before = header.zones[2][0].id;
@@ -5133,8 +5049,7 @@ mod tests {
 
     #[test]
     fn header_picker_revalidates_destination_and_capacity() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         s.dispatch(HeaderAction::Edit { editing: true }.action())
             .unwrap();
         let before = s.state.workspace.layout.header.zones[0][0].id;
@@ -5221,8 +5136,7 @@ mod tests {
 
     #[test]
     fn header_preview_cancel_and_done_are_transactional() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let original = s.capture_workspace().unwrap();
         let model = original.history.layout().header.clone();
         s.dispatch(HeaderAction::Edit { editing: true }.action())
@@ -5314,8 +5228,7 @@ mod tests {
     #[test]
     fn workspace_picker_cannot_adopt_an_uncommitted_header_baseline() {
         for platform in [Platform::Gtk, Platform::Web] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let original = s.capture_workspace().unwrap();
             s.dispatch(HeaderAction::Edit { editing: true }.action())
                 .unwrap();
@@ -5350,7 +5263,7 @@ mod tests {
 
     #[test]
     fn workspace_bottom_clearance_is_runtime_state_across_history_and_switching() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         let initial = app.capture_workspace().unwrap();
         let viewport = [1000., 1000.];
         let original = app.layout(viewport);
@@ -5422,7 +5335,7 @@ mod tests {
 
     #[test]
     fn history_preview_never_changes_capture() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let starting = s.capture_workspace().unwrap();
         for position in [[410., 170.], [520., 220.]] {
             s.dispatch(UiAction::MovePanel {
@@ -5472,7 +5385,7 @@ mod tests {
 
     #[test]
     fn history_names_affected_panels_and_toolbars() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::MovePanel {
             panel: Panel::Layers,
             target: DockTarget::Float {
@@ -5524,7 +5437,7 @@ mod tests {
 
     #[test]
     fn managed_window_menu_saves_workspaces_without_separate_layout_controls() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.configure_workspace_manager(ManagedWorkspace {
             id: "test".into(),
             name: "Painting".into(),
@@ -5534,33 +5447,33 @@ mod tests {
         .unwrap();
         let menu = s.workspace_menu();
         assert!(matches!(
-            menu.sections[0][0].action,
+            menu.sections[1][0].action,
             Some(UiAction::Invoke {
                 command: CommandId::UndoWorkspace
             })
         ));
         assert!(matches!(
-            menu.sections[0][1].action,
+            menu.sections[1][1].action,
             Some(UiAction::Invoke {
                 command: CommandId::RedoWorkspace
             })
         ));
-        assert_eq!(menu.sections[1][0].label, "Workspaces");
+        assert_eq!(menu.sections[2][0].label, "Workspaces");
         assert!(
-            menu.sections[1][0]
+            menu.sections[2][0]
                 .sections
                 .iter()
                 .flatten()
                 .any(|i| i.label == "Reset All Brushes…")
         );
-        assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
+        assert!(menu.sections[3].iter().any(|i| i.label == "Layers"));
         assert!(
-            menu.sections[2]
+            menu.sections[3]
                 .iter()
                 .all(|i| !i.label.ends_with(" panel"))
         );
-        assert_eq!(menu.sections.len(), 3);
-        let workspaces = &menu.sections[1][0];
+        assert_eq!(menu.sections.len(), 4);
+        let workspaces = &menu.sections[2][0];
         assert_eq!(
             workspaces
                 .sections
@@ -5590,8 +5503,8 @@ mod tests {
                 command: WorkspaceCommand::SaveAsTemplate | WorkspaceCommand::ManageTemplates
             })
         )));
-        assert_eq!(menu.sections[1].len(), 2);
-        let toolbars = &menu.sections[1][1];
+        assert_eq!(menu.sections[2].len(), 2);
+        let toolbars = &menu.sections[2][1];
         assert_eq!(toolbars.label, "Quick Access Toolbars");
         assert!(
             toolbars.sections[0]
@@ -5620,7 +5533,7 @@ mod tests {
 
     #[test]
     fn read_only_workspace_rejects_new_contacts_and_keys_but_finishes_existing_ink() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let before = s.engine.document().clone();
         s.set_workspace_read_only(true);
         s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
@@ -5654,7 +5567,7 @@ mod tests {
 
     #[test]
     fn pending_workspace_adoption_blocks_new_input_without_touching_artwork() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let capture = s.capture_workspace().unwrap();
         let before = s.engine.document().clone();
         s.begin_workspace_transition().unwrap();
@@ -5674,7 +5587,7 @@ mod tests {
 
     #[test]
     fn reset_all_workspace_brushes_preserves_layout_color_tool_and_document() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
         invoke(&mut s, CommandId::Eraser);
         s.dispatch(UiAction::SetBrushOpacity { value: 0.35 })
@@ -5716,7 +5629,7 @@ mod tests {
 
     #[test]
     fn library_copies_remap_tiles_and_full_reset_recovers_toolbar_customization() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let initial = s.capture_workspace().unwrap();
         let baseline = initial.history.layout().clone();
         let source = baseline
@@ -5761,7 +5674,7 @@ mod tests {
 
     #[test]
     fn host_acknowledgements_finish_during_workspace_transition_and_ownership_recovery() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for read_only in [false, true] {
             s.set_workspace_read_only(false);
             s.dispatch(UiAction::SetTheme {
@@ -5801,7 +5714,7 @@ mod tests {
 
     #[test]
     fn replacing_a_toolbar_with_an_empty_library_entry_preserves_placement_and_undo() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let before = s.capture_workspace().unwrap();
         let source = before
             .history
@@ -5849,7 +5762,7 @@ mod tests {
 
     #[test]
     fn durable_workspace_history_resumes_redo_and_keeps_abandoned_revisions() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let original = s.state.workspace.layout.clone();
         s.dispatch(UiAction::MovePanel {
             panel: Panel::Sizes,
@@ -5869,7 +5782,7 @@ mod tests {
         let captured = s.capture_workspace().unwrap();
         assert_eq!(captured.history.revisions.len(), 2);
         let encoded = serde_json::to_string(&captured).unwrap();
-        let mut reopened = session();
+        let mut reopened = session(Platform::Gtk);
         reopened
             .adopt_workspace(
                 PreparedWorkspace::new(serde_json::from_str(&encoded).unwrap()).unwrap(),
@@ -5905,7 +5818,7 @@ mod tests {
 
     #[test]
     fn workspace_switch_keeps_independent_working_values_and_document_history() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         let document = s.engine.document().clone();
         let blank = s.capture_workspace().unwrap();
@@ -5945,7 +5858,7 @@ mod tests {
 
     #[test]
     fn sparse_overrides_only_reset_the_setting_explicitly_edited() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let id = s.state.brush.preset;
         let defaults = layer_core::default_brush(preset(id).unwrap());
         let mut saved = s.capture_workspace().unwrap();
@@ -5984,7 +5897,7 @@ mod tests {
 
     #[test]
     fn workspace_adoption_rejects_invalid_state_and_active_artwork_without_side_effects() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let captured = s.capture_workspace().unwrap();
         let mut invalid = captured.clone();
         invalid
@@ -6013,8 +5926,7 @@ mod tests {
 
     #[test]
     fn document_save_keeps_source_assets_and_tracks_the_saved_undo_state() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let pixels = std::sync::Arc::<[u8]>::from([200, 20, 90, 128]);
         s.import_layer_asset(
             "Image",
@@ -6061,6 +5973,7 @@ mod tests {
             decoded,
             s.state.document_file.location.clone(),
             [800, 600],
+            Platform::Gtk,
         )
         .unwrap();
         assert!(!reopened.state.document_file.modified);
@@ -6076,7 +5989,7 @@ mod tests {
 
     #[test]
     fn normal_parking_keeps_unsubmitted_ink_and_restores_the_same_editor() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.frame(0, 0).unwrap();
         s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
         assert!(s.park_document().is_err());
@@ -6102,7 +6015,7 @@ mod tests {
 
     #[test]
     fn renderer_replacement_retains_saved_checkpoint_history_and_live_contact() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         let checkpoint = s.engine.checkpoint();
         let layer = s.engine.document().active_layer;
@@ -6137,8 +6050,7 @@ mod tests {
 
     #[test]
     fn save_during_contact_uses_the_committed_boundary_and_keeps_live_ink_dirty() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let initial = s.engine.document().layers[0].raster.identity();
         s.pen(event(&s, 1, PenPhase::Down, 0.3)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
@@ -6184,8 +6096,7 @@ mod tests {
     #[test]
     fn in_place_new_and_open_share_unsaved_and_save_completion_policy() {
         for platform in [Platform::Ios, Platform::Mac] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             s.set_document_replacement(true);
             invoke(&mut s, CommandId::AddLayer);
             invoke(&mut s, CommandId::NewDocument);
@@ -6236,8 +6147,7 @@ mod tests {
 
     #[test]
     fn close_save_cancel_failure_and_concurrent_edits_never_discard_work() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         let location = DocumentLocation {
             uri: "file:///drawing.capy".into(),
@@ -6283,8 +6193,7 @@ mod tests {
 
     #[test]
     fn export_snapshot_freezes_the_master_without_acknowledging_save() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         s.engine.render_frame_at(0).unwrap();
         s.engine.render_frame_at(1_500_000_000).unwrap();
@@ -6310,8 +6219,7 @@ mod tests {
 
     #[test]
     fn file_requests_are_single_flight_and_new_open_do_not_replace_artwork() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         let document = s.engine.document().clone();
         for command in [
@@ -6344,8 +6252,7 @@ mod tests {
 
     #[test]
     fn save_completion_during_a_live_stroke_defers_close_until_pen_up() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         invoke(&mut s, CommandId::SaveDocument);
         let id = s.state.requests.last().unwrap().id;
@@ -6380,6 +6287,7 @@ mod tests {
             Recorder::default(),
             Document::new("test", 2048, 1536),
             [1000, 1000],
+            Platform::Gtk,
         )
         .unwrap();
         s.state.camera.work_area = [200.0, 50.0, 400.0, 300.0];
@@ -6459,8 +6367,7 @@ mod tests {
         let coverage =
             Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444]).unwrap());
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let send = |s: &mut UiSession<Recorder>, phase| {
                 let mut e = event(s, 10, phase, 1.);
                 let m = s.state.camera.document_to_surface();
@@ -6688,8 +6595,7 @@ mod tests {
     fn ruler_tools_preview_edit_cancel_and_undo_without_repainting() {
         use layer_core::RulerGeometry;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             s.set_viewport([600., 500.], [1200, 1000]).unwrap();
             s.state.camera.rotation = 0.3;
             s.state.camera.flipped = [true, true];
@@ -6821,7 +6727,7 @@ mod tests {
     #[test]
     fn figure_tools_use_shared_controls_constrain_cancel_and_commit_once() {
         use layer_core::{Edit, LayerOperationKind};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "u", true, false, false).handled);
         key(&mut s, "u", false, false, false);
         assert_eq!(s.state.tool_set.groups.len(), 3);
@@ -7061,7 +6967,7 @@ mod tests {
     #[test]
     fn gradient_tools_commit_once_with_local_selection_and_cancel_cleanly() {
         use layer_core::{Edit, LayerOperationKind, Selection};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "g", true, false, false).handled);
         key(&mut s, "g", false, false, false);
         assert_eq!(s.state.tool_set.subtools.len(), 4);
@@ -7214,8 +7120,7 @@ mod tests {
     fn hand_uses_shared_pointer_and_touch_navigation_without_painting() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 assert!(key(&mut s, "h", true, false, false).handled);
                 key(&mut s, "h", false, false, false);
                 assert!(s.command(CommandId::Hand).selected);
@@ -7254,129 +7159,9 @@ mod tests {
     }
 
     #[test]
-    fn eyedropper_coalesces_points_resolves_color_slots_and_rejects_stale_results() {
-        use layer_render::{ColorSample, ColorSampleSource};
-        let mut s = session();
-        assert!(key(&mut s, "i", true, false, false).handled);
-        key(&mut s, "i", false, false, false);
-        assert_eq!(s.state.tool_set.subtools.len(), 2);
-        s.dispatch(UiAction::Color {
-            action: ColorAction::Select {
-                slot: ColorSlot::Background,
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Color {
-            action: ColorAction::Select {
-                slot: ColorSlot::Transparent,
-            },
-        })
-        .unwrap();
-        let foreground = s.state.colors.foreground;
-        let revision = s.engine.document().revision;
-        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-            let m = s.state.camera.document_to_surface();
-            let mut e = event(s, 1, phase, 1.0);
-            e.surface_position = Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            };
-            s.pen(e).unwrap();
-        };
-        s.state.camera.flipped = [true, false];
-        s.state.camera.rotation = 0.7;
-        send(&mut s, PenPhase::Down, [64.25, 80.25]);
-        assert!(s.wants_continuous_frames());
-        s.frame(1, 1).unwrap();
-        let request = s.renderer_mut().sample_requests[0];
-        assert_eq!(request.position, [64, 80]);
-        assert_eq!(request.source, ColorSampleSource::Composite);
-        for x in 100..200 {
-            send(&mut s, PenPhase::Move, [x as f32 + 0.25, 80.25]);
-        }
-        send(&mut s, PenPhase::Up, [199.25, 80.25]);
-        s.frame(2, 2).unwrap();
-        assert_eq!(s.renderer_mut().sample_requests.len(), 1);
-        s.renderer_mut().sample_reply = Some(ColorSample {
-            request_id: request.request_id,
-            rgba: [0.25, 0.5, 1.0, 0.3],
-        });
-        let change = s.frame(3, 3).unwrap();
-        assert_ne!(change.regions & regions::BRUSH, 0);
-        assert_eq!(s.state.colors.foreground, foreground);
-        assert_eq!(s.state.colors.slot, ColorSlot::Background);
-        for (a, b) in s
-            .state
-            .colors
-            .background.rgba
-            .into_iter()
-            .zip([0.537099, 0.735357, 1.0, 1.0])
-        {
-            assert!((a - b).abs() < 0.0001);
-        }
-        assert_eq!(s.renderer_mut().sample_requests[1].position, [199, 80]);
-        let color = [0.1, 0.2, 0.3, 1.0];
-        s.dispatch(UiAction::SetColor { rgba: color }).unwrap();
-        s.renderer_mut().sample_reply = Some(ColorSample {
-            request_id: request.request_id,
-            rgba: [1.0; 4],
-        });
-        s.frame(4, 4).unwrap();
-        assert_eq!(
-            s.state.colors.background.rgba, color,
-            "late sample cannot overwrite a manual choice"
-        );
-        assert!(!s.wants_continuous_frames());
-        assert_eq!(s.engine.document().revision, revision);
-        assert_eq!(s.renderer_mut().dabs, 0);
-
-        let mut layer = s
-            .engine
-            .document()
-            .layer(s.engine.document().active_layer)
-            .unwrap()
-            .clone();
-        layer.properties.offset = Point { x: 16.0, y: 8.0 };
-        let id = layer.id;
-        s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))
-            .unwrap();
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Tool {
-                tool: LayerCanvasTool::PickLayer,
-            },
-        })
-        .unwrap();
-        send(&mut s, PenPhase::Down, [64.25, 80.25]);
-        s.frame(5, 5).unwrap();
-        let request = *s.renderer_mut().sample_requests.last().unwrap();
-        assert_eq!(
-            (request.source, request.position),
-            (ColorSampleSource::Layer(id), [48, 72])
-        );
-        invoke(&mut s, CommandId::Hand);
-        s.renderer_mut().sample_reply = Some(ColorSample {
-            request_id: request.request_id,
-            rgba: [1.0; 4],
-        });
-        s.frame(6, 6).unwrap();
-        assert_eq!(
-            s.state.colors.background.rgba, color,
-            "tool changes cancel sampling"
-        );
-        invoke(&mut s, CommandId::Eyedropper);
-        assert_eq!(
-            s.state.layer_tools.tool,
-            LayerCanvasTool::PickLayer,
-            "remember source subtool"
-        );
-    }
-
-    #[test]
     fn sdr_host_sample_area_cancels_stale_results_and_keeps_document_and_opacity() {
         use layer_render::{ColorSample, ColorSampleArea, ColorSampleSource};
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-        let mut s = session();
-        s.set_platform(platform);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::Eyedropper);
         let revision = s.engine.document().revision;
         let opacity = s.state.brush.opacity;
@@ -7385,8 +7170,6 @@ mod tests {
         let old = *s.renderer_mut().sample_requests.last().unwrap();
         s.dispatch(UiAction::SetColorSampleSize { width: 5 }).unwrap();
         assert_eq!(s.state.color_picker.sample_width, 5);
-        if !platform.color_picker() { assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
-            && item.action == UiAction::SetColorSampleSize { width: 5 })); }
         assert!(s.dispatch(UiAction::SetColorSampleSize { width: 4 }).is_err());
         let color = s.state.colors.rgba();
         s.renderer_mut().sample_reply = Some(ColorSample { request_id: old.request_id, rgba: [1.; 4] });
@@ -7394,18 +7177,15 @@ mod tests {
         s.frame(2, 2).unwrap();
         assert_eq!(s.state.colors.rgba(), color);
         let next = *s.renderer_mut().sample_requests.last().unwrap();
-        assert_eq!(next.area, if platform.color_picker() { ColorSampleArea::Circle5 } else { ColorSampleArea::Average5 });
+        assert_eq!(next.area, ColorSampleArea::Circle5);
         assert_ne!(next.request_id, old.request_id);
         s.renderer_mut().sample_reply = Some(ColorSample { request_id: next.request_id, rgba: [0.25, 0.5, 0.75, 0.2] });
         s.frame(3, 3).unwrap();
-        if platform.color_picker() {
-            assert_eq!(s.state.colors.rgba(), color);
-            assert!(s.state.color_picker.preview.is_some());
-        } else { assert_ne!(s.state.colors.rgba(), color); }
+        assert_eq!(s.state.colors.rgba(), color);
+        assert!(s.state.color_picker.preview.is_some());
         assert_eq!(s.state.colors.rgba()[3], 1.);
         assert_eq!(s.state.brush.opacity, opacity);
         assert_eq!(s.engine.document().revision, revision);
-        }
     }
 
     #[test]
@@ -7413,8 +7193,7 @@ mod tests {
         use layer_core::{LayerOperationKind, Point, Selection};
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for linked in [false, true] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 let area = Selection::polygon(vec![
                     Point { x: 100., y: 100. },
                     Point { x: 300., y: 100. },
@@ -7499,7 +7278,7 @@ mod tests {
     #[test]
     fn window_blur_and_pen_cancel_keep_the_transform_and_roll_back_only_the_drag() {
         use layer_core::{Point, Selection};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let selection = Selection::polygon(vec![
             Point { x: 100., y: 100. },
             Point { x: 300., y: 100. },
@@ -7547,7 +7326,7 @@ mod tests {
     #[test]
     fn operation_controls_preview_cancel_apply_and_undo_share_one_transaction() {
         use layer_core::{Affine, Point, Selection};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let selection = Selection::polygon(vec![
             Point { x: 100., y: 100. },
             Point { x: 300., y: 100. },
@@ -7675,8 +7454,7 @@ mod tests {
     #[test]
     fn brush_class_browses_all_sets_and_remembers_tools_and_settings() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
                 layout: WorkspacePreset::Painter.layout(platform),
                 ..WorkspaceState::default()
@@ -7726,7 +7504,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             assert!(s.state.customization.drawer.is_none(), "Clicking the opener again closes it");
             let capture = s.capture_workspace().unwrap();
-            let mut restored = session();
+            let mut restored = session(Platform::Gtk);
             restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), remembered);
         }
@@ -7735,8 +7513,7 @@ mod tests {
     #[test]
     fn sculpt_and_brush_restore_separate_selections_across_workspace_reload() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Windows] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
                 layout: WorkspacePreset::Painter.layout(platform), ..WorkspaceState::default()
             }) }).unwrap();
@@ -7768,11 +7545,9 @@ mod tests {
             invoke(&mut s, CommandId::Eraser);
             assert!(!s.command(CommandId::Sculpt).selected);
             assert!(!s.command(CommandId::DrawingBrush).selected);
-            let drawing_icon = if CommandId::Select.available_on(platform) { Some("pencil") } else { CommandId::DrawingBrush.icon() };
-            let sculpt_icon = if CommandId::Select.available_on(platform) { Some("liquify") } else { CommandId::Sculpt.icon() };
-            assert_eq!(s.command(CommandId::DrawingBrush).icon, drawing_icon);
-            assert_eq!(s.command(CommandId::Sculpt).icon, sculpt_icon);
-            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, sculpt_icon.unwrap());
+            assert_eq!(s.command(CommandId::DrawingBrush).icon, Some("pencil"));
+            assert_eq!(s.command(CommandId::Sculpt).icon, Some("liquify"));
+            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "liquify");
             let eraser = s.state.workspace.layout.header.entries().find(|e|
                 e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
             s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
@@ -7783,11 +7558,10 @@ mod tests {
                 [vec![Panel::Tools], vec![Panel::ToolSettings]]);
             let capture = s.capture_workspace().unwrap();
             let json = serde_json::to_string(&capture).unwrap();
-            let mut restored = session();
-            restored.set_platform(platform);
+            let mut restored = session(platform);
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
-            assert_eq!(restored.command(CommandId::DrawingBrush).icon, drawing_icon);
-            assert_eq!(restored.command(CommandId::Sculpt).icon, sculpt_icon);
+            assert_eq!(restored.command(CommandId::DrawingBrush).icon, Some("pencil"));
+            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("liquify"));
             invoke(&mut restored, CommandId::DrawingBrush);
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
             invoke(&mut restored, CommandId::Sculpt);
@@ -7797,7 +7571,7 @@ mod tests {
 
     #[test]
     fn tool_groups_remember_subtools_edits_and_never_change_paint_color() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let color = [0.2, 0.5, 0.8, 1.0];
         s.dispatch(UiAction::SetColor { rgba: color }).unwrap();
         let mut remembered = Vec::new();
@@ -7853,7 +7627,7 @@ mod tests {
                 assert_eq!(s.engine.configured_brush().spacing, 0.23);
             }
         }
-        invoke(&mut s, CommandId::Lasso);
+        invoke(&mut s, CommandId::Hand);
         assert!(s.state.tool_settings.is_empty());
         assert!(
             s.state
@@ -7878,7 +7652,7 @@ mod tests {
 
     #[test]
     fn tool_switch_keeps_active_stroke_snapshot_and_restores_next_stroke_settings() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let original = s.engine.configured_brush().clone();
         let enabled: Vec<_> = s.state.commands.iter().map(|c| c.enabled).collect();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
@@ -7922,7 +7696,7 @@ mod tests {
 
     #[test]
     fn tool_family_keys_cycle_in_toolbar_order_and_direct_bindings_stay_direct() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for (letter, family) in [
             ("p", ToolFamily::Ink),
             ("b", ToolFamily::Paint),
@@ -7991,7 +7765,7 @@ mod tests {
 
     #[test]
     fn tool_edits_preserve_other_parameters_and_the_live_stroke() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let original = s.engine.configured_brush().clone();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
@@ -8028,7 +7802,7 @@ mod tests {
 
     #[test]
     fn shared_color_slots_drive_transparent_paint_without_changing_the_tip() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let preset = s.state.brush.preset;
         s.dispatch(UiAction::Color {
             action: ColorAction::Select {
@@ -8079,8 +7853,7 @@ mod tests {
     fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
         use layer_core::{EffectInstallMode, EffectPackage};
         for platform in [Platform::Web, Platform::Android, Platform::Gtk, Platform::Windows] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             s.frame(0, 0).unwrap();
             let package = EffectPackage {
                 format: 1,
@@ -8104,7 +7877,7 @@ mod tests {
     #[test]
     fn background_readback_waits_for_contacts_and_pending_filters() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.frame(0, 0).unwrap();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
         assert!(!s.background_readback_idle());
@@ -8130,7 +7903,7 @@ mod tests {
     fn runtime_filter_publication_is_atomic_and_uses_current_values() {
         use layer_core::{EffectInstallMode, EffectPackage, EffectValue};
         use std::sync::Arc;
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Effect {
             action: EffectAction::Insert {
                 effect: "unsharp_mask".into(),
@@ -8246,8 +8019,7 @@ mod tests {
         use layer_core::{EffectCategory, EffectInstallMode, EffectPackage};
         use std::sync::Arc;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
             s.frame(0, 0).unwrap();
             let program = Arc::make_mut(&mut definition.program);
@@ -8296,7 +8068,7 @@ mod tests {
     fn runtime_filter_add_cannot_replace_a_document_only_program() {
         use layer_core::{Edit, EffectInstallMode, EffectInstance, EffectPackage, Layer};
         use std::sync::Arc;
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
         Arc::make_mut(&mut definition.program).id = "document:custom".into();
         let id = s.engine.allocate_layer_id();
@@ -8331,8 +8103,7 @@ mod tests {
         for library in [false, true] {
             for dirty in [false, true] {
                 for interaction in [false, true] {
-                    let mut s = session();
-                    s.set_platform(Platform::Web);
+                    let mut s = session(Platform::Web);
                     s.set_document_replacement(true);
                     if dirty {
                         invoke(&mut s, CommandId::AddLayer);
@@ -8408,7 +8179,7 @@ mod tests {
     #[test]
     fn save_and_close_during_library_warmup_waits_for_the_saved_checkpoint() {
         use layer_core::{EffectInstallMode, EffectPackage};
-        let mut s = session();
+        let mut s = session(Platform::Mac);
         invoke(&mut s, CommandId::AddLayer);
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
@@ -8451,7 +8222,7 @@ mod tests {
     fn startup_filter_library_does_not_rewrite_saved_programs() {
         use layer_core::{EffectInstallMode, EffectPackage};
         use std::sync::Arc;
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Effect {
             action: EffectAction::Insert {
                 effect: "unsharp_mask".into(),
@@ -8505,7 +8276,7 @@ mod tests {
 
     #[test]
     fn filter_picker_search_and_categories_are_ui_only() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let revision = s.engine.document().revision;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             s.set_platform(platform);
@@ -8559,8 +8330,7 @@ mod tests {
     #[test]
     fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             for _ in 0..2 {
                 s.dispatch(UiAction::Layer {
                     action: LayerAction::New {
@@ -8618,7 +8388,7 @@ mod tests {
 
     #[test]
     fn layer_row_selection_references_and_editing_are_independent() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let send = |s: &mut UiSession<Recorder>, action| {
             s.dispatch(UiAction::Layer { action }).unwrap();
         };
@@ -8734,7 +8504,7 @@ mod tests {
             },
         };
         for kind in ["paint", "group", "inherited"] {
-            let mut s = session();
+            let mut s = session(Platform::Gtk);
             let paint = s.engine.document().active_layer.0;
             let mut target = paint;
             let mut lock = paint;
@@ -8816,7 +8586,7 @@ mod tests {
                 0.55
             );
         }
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let target = s.engine.document().active_layer.0;
         let revision = s.engine.document().revision;
         for opacity in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
@@ -8829,6 +8599,7 @@ mod tests {
             new_drawing(64, 64).unwrap(),
             None,
             [128, 128],
+            Platform::Gtk,
         )
         .unwrap();
         let paper = s
@@ -8854,7 +8625,7 @@ mod tests {
 
     #[test]
     fn canvas_tools_are_shared_toolbar_commands() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for (command, tool) in [
             (CommandId::Lasso, LayerCanvasTool::Select),
             (CommandId::Move, LayerCanvasTool::Move),
@@ -8875,7 +8646,7 @@ mod tests {
 
     #[test]
     fn layer_context_preserves_checks_and_bulk_duplicate_keeps_clipping_stacks() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let send =
             |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
         send(
@@ -8910,7 +8681,7 @@ mod tests {
 
     #[test]
     fn paper_can_be_selected_but_never_painted_or_moved_above_artwork() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
         assert!(
             s.state
@@ -8981,7 +8752,7 @@ mod tests {
 
     #[test]
     fn copied_masks_are_independent_and_keep_their_canvas_position() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let send =
             |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
         send(
@@ -9041,7 +8812,7 @@ mod tests {
 
     #[test]
     fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let original = s.engine.document().layers.clone();
         s.dispatch(UiAction::Layer {
             action: LayerAction::New {
@@ -9095,7 +8866,7 @@ mod tests {
 
     #[test]
     fn layer_drop_preview_shares_parent_lock_cycle_and_clipping_validation() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for _ in 0..2 {
             s.dispatch(UiAction::Layer {
                 action: LayerAction::New {
@@ -9154,7 +8925,7 @@ mod tests {
 
     #[test]
     fn dropping_into_a_closed_group_expands_it_without_changing_edit_target() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Layer {
             action: LayerAction::New {
                 group: true,
@@ -9187,7 +8958,7 @@ mod tests {
     #[test]
     fn layer_mask_creation_deletion_apply_and_targets_round_trip_history() {
         use layer_core::{LayerOperationKind, Selection};
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let id = s.engine.document().active_layer.0;
         let selection = Selection::polygon(vec![
             Point { x: 0., y: 0. },
@@ -9232,7 +9003,7 @@ mod tests {
 
     #[test]
     fn undo_mask_removal_after_navigating_restores_the_owner_target() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let first = s.engine.document().active_layer;
         s.layer_action(LayerAction::New {
             group: false,
@@ -9259,7 +9030,7 @@ mod tests {
 
     #[test]
     fn reparent_keeps_world_position_and_group_rows_travel_together() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let id = s.engine.document().active_layer.0;
         s.layer_action(LayerAction::AddMask { id, replace: false })
             .unwrap();
@@ -9305,19 +9076,16 @@ mod tests {
     #[test]
     fn workspace_management_is_shared_transactional_and_independent_of_artwork() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let original = s.state.workspace.clone();
             let revision = s.engine.document().revision;
             let edit = |s: &mut UiSession<Recorder>, action| {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let mut menu = s.workspace_menu();
-            if CommandId::CustomizeWorkspaceUi.available_on(platform) {
-                assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
-                assert!(!format!("{menu:?}").contains("Show Menu Bar"));
-                menu.sections.remove(0);
-            }
+            assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
+            assert!(!format!("{menu:?}").contains("Show Menu Bar"));
+            menu.sections.remove(0);
             assert_eq!(
                 menu.sections[1].len(),
                 Panel::ALL
@@ -9495,8 +9263,7 @@ mod tests {
     #[test]
     fn toolbar_manager_selects_hidden_toolbars_and_deletes_with_confirmation_and_undo() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let edit = |s: &mut UiSession<Recorder>, action| {
                 s.dispatch(UiAction::Customize { action }).unwrap();
             };
@@ -9608,7 +9375,7 @@ mod tests {
 
     #[test]
     fn workspace_resize_history_coalesces_and_cancel_restores_geometry() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         let before = s.state.workspace.clone();
         let d = s.layout(viewport).dividers[0].clone();
@@ -9645,8 +9412,7 @@ mod tests {
 
     #[test]
     fn zen_context_menu_contains_only_icon_customization() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let target = ContextTarget::ZenMode;
         let menu = s.context_menu(target).unwrap();
         assert_eq!(menu.title, "Zen mode");
@@ -9673,8 +9439,7 @@ mod tests {
 
     #[test]
     fn zen_icons_are_core_choices_with_live_icons_and_reset() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let id = PreferenceId::ZenIcon;
         let field = |s: &Settings, platform| {
             s.pages(platform)
@@ -9758,8 +9523,7 @@ mod tests {
     #[test]
     fn tab_toggles_zen_but_preserves_editor_navigation_and_custom_bindings() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             assert_eq!(s.command(CommandId::ZenMode).shortcut, "Tab");
             assert!(!key(&mut s, "Tab", true, false, true).handled);
             key(&mut s, "Tab", false, false, true);
@@ -9789,8 +9553,7 @@ mod tests {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for capy in [true, false] {
                 for edges in [false, true] {
-                    let mut s = session();
-                    s.set_platform(platform);
+                    let mut s = session(platform);
                     for (id, value) in [
                         (PreferenceId::ZenShowCapy, capy),
                         (PreferenceId::ZenRevealAtEdges, edges),
@@ -9866,7 +9629,7 @@ mod tests {
 
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.state.settings.zen_reveal_at_edges = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
@@ -9921,7 +9684,7 @@ mod tests {
     #[test]
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
+            let mut s = session(Platform::Gtk);
             s.state.settings.zen_reveal_at_edges = true;
             s.set_platform(platform);
             let facts = ChromeFacts::default();
@@ -9987,7 +9750,7 @@ mod tests {
     }
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::ZenMode);
         let dragging = ChromeFacts {
             dragging: true,
@@ -10031,7 +9794,7 @@ mod tests {
 
     #[test]
     fn shortcuts_share_modifiers_editing_guards_and_repeat_policy() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         assert!(!key(&mut s, "e", true, true, false).handled);
         key(&mut s, "e", false, true, false);
         assert!(!key(&mut s, "e", true, false, true).handled);
@@ -10076,7 +9839,7 @@ mod tests {
     fn pointer_ownership_keeps_pan_and_ink_stable_through_modifier_changes() {
         use ContactPhase::*;
         use PointerButton::*;
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let before = s.state.camera.clone();
         key(&mut s, " ", true, false, false);
         assert!(!pointer(&mut s, 1, Down, [300.0; 2], Primary).paint);
@@ -10105,7 +9868,7 @@ mod tests {
     }
     #[test]
     fn routed_strokes_can_queue_back_to_back_before_a_frame() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for (index, phase) in [
             ContactPhase::Down,
             ContactPhase::Up,
@@ -10127,7 +9890,7 @@ mod tests {
     }
     #[test]
     fn viewport_owns_initial_fit_and_layout_bounds_without_refitting_edits() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let logical = [1200.0, 900.0];
         let physical = [2400, 1800];
         assert!(s.set_viewport(logical, physical).unwrap().canvas_wake);
@@ -10167,7 +9930,7 @@ mod tests {
 
     #[test]
     fn divider_lifecycle_preserves_grab_offset_and_uses_shared_nudges() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         for d in s.layout(viewport).dividers {
             let pointer = [d.bounds.x + 1.0, d.bounds.y + 1.0];
@@ -10222,7 +9985,7 @@ mod tests {
     }
     #[test]
     fn workspace_roundtrips_into_a_fresh_session_without_document_changes() {
-        let mut source = session();
+        let mut source = session(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         for action in [
             UiAction::MovePanel {
@@ -10261,7 +10024,7 @@ mod tests {
                 invoke(&mut source, CommandId::ZenMode);
             }
             let saved = serde_json::to_string(&source.state.workspace).unwrap();
-            let mut restored = session();
+            let mut restored = session(Platform::Gtk);
             let camera = restored.state.camera.clone();
             let revision = restored.engine.document().revision;
             let change = restored
@@ -10300,8 +10063,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for tearoff in [false, true] {
-                let mut app = session();
-                app.set_platform(platform);
+                let mut app = session(platform);
                 let baseline = app.state.workspace.clone();
                 let item = DockItem::Group { group: 5 };
                 let bounds = find_group(&app, viewport, |g| g.id == 5).bounds;
@@ -10344,8 +10106,7 @@ mod tests {
             Platform::Ios,
         ] {
             let viewport = [1200., 900.];
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Brushes,
                 viewport,
@@ -10438,8 +10199,7 @@ mod tests {
         ] {
             let viewport = [1200., 900.];
             for icon in [false, true] {
-                let mut app = session();
-                app.set_platform(platform);
+                let mut app = session(platform);
                 let panel = Panel::Brushes;
                 let group = app.state.workspace.layout.panel_group(panel).unwrap();
                 app.dispatch(UiAction::MeasurePanels {
@@ -10511,8 +10271,7 @@ mod tests {
             Platform::Mac,
             Platform::Ios,
         ] {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Brushes,
                 viewport,
@@ -10649,8 +10408,7 @@ mod tests {
             for edge in [Edge::Left, Edge::Right] {
                 for separate_bands in [false, true] {
                     for float in [false, true] {
-                        let mut app = session();
-                        app.set_platform(platform);
+                        let mut app = session(platform);
                         let layout = &mut app.state.workspace.layout;
                         layout.set_panel_visible(Panel::Toolbar, false).unwrap();
                         layout.set_panel_visible(Panel::Sizes, false).unwrap();
@@ -10721,8 +10479,7 @@ mod tests {
 
     #[test]
     fn application_menus_reuse_live_models_and_selection_commands_are_undoable() {
-        let mut app = session();
-        app.set_platform(Platform::Gtk);
+        let mut app = session(Platform::Gtk);
         assert_eq!(
             ApplicationMenu::ALL.map(|m| m.label()),
             [
@@ -10868,8 +10625,7 @@ mod tests {
     fn group_tab_presentation_selection_moves_and_history_are_shared() {
         let viewport = [1600.0, 1000.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             let group = app
                 .state
                 .workspace
@@ -11011,20 +10767,11 @@ mod tests {
     #[test]
     fn dragging_panels_preserves_tab_visibility_and_history() {
         let viewport = [1600.0, 1200.0];
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             for style in TabStyle::ALL {
                 for hidden in [false, true] {
                     for destination in ["float", "edge", "merge", "cancel"] {
-                        let mut app = session();
-                        app.set_platform(platform);
+                        let mut app = session(platform);
                         let panel = Panel::Sizes;
                         let group = app.state.workspace.layout.panel_group(panel).unwrap();
                         for action in [
@@ -11172,8 +10919,7 @@ mod tests {
         let viewport = [1600., 1200.];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for cancel in [false, true] {
-                let mut app = session();
-                app.set_platform(platform);
+                let mut app = session(platform);
                 let group = app
                     .state
                     .workspace
@@ -11238,8 +10984,7 @@ mod tests {
     fn tear_off_threshold_singleton_identity_and_multi_tab_cancel_are_shared() {
         let viewport = [1600.0, 1200.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             let group = app
                 .state
                 .workspace
@@ -11334,8 +11079,7 @@ mod tests {
             .into_iter()
             .flat_map(|platform| [false, true].map(|collapsed| (platform, collapsed)))
         {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             app.state.workspace.layout.bands[0].extent = 400.;
             if collapsed {
                 app.state
@@ -11365,8 +11109,7 @@ mod tests {
     #[test]
     fn windows_column_handles_collapse_with_workspace_history() {
         let viewport = [1200.0, 900.0];
-        let mut app = session();
-        app.set_platform(Platform::Windows);
+        let mut app = session(Platform::Windows);
         let panel = Panel::Sizes;
         let group = app.state.workspace.layout.panel_group(panel).unwrap();
         for style in TabStyle::ALL {
@@ -11409,8 +11152,7 @@ mod tests {
     #[test]
     fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let viewport = [1200., 900.];
             s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
                 .unwrap();
@@ -11433,7 +11175,7 @@ mod tests {
 
     #[test]
     fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.state.settings.zen_reveal_at_edges = true;
         s.set_platform(Platform::Gtk);
         for column in [4, 8] {
@@ -11498,8 +11240,7 @@ mod tests {
             DockItem::Group { group: 2 },
         ] {
             for slot in 0..3 {
-                let mut s = session();
-                s.set_platform(Platform::Gtk);
+                let mut s = session(Platform::Gtk);
                 s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
                     .unwrap();
                 let resolved = s.layout(viewport);
@@ -11566,8 +11307,7 @@ mod tests {
         let viewport = [1600., 1000.];
         for right in [false, true] {
             for whole in [false, true] {
-                let mut s = session();
-                s.set_platform(Platform::Gtk);
+                let mut s = session(Platform::Gtk);
                 s.state
                     .workspace
                     .layout
@@ -11695,8 +11435,7 @@ mod tests {
         for right in [false, true] {
             for structure in ["stacked", "nested", "single"] {
                 for collapsed in [false, true] {
-                    let mut s = session();
-                    s.set_platform(Platform::Gtk);
+                    let mut s = session(Platform::Gtk);
                     let stacked = structure != "single";
                     let (source, band) = if stacked { (8, 3) } else { (5, 7) };
                     let layout = &mut s.state.workspace.layout;
@@ -11797,8 +11536,7 @@ mod tests {
 
     #[test]
     fn collapsed_column_drag_never_tears_off_and_is_one_undo_transaction() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let viewport = [1200., 900.];
         s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
@@ -11837,8 +11575,7 @@ mod tests {
         let viewport = [1200., 900.];
         for cancel in [false, true] {
             for group in [5, 8] {
-                let mut s = session();
-                s.set_platform(Platform::Gtk);
+                let mut s = session(Platform::Gtk);
                 let original = s.state.workspace.clone();
                 let root = original.layout.column_for_group(group).unwrap();
                 let width = original
@@ -11950,8 +11687,7 @@ mod tests {
     }
     impl CollapsedResizeTest {
         fn new(platform: Platform, right: bool, nested: Option<bool>) -> Self {
-            let mut session = session();
-            session.set_platform(platform);
+            let mut session = session(platform);
             let viewport = [1600., 1000.];
             let (id, root) = if let Some(second) = nested {
                 let band = &mut session.state.workspace.layout.bands[0];
@@ -12049,15 +11785,7 @@ mod tests {
 
     #[test]
     fn expanded_divider_waits_for_pointer_then_resizes_and_can_collapse_again() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             for right in [false, true] {
                 let mut t = CollapsedResizeTest::new(platform, right, None);
                 let before = t.session.state.workspace.clone();
@@ -12426,8 +12154,7 @@ mod tests {
     #[test]
     fn column_drawer_anchor_follows_tab_and_sidebar_selection_on_gtk_android_and_web() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             for column in [4, 8] {
                 s.state.workspace.layout.column_stack_mut(column).drawers = true;
             }
@@ -12485,8 +12212,7 @@ mod tests {
 
     #[test]
     fn collapsed_drawers_are_persistent_per_column_and_follow_tab_selection() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         for column in [4, 8] {
             s.state.workspace.layout.column_stack_mut(column).drawers = true;
         }
@@ -12567,8 +12293,7 @@ mod tests {
                 .map(|case| (platform, case))
             })
         {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             for column in [4, 8] {
                 s.state.workspace.layout.column_stack_mut(column).drawers = true;
             }
@@ -12666,7 +12391,7 @@ mod tests {
                 [Panel::Adjustments, Panel::Layers, Panel::Properties],
             ),
         ] {
-            let mut s = session();
+            let mut s = session(Platform::Gtk);
             let viewport = [1200., 900.];
             let group = 8;
             let bounds = find_group(&s, viewport, |g| g.id == group).bounds;
@@ -12734,58 +12459,9 @@ mod tests {
     }
 
     #[test]
-    fn detached_tabs_preserve_the_grab_point_within_each_tab() {
-        for (index, panel) in [Panel::Layers, Panel::Adjustments, Panel::Properties]
-            .into_iter()
-            .enumerate()
-        {
-            let mut s = session();
-            let viewport = [1200., 900.];
-            let bounds = find_group(&s, viewport, |g| g.id == 8).bounds;
-            let tabs: Vec<_> = [80., 36., 60.]
-                .into_iter()
-                .enumerate()
-                .scan(bounds.x, |x, (index, width)| {
-                    let tab = TabHit {
-                        group: 8,
-                        index,
-                        bounds: Bounds {
-                            x: *x,
-                            width,
-                            height: TAB_BAR_HEIGHT,
-                            ..bounds
-                        },
-                    };
-                    *x += width;
-                    Some(tab)
-                })
-                .collect();
-            let before = s.state.workspace.clone();
-            let item = DockItem::Panel { panel };
-            for offset in [7., tabs[index].bounds.width - 2.] {
-                let press = [tabs[index].bounds.x + offset, bounds.y + 18.];
-                s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs)
-                    .unwrap();
-                s.begin_tab_drag(&tabs, bounds);
-                let away = [600., 450.];
-                s.drag_workspace(item, ContactPhase::Move, away, viewport, &tabs)
-                    .unwrap();
-                let floated = find_group(&s, viewport, |g| g.floating && g.active == panel);
-                assert_eq!(floated.bounds.x, away[0] - offset);
-                assert_eq!(floated.bounds.y, away[1] - 18.);
-                assert!(s.tab_drag_preview(away).is_none());
-                s.drag_workspace(item, ContactPhase::Cancel, away, viewport, &tabs)
-                    .unwrap();
-                assert_eq!(s.state.workspace, before);
-            }
-        }
-    }
-
-    #[test]
     fn column_drawer_tabs_reorder_and_reject_stale_geometry() {
-        for platform in [Platform::Generic, Platform::Gtk, Platform::Windows] {
-            let mut s = session();
-            s.set_platform(platform);
+        for platform in [Platform::Gtk, Platform::Windows] {
+            let mut s = session(platform);
             for column in [4, 8] {
                 s.state.workspace.layout.column_stack_mut(column).drawers = true;
             }
@@ -12868,8 +12544,7 @@ mod tests {
     fn collapsed_toolbar_tiles_use_live_origins_and_keep_the_parent_drawer() {
         let viewport = [1200., 900.];
         for group in [5, 8] {
-            let mut s = session();
-            s.set_platform(Platform::Gtk);
+            let mut s = session(Platform::Gtk);
             for column in [4, 8] {
                 s.state.workspace.layout.column_stack_mut(column).drawers = true;
             }
@@ -13014,8 +12689,7 @@ mod tests {
             for viewport in [[1600.0, 1200.0], [640.0, 480.0]] {
                 for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
                     for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
-                        let mut app = session();
-                        app.set_platform(platform);
+                        let mut app = session(platform);
                         customize(&mut app, CustomizationAction::SetTileStyle {
                             panel: Panel::Toolbar,
                             style,
@@ -13076,8 +12750,7 @@ mod tests {
         let viewport = [1600.0, 1200.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for panel in [Panel::Toolbar, Panel::Sizes] {
-                let mut app = session();
-                app.set_platform(platform);
+                let mut app = session(platform);
                 app.dispatch(UiAction::MovePanel {
                     panel,
                     viewport,
@@ -13170,8 +12843,7 @@ mod tests {
     fn zen_hidden_docks_only_allow_floating_tab_targets() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             let panel = Panel::Toolbar;
             let item = DockItem::Panel { panel };
             app.dispatch(UiAction::MovePanel {
@@ -13274,7 +12946,7 @@ mod tests {
     fn zen_floating_drag_reveals_at_edges_and_release_uses_normal_proximity() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session();
+            let mut app = session(Platform::Gtk);
             app.state.settings.zen_reveal_at_edges = true;
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {
@@ -13353,7 +13025,7 @@ mod tests {
 
     #[test]
     fn malformed_workspace_restore_is_atomic() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         let valid = serde_json::to_value(&app.state.workspace).unwrap();
         let mut invalid = Vec::new();
         let mut value = valid.clone();
@@ -13427,8 +13099,7 @@ mod tests {
                 "paint",
                 "paper",
             ] {
-                let mut app = session();
-                app.set_platform(platform);
+                let mut app = session(platform);
                 if effect == "paper" {
                     let id = app
                         .engine
@@ -13626,8 +13297,7 @@ mod tests {
     fn effect_creation_properties_and_navigation_are_shared() {
         use layer_core::EffectValue;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut app = session();
-            app.set_platform(platform);
+            let mut app = session(platform);
             let base = app.engine.document().active_layer;
             let send = |app: &mut UiSession<Recorder>, action| {
                 app.dispatch(UiAction::Effect { action }).unwrap()
@@ -13761,7 +13431,7 @@ mod tests {
     }
     #[test]
     fn shared_drop_preview_validates_the_exact_move() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         let item = DockItem::Panel {
             panel: Panel::Toolbar,
@@ -13783,7 +13453,7 @@ mod tests {
             hint.target,
             DockTarget::Tab {
                 group: 8,
-                index: None
+                index: Some(0)
             }
         );
         app.dispatch(item.move_action(hint.target, viewport))
@@ -13810,7 +13480,7 @@ mod tests {
     }
     #[test]
     fn wheel_pans_shift_pans_horizontally_and_control_zooms_without_rotation() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let before = s.state.camera.clone();
         s.scroll([500.0, 500.0], [0.0, 40.0], 2.0, false, false)
             .unwrap();
@@ -13833,8 +13503,7 @@ mod tests {
     #[test]
     fn camera_gestures_wait_for_paint_to_finish_without_reporting_an_error() {
         for platform in [Platform::Ios, Platform::Mac] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let before = s.state.camera.clone();
             s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
             let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
@@ -13851,7 +13520,7 @@ mod tests {
     }
     #[test]
     fn zen_does_not_move_camera_layout_or_request_canvas_work() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.set_viewport([1000.0; 2], [1000; 2]).unwrap();
         let camera = s.state.camera.clone();
         let layout = s.state.workspace.layout.clone();
@@ -13867,14 +13536,14 @@ mod tests {
         assert_eq!(s.state.camera.viewport, [1000, 1000]);
         assert_eq!(s.state.camera.translation, camera.translation);
         assert_eq!(s.state.camera.zoom, camera.zoom);
-        let mut full = session();
+        let mut full = session(Platform::Gtk);
         full.set_viewport([2000.0; 2], [2000; 2]).unwrap();
         invoke(&mut full, CommandId::FitCanvas);
         assert!(full.state.camera.zoom > camera.zoom);
     }
     #[test]
     fn initial_state_and_every_preset_are_valid() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         assert_eq!(app.state.tabs.len(), 1);
         assert!(!app.command(CommandId::Undo).enabled);
         assert!(app.command(CommandId::DeleteLayer).enabled);
@@ -13899,7 +13568,7 @@ mod tests {
 
     #[test]
     fn cursor_is_display_only_and_obeys_zoom_dpi_settings_and_pan() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.set_viewport([500.0, 500.0], [1000, 1000]).unwrap();
         let before = s.state.revision;
         let document = s.engine.document().clone();
@@ -13953,7 +13622,7 @@ mod tests {
 
     #[test]
     fn cursor_visibility_follows_contact_before_rendering_and_after_cancel() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let mut view = CanvasCursor::default();
         for kind in [PointerKind::Mouse, PointerKind::Pen] {
             for hide in [true, false] {
@@ -14000,7 +13669,7 @@ mod tests {
 
     #[test]
     fn brush_size_cursors_stay_visible_for_erasing_and_transparent_paint() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         let mut view = CanvasCursor::default();
         for (tool, slot, input_tool, flags, erasing) in [
             (
@@ -14102,7 +13771,7 @@ mod tests {
 
     #[test]
     fn none_cursor_uses_sight_only_for_confirmed_indirect_hover() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.state.settings.cursor = CursorMode::None;
         for (tool, flags, sight) in [
             (ToolKind::Mouse, SampleFlags::PRIMARY, true),
@@ -14163,7 +13832,7 @@ mod tests {
 
     #[test]
     fn cursor_markers_keep_their_size_and_outline_at_fractional_dpi() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         for pixels in [500, 750, 1000, 1500] {
             s.set_viewport([500.0, 500.0], [pixels, pixels]).unwrap();
             s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
@@ -14222,7 +13891,7 @@ mod tests {
 
     #[test]
     fn mask_cursor_composes_tip_flip_rotation_aspect_camera_and_dpi() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.set_viewport([500.0, 500.0], [1000, 1000]).unwrap();
         s.state.camera.zoom = 2.0;
         s.state.camera.rotation = std::f32::consts::FRAC_PI_2;
@@ -14261,7 +13930,7 @@ mod tests {
 
     #[test]
     fn contact_cursor_uses_live_pressure_without_depositing_another_dab() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SetBrushSize { value: 200.0 }).unwrap();
         let low = event(&s, 1, PenPhase::Down, 0.2);
         s.pen(low).unwrap();
@@ -14284,11 +13953,7 @@ mod tests {
     }
     #[test]
     fn menu_sections_are_nonempty_unique_and_keep_related_commands_together() {
-        for sections in [FILE_MENU, EDIT_MENU, VIEW_MENU]
-            .map(|m| m.sections)
-            .into_iter()
-            .chain([PRIMARY_MENU])
-        {
+        for sections in [FILE_MENU, EDIT_MENU, VIEW_MENU].map(|m| m.sections) {
             assert!(!sections.is_empty());
             let mut seen = Vec::new();
             for &section in sections {
@@ -14299,15 +13964,6 @@ mod tests {
                 }
             }
         }
-        assert_eq!(PRIMARY_MENU[0], &[CommandId::NewWindow]);
-        assert_eq!(
-            PRIMARY_MENU[1],
-            &[
-                CommandId::Settings,
-                CommandId::KeyboardShortcuts,
-                CommandId::About
-            ]
-        );
         assert_eq!(
             serde_json::to_value(VIEW_MENU.sections).unwrap(),
             serde_json::json!([
@@ -14324,8 +13980,7 @@ mod tests {
     }
     #[test]
     fn fullscreen_follows_host_notifications_and_leaves_browser_f11_unbound() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let workspace = s.state.workspace.clone();
         assert_eq!(s.command(CommandId::Fullscreen).shortcut, "F11");
         invoke(&mut s, CommandId::Fullscreen);
@@ -14387,7 +14042,7 @@ mod tests {
             catalog.panels.iter().map(|p| p.id).collect::<Vec<_>>(),
             Panel::ALL
         );
-        let session = session();
+        let session = session(Platform::Gtk);
         for id in catalog.layer_commands.iter().chain(catalog.tool_commands) {
             assert!(session.state.commands.iter().any(|c| c.id == *id));
         }
@@ -14400,7 +14055,7 @@ mod tests {
     }
     #[test]
     fn opacity_without_id_uses_the_live_selected_layer() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
         let second = app.engine.document().active_layer.0;
         let action: UiAction =
@@ -14435,7 +14090,7 @@ mod tests {
     }
     #[test]
     fn panel_configuration_keeps_compact_preview_live_without_changing_docking() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         let before = app.state.workspace.clone();
         assert_eq!(
             app.panel_view(Panel::Brushes)
@@ -14488,7 +14143,7 @@ mod tests {
 
     #[test]
     fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::ZenMode);
         let open = |app: &mut UiSession<Recorder>| {
             customize(app, CustomizationAction::ShowAllControls { panel: Panel::Sizes });
@@ -14598,7 +14253,7 @@ mod tests {
     }
     #[test]
     fn selected_tab_toggles_drawer_and_other_tabs_preserve_its_open_state() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         app.dispatch(UiAction::MovePanel {
             panel: Panel::Sizes,
             target: DockTarget::Tab {
@@ -14676,7 +14331,7 @@ mod tests {
 
     #[test]
     fn expanded_configuration_tracks_the_selected_tab_after_docking() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         app.dispatch(UiAction::SelectPanelTab {
             group: 6,
             panel: Panel::Sizes,
@@ -14703,8 +14358,7 @@ mod tests {
     fn gtk_android_and_web_switch_eligible_toolbar_drawers_on_the_first_click() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             for zen in [false, true] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 s.state.workspace.zen_mode = zen;
                 let viewport = [1200., 900.];
                 let tiles = s
@@ -14796,7 +14450,7 @@ mod tests {
                         "Press retains the drawer until activation"
                     );
                     let change = activate(&mut s, tile);
-                    if Panel::palettes_presented_on(platform) && next.columns == [vec![Panel::Color]] {
+                    if next.columns == [vec![Panel::Color]] {
                         next.columns[0].push(Panel::Palettes);
                     }
                     assert_eq!(s.state.customization.drawer.as_ref().unwrap(), &next);
@@ -14852,7 +14506,7 @@ mod tests {
     #[test]
     fn sketch_color_and_layers_drawers_close_on_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-            let mut s = session(); s.set_platform(platform);
+            let mut s = session(platform);
             s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
             for control in [ToolbarControl::Color, ToolbarControl::Panel { panel: Panel::Layers }] {
                 let id = s.state.workspace.layout.header.zones.iter().flatten().find(|e|
@@ -14870,8 +14524,7 @@ mod tests {
     #[test]
     fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let brush = s
                 .state
                 .workspace
@@ -14922,8 +14575,7 @@ mod tests {
 
     #[test]
     fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
         let tiles = s
@@ -15067,8 +14719,7 @@ mod tests {
 
     #[test]
     fn tool_drawer_shortcuts_select_tools_and_zen_entry_stays_hidden() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
         let tile = s
             .state
@@ -15105,7 +14756,7 @@ mod tests {
 
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         app.state
             .workspace
             .layout
@@ -15163,8 +14814,7 @@ mod tests {
     }
     #[test]
     fn android_drawers_and_columns_replace_legacy_popup_behavior() {
-        let mut app = session();
-        app.set_platform(Platform::Android);
+        let mut app = session(Platform::Android);
         let viewport = [1200.0, 900.0];
         app.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
@@ -15196,17 +14846,8 @@ mod tests {
 
     #[test]
     fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent_on_all_platforms() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Windows,
-        ] {
-            let mut app = session();
-            app.set_platform(platform);
+        for platform in Platform::ALL {
+            let mut app = session(platform);
             let tile = |app: &UiSession<Recorder>, control| {
                 app.state
                     .workspace
@@ -15253,7 +14894,7 @@ mod tests {
 
     #[test]
     fn appearance_follows_system_unless_overridden() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         let check_menu = |state: &UiState| {
             let command = state
                 .commands
@@ -15313,8 +14954,7 @@ mod tests {
     }
     #[test]
     fn system_accent_recolors_until_an_accent_is_saved() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let teal = crate::ACCENTS[1].1;
         let red = crate::ACCENTS[5].1;
         let change = s
@@ -15345,7 +14985,7 @@ mod tests {
         assert_eq!(s.state.palette.accent, red);
         preference(&mut s, PreferenceAction::Reset { id: PreferenceId::Accent });
         assert_eq!(s.state.palette.accent, crate::ACCENTS[2].1);
-        let mut next = session();
+        let mut next = session(Platform::Gtk);
         next.inherit_window_state(&s).unwrap();
         next.dispatch(UiAction::RestoreSettings {
             settings: s.state.settings.clone(),
@@ -15356,8 +14996,7 @@ mod tests {
     #[test]
     fn base_colors_validate_save_and_follow_the_resolved_theme() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::Settings);
             let before = s.state.palette;
             for invalid in ["red", "#12345g", "#123", "#12345678"] {
@@ -15414,8 +15053,7 @@ mod tests {
     #[test]
     fn settings_navigation_validation_and_autosave_are_shared() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::Settings);
             preference(
                 &mut s,
@@ -15488,8 +15126,7 @@ mod tests {
     #[test]
     fn settings_sliders_use_core_ranges_steps_and_dependencies() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::Settings);
             for row in s
                 .preferences()
@@ -15563,8 +15200,7 @@ mod tests {
     #[test]
     fn settings_type_to_search_is_shared_and_preserves_native_editing() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::Settings);
             let settings = s.state.settings.clone();
             for character in ["P", "r", "é", "s", "s"] {
@@ -15625,8 +15261,7 @@ mod tests {
 
     #[test]
     fn android_persistent_search_returns_to_categories_when_empty() {
-        let mut s = session();
-        s.set_platform(Platform::Android);
+        let mut s = session(Platform::Android);
         invoke(&mut s, CommandId::Settings);
         for query in ["", "   ", "prediction", ""] {
             preference(
@@ -15648,8 +15283,7 @@ mod tests {
     #[test]
     fn about_links_are_shared_searchable_and_read_only() {
         for platform in [Platform::Gtk, Platform::Web] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::About);
             let view = s.preferences().unwrap();
             let about = view
@@ -15704,8 +15338,7 @@ mod tests {
     }
     #[test]
     fn preferences_metadata_search_dependencies_and_deep_links() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::Settings);
         assert_eq!(s.preferences().unwrap().pages.len(), 6);
         let rows = |s: &UiSession<Recorder>| {
@@ -15800,8 +15433,7 @@ mod tests {
             Platform::Windows,
         ] {
             for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 invoke(&mut s, CommandId::SelectAll);
                 s.dispatch(UiAction::Layer {
                     action: LayerAction::New {
@@ -15879,7 +15511,7 @@ mod tests {
             LayerCanvasTool::Select,
             LayerCanvasTool::LassoFill,
         ] {
-            let mut s = session();
+            let mut s = session(Platform::Gtk);
             s.layer_interaction.tool = tool;
             s.input_pending = false;
             let mut predicted = event(&s, 1, PenPhase::Move, 0.5);
@@ -15903,8 +15535,7 @@ mod tests {
             for available in [false, true] {
                 for native in [false, true] {
                     for milliseconds in [64., 0.] {
-                        let mut window = session();
-                        window.set_platform(platform);
+                        let mut window = session(platform);
                         window.set_platform_prediction_available(available);
                         window
                             .apply_settings(Settings {
@@ -15918,6 +15549,7 @@ mod tests {
                             new_drawing(1024, 768).unwrap(),
                             None,
                             window.state.camera.viewport,
+                            Platform::Gtk,
                         )
                         .unwrap();
                         s.inherit_window_state(&window).unwrap();
@@ -15986,7 +15618,6 @@ mod tests {
     #[test]
     fn native_prediction_order_dependencies_and_runtime_follow_capability_on_every_host() {
         for (platform, title, supported) in [
-            (Platform::Generic, "Use native stroke prediction", false),
             (Platform::Gtk, "Use Linux stroke prediction", false),
             (Platform::Windows, "Use Windows stroke prediction", true),
             (Platform::Mac, "Use macOS stroke prediction", false),
@@ -15994,8 +15625,7 @@ mod tests {
             (Platform::Android, "Use Android stroke prediction", true),
             (Platform::Web, "Use browser stroke prediction", true),
         ] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             let settings = Settings {
                 prediction_ms: 23.0,
                 ..Settings::default()
@@ -16084,8 +15714,7 @@ mod tests {
 
     #[test]
     fn native_prediction_capability_disables_controls_without_changing_saved_choice() {
-        let mut s = session();
-        s.set_platform(Platform::Android);
+        let mut s = session(Platform::Android);
         invoke(&mut s, CommandId::Settings);
         let row = |s: &UiSession<Recorder>| {
             s.preferences()
@@ -16163,7 +15792,7 @@ mod tests {
             serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.5,"cursor":"brush_size"}"#)
                 .unwrap();
         assert_eq!(old.pressure_gamma, 1.5);
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::RestoreSettings {
             settings: old.clone(),
         })
@@ -16199,8 +15828,7 @@ mod tests {
     }
     #[test]
     fn shortcut_conflicts_require_explicit_replacement_and_update_menu_hints_immediately() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::KeyboardShortcuts);
         let target = CommandId::Brush.shortcut_id();
         record_shortcut(&mut s, &target, "y", true);
@@ -16258,8 +15886,7 @@ mod tests {
     }
     #[test]
     fn shortcut_recording_cancel_clear_and_platform_reservations() {
-        let mut s = session();
-        s.set_platform(Platform::Web);
+        let mut s = session(Platform::Web);
         assert!(!s.command(CommandId::NewWindow).enabled);
         invoke(&mut s, CommandId::KeyboardShortcuts);
         assert!(
@@ -16304,7 +15931,7 @@ mod tests {
     }
     #[test]
     fn size_shortcuts_and_momentary_pan_use_the_same_keymap() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::KeyboardShortcuts);
         record_shortcut(&mut s, "size.48", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
@@ -16331,8 +15958,7 @@ mod tests {
         assert_eq!(ui_catalog().text_size_pt, UI_TEXT_PT);
         assert_eq!(UI_TEXT_PT, 11);
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::Settings);
             assert!(
                 !s.preferences()
@@ -16364,8 +15990,7 @@ mod tests {
             Platform::Ios,
             Platform::Windows,
         ] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::KeyboardShortcuts);
             for query in ["z", " Z "] {
                 preference(
@@ -16449,7 +16074,7 @@ mod tests {
 
     #[test]
     fn shortcut_modified_tracks_binding_sets_not_saved_override_presence() {
-        let mut s = session();
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::KeyboardShortcuts);
         let id = ToolFamily::Paint.shortcut_id().to_string();
         preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
@@ -16518,8 +16143,7 @@ mod tests {
     #[test]
     fn shortcut_editor_preserves_alternatives_and_owns_search_limits_and_defaults() {
         for platform in [Platform::Gtk, Platform::Web] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::KeyboardShortcuts);
             let id = ToolFamily::Paint.shortcut_id().to_string();
             preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
@@ -16600,8 +16224,7 @@ mod tests {
     }
     #[test]
     fn applied_settings_emit_durable_host_requests_and_configure_input() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::NewWindow);
         let first = s.state.requests[0].id;
         invoke(&mut s, CommandId::Settings);
@@ -16650,7 +16273,7 @@ mod tests {
 
     #[test]
     fn camera_and_viewport_changes_reuse_the_document_composite() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         app.frame(0, 8_000_000).unwrap();
         assert_eq!(app.engine.backend().composites, 1);
         app.gesture([200.0, 200.0], [250.0, 300.0], 1.25, 0.4)
@@ -16663,7 +16286,7 @@ mod tests {
     }
     #[test]
     fn layers_commands_and_undo_have_one_source_of_truth() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
         let id = app.engine.document().active_layer.0;
         assert_eq!(app.state.layers.len(), 3);
@@ -16704,17 +16327,8 @@ mod tests {
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Ios,
-            Platform::Mac,
-            Platform::Windows,
-        ] {
-            let mut app = session();
-            app.set_platform(platform);
+        for platform in Platform::ALL {
+            let mut app = session(platform);
             app.state
                 .workspace
                 .layout
@@ -16833,7 +16447,7 @@ mod tests {
     }
     #[test]
     fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {
-        let mut app = session();
+        let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
         invoke(&mut app, CommandId::Undo);
         assert!(app.command(CommandId::Redo).enabled);

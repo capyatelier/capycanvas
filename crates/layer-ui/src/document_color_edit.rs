@@ -150,9 +150,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// this saved recipe. Temporary comparison toggles never enter history.
     pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, String> {
         self.require_document_idle()?;
-        if !CommandId::SoftProofSetup.available_on(self.state.platform) {
-            return Err("Soft proofing is unavailable on this host".into());
-        }
         if recipe != self.engine.document().proof {
             self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
         }
@@ -175,17 +172,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(PreparedColorTransition, Project), String> {
         self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
-        if !matches!(
-            self.state.platform,
-            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-        ) {
-            return Err("Document color changes are unavailable on this host".into());
-        }
         let prepared = self
             .engine
             .prepare_color_transition(transition)
             .map_err(error)?;
-        if !crate::color_management::enabled(self.state.platform) { crate::require_sdr_host(prepared.document(), "this host")?; }
         let project = Project::snapshot(prepared.document(), &self.files.assets)?;
         Ok((prepared, project))
     }
@@ -196,12 +186,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<UiChange, String> {
         self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
-        if !matches!(
-            self.state.platform,
-            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-        ) {
-            return Err("Document color changes are unavailable on this host".into());
-        }
         let mut colors = self.state.colors.clone();
         colors.set_rgb_space(prepared.document().color.space)?;
         colors.set_document_depth(prepared.document().color.depth)?;

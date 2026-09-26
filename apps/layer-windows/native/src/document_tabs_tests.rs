@@ -110,8 +110,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     }
     project.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
     let mut host = NativeHost::new(Platform::Windows).unwrap();
-    host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [96, 72]).unwrap();
-    host.session.set_platform(Platform::Windows);
+    host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [96, 72], Platform::Windows).unwrap();
     host.resize(96, 72, 1.).unwrap();
     let mut service = DocumentService::open(|| {}).unwrap();
     service.start_recovery().unwrap();

@@ -22,9 +22,9 @@ impl Fixture {
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],
+            Platform::Windows,
         )
         .unwrap();
-        native.session.set_platform(Platform::Windows);
         native.startup = Default::default();
         native
             .import_layer_image(

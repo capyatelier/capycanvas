@@ -1957,7 +1957,7 @@ mod tests {
         );
         state
             .layout
-            .reset_docking(crate::Platform::Generic)
+            .reset_docking(crate::Platform::Gtk)
             .unwrap();
         assert!(state.layout.collapsed.is_empty());
         state.validate().unwrap();

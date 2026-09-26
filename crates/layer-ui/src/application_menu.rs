@@ -69,8 +69,7 @@ impl ApplicationMenu {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn proof_panel_command(&self, id: CommandId) -> bool {
-        crate::color_management::enabled(self.state.platform)
-            && matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)
+        matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)
     }
     pub fn application_menu(&self, menu: ApplicationMenu) -> ContextMenu {
         use ApplicationMenu as M;
@@ -82,7 +81,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             item
         };
         let mut model = match menu {
-            M::Primary if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) => ContextMenu {
+            M::Primary => ContextMenu {
                 title: menu.label().into(),
                 sections: vec![
                     M::ALL
@@ -151,7 +150,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         &[CommandId::Website, CommandId::SourceCode],
                         &[CommandId::About],
                     ],
-                    M::Primary => PRIMARY_MENU,
                     _ => unreachable!(),
                 };
                 ContextMenu {
@@ -180,7 +178,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         };
-        if menu==M::View && CommandId::SelectionOutline.available_on(self.state.platform) {model.sections.push(vec![command(CommandId::SelectionOutline)]);}
+        if menu==M::View {model.sections.push(vec![command(CommandId::SelectionOutline)]);}
         model.title = menu.label().into();
         model.with_shortcuts(&self.state.settings, self.state.platform)
     }

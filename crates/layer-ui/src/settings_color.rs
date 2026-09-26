@@ -27,7 +27,7 @@ impl PhotoOpenPolicy {
 }
 
 impl Settings {
-    pub(super) fn color_groups(&self, platform: Platform) -> Vec<PreferenceGroup> {
+    pub(super) fn color_groups(&self) -> Vec<PreferenceGroup> {
         use PreferenceId::*;
         let choice = |id, title: &str, description: &str, options: &[&str], selected| {
             row(
@@ -61,8 +61,7 @@ impl Settings {
                         NewBitDepth,
                         "Bit depth",
                         "16-bit improves precision for subsequent edits.",
-                        if crate::color_management::enabled(platform) { &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"] }
-                        else { &["8-bit SDR", "16-bit SDR"] },
+                        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
                         match defaults.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 },
                     ),
                     choice(
@@ -127,7 +126,7 @@ mod tests {
     use super::*;
     #[test]
     fn future_document_policies_validate_and_round_trip_independently() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for platform in Platform::ALL {
             let mut settings = Settings::default();
             let existing = settings.new_document.defaults.project().unwrap();
             for (id, value) in [
@@ -168,15 +167,6 @@ mod tests {
                         PreferenceId::NewColorSpace,
                         PreferenceValue::Choice(4),
                         platform
-                    )
-                    .is_err()
-            );
-            assert!(
-                settings
-                    .edit(
-                        PreferenceId::PhotoDepth,
-                        PreferenceValue::Choice(0),
-                        Platform::Generic
                     )
                     .is_err()
             );

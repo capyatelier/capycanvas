@@ -24,28 +24,24 @@ fn painting_with(s: &UiSession<Recorder>, preset: u32) -> bool {
 
 #[test]
 fn alt_samples_color_while_held_and_restores_the_brush() {
-    for platform in [Platform::Gtk, Platform::Generic] {
-        let mut s = session();
-        s.set_platform(platform);
-        let preset = s.state.brush.preset;
-        let reply = held_key(&mut s, "Alt_L", true, Modifiers::default());
-        assert!(reply.handled && reply.change.regions & regions::BRUSH != 0);
-        assert!(sampling(&s), "{platform:?}");
-        assert_eq!(s.eyedropper.picking.previous.is_some(), platform.color_picker());
-        let reply = held_key(&mut s, "Alt_L", false, alt());
-        assert!(reply.handled);
-        assert!(painting_with(&s, preset), "{platform:?}");
-        assert!(s.eyedropper.picking.previous.is_none());
-        assert!(s.interaction.holds.is_empty() && s.interaction.hold_base.is_none());
-    }
+    let mut s = session(Platform::Gtk);
+    let preset = s.state.brush.preset;
+    let reply = held_key(&mut s, "Alt_L", true, Modifiers::default());
+    assert!(reply.handled && reply.change.regions & regions::BRUSH != 0);
+    assert!(sampling(&s));
+    assert!(s.eyedropper.picking.previous.is_some());
+    let reply = held_key(&mut s, "Alt_L", false, alt());
+    assert!(reply.handled);
+    assert!(painting_with(&s, preset));
+    assert!(s.eyedropper.picking.previous.is_none());
+    assert!(s.interaction.holds.is_empty() && s.interaction.hold_base.is_none());
 }
 
 #[test]
 fn space_and_alt_compose_in_every_press_and_release_order() {
     for press_space_first in [true, false] {
         for release_space_first in [true, false] {
-            let mut s = session();
-            s.set_platform(Platform::Gtk);
+            let mut s = session(Platform::Gtk);
             let preset = s.state.brush.preset;
             if press_space_first {
                 held_key(&mut s, " ", true, Modifiers::default());
@@ -74,8 +70,7 @@ fn space_and_alt_compose_in_every_press_and_release_order() {
 #[test]
 fn held_overrides_compose_and_the_latest_hold_wins() {
     for release_alt_first in [true, false] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         s.state.settings.shortcuts.insert("hold.eraser".into(), vec![KeyChord::new("e", Modifiers::default())]);
         let preset = s.state.brush.preset;
         held_key(&mut s, "Alt_L", true, Modifiers::default());
@@ -97,8 +92,7 @@ fn held_overrides_compose_and_the_latest_hold_wins() {
 
 #[test]
 fn held_modifiers_do_not_block_other_chords() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let size = s.state.brush.diameter;
     held_key(&mut s, "Alt_L", true, Modifiers::default());
     held_key(&mut s, "Shift_L", true, alt());
@@ -116,8 +110,7 @@ fn held_modifiers_do_not_block_other_chords() {
 
 #[test]
 fn selection_tools_keep_alt_for_their_own_modes() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::Lasso);
     let tool = s.layer_interaction.tool;
     assert!(tool.selection_tool().is_some());
@@ -131,8 +124,7 @@ fn selection_tools_keep_alt_for_their_own_modes() {
 
 #[test]
 fn blur_ends_holds_idempotently() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let preset = s.state.brush.preset;
     held_key(&mut s, "Alt_L", true, Modifiers::default());
     assert!(sampling(&s));
@@ -147,8 +139,7 @@ fn blur_ends_holds_idempotently() {
 
 #[test]
 fn holds_wait_for_an_active_stroke_to_finish() {
-    let mut s = session();
-    s.set_platform(Platform::Generic);
+    let mut s = session(Platform::Gtk);
     let preset = s.state.brush.preset;
     s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
     s.pen(event(&s, 2, PenPhase::Move, 1.)).unwrap();
@@ -166,26 +157,19 @@ fn holds_wait_for_an_active_stroke_to_finish() {
 
 #[test]
 fn explicit_tool_choice_ends_the_hold() {
-    for platform in [Platform::Gtk, Platform::Generic] {
-        let mut s = session();
-        s.set_platform(platform);
-        held_key(&mut s, "Alt_L", true, Modifiers::default());
-        assert!(sampling(&s));
-        invoke(&mut s, CommandId::Move);
-        if !platform.color_picker() {
-            assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Move);
-        }
-        let tool = s.layer_interaction.tool;
-        assert!(s.interaction.holds.is_empty() && s.interaction.hold_base.is_none());
-        assert!(!held_key(&mut s, "Alt_L", false, alt()).handled);
-        assert_eq!(s.layer_interaction.tool, tool, "{platform:?}");
-    }
+    let mut s = session(Platform::Gtk);
+    held_key(&mut s, "Alt_L", true, Modifiers::default());
+    assert!(sampling(&s));
+    invoke(&mut s, CommandId::Move);
+    let tool = s.layer_interaction.tool;
+    assert!(s.interaction.holds.is_empty() && s.interaction.hold_base.is_none());
+    assert!(!held_key(&mut s, "Alt_L", false, alt()).handled);
+    assert_eq!(s.layer_interaction.tool, tool);
 }
 
 #[test]
 fn sampling_rearms_while_the_hold_continues() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let preset = s.state.brush.preset;
     held_key(&mut s, "Alt_L", true, Modifiers::default());
     assert!(s.cancel_picker());
@@ -198,7 +182,7 @@ fn sampling_rearms_while_the_hold_continues() {
 
 #[test]
 fn relative_steps_follow_the_tool_setting_bounds() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let size = s.state.brush.diameter;
     let step = |s: &mut UiSession<Recorder>, key: &str, repeat: bool| {
         s.input(UiInput::Key {
@@ -284,8 +268,7 @@ fn stored_bindings_without_scopes_keep_their_meaning() {
 
 #[test]
 fn held_rows_record_modifier_only_triggers() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
     preference(&mut s, PreferenceAction::BeginShortcut { id: "hold.eraser".into() });
     held_key(&mut s, "Shift_L", true, Modifiers::default());
@@ -302,8 +285,7 @@ fn held_rows_record_modifier_only_triggers() {
 
 #[test]
 fn catalog_lists_held_and_step_bindings() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let catalog = s.command_catalog();
     let held = catalog.iter().find(|d| d.id == "hold.eyedropper").unwrap();
     assert_eq!(held.kind, CommandKind::Held);

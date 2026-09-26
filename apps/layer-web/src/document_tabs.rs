@@ -195,9 +195,12 @@ impl WebApp {
         } else {
             // Keep the existing browser window usable after its last drawing
             // closes, with a new identity and no retained discarded history.
-            let mut next =
-                UiSession::blank(AttachedRenderer::default(), self.session.state().camera.viewport)
-                    .map_err(js)?;
+            let mut next = UiSession::blank(
+                AttachedRenderer::default(),
+                self.session.state().camera.viewport,
+                layer_ui::Platform::Web,
+            )
+            .map_err(js)?;
             next.inherit_window_state(&self.session).map_err(js)?;
             next.set_document_replacement(false);
             self.session.park_document().map_err(js)?;

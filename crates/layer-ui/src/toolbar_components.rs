@@ -297,7 +297,7 @@ impl UiState {
             } else {
                 "Variant"
             };
-            if self.platform.color_picker() && self.layer_tools.tool.picks_color() {
+            if self.layer_tools.tool.picks_color() {
                 options.extend(choice("picker-style", "Style", false, variants));
                 let sources = [("Visible color", false), ("Selected layer", true)].into_iter()
                     .filter(|(_, layer)| !layer || self.color_picker.can_sample_layer)

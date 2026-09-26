@@ -5,7 +5,7 @@ use std::sync::Arc;
 fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
     let source = Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4]));
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("touch placement", 200, 150), [800, 600]).unwrap();
+        Document::new("touch placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", source, None).unwrap();
     let input = |id, phase, position| UiInput::Pointer { id, phase, position,
         kind: PointerKind::Touch, button: PointerButton::Primary };
@@ -26,7 +26,7 @@ fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outs
 #[test]
 fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("drop", 2000, 1500), [800, 600]).unwrap();
+        Document::new("drop", 2000, 1500), [800, 600], Platform::Gtk).unwrap();
     let point = Point { x: 410., y: 280. };
     let expected = session.state.camera.input_transform().map(point);
     let context = session.image_placement_context(Some(point), None).unwrap();
@@ -50,7 +50,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     let first = source([600, 400]);
     let second = source([100, 300]);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("batch", 200, 150), [800, 600]).unwrap();
+        Document::new("batch", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.layer_interaction.selected = std::collections::BTreeSet::from([LayerId(1), LayerId(2)]);
     let selected = session.layer_interaction.selected.clone();
     let original = session.engine.document().clone();
@@ -115,7 +115,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     clipped.properties.parent = Some(group_id);
     clipped.properties.clipped = true;
     doc.layers.insert(1, clipped);
-    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600]).unwrap();
+    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
     let source = Arc::unwrap_or_clone(rgba8_source([2, 1], |_, _| [255; 4]));
     assert_eq!(session.image_layer_drop_hint(group_id.0, 0.5), Some(LayerDropPosition::Into));
     assert_eq!(session.image_layer_drop_hint(2, 0.9), Some(LayerDropPosition::Above));
@@ -156,7 +156,7 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     let mut doc = Document::new("locked photo", 200, 150);
     doc.layers[0].source = Some(rgba8_source([2, 1], |_, _| [255; 4]));
     doc.layers[0].properties.locked = true;
-    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600]).unwrap();
+    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
     let before = session.engine.document().clone();
     let selected = session.layer_interaction.selected.clone();
     let tool = session.layer_interaction.tool;
@@ -178,7 +178,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     for _ in 0..400 { builder.push_row(&[255; 600 * 8]).unwrap(); }
     let source = builder.finish().unwrap();
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("placement", 200, 150), [800, 600]).unwrap();
+        Document::new("placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     let original = session.engine.document().clone();
     session.place_layer_source("Photo", source.clone(), None).unwrap();
     let placed = session.engine.document().layer(session.engine.document().active_layer).unwrap();
@@ -212,7 +212,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     let mut bytes = Vec::new();
     project.write(&mut bytes).unwrap();
     let restored = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-    let mut reopened = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, restored.document, [800, 600]).unwrap();
+    let mut reopened = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, restored.document, [800, 600], Platform::Gtk).unwrap();
     let thumbnail_revision = reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision;
     invoke(&mut reopened, CommandId::ScaleRotate);
     invoke(&mut reopened, CommandId::PlacementOriginalSize);
@@ -254,7 +254,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
     builder.push_row(&row).unwrap();
     builder.push_row(&row).unwrap();
     let source = builder.finish().unwrap();
-    let mut session = session();
+    let mut session = session(Platform::Gtk);
     let before = session.engine.document().clone();
     assert!(
         session
@@ -360,7 +360,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
         .flat_map(u16::to_le_bytes)
         .collect();
     builder.push_row(&samples).unwrap();
-    let mut session = session();
+    let mut session = session(Platform::Gtk);
     session.engine.backend_mut().tiled_sources = true;
     session
         .import_layer_source("Original", builder.finish().unwrap())
@@ -537,7 +537,7 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
 fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history_on(platform: Platform) {
     use layer_core::{color::source::*, raster::*};
     use std::sync::Arc;
-    let mut session = session();
+    let mut session = session(Platform::Gtk);
     session.state.platform = platform;
     session.engine.backend_mut().tiled_sources = true;
     // The retained image is larger than the document. Materializing it must not
@@ -606,7 +606,7 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     };
     let source = fixture();
     let limits = ProjectLimits { asset_bytes: source.resident_bytes() as u64 + 1024, ..Default::default() };
-    let mut session = session();
+    let mut session = session(Platform::Gtk);
     session.engine.backend_mut().tiled_sources = true;
     session.import_layer_source_with_limits("First", source.clone(), limits).unwrap();
     session.engine.apply_edit(Edit::SetLayerOpacity { id: session.engine.document().active_layer, opacity: 0.5 }).unwrap();
@@ -646,8 +646,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
         let source = std::sync::Arc::new(builder.finish().unwrap());
         let mut document = Document::new("retained", 20, 20);
         document.layers[0].source = Some(source.clone());
-        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600]).unwrap();
-        s.set_platform(platform);
+        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], platform).unwrap();
         s.frame(1, 1).unwrap();
         invoke(&mut s, CommandId::RepairSourceProfile);
         let id = s.state.requests.first().unwrap().id;
@@ -704,8 +703,7 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
         document.layers[0].raster = RasterRevision::backed(RasterData {
             tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile)].into(), watercolor: None,
         });
-        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600]).unwrap();
-        s.set_platform(platform);
+        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], platform).unwrap();
         s.frame(1, 1).unwrap();
         invoke(&mut s, CommandId::RepairSourceProfile);
         let id = s.state.requests.first().unwrap().id;
@@ -730,7 +728,7 @@ fn window_blur_keeps_an_image_placement_open() {
     }, 1024 * 1024).unwrap();
     for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("blur placement", 200, 150), [800, 600]).unwrap();
+        Document::new("blur placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
     assert!(session.operation.placing());
     session.input(UiInput::Blur).unwrap();
@@ -748,7 +746,7 @@ fn skewed_photo_placements_reopen_with_their_skew() {
     }, 1024 * 1024).unwrap();
     for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("skew placement", 200, 150), [800, 600]).unwrap();
+        Document::new("skew placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
     let skew = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|f| f.id == "transform_skew").unwrap().value;
     session.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.4 }).unwrap();

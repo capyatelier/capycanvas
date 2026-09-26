@@ -983,7 +983,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
                     return Err("Return to artwork to use this tool".into());
                 }
-                if self.state.platform.color_picker() && tool.picks_color() {
+                if tool.picks_color() {
                     self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
                     if self.eyedropper.picking.previous.is_none() { self.start_picker()?; }
                     else { self.configure_picker(ColorPickerAction::Source { layer: self.eyedropper.layer })?; }
@@ -1005,7 +1005,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     self.layer_interaction.figure = (shape, paint);
                 }
-                if tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {return Err("Tonal range is not available on this platform".into());}
                 self.cancel_layer_gesture()?;
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;
@@ -1019,9 +1018,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } = tool
                 {
                     self.layer_interaction.gradient = [radial, transparent];
-                }
-                if tool.picks_color() {
-                    self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
                 }
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
@@ -1379,7 +1375,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let item = |label: &str, action: A| {
             let enabled = match &action {
-                A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => CommandId::RepairSourceProfile.available_on(self.state.platform) && self.can_edit_original(l.id) && !self.state.document_file.busy,
+                A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => self.can_edit_original(l.id) && !self.state.document_file.busy,
                 A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
                 A::DeleteSelected => doc.can_delete_layers(&roots),
@@ -1637,7 +1633,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 },
             ]);
-            if l.source.as_ref().is_some_and(|s| s.is_original()) && CommandId::RepairSourceProfile.available_on(self.state.platform) {
+            if l.source.as_ref().is_some_and(|s| s.is_original()) {
                 protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
                 protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
             }

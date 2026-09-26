@@ -58,7 +58,6 @@ pub(crate) struct Picking {
 pub(crate) struct Eyedropper {
     pub layer: bool,
     pub area: ColorSampleArea,
-    pub contact: bool,
     pub picking: Picking,
     pub preview_only: bool,
     pub sample: Option<RgbColor>,
@@ -70,7 +69,6 @@ pub(crate) struct Eyedropper {
 impl Eyedropper {
     pub fn cancel(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.contact = false;
         self.last = None;
         self.sample = None;
         self.queued = None;

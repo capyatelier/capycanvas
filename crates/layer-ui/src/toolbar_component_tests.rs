@@ -1,7 +1,6 @@
 #[test]
 fn toolbar_resets_use_tool_defaults_and_reject_stale_context() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let original = s.state().brush.diameter;
     let context = s.state().toolbar_context();
     s.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 517. }).unwrap();
@@ -31,7 +30,7 @@ fn toolbar_resets_use_tool_defaults_and_reject_stale_context() {
 
 #[test]
 fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let context = s.state().toolbar_context();
     let history = s.capture_workspace().unwrap().history;
     for value in [0.5, 27.3, 2048.0] {
@@ -99,7 +98,7 @@ fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
         .is_err()
     );
     let context = s.state().toolbar_context();
-    let mut next = session();
+    let mut next = session(Platform::Gtk);
     next.inherit_window_state(&s).unwrap();
     assert!(
         next.dispatch(UiAction::ToolbarEdit {
@@ -113,8 +112,7 @@ fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
 
 #[test]
 fn toolbar_options_follow_tools_and_preserve_completion_actions() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     for tool in [
         CommandId::Brush,
         CommandId::Eraser,
@@ -198,10 +196,9 @@ fn toolbar_component_defaults_round_trip_on_supported_hosts() {
                     .iter()
                     .map(|t| t.control)
                     .collect::<Vec<_>>(),
-                if platform.color_picker() { vec![ToolbarControl::BrushSizeSlider,
+                [ToolbarControl::BrushSizeSlider,
                     ToolbarControl::ColorPicker, ToolbarControl::BrushOpacitySlider,
-                    ToolbarControl::Command { command: CommandId::Undo }, ToolbarControl::Command { command: CommandId::Redo }] }
-                else { vec![ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider] }
+                    ToolbarControl::Command { command: CommandId::Undo }, ToolbarControl::Command { command: CommandId::Redo }]
             );
         }
         if preset == WorkspacePreset::Photographer {
@@ -331,8 +328,7 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
 
 #[test]
 fn toolbar_components_customize_and_restore_as_atomic_items() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(WorkspaceState {
             layout: WorkspacePreset::Photographer.layout(Platform::Gtk),
@@ -387,8 +383,7 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
 
 #[test]
 fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::Eyedropper);
     s.dispatch(UiAction::SetColorSampleSize { width: 101 })
         .unwrap();
@@ -497,8 +492,7 @@ fn toolbar_drawer_measurement_contains_all_components_across_styles_and_widths()
 
 #[test]
 fn options_preferences_round_trip_and_undo_without_losing_controls() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let layout = WorkspacePreset::Photographer.layout(Platform::Gtk);
     let tile = layout
         .panel(Panel::Commands)
@@ -610,8 +604,7 @@ fn vertical_options_shrink_before_reflowing_and_keep_more_accessible() {
 
 #[test]
 fn compact_edge_moves_preserve_toolbar_identity_and_one_step_history() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
     let panel = layout
         .panels
@@ -799,8 +792,7 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
 
 #[test]
 fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::AutoSelect);
     let options = s.state().tool_options();
     let mode = options
@@ -906,7 +898,7 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
 
 #[test]
 fn slider_bookmarks_round_trip_follow_presets_and_reject_stale_editors() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let control = ToolbarControl::BrushSizeSlider;
     let context = s.state().toolbar_context();
     s.dispatch(UiAction::SetToolSetting {
@@ -1032,7 +1024,7 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
 
 #[test]
 fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
-    let s = session();
+    let s = session(Platform::Gtk);
     let stamp = s.toolbar_stamp(s.state().toolbar_context()).unwrap();
     assert_eq!(stamp.alpha.len(), (stamp.size * stamp.size) as usize);
     assert!(stamp.alpha.iter().any(|&a| a > 0));
@@ -1127,7 +1119,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
 
 #[test]
 fn slider_stamp_preserves_mask_holes_and_brush_grain() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let mut brush = layer_core::BrushSnapshot::default();
     brush.aspect = 1.;
     brush.angle_radians = 0.;

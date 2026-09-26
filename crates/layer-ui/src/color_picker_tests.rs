@@ -26,8 +26,7 @@ fn picker_reply(s: &mut UiSession<Recorder>, rgba: [f32; 4]) {
 #[test]
 fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
     for kind in [PointerKind::Mouse, PointerKind::Pen] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::Eraser);
         let previous = s.state.layer_tools.tool;
         let original = s.state.colors.clone();
@@ -90,8 +89,7 @@ fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
 #[test]
 fn color_picker_keeps_selection_mask_colors_separate_from_artwork() {
     for saved in [false, true] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let artwork = s.state.colors.clone();
         invoke(&mut s, CommandId::SelectAll);
         invoke(&mut s, CommandId::QuickMask);
@@ -149,8 +147,7 @@ fn color_picker_keeps_selection_mask_colors_separate_from_artwork() {
 #[test]
 fn color_picker_cancellation_rejects_inflight_results_and_restores_wheel() {
     for cancel in 0..5 {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let original = s.state.colors.clone();
         invoke(&mut s, CommandId::Eyedropper);
         let hover = event(&s, 1, PenPhase::Hover, 0.);
@@ -189,8 +186,7 @@ fn color_picker_cancellation_rejects_inflight_results_and_restores_wheel() {
 
 #[test]
 fn color_picker_touch_tracks_one_contact_toggles_source_and_commits_on_lift() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let original = s.state.colors.clone();
     let camera = s.state.camera.clone();
     picker_pointer(&mut s, 8, ContactPhase::Down, PointerKind::Touch, [250., 300.]);
@@ -271,8 +267,7 @@ fn color_picker_retires_touches_that_predate_toolbar_entry() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
             for finger_cancels in [false, true] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 let camera = s.state.camera.clone();
                 picker_pointer(&mut s, 10, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
                 s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();
@@ -305,8 +300,7 @@ fn color_picker_retires_touches_that_predate_toolbar_entry() {
 #[test]
 fn color_picker_hold_requires_a_live_unclaimed_single_touch() {
     for interruption in ["up", "cancel", "blur", "pen", "second finger", "picker", "picker cancelled"] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::Move);
         let previous = s.state.layer_tools.tool;
         picker_pointer(&mut s, 8, ContactPhase::Down, PointerKind::Touch, [250., 300.]);
@@ -341,8 +335,7 @@ fn color_picker_hold_requires_a_live_unclaimed_single_touch() {
 #[test]
 fn color_picker_consumed_touch_does_not_capture_another_pointer_kind() {
     for kind in [PointerKind::Mouse, PointerKind::Pen] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::Eyedropper);
         picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
         assert!(picker_pointer(&mut s, 1, ContactPhase::Down, kind, [400., 400.]).paint);
@@ -361,7 +354,7 @@ fn color_picker_consumed_touch_does_not_capture_another_pointer_kind() {
 fn touch_release_cleans_up_even_when_normal_routing_is_blocked() {
     for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
         for blocked in ["settings", "workspace transition", "invalid position"] {
-            let mut s = session();
+            let mut s = session(Platform::Gtk);
             picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
             s.state.settings_open = blocked == "settings";
             s.workspace_transition = blocked == "workspace transition";
@@ -377,8 +370,7 @@ fn touch_release_cleans_up_even_when_normal_routing_is_blocked() {
 
 #[test]
 fn color_picker_motion_previews_without_starvation_and_press_rejects_old_readback() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let original = s.state.colors.clone();
     invoke(&mut s, CommandId::Eyedropper);
     s.picker_position([200., 200.]);
@@ -410,8 +402,7 @@ fn color_picker_motion_previews_without_starvation_and_press_rejects_old_readbac
 
 #[test]
 fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     s.state.workspace.layout = WorkspacePreset::Painter.layout(Platform::Gtk);
     invoke(&mut s, CommandId::Eyedropper);
     let anchor = s
@@ -432,7 +423,7 @@ fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
         })
         .unwrap();
     let mut drawer = ContentDrawer::for_tile(&s.state.workspace.layout, anchor).unwrap();
-    drawer.configure_picker(&s.state.workspace.layout, Platform::Gtk);
+    drawer.configure_picker(&s.state.workspace.layout);
     assert_eq!(drawer.columns, [vec![Panel::ToolSettings]]);
     assert_eq!(drawer.column_widths(), [240.]);
     assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
@@ -493,8 +484,7 @@ fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
 
 #[test]
 fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     s.state.color_picker.style = ColorPickerStyle::Eyedropper;
     s.dispatch(ToolbarControl::ColorPicker.action().unwrap())
         .unwrap();
@@ -529,7 +519,7 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
             })
             .unwrap();
         let mut drawer = ContentDrawer::for_tile(&s.state.workspace.layout, anchor).unwrap();
-        drawer.configure_picker(&s.state.workspace.layout, Platform::Gtk);
+        drawer.configure_picker(&s.state.workspace.layout);
         assert_eq!(
             drawer.columns,
             [vec![Panel::Brushes], vec![Panel::ToolSettings]]
@@ -555,8 +545,7 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
 #[test]
 fn picker_preview_keeps_workspace_models_retained_on_supported_hosts() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
-        let mut s = session();
-        s.set_platform(platform);
+        let mut s = session(platform);
         invoke(&mut s, CommandId::Eyedropper);
         let model = s.workspace_model_revision();
         let content = s.workspace_content_revision();

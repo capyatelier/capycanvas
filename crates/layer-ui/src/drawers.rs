@@ -425,7 +425,7 @@ impl ContentDrawer {
             },
         })
     }
-    pub(crate) fn configure_picker(&mut self, layout: &DockLayout, platform: Platform) {
+    pub(crate) fn configure_picker(&mut self, layout: &DockLayout) {
         let control = match self.anchor {
             DrawerAnchor::Header { id } => layout.header.entry(id).ok().and_then(|e| match e.item {
                 HeaderItem::Tool { control } => Some(control), _ => None,
@@ -434,7 +434,7 @@ impl ContentDrawer {
                 .and_then(|p| p.tiles().iter().find(|t| t.id == tile)).map(|t| t.control),
             _ => None,
         };
-        self.compact = platform.color_picker() && matches!(control,
+        self.compact = matches!(control,
             Some(ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }));
         if self.compact {
             self.dismissal = DrawerDismissal::Explicit;

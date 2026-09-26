@@ -25,9 +25,9 @@ fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
         layer_ui::new_drawing(width, height).unwrap(),
         None,
         [2400, 1800],
+        platform,
     )
     .unwrap();
-    host.session.set_platform(platform);
     host.session.set_document_replacement(true);
     // Match the settled app's task workspace and working tools. Bare C-ABI
     // creation precedes the coordinator's adoption and omits its menu routes.

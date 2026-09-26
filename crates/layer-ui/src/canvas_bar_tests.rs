@@ -47,7 +47,7 @@ fn canvas_bar_avoids_floating_panels_and_stays_inside_the_area() {
 
 fn filled_selection_session() -> UiSession<Recorder> {
     use layer_core::Selection;
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let selection = Selection::polygon(vec![
         Point { x: 100., y: 100. },
         Point { x: 300., y: 100. },
@@ -221,7 +221,7 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
         builder.finish().unwrap()
     };
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("bar placement", 200, 150), [800, 600]).unwrap();
+        Document::new("bar placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     s.place_layer_source("Photo", source(), None).unwrap();
     s.frame(0, 0).unwrap();
     let bar = s.state.canvas_bar.clone().expect("placement bar");
@@ -291,7 +291,7 @@ fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
     }, 1024 * 1024).unwrap();
     for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("flip placement", 200, 150), [800, 600]).unwrap();
+        Document::new("flip placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
     invoke(&mut s, CommandId::ApplyTransform);
     let placed = s.engine.document().clone();
@@ -321,8 +321,7 @@ fn rectangle_selection(s: &mut UiSession<Recorder>, [x0, y0, x1, y1]: [f32; 4]) 
 
 #[test]
 fn selection_bar_follows_selection_tools_commands_and_history() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     invoke(&mut s, CommandId::FitCanvas);
     invoke(&mut s, CommandId::RectangleSelect);

@@ -1,14 +1,10 @@
 //! Shared presentation and interaction policy for native and browser color controls.
 //! Hosts own pointer capture, widget drawing, display observations and profile I/O.
-use crate::{Platform, UiSession};
+use crate::UiSession;
 use layer_core::color::{RgbSpace, hdr::SdrRendition};
 use layer_render::CanvasRenderer;
 use serde::Deserialize;
 use serde_json::{Value, json};
-
-pub fn enabled(platform: Platform) -> bool {
-    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows | Platform::Mac | Platform::Ios)
-}
 
 pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {
     let document = session.engine().document();

@@ -24,9 +24,9 @@ impl Fixture {
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],
+            Platform::Windows,
         )
         .unwrap();
-        host.session.set_platform(Platform::Windows);
         host.session.set_document_replacement(true);
         host.resize(64, 48, 1.).unwrap();
         let (wake, done) = mpsc::channel();

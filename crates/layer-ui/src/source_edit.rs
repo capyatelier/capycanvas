@@ -103,7 +103,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
     }
     pub(super) fn request_source_repair(&mut self, id: LayerId) -> Result<(), String> {
-        if !CommandId::RepairSourceProfile.available_on(self.state.platform) || !self.can_edit_original(id) {
+        if !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());
         }
         self.request_document(DocumentRequest::RepairSourceProfile { layer: id.0 })?;
@@ -213,7 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn request_source_rasterize(&mut self, id: LayerId) -> Result<(), String> {
-        if !CommandId::RepairSourceProfile.available_on(self.state.platform) || !self.can_edit_original(id) {
+        if !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());
         }
         self.request_document(DocumentRequest::RasterizeSource { layer: id.0 })?;

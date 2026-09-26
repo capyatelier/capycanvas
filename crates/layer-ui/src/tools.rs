@@ -499,32 +499,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
         };
     }
     if canvas_tool.picks_color() {
-        return ToolSetView {
-            groups: vec![ToolSetItem {
-                label: "Eyedropper",
-                icon: "eyedropper",
-                action: UiAction::Layer {
-                    action: LayerAction::Tool { tool: canvas_tool },
-                },
-                selected: true,
-                preview: None,
-            }],
-            subtools: [
-                ("Visible color", "eye", LayerCanvasTool::PickVisible),
-                ("Layer color", "layers", LayerCanvasTool::PickLayer),
-            ]
-            .into_iter()
-            .map(|(label, icon, tool)| ToolSetItem {
-                label,
-                icon,
-                action: UiAction::Layer {
-                    action: LayerAction::Tool { tool },
-                },
-                selected: tool == canvas_tool,
-                preview: None,
-            })
-            .collect(),
-        };
+        return ToolSetView::default();
     }
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {

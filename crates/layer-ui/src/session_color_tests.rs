@@ -4,7 +4,7 @@ fn tone_preview_survives_edits_but_not_document_replacement() {
     use crate::proof_workflow::ToneKey;
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
     let mut document=Document::new("HDR",32,32); document.color.depth=SampleDepth::F32;
-    let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32]).unwrap();
+    let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32], Platform::Gtk).unwrap();
     let mut s=make();
     let original=ToneKey::current(&s).unwrap();
     s.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
@@ -22,7 +22,7 @@ fn tone_preview_survives_edits_but_not_document_replacement() {
 fn print_panel_first_use_has_no_target_and_off_rejects_late_publication() {
     use crate::proof_workflow::{proof_form,ProofPreparation};
     use layer_core::color::{ColorProfile,ProofRecipe,RgbSpace};
-    let mut s=session();
+    let mut s=session(Platform::Gtk);
     let before=s.engine.checkpoint();
     let form=proof_form(&s);
     assert!(form["print_settings"]["profile"].is_null());
@@ -42,7 +42,7 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
     use crate::proof_workflow::{ProofPreparation, ProofView};
     use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};
     for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
-        let mut s = session(); s.set_platform(platform);
+        let mut s = session(platform);
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
         let original = ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(bytes.clone().into()));
         s.set_proof_recipe(Some(original.clone())).unwrap();
@@ -98,8 +98,7 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
 
 #[test]
 fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let original = s.engine.document().clone();
     let checkpoint = s.engine.checkpoint();
     assert!(s.command(CommandId::SoftProof).enabled);
@@ -134,8 +133,7 @@ fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
 #[test]
 fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     use layer_core::color::{ColorProfile, ProofRecipe};
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let original = s.engine.document().clone();
     assert!(s.command(CommandId::SoftProof).enabled);
     let recipe = ProofRecipe::new("Lab paper".into(), ColorProfile::default());
@@ -168,8 +166,7 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
     use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbColor, RgbSpace}};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-    let mut s = session();
-    s.set_platform(platform);
+    let mut s = session(platform);
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.8, 0.3, 0.1, 1.]).unwrap();
     s.dispatch(UiAction::Color { action: ColorAction::Definition { color: definition } }).unwrap();
     s.frame(1, 1).unwrap();
@@ -228,6 +225,7 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
             },
             document,
             [1000; 2],
+            Platform::Gtk,
         )
         .unwrap()
     };
@@ -329,6 +327,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
         },
         document,
         [1000; 2],
+        Platform::Gtk,
     )
     .unwrap();
     let foreground = RgbColor::new(RgbSpace::DisplayP3, [1., 0.1, 0.3, 0.37]).unwrap();
@@ -386,8 +385,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
     use layer_color::DocumentColorChange as C;
     use layer_core::color::{RgbSpace, SampleDepth};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
-        let mut s = session();
-        s.set_platform(platform);
+        let mut s = session(platform);
         s.frame(1, 1).unwrap();
         invoke(&mut s, CommandId::AssignProfile);
         let id = s.state.requests.first().unwrap().id;
@@ -451,8 +449,7 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     let mut document = Document::new("HDR", 32, 32);
     document.color.depth = SampleDepth::F16;
     let renderer = Recorder { color: document.color, ..Default::default() };
-    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
-    s.set_platform(Platform::Gtk);
+    let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     let original = s.engine.document().clone();
     let checkpoint = s.engine.checkpoint();
     assert!(!s.command(CommandId::PreviewSdr).enabled);
@@ -490,7 +487,7 @@ fn proof_panel_preview_can_compare_master_and_saved_without_touching_history() {
     use layer_core::color::{SampleDepth, hdr::SdrRendition};
     let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
     let renderer=Recorder {color:document.color,..Default::default()};
-    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     let original=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
     let draft=SdrRendition { exposure:-1., contrast:1.2, headroom:3., ..Default::default() };
     s.state.soft_proof=true;s.state.gamut_warning=true;
@@ -512,7 +509,7 @@ fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
     let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
     let renderer=Recorder{color:document.color,..Default::default()};
-    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     let original=s.engine.document().sdr_rendition;
     let changed=SdrRendition{exposure:1.5,highlight_color:0.65,..original};
     s.set_proof_mode(ProofMode::Sdr).unwrap();
@@ -547,7 +544,7 @@ fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
     use layer_core::color::{SampleDepth,ProofRecipe,ColorProfile,RgbSpace};
     let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
     let renderer=Recorder{color:document.color,..Default::default()};
-    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     assert!(s.set_proof_mode(ProofMode::Print).is_err());
     s.set_proof_recipe(Some(ProofRecipe::new("Printer".into(),ColorProfile::Builtin(RgbSpace::Srgb)))).unwrap();
     let original=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
@@ -568,8 +565,7 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
     let mut document = Document::new("HDR", 32, 32);
     document.color.depth = SampleDepth::F16;
     let renderer = Recorder { color: document.color, ..Default::default() };
-    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
-    s.set_platform(Platform::Gtk);
+    let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     let toggle = |s: &mut UiSession<Recorder>| {
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
         // Only enabling asks the host to reveal the panel, including setup.
@@ -612,8 +608,7 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
     assert_eq!(s.engine.document(), &saved);
     assert_eq!(s.engine.checkpoint(), checkpoint);
 
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     toggle(&mut s);
     assert_eq!(s.proof_panel_mode(), ProofMode::Print, "SDR artwork opens Print setup");
     assert_eq!(s.proof_mode(), ProofMode::Off);
@@ -635,8 +630,7 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
         document.layers.insert(0, layer);
         document.active_layer = id;
         let renderer = Recorder { color: document.color, ..Default::default() };
-        let mut s = UiSession::new(renderer, document, [32,32]).unwrap();
-        s.set_platform(Platform::Gtk);
+        let mut s = UiSession::new(renderer, document, [32,32], Platform::Gtk).unwrap();
         let before = s.engine.document().clone();
         let set = |value| UiAction::Effect { action: EffectAction::Set { layer: id.0, key: key.into(), value: EffectValue::Number(value) } };
         s.dispatch(set(value)).unwrap();
@@ -656,7 +650,7 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
 #[test]
 fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() {
     for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Windows] {
-        let mut s=session();s.set_platform(platform);
+        let mut s = session(platform);
         s.dispatch(UiAction::Customize {action:CustomizationAction::SetPanelVisible {panel:Panel::Color,visible:true}}).unwrap();
         let before=s.engine.document().clone();
         crate::proof_panel::reveal(&mut s).unwrap();
@@ -683,8 +677,7 @@ fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() 
 fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history() {
     use crate::proof_panel::{apply, ProofAction};
     let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
-    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32]).unwrap();
-    s.set_platform(Platform::Windows);
+    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Windows).unwrap();
     let original=s.engine.document().sdr_rendition;
     let checkpoint=s.engine.checkpoint();
     // No full-recipe snapshots: queued fields resolve against the current recipe.
@@ -727,8 +720,7 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     layer.effect = Some(Arc::new(instance));
     document.layers.insert(0, layer);
     let renderer = Recorder { color: document.color, ..Default::default() };
-    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
-    s.set_platform(Platform::Gtk);
+    let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
     let id = s.state.layer_properties.layer.unwrap();
     let effect = s.engine.document().layer(layer_core::LayerId(id)).unwrap().effect.clone().unwrap();
@@ -749,7 +741,7 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
 fn phased_proof_controls_commit_once() {
     use crate::proof_panel::{apply, ProofAction, SdrControlEdit};
     let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
-    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32]).unwrap();
+    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Gtk).unwrap();
     let checkpoint=s.engine.checkpoint();
     for (phase,steps) in [(ContactPhase::Down,1.),(ContactPhase::Move,1.),(ContactPhase::Up,0.)] {
         apply(&mut s,ProofAction::Control{part:1,edit:SdrControlEdit::Step{axis:0,steps},phase:Some(phase)}).unwrap();

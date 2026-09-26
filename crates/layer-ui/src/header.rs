@@ -183,11 +183,7 @@ impl HeaderLayout {
 
     pub fn painter_for_platform(platform: Platform) -> Self {
         let mut header = Self::painter();
-        if CommandId::Select.available_on(platform) { header.replace_tool(CommandId::Lasso, CommandId::Select); }
-        if !CommandId::DrawingBrush.available_on(platform) {
-            header.replace_tool(CommandId::DrawingBrush, CommandId::Brush);
-            header.replace_tool(CommandId::Sculpt, CommandId::Blend);
-        }
+        header.replace_tool(CommandId::Lasso, CommandId::Select);
         header.with_platform_controls(platform)
     }
 
@@ -912,7 +908,7 @@ pub fn tool_icon(state: &UiState, control: ToolbarControl) -> &'static str {
 pub fn tool_state(state: &UiState, control: ToolbarControl) -> (bool, bool) {
     match control {
         ToolbarControl::ColorPicker => (
-            state.platform.color_picker() && tool_state(state, ToolbarControl::Command { command: CommandId::Eyedropper }).0,
+            tool_state(state, ToolbarControl::Command { command: CommandId::Eyedropper }).0,
             state.layer_tools.tool.picks_color() && state.color_picker.style == crate::ColorPickerStyle::Glass,
         ),
         ToolbarControl::Command { command } => state
@@ -942,10 +938,9 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         if control == ToolbarControl::ColorPicker {
             return self.dispatch(control.action().unwrap());
         }
-        if self.state().platform.color_picker() && control == (ToolbarControl::Command { command: CommandId::Eyedropper }) {
-            return self.dispatch(UiAction::Invoke { command: CommandId::Eyedropper });
-        }
-        if control.selectable() && self.state().platform.color_picker() && self.state().layer_tools.tool.picks_color() {
+        if control == (ToolbarControl::Command { command: CommandId::Eyedropper })
+            || (control.selectable() && self.state().layer_tools.tool.picks_color())
+        {
             return self.dispatch(UiAction::Invoke { command: CommandId::Eyedropper });
         }
         let (enabled, selected) = tool_state(self.state(), control);

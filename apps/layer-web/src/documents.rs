@@ -326,6 +326,7 @@ impl WebApp {
                 project,
                 None,
                 viewport,
+                layer_ui::Platform::Web,
             )
             .map_err(js)?;
             candidate.frame(0, 0).map_err(js)?;

@@ -859,7 +859,7 @@ mod tests {
                 "{point:?}"
             );
             assert!(matches!(
-                r.drop_hint_with_group_body(point[0], point[1], &[], true, true)
+                r.drop_hint(point[0], point[1], &[], true)
                     .unwrap()
                     .target,
                 DockTarget::Tab { group, .. } if group == sidebar.id

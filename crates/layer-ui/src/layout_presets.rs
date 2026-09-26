@@ -35,7 +35,7 @@ impl WorkspacePreset {
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.without_palettes_layout(platform);
-        if Panel::palettes_presented_on(platform) && self != Self::Painter {
+        if self != Self::Painter {
             for (panel, anchor) in [
                 (Panel::Palettes, Panel::Color),
                 (Panel::Proof, Panel::Navigator),
@@ -77,9 +77,7 @@ impl WorkspacePreset {
 
     fn without_palettes_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.proportional_layout(platform);
-        if self == Self::Illustrator
-            && platform != crate::Platform::Generic
-        {
+        if self == Self::Illustrator {
             fit_paint_columns(&mut layout);
         }
         layout
@@ -87,7 +85,7 @@ impl WorkspacePreset {
 
     fn proportional_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.without_picker_layout(platform);
-        if self == Self::Painter && platform.color_picker() {
+        if self == Self::Painter {
             let panel = layout.panels.iter().find(|p| p.tiles().iter().any(|t| t.control == ToolbarControl::BrushSizeSlider)).unwrap();
             let id = panel.id;
             let before = panel.tiles().iter().find(|t| t.control == ToolbarControl::BrushOpacitySlider).unwrap().id;
@@ -97,7 +95,7 @@ impl WorkspacePreset {
                 ToolbarControl::Command { command: crate::CommandId::Redo },
             ]).expect("Sketch history buttons");
         }
-        if self == Self::Photographer && platform != crate::Platform::Generic {
+        if self == Self::Photographer {
             layout.column_stack_mut(4).drawers = true;
         }
         layout
@@ -105,15 +103,13 @@ impl WorkspacePreset {
 
     fn without_picker_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.component_layout(platform);
-        if platform != crate::Platform::Generic {
-            self.arrange_components(&mut layout);
-            if self == Self::Photographer {
-                let flip = layout.panel(Panel::Commands).unwrap().tiles().iter()
-                    .find(|t| t.control == ToolbarControl::Command {
-                        command: crate::CommandId::FlipHorizontal,
-                    }).unwrap().id;
-                layout.remove_tool(Panel::Commands, flip).expect("Photo command default");
-            }
+        self.arrange_components(&mut layout);
+        if self == Self::Photographer {
+            let flip = layout.panel(Panel::Commands).unwrap().tiles().iter()
+                .find(|t| t.control == ToolbarControl::Command {
+                    command: crate::CommandId::FlipHorizontal,
+                }).unwrap().id;
+            layout.remove_tool(Panel::Commands, flip).expect("Photo command default");
         }
         layout
     }
@@ -136,90 +132,86 @@ impl WorkspacePreset {
 
     fn component_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.toolbar_components_layout(platform);
-        if platform != crate::Platform::Generic {
-            match self {
-                Self::Painter => {
-                    let panel = layout
-                        .add_toolbar(
-                            None,
-                            "Brush controls",
-                            &[
-                                ToolbarControl::BrushSizeSlider,
-                                ToolbarControl::BrushOpacitySlider,
-                            ],
-                        )
-                        .expect("built-in brush controls");
-                    layout
-                        .panels
-                        .iter_mut()
-                        .find(|p| p.id == panel)
-                        .unwrap()
-                        .tile_style = TileStyle::Medium;
-                    layout
-                        .move_panel(
-                            [1600., 1000.],
-                            panel,
-                            DockTarget::Edge {
-                                edge: Edge::Bottom,
-                                outer: false,
-                            },
-                        )
-                        .expect("bottom brush toolbar");
-                }
-                Self::Photographer => {
-                    let config = layout
-                        .panels
-                        .iter_mut()
-                        .find(|p| p.id == Panel::Commands)
-                        .unwrap();
-                    config.tiles_mut().unwrap().retain(|t| {
-                        !matches!(
-                            t.control,
-                            ToolbarControl::Command {
-                                command: crate::CommandId::ClearLayer
-                                    | crate::CommandId::FillSelection
-                            }
-                        )
-                    });
-                    layout
-                        .insert_tools(
-                            Panel::Commands,
-                            None,
-                            &[ToolbarControl::Divider, ToolbarControl::TOOL_OPTIONS],
-                        )
-                        .unwrap();
-                }
-                Self::Illustrator => (),
+        match self {
+            Self::Painter => {
+                let panel = layout
+                    .add_toolbar(
+                        None,
+                        "Brush controls",
+                        &[
+                            ToolbarControl::BrushSizeSlider,
+                            ToolbarControl::BrushOpacitySlider,
+                        ],
+                    )
+                    .expect("built-in brush controls");
+                layout
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == panel)
+                    .unwrap()
+                    .tile_style = TileStyle::Medium;
+                layout
+                    .move_panel(
+                        [1600., 1000.],
+                        panel,
+                        DockTarget::Edge {
+                            edge: Edge::Bottom,
+                            outer: false,
+                        },
+                    )
+                    .expect("bottom brush toolbar");
             }
+            Self::Photographer => {
+                let config = layout
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == Panel::Commands)
+                    .unwrap();
+                config.tiles_mut().unwrap().retain(|t| {
+                    !matches!(
+                        t.control,
+                        ToolbarControl::Command {
+                            command: crate::CommandId::ClearLayer
+                                | crate::CommandId::FillSelection
+                        }
+                    )
+                });
+                layout
+                    .insert_tools(
+                        Panel::Commands,
+                        None,
+                        &[ToolbarControl::Divider, ToolbarControl::TOOL_OPTIONS],
+                    )
+                    .unwrap();
+            }
+            Self::Illustrator => (),
         }
         layout
     }
 
     fn toolbar_components_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = self.selection_layout(platform);
-        if crate::CommandId::Select.available_on(platform) {
-            if self == Self::Painter {
-                replace_tool(&mut layout, crate::CommandId::Lasso, crate::CommandId::Select);
-            } else if self == Self::Photographer {
-                use crate::CommandId::*;
-                for (before_command, commands) in [(Lasso, &[RectangleSelect, EllipseSelect][..]), (AutoSelect, &[PolygonSelect][..]), (Fill, &[ColorSelect][..])] {
-                    let before = layout.panel(Panel::Toolbar).unwrap().tiles().iter()
-                        .find(|tile| tile.control == ToolbarControl::Command { command: before_command }).map(|tile| tile.id);
-                    let controls: Vec<_> = commands.iter().map(|&command| ToolbarControl::Command { command }).collect();
-                    layout.insert_tools(Panel::Toolbar, before, &controls).expect("included selection tools");
-                }
+        if self == Self::Painter {
+            replace_tool(&mut layout, crate::CommandId::Lasso, crate::CommandId::Select);
+        } else if self == Self::Photographer {
+            use crate::CommandId::*;
+            for (before_command, commands) in [(Lasso, &[RectangleSelect, EllipseSelect][..]), (AutoSelect, &[PolygonSelect][..]), (Fill, &[ColorSelect][..])] {
+                let before = layout.panel(Panel::Toolbar).unwrap().tiles().iter()
+                    .find(|tile| tile.control == ToolbarControl::Command { command: before_command }).map(|tile| tile.id);
+                let controls: Vec<_> = commands.iter().map(|&command| ToolbarControl::Command { command }).collect();
+                layout.insert_tools(Panel::Toolbar, before, &controls).expect("included selection tools");
             }
         }
         layout
     }
 
     fn selection_layout(self, platform: crate::Platform) -> DockLayout {
-        let mut layout=if self == Self::Photographer && platform != crate::Platform::Generic {
+        let mut layout=if self == Self::Photographer {
             Self::illustrator_primary_layout(platform)
         } else {
-            self.layout_with_header_tools(platform,crate::CommandId::CustomizeWorkspaceUi.available_on(platform))
+            self.layout_with_header_tools(platform)
         };
-        if self == Self::Painter && crate::CommandId::DrawingBrush.available_on(platform) {
+        if self == Self::Painter {
             for (old, new) in [(crate::CommandId::Brush, crate::CommandId::DrawingBrush), (crate::CommandId::Blend, crate::CommandId::Sculpt)] {
                 replace_tool(&mut layout, old, new);
             }
@@ -242,55 +234,43 @@ impl WorkspacePreset {
             let stack = layout.column_stack_mut(column);
             stack.drawers = false;
             stack.auto_hide = false;
-            if matches!(
-                platform,
-                crate::Platform::Gtk
-                    | crate::Platform::Web
-                    | crate::Platform::Android
-                    | crate::Platform::Windows
-                    | crate::Platform::Mac
-                    | crate::Platform::Ios
-            ) {
-                let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
-                if band.edge != Edge::Right {
-                    continue;
-                }
-                layout.collapsed.push(CollapsedColumn {
-                    root: column,
-                    expanded_width: band.extent - WORKSPACE_SPACING,
-                });
-                band.extent = TILE_SIZE + WORKSPACE_SPACING;
+            let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
+            if band.edge != Edge::Right {
+                continue;
             }
+            layout.collapsed.push(CollapsedColumn {
+                root: column,
+                expanded_width: band.extent - WORKSPACE_SPACING,
+            });
+            band.extent = TILE_SIZE + WORKSPACE_SPACING;
         }
         layout
     }
 
     fn illustrator_primary_layout(platform: crate::Platform) -> DockLayout {
         let mut layout = Self::illustrator_columns_layout(platform);
-        if !matches!(platform, crate::Platform::Generic) {
-            // Keep the primary column permanently expanded at the outer
-            // right edge. Secondary panels occupy the icon strip inward
-            // from it, in Tool Set / Tool + Brush size / Navigator order.
-            if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
-                *panels = vec![Panel::Color, Panel::Stats];
-                *active = Panel::Color;
-            }
-            if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(10) {
-                *panels = vec![Panel::Navigator];
-                *active = Panel::Navigator;
-            }
-            let mut secondary = layout.bands.remove(1);
-            secondary.edge = Edge::Right;
-            let expanded_width = secondary.extent - WORKSPACE_SPACING;
-            secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
-            layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
-            layout.bands.insert(2, secondary);
-            layout.collapsed = vec![CollapsedColumn { root: 4, expanded_width }];
+        // Keep the primary column permanently expanded at the outer
+        // right edge. Secondary panels occupy the icon strip inward
+        // from it, in Tool Set / Tool + Brush size / Navigator order.
+        if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
+            *panels = vec![Panel::Color, Panel::Stats];
+            *active = Panel::Color;
         }
+        if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(10) {
+            *panels = vec![Panel::Navigator];
+            *active = Panel::Navigator;
+        }
+        let mut secondary = layout.bands.remove(1);
+        secondary.edge = Edge::Right;
+        let expanded_width = secondary.extent - WORKSPACE_SPACING;
+        secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
+        layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
+        layout.bands.insert(2, secondary);
+        layout.collapsed = vec![CollapsedColumn { root: 4, expanded_width }];
         layout
     }
 
-    fn layout_with_header_tools(self, platform: crate::Platform, header_tools: bool) -> DockLayout {
+    fn layout_with_header_tools(self, platform: crate::Platform) -> DockLayout {
         if self == Self::Illustrator {
             return Self::illustrator_columns_layout(platform);
         }
@@ -409,19 +389,8 @@ impl WorkspacePreset {
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
-            if header_tools {
-                layout.bands.clear();
-                layout.canvas_info.visible = false;
-                return layout;
-            }
-            layout.bands.push(DockBand {
-                alignment: None,
-                id: 3,
-                edge: Edge::Top,
-                extent: TileStyle::Medium.size()[1] + WORKSPACE_SPACING,
-                root: tabs(4, &[Panel::Commands]),
-            });
-            layout.next_id = 5;
+            layout.bands.clear();
+            layout.canvas_info.visible = false;
         } else {
             // The expanded outer column keeps navigation and layers visible.
             // Secondary controls open inward from a narrow icon column.
@@ -466,16 +435,7 @@ impl DockLayout {
     /// Paint opens its original right stack on adoption, preview and reset.
     /// Ordinary open/close remains transient; Photo uses a fixed outer column.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
-        if matches!(
-            platform,
-            crate::Platform::Gtk
-                | crate::Platform::Web
-                | crate::Platform::Android
-                | crate::Platform::Windows
-                | crate::Platform::Mac
-                | crate::Platform::Ios
-        )
-            && self.collapsed.len() == 1
+        if self.collapsed.len() == 1
             && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
         {
             for stack in &mut self.column_stacks {
@@ -586,13 +546,7 @@ mod tests {
                     items.contains(&HeaderItem::Menu),
                     minimal && platform != Platform::Mac
                 );
-                let mut native = preset.layout(Platform::Gtk).header.projected_for(platform);
-                if !crate::CommandId::Select.available_on(platform) { native.replace_tool(crate::CommandId::Select, crate::CommandId::Lasso); }
-                // Hosts without these projections retain the prior tools.
-                if !crate::CommandId::DrawingBrush.available_on(platform) {
-                    native.replace_tool(crate::CommandId::DrawingBrush, crate::CommandId::Brush);
-                    native.replace_tool(crate::CommandId::Sculpt, crate::CommandId::Blend);
-                }
+                let native = preset.layout(Platform::Gtk).header.projected_for(platform);
                 for zone in HeaderZone::ALL {
                     assert_eq!(
                         layout.header.zones[zone.index()]
@@ -649,33 +603,12 @@ mod tests {
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
                 [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
-                (
-                    14,
-                    if Panel::palettes_presented_on(platform) {
-                        vec![Panel::Color, Panel::Palettes]
-                    } else {
-                        vec![Panel::Color, Panel::Proof, Panel::Stats]
-                    },
-                ),
+                (14, vec![Panel::Color, Panel::Palettes]),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
-                (
-                    6,
-                    if Panel::palettes_presented_on(platform) {
-                        vec![Panel::Brushes, Panel::Stats]
-                    } else {
-                        vec![Panel::Brushes]
-                    },
-                ),
+                (6, vec![Panel::Brushes, Panel::Stats]),
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
-                (
-                    10,
-                    if Panel::palettes_presented_on(platform) {
-                        vec![Panel::Navigator, Panel::Proof]
-                    } else {
-                        vec![Panel::Navigator]
-                    },
-                ),
+                (10, vec![Panel::Navigator, Panel::Proof]),
             ] {
                 let DockNode::Tabs { panels, active, .. } = layout.node(id).unwrap() else {
                     panic!("default tab group");
@@ -689,9 +622,6 @@ mod tests {
                 let color = group(Panel::Color);
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
-                if !Panel::palettes_presented_on(platform) {
-                    assert_eq!(color, group(Panel::Stats));
-                }
                 assert_eq!(properties, group(Panel::Adjustments));
                 assert_eq!(color.x, properties.x);
                 assert_eq!(properties.x, layers.x);
@@ -702,43 +632,6 @@ mod tests {
                 assert!(resolved.work_area.width > 0. && resolved.work_area.height > 0.);
             }
         }
-    }
-
-    #[test]
-    fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
-        // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Generic);
-        assert_eq!(
-            layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-            [Edge::Left, Edge::Top]
-        );
-        assert!(layout.floating.is_empty() && layout.collapsed.is_empty());
-        for panel in Panel::ALL {
-            assert_eq!(
-                layout.panel_group(panel).is_some(),
-                matches!(panel, Panel::Toolbar | Panel::Commands)
-            );
-        }
-        for panel in [Panel::Toolbar, Panel::Commands] {
-            assert_eq!(layout.panel(panel).unwrap().tile_style, TileStyle::Medium);
-        }
-        for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
-            assert!(
-                layout
-                    .panels
-                    .iter()
-                    .flat_map(|p| p.tiles())
-                    .any(|t| t.control == ToolbarControl::Panel { panel })
-            );
-        }
-    }
-
-    #[test]
-    fn generic_sketch_keeps_tools_accessible_without_header_projection() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Generic);
-        assert!(layout.panel_group(Panel::Toolbar).is_some());
-        assert!(layout.panel_group(Panel::Commands).is_some());
-        assert!(layout.canvas_info.visible);
     }
 
     #[test]
@@ -933,9 +826,6 @@ mod tests {
             moved.move_item([1400., 1000.], DockItem::Group { group: 10 }, DockTarget::Tab { group: 7, index: None }).unwrap();
             assert_eq!(moved.fit_height_groups, [14]);
             assert!((column(&layout, 1000.) - column(&resized, 1000.)).abs() < 0.01);
-        }
-        for platform in [Platform::Generic] {
-            assert!(WorkspacePreset::Illustrator.layout(platform).fit_height_groups.is_empty());
         }
     }
 }

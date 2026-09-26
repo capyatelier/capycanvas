@@ -3,7 +3,7 @@ mod painted_selection_checks {
     #[test]
     fn saving_quick_mask_activates_saved_layer_and_navigation_hides_only_previous_mask() {
         use layer_core::SelectionTarget;
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let art = s.engine.document().active_layer;
         let saved_menus = |s: &UiSession<Recorder>| {
             s.application_menu(ApplicationMenu::Select).sections.into_iter().flatten()
@@ -44,7 +44,7 @@ mod painted_selection_checks {
     #[test]
     fn mask_mode_couples_overlay_and_painting_and_bucket_uses_displayed_color() {
         use layer_core::{EffectValue, color::{RgbColor, RgbSpace}};
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let artwork = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
         let color = RgbColor::new(RgbSpace::Srgb, [0.,0.5,1.,1.]).unwrap();
@@ -69,7 +69,7 @@ mod painted_selection_checks {
     #[test]
     fn mask_mode_is_global_persisted_and_preserves_colors_and_layer_properties() {
         use layer_core::{EffectValue, color::{RgbColor, RgbSpace}};
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let set = |layer, key: &str, value| UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } };
         invoke(&mut s, CommandId::QuickMask);
         let cyan = RgbColor::new(RgbSpace::Srgb, [0., 0.5, 1., 1.]).unwrap();
@@ -97,7 +97,7 @@ mod painted_selection_checks {
         assert_eq!(s.mask_properties().opacity, 0.5);
         s.dispatch(set(second.0, "mask_mode", EffectValue::Choice(1))).unwrap();
         let saved = serde_json::to_string(&s.state.settings).unwrap();
-        let mut restored = session(); restored.set_platform(Platform::Gtk);
+        let mut restored = session(Platform::Gtk);
         restored.dispatch(UiAction::RestoreSettings { settings: serde_json::from_str(&saved).unwrap() }).unwrap();
         invoke(&mut restored, CommandId::QuickMask);
         assert_eq!(restored.state.layer_properties.controls[0].value, EffectValue::Choice(1));
@@ -121,8 +121,7 @@ mod painted_selection_checks {
     #[test]
     fn color_transition_waits_for_selection_capture_and_discards_gpu_requests() {
         use layer_core::{ColorTransition, color::{DocumentColor, RgbSpace, SampleDepth}};
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
         let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
             color, layers: s.engine.document().layers.clone(),
@@ -148,8 +147,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn mask_final_replay_waits_for_the_existing_submission_acknowledgement() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let mut brush = s.engine.configured_brush().clone();
         brush.taper.end_distance_diameters = 2.;
         s.engine.set_brush(brush).unwrap();
@@ -172,8 +170,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn quick_mask_final_taper_replaces_preview() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let mut brush = s.engine.configured_brush().clone();
         brush.taper.end_distance_diameters = 2.;
         s.engine.set_brush(brush).unwrap();
@@ -195,8 +192,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn mask_editing_blocks_artwork_filters_and_destructive_commands() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::QuickMask);
         let id = s.engine.document().active_layer.0;
         let layers = s.engine.document().layers.clone();
@@ -221,8 +217,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn quick_mask_colors_remain_unrestricted_and_swap_the_paint_slot() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let artwork = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
         s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: 0, key: "mask_mode".into(), value: layer_core::EffectValue::Choice(1) } }).unwrap();
@@ -248,8 +243,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn selection_brush_keeps_completed_contacts_ordered_and_defers_undo() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectionBrush);
         send(&mut s, PenPhase::Down, 100.);
         send(&mut s, PenPhase::Up, 100.);
@@ -275,8 +269,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn quick_mask_entry_preserves_none_and_empty_without_history() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let colors = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
         assert!(s.state.layer_tools.quick_mask);
@@ -302,8 +295,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn quick_mask_captures_before_exit_and_keeps_artwork_untouched() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let layers = s.engine.document().layers.clone();
         invoke(&mut s, CommandId::QuickMask);
         send(&mut s, PenPhase::Down, 100.);
@@ -328,8 +320,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn saved_selection_edit_load_and_replace_are_independent() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectAll);
         let original = s.engine.document().selection.clone().unwrap();
         invoke(&mut s, CommandId::SaveSelectionLayer);
@@ -381,8 +372,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn saved_selection_locked_destination_and_non_dry_brush_do_not_paint_artwork() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::NewSelectionLayer);
         let id = s.engine.document().active_layer;
         assert!(
@@ -416,8 +406,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn selection_submission_stays_frozen_until_ack_while_new_contacts_accumulate() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectionBrush);
         s.engine.backend_mut().selection_wait = true;
         send(&mut s, PenPhase::Down, 100.);
@@ -437,8 +426,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn unchanged_selection_contact_preserves_none_and_undo() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectionBrush);
         send(&mut s, PenPhase::Down, 100.);
         send(&mut s, PenPhase::Up, 100.);
@@ -457,8 +445,7 @@ mod painted_selection_checks {
     }
     #[test]
     fn selection_brush_latches_alt_preserves_empty_and_keeps_its_settings() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectionBrush);
         invoke(&mut s, CommandId::SelectionSubtract);
         send(&mut s, PenPhase::Down, 100.);
@@ -491,8 +478,7 @@ mod painted_selection_checks {
         let saved = s.capture_workspace().unwrap();
         let saved = serde_json::to_string(&saved).unwrap();
         let prepared = PreparedWorkspace::new(serde_json::from_str(&saved).unwrap()).unwrap();
-        let mut restored = session();
-        restored.set_platform(Platform::Gtk);
+        let mut restored = session(Platform::Gtk);
         restored.adopt_workspace(prepared).unwrap();
         assert_eq!(
             restored.selection_tools.options.brush,
@@ -508,7 +494,7 @@ mod painted_selection_checks {
     #[test]
     fn mask_properties_share_paint_semantics_and_saved_history() {
         use layer_core::{EffectValue, SelectionPaintBehavior};
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::QuickMask);
         let row = &s.state.layers[0];
         assert!(row.quick_mask && row.selection_layer && row.drawing && row.selected);
@@ -552,7 +538,7 @@ mod painted_selection_checks {
 
     #[test]
     fn selection_resize_is_async_cancelable_and_one_undo_step() {
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectAll);
         let before = s.engine.document().selection.clone();
         let resize = |action| UiAction::Selection { action };

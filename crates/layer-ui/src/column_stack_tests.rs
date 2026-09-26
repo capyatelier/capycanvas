@@ -1,8 +1,7 @@
 const STACK_VIEW: [f32; 2] = [1800., 1100.];
 
 fn three_member_target() -> UiSession<Recorder> {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let layout = &mut s.state.workspace.layout;
     layout.set_column_collapsed(5, true, STACK_VIEW).unwrap();
     let mut target = 4;
@@ -453,8 +452,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
             panel: Panel::Toolbar,
         },
     ] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         customize(
             &mut s,
             CustomizationAction::SetColumnCollapsed {
@@ -521,8 +519,7 @@ fn paint_defaults_open_right_stack_on_load_and_reset() {
 }
 
 fn check_paint_default_stack(platform: Platform) {
-    let mut s = session();
-    s.set_platform(platform);
+    let mut s = session(platform);
     let layout = crate::WorkspacePreset::Illustrator.layout(platform);
     let capture = crate::WorkspaceCapture {
         history: crate::LayoutHistory::new(&layout),
@@ -605,8 +602,7 @@ fn check_paint_default_stack(platform: Platform) {
 }
 
 fn stack_fixture() -> (UiSession<Recorder>, u32, u32) {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let mut columns = Vec::new();
     for panel in [Panel::Brushes, Panel::Layers] {
         let group = s.state.workspace.layout.panel_group(panel).unwrap();

@@ -152,8 +152,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         project.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
         let (gpu, mut state) = hdr_renderer(color);
         let mut host = NativeHost::new(Platform::Windows).unwrap();
-        host.session = UiSession::from_project(gpu, project, None, [128, 96]).unwrap();
-        host.session.set_platform(Platform::Windows);
+        host.session = UiSession::from_project(gpu, project, None, [128, 96], Platform::Windows).unwrap();
         host.session.set_document_replacement(true);
         host.document_adopted();
         settle(&mut host);
@@ -571,8 +570,7 @@ fn d3d12_windows_float32_signed_range_rejects_lossy_demotion_and_protects_export
     project.document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
     let (gpu, state) = hdr_renderer(color);
     let mut host = NativeHost::new(Platform::Windows).unwrap();
-    host.session = UiSession::from_project(gpu, project, None, [128, 96]).unwrap();
-    host.session.set_platform(Platform::Windows);
+    host.session = UiSession::from_project(gpu, project, None, [128, 96], Platform::Windows).unwrap();
     host.session.set_document_replacement(true);
     host.document_adopted();
     settle(&mut host);

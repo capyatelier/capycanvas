@@ -278,7 +278,7 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
-        if state.platform.color_picker() { map.serialize_entry("color_preview", &self.color_preview())?; }
+        map.serialize_entry("color_preview", &self.color_preview())?;
         let colors = state.display_colors();
         map.serialize_entry("color_panel", &self.color_view(colors))?;
         map.serialize_entry(
@@ -288,7 +288,7 @@ impl NativeHost {
             }),
         )?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
-            "creation": state.settings.new_document.form_for(state.platform),
+            "creation": state.settings.new_document.form(),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
             "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
             "new_title": layer_ui::DocumentRequest::New.title(),
@@ -379,10 +379,7 @@ mod tests {
                 host.ui_color = crate::UiColor::Tagged(layer_core::color::RgbSpace::DisplayP3);
             }
             let snapshot = host.take_value().unwrap();
-            assert_eq!(snapshot.get("color_preview").is_some(), platform.color_picker(), "{platform:?}");
-            if platform.color_picker() {
-                assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
-            }
+            assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
         }
     }
     fn decoded(bytes: Option<Vec<u8>>) -> Option<Value> {
@@ -442,7 +439,6 @@ mod tests {
             Platform::Ios,
             Platform::Mac,
             Platform::Windows,
-            Platform::Generic,
         ] {
             let mut host = host(platform);
             workspace_fixture(&mut host);
@@ -506,7 +502,7 @@ mod tests {
     #[test]
     fn open_column_resize_publishes_layout_without_rebuilding_content() {
         use layer_ui::{ContactPhase::*, CustomizationAction, Panel};
-        let mut host = host(Platform::Generic);
+        let mut host = host(Platform::Gtk);
         workspace_fixture(&mut host);
         for action in [
             CustomizationAction::SetColumnCollapsed { group: 41, collapsed: true },
@@ -644,7 +640,6 @@ mod tests {
             Platform::Ios,
             Platform::Mac,
             Platform::Windows,
-            Platform::Generic,
         ] {
             let mut host = host(platform);
             workspace_fixture(&mut host);
@@ -703,26 +698,7 @@ mod tests {
                 let next = update(&mut host);
                 assert!(next.get("state").is_none());
                 let group = &next["workspace_update"]["drag"]["group"];
-                let actual = host
-                    .session
-                    .layout(host.logical)
-                    .groups
-                    .into_iter()
-                    .find(|g| Some(g.id as u64) == group["id"].as_u64())
-                    .unwrap();
-                let expected =
-                    if matches!(
-                        platform,
-                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
-                    ) {
-                        layer_ui::Bounds {
-                            x: x - 10.,
-                            y: 400.,
-                            ..bounds
-                        }
-                    } else {
-                        actual.bounds
-                    };
+                let expected = layer_ui::Bounds { x: x - 10., y: 400., ..bounds };
                 assert_eq!(group["bounds"], serde_json::to_value(expected).unwrap());
                 assert!(next.get("workspace_persistence").is_none());
             }

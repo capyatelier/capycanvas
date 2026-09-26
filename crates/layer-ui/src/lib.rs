@@ -21,7 +21,7 @@ pub mod color_management;
 pub mod parameter_pad;
 
 mod import_policy;
-pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import, require_sdr_host};
+pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import};
 
 pub mod recovery;
 mod workspace_update;
@@ -210,16 +210,6 @@ pub struct MenuSpec {
     pub label: &'static str,
     pub sections: &'static [&'static [CommandId]],
 }
-pub const PRIMARY_MENU: &[&[CommandId]] = &[
-    &[CommandId::NewWindow],
-    &[
-        CommandId::Settings,
-        CommandId::KeyboardShortcuts,
-        CommandId::About,
-    ],
-    &[CommandId::Drawings],
-    &[CommandId::SearchCommands],
-];
 pub const EDIT_MENU: MenuSpec = MenuSpec {
     label: "Edit",
     sections: &[
@@ -468,10 +458,6 @@ impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows),
-            Self::TonalSelect => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::QuickMask | Self::ReturnToArtwork | Self::NewSelectionLayer | Self::SaveSelectionLayer | Self::Reselect | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::ResetMaskColors | Self::SwapMaskColors | Self::FillSelectionMask | Self::ClearSelectionMask | Self::SelectionBrush | Self::SelectionBrushPressure | Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::DrawingBrush | Self::Sculpt => true,
-            Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::ShowCanvasActionBar
             | Self::TransformFlipHorizontal
             | Self::TransformFlipVertical
@@ -480,62 +466,7 @@ impl CommandId {
             | Self::ResetTransform
             | Self::RemoveSelectionPoint
             | Self::MaskSelection => platform.canvas_bar(),
-            Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
-            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows),
-            Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::RasterizeSource | Self::RepairSourceProfile => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::CustomizeWorkspaceUi => matches!(
-                platform,
-                Platform::Gtk
-                    | Platform::Web
-                    | Platform::Android
-                    | Platform::Ios
-                    | Platform::Mac
-                    | Platform::Windows
-            ),
-            Self::Fullscreen => matches!(
-                platform,
-                Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows
-            ),
-            Self::NewDocument
-            | Self::OpenDocument
-            | Self::SaveDocument
-            | Self::SaveDocumentAs
-            | Self::CloseDocument => {
-                matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Mac
-                        | Platform::Ios
-                        | Platform::Android
-                        | Platform::Windows
-                        | Platform::Web
-                )
-            }
-            Self::ExportDocument => {
-                matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Mac
-                        | Platform::Ios
-                        | Platform::Android
-                        | Platform::Windows
-                        | Platform::Web
-                )
-            }
-            Self::Website | Self::SourceCode => {
-                matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Windows
-                )
-            }
+            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }

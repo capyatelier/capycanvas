@@ -76,21 +76,12 @@ pub struct NewDocumentPreset {
     pub options: NewDocumentOptions,
 }
 impl NewDocumentPreset {
-    pub fn builtins_for(platform: crate::Platform) -> Vec<Self> {
-        let mut presets = Self::builtins().to_vec();
-        if crate::color_management::enabled(platform) {
-            presets.push(Self { name: "HDR drawing".into(), options: NewDocumentOptions {
-                color: DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 },
-                ..Default::default()
-            }});
-        }
-        presets
-    }
-    pub fn builtins() -> [Self; 3] {
+    pub fn builtins() -> [Self; 4] {
         [
             ("Standard drawing", RgbSpace::Srgb, SampleDepth::U8),
             ("Wide color", RgbSpace::DisplayP3, SampleDepth::U8),
             ("Photo editing", RgbSpace::ProPhoto, SampleDepth::U16),
+            ("HDR drawing", RgbSpace::Srgb, SampleDepth::F16),
         ]
         .map(|(name, space, depth)| Self {
             name: name.into(),
@@ -180,11 +171,10 @@ pub struct NewDocumentForm {
     pub spaces: Vec<(RgbSpace, &'static str)>,
 }
 impl NewDocumentSettings {
-    pub fn form(&self) -> NewDocumentForm {self.form_for(crate::Platform::Generic)}
-    pub fn form_for(&self,platform:crate::Platform)->NewDocumentForm {
+    pub fn form(&self) -> NewDocumentForm {
         NewDocumentForm {
             options: self.defaults,
-            presets: NewDocumentPreset::builtins_for(platform).into_iter().chain(self.presets.iter().cloned()).collect(),
+            presets: NewDocumentPreset::builtins().into_iter().chain(self.presets.iter().cloned()).collect(),
             spaces: RgbSpace::ALL.into_iter().map(|space| (space, space.name())).collect(),
         }
     }
@@ -193,6 +183,13 @@ impl NewDocumentSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_host_offers_the_hdr_preset_and_reserves_its_name() {
+        let hdr = NewDocumentSettings::default().form().presets.into_iter().find(|p| p.name == "HDR drawing").unwrap();
+        assert_eq!(hdr.options.color, DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 });
+        let mut settings = NewDocumentSettings::default();
+        assert!(settings.apply(NewDocumentAction::Remember { options: Default::default(), name: "hdr drawing".into(), defaults: false }).is_err());
+    }
     #[test]
     fn preference_actions_validate_before_changing_defaults_or_presets() {
         let mut settings = NewDocumentSettings::default();

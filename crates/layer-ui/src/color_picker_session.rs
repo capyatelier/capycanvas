@@ -193,9 +193,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         input: &UiInput,
     ) -> Result<Option<UiChange>, String> {
-        if !self.state.platform.color_picker() {
-            return Ok(None);
-        }
         let mut changed = regions::COLOR_PREVIEW;
         match *input {
             UiInput::ColorPickerHold {

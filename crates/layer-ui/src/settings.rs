@@ -7,11 +7,9 @@ use std::collections::BTreeMap;
 mod color;
 pub use color::{MissingProfilePolicy, PhotoOpenPolicy};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
-    #[default]
-    Generic,
     Gtk,
     Web,
     Windows,
@@ -21,11 +19,9 @@ pub enum Platform {
 }
 impl Platform {
     pub fn canvas_bar(self) -> bool {
-        matches!(self, Self::Generic | Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android)
     }
-    pub fn color_picker(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios | Self::Windows)
-    }
+    pub const ALL: [Self; 6] = [Self::Gtk, Self::Web, Self::Windows, Self::Mac, Self::Ios, Self::Android];
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
     }
@@ -35,12 +31,6 @@ impl Platform {
     }
     pub fn system_accent(self) -> bool {
         matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)
-    }
-    pub fn swatch_preferences(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
-    }
-    pub fn transparency_preference(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Windows | Self::Mac | Self::Ios)
     }
 }
 
@@ -737,7 +727,6 @@ impl Settings {
                     Platform::Windows => "Use Windows stroke prediction",
                     Platform::Mac => "Use macOS stroke prediction",
                     Platform::Gtk => "Use Linux stroke prediction",
-                    Platform::Generic => "Use native stroke prediction",
                 },
                 "",
                 PreferenceKind::Switch {
@@ -798,8 +787,9 @@ impl Settings {
                                 .unwrap() as u32,
                         },
                     ),
-                    self.base_row(crate::Theme::Dark, platform),
-                    self.base_row(crate::Theme::Light, platform),
+                    self.base_row(crate::Theme::Dark),
+                    self.base_row(crate::Theme::Light),
+                    self.accent_row(platform),
                 ],
             }],
             vec![
@@ -955,21 +945,10 @@ impl Settings {
                 ),
             ],
         });
-        if !platform.transparency_preference() {
-            for group in &mut groups[0] {
-                group.rows.retain(|row| row.id != Transparency);
-            }
-        }
-        if platform.swatch_preferences() {
-            let rows = &mut groups[0][0].rows;
-            let light = rows.iter().position(|r| r.id == LightBase).unwrap();
-            rows.insert(light + 1, self.accent_row(platform));
-        }
-        groups.insert(2, self.color_groups(platform));
+        groups.insert(2, self.color_groups());
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
-            .filter(|(id, _)| *id != SettingsPage::Color || matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows))
             .map(|(id, groups)| PreferencePage {
                 id,
                 title: id.title().into(),
@@ -997,24 +976,11 @@ impl Settings {
             false,
         )
     }
-    fn base_row(&self, theme: crate::Theme, platform: Platform) -> PreferenceRow {
+    fn base_row(&self, theme: crate::Theme) -> PreferenceRow {
         let (id, title, value) = match theme {
             crate::Theme::Dark => (PreferenceId::DarkBase, "Dark theme base color", self.dark_base),
             crate::Theme::Light => (PreferenceId::LightBase, "Light theme base color", self.light_base),
         };
-        if !platform.swatch_preferences() {
-            return row(
-                id,
-                title,
-                "",
-                PreferenceKind::Text {
-                    value: value.to_string(),
-                    constraint: TextConstraint::HexColor,
-                    max_length: 7,
-                    placeholder: theme.default_base().to_string(),
-                },
-            );
-        }
         let presets = theme
             .base_choices()
             .iter()
@@ -1563,7 +1529,6 @@ mod copy_tests {
         assert_eq!(apply(&mut settings, edit(&ACCENTS[2].1.to_string())), None);
         assert_eq!(apply(&mut settings, edit("")), None);
         assert_eq!(settings.accent, None);
-        assert!(settings.field(PreferenceId::Accent, Platform::Generic).is_err());
         for (platform, system) in [(Platform::Mac, true), (Platform::Ios, false)] {
             let PreferenceKind::Swatches { swatches, .. } = settings.field(PreferenceId::Accent, platform).unwrap().kind else {
                 unreachable!()
@@ -1620,28 +1585,19 @@ mod copy_tests {
             assert!(edit(&mut settings, "#4455").is_some());
             assert_eq!(edit(&mut settings, ""), None);
             assert_eq!(base(&settings), theme.default_base());
-            assert!(matches!(
-                rows(&settings, Platform::Generic).into_iter().find(|r| r.id == id).unwrap().kind,
-                PreferenceKind::Text { .. }
-            ));
         }
     }
 
     #[test]
     fn panel_transparency_rows_follow_the_presenting_hosts() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows, Platform::Generic] {
+        for platform in Platform::ALL {
             let row = Settings::default().pages(platform)[0].groups.iter()
-                .flat_map(|g| g.rows.clone()).find(|r| r.id == PreferenceId::Transparency);
-            assert_eq!(row.is_some(), platform.transparency_preference(), "{platform:?}");
-            if let Some(row) = row {
-                let json = serde_json::to_value(&row.kind).unwrap();
-                assert_eq!(json["presentation"]["type"], "circles");
-                assert_eq!(json["presentation"]["alphas"].as_array().unwrap().len(), 4);
-                assert_eq!(json["selected"], 1, "Low is the default");
-            }
+                .flat_map(|g| g.rows.clone()).find(|r| r.id == PreferenceId::Transparency).unwrap();
+            let json = serde_json::to_value(&row.kind).unwrap();
+            assert_eq!(json["presentation"]["type"], "circles");
+            assert_eq!(json["presentation"]["alphas"].as_array().unwrap().len(), 4);
+            assert_eq!(json["selected"], 1, "Low is the default");
         }
-        assert!(Platform::Mac.transparency_preference() && Platform::Ios.transparency_preference());
-        assert!(Platform::Windows.transparency_preference());
     }
 
     #[test]
@@ -1657,15 +1613,7 @@ mod copy_tests {
     #[test]
     fn cursor_choices_preserve_saved_modes_and_reset_after_reordering() {
         assert_eq!(CursorMode::CHOICES[0], (CursorMode::None, "None"));
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Windows,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Android,
-        ] {
+        for platform in Platform::ALL {
             for saved in [
                 "brush_size",
                 "brush_size_cross",
@@ -1765,15 +1713,7 @@ mod copy_tests {
 
     #[test]
     fn zen_preferences_roundtrip_and_reset() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
+        for platform in Platform::ALL {
             let mut settings = Settings::default();
             let group = settings
                 .pages(platform)
@@ -1966,15 +1906,7 @@ mod copy_tests {
     #[test]
     fn settings_copy_is_short_on_every_platform() {
         let settings = Settings::default();
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Windows,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Android,
-        ] {
+        for platform in Platform::ALL {
             for page in settings.pages(platform) {
                 check(&page.title);
                 for group in page.groups {

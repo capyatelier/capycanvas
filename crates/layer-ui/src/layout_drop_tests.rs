@@ -3,8 +3,7 @@ const VIEW: [f32; 2] = [1600., 1000.];
 #[test]
 fn upper_bodies_snap_to_tab_slots_in_first_lower_and_floating_groups() {
     for floating in [false, true] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         let layout = &mut s.state.workspace.layout;
         layout.add_panel_to_group(Panel::Adjustments, 5).unwrap();
         layout.add_panel_to_group(Panel::Properties, 6).unwrap();
@@ -90,8 +89,7 @@ fn menubar_prepends_every_column_payload_on_both_sides() {
                 DockItem::Group { group: 2 },
                 DockItem::Column { column: 8 },
             ] {
-                let mut s = session();
-                s.set_platform(Platform::Gtk);
+                let mut s = session(Platform::Gtk);
                 let layout = &mut s.state.workspace.layout;
                 layout.bands[0].edge = edge;
                 layout.bands[1].edge = if edge == Edge::Left {
@@ -172,8 +170,7 @@ fn menubar_prepends_every_column_payload_on_both_sides() {
 #[test]
 fn group_body_prepends_and_highlights_content_while_tabs_keep_insertion_lines() {
     for floating in [false, true] {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         if floating {
             s.state
                 .workspace
@@ -266,8 +263,7 @@ fn group_body_prepends_and_highlights_content_while_tabs_keep_insertion_lines() 
 
 #[test]
 fn nested_columns_reject_collapse() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let layout = &mut s.state.workspace.layout;
     layout
         .move_panel(
@@ -340,8 +336,7 @@ fn new_stacks_default_to_full_columns() {
 
 #[test]
 fn menubar_targets_follow_native_header_height_without_taking_the_tab_strip() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let item = DockItem::Panel {
         panel: Panel::Properties,
     };

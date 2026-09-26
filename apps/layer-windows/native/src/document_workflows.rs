@@ -769,11 +769,10 @@ mod tests {
             .unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
-            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36]).unwrap();
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36], Platform::Windows).unwrap();
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
         host.session =
             *crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap();
-        host.session.set_platform(Platform::Windows);
         host.session.set_document_replacement(true);
         host.document_adopted();
         settle(&mut host);

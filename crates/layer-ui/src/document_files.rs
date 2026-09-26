@@ -195,6 +195,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         project: Project,
         location: Option<DocumentLocation>,
         viewport: [u32; 2],
+        platform: Platform,
     ) -> Result<Self, String> {
         if let Some(location) = &location {
             location.validate()?;
@@ -210,7 +211,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|l| l.name.to_string())
             })
             .flatten();
-        let mut session = Self::new(renderer, project.document, viewport)?;
+        let mut session = Self::new(renderer, project.document, viewport, platform)?;
         for (id, asset) in &project.assets {
             session
                 .renderer_mut()

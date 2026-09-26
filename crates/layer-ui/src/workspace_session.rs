@@ -333,9 +333,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             region_tools,
         } = prepared;
         let mut working = capture.working;
-        if Panel::palettes_presented_on(self.state.platform) {
-            working.colors.library.ensure_starters();
-        }
+        working.colors.library.ensure_starters();
         let space = self.engine.document().color.space;
         working.colors.set_rgb_space(space)?;
         working.colors.set_document_depth(self.engine.document().color.depth)?;
@@ -367,10 +365,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             opacity: brush.opacity,
             color: self.state.colors.preview(self.state.colors.definition()),
         };
-        let canvas_tool = if self.state.platform.color_picker() && working.canvas_tool.picks_color() {
-            LayerCanvasTool::Paint
-        } else if working.canvas_tool.selection_tool()==Some(SelectionTool::Tonal) && !CommandId::TonalSelect.available_on(self.state.platform) {LayerCanvasTool::Select}
-        else { working.canvas_tool };
+        let canvas_tool = if working.canvas_tool.picks_color() { LayerCanvasTool::Paint } else { working.canvas_tool };
         self.layer_interaction.tool = canvas_tool;
         self.layer_interaction.gradient = working.gradient;
         self.layer_interaction.figure = working.figure;
@@ -379,7 +374,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.tonal_tools = Default::default();
         self.selection_tools = selection_tools::SelectionTools::default();
         self.selection_tools.options = working.selection;
-        if self.selection_tools.options.tool==SelectionTool::Tonal && !CommandId::TonalSelect.available_on(self.state.platform) {self.selection_tools.options.tool=SelectionTool::Lasso;}
         self.engine.set_tool(
             if self.state.brush.tool == Tool::Eraser || self.state.colors.transparent() {
                 StrokeTool::Eraser

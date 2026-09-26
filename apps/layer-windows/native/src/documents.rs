@@ -933,8 +933,7 @@ mod tests {
         // Completed host-backed pixels stay saveable with no GPU at any point.
         // Actual admitted pointer batches are covered by the native loss fixture.
         f.host.session =
-            UiSession::from_project(Renderer(None), project, None, [256, 256]).unwrap();
-        f.host.session.set_platform(Platform::Windows);
+            UiSession::from_project(Renderer(None), project, None, [256, 256], Platform::Windows).unwrap();
         f.host.session.set_document_replacement(true);
         f.host.session.mark_recovered();
         f.host.suspend_renderer().unwrap();
@@ -1192,6 +1191,7 @@ mod tests {
                 layer_ui::new_drawing(64, 48).unwrap(),
                 None,
                 f.host.session.state().camera.viewport,
+                Platform::Windows,
             )
             .unwrap();
             f.service.worker.shared.mailbox.lock().unwrap().completed =
@@ -1285,8 +1285,7 @@ mod gpu_tests {
         let project = layer_ui::new_drawing(63, 47).unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
-            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [31, 29]).unwrap();
-        host.session.set_platform(Platform::Windows);
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [31, 29], Platform::Windows).unwrap();
         host.session.set_document_replacement(true);
         host.resize(31, 29, 1.).unwrap();
         host.import_layer_image(
@@ -1363,9 +1362,9 @@ mod gpu_tests {
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],
+            Platform::Gtk,
         )
         .unwrap();
-        host.session.set_platform(Platform::Gtk);
         host.session.set_document_replacement(true);
         host.resize(64, 48, 1.).unwrap();
         let directory =

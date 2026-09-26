@@ -39,8 +39,7 @@ mod selection_tools_checks {
     fn geometric_selection_constraints_history_cancel_and_workspace_memory() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             for command in [CommandId::RectangleSelect, CommandId::EllipseSelect] {
-                let mut s = session();
-                s.set_platform(platform);
+                let mut s = session(platform);
                 invoke(&mut s, command);
                 // Reversed drags work under a transformed camera.
                 s.state.camera.zoom = 2.;
@@ -88,8 +87,7 @@ mod selection_tools_checks {
                 }
                 let capture = s.capture_workspace().unwrap();
                 let saved = serde_json::to_string(&capture).unwrap();
-                let mut restored = session();
-                restored.set_platform(platform);
+                let mut restored = session(platform);
                 restored
                     .adopt_workspace(
                         PreparedWorkspace::new(serde_json::from_str(&saved).unwrap()).unwrap(),
@@ -122,8 +120,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn polygon_selection_points_finish_backspace_blur_and_history() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::PolygonSelect);
         click(&mut s, [20., 20.]);
         click(&mut s, [150., 20.]);
@@ -163,8 +160,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn polygon_bar_finishes_removes_and_cancels_without_a_keyboard() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::PolygonSelect);
         assert!(s.state.canvas_bar.is_none());
         click(&mut s, [20., 20.]);
@@ -205,8 +201,7 @@ mod selection_tools_checks {
     }
     #[test]
     fn global_color_selection_uses_sources_and_rejects_stale_results() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::ColorSelect);
         assert_eq!(s.state.tool_set.subtools.len(), 8);
         assert!(!s.state.tool_settings.iter().any(|c| c.id == "gap_closing"));
@@ -257,8 +252,7 @@ mod selection_tools_checks {
     #[test]
     fn sampling_sources_require_a_selection_tool() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
-            let mut s = session();
-            s.set_platform(platform);
+            let mut s = session(platform);
             for command in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
                 assert!(!s.command(command).enabled);
             }
@@ -314,8 +308,7 @@ mod selection_tools_checks {
     fn all_selection_tools_share_options_with_atomic_history_and_persistence() {
         use std::sync::Arc;
         for tool in SelectionTool::ALL.into_iter().filter(|t| !matches!(t, SelectionTool::Brush | SelectionTool::Tonal)) {
-            let mut s = session();
-            s.set_platform(Platform::Gtk);
+            let mut s = session(Platform::Gtk);
             invoke(&mut s, tool.command());
             for command in [
                 CommandId::SelectionNew,
@@ -417,8 +410,7 @@ mod selection_tools_checks {
         assert_eq!(old.mode, SelectionMode::New);
         assert!(old.antialias);
         assert_eq!(old.feather, 0.);
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::PolygonSelect);
         invoke(&mut s, CommandId::SelectionConstrainAngles);
         click(&mut s, [20., 20.]);
@@ -453,7 +445,7 @@ mod selection_tools_checks {
     fn held_selection_modifiers_latch_per_contact_and_preserve_configured_mode() {
         for (shift, alt, expected) in [(true,false,SelectionMode::Add),(false,true,SelectionMode::Subtract),(true,true,SelectionMode::Intersect)] {
             for tool in [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso] {
-                let mut s = session(); s.set_platform(Platform::Gtk);
+                let mut s = session(Platform::Gtk);
                 invoke(&mut s, tool);
                 s.interaction.modifiers.shift = shift; s.interaction.modifiers.alt = alt;
                 assert_eq!(s.effective_selection_mode(), expected);
@@ -467,7 +459,7 @@ mod selection_tools_checks {
                 assert_eq!(s.effective_selection_mode(), SelectionMode::New);
             }
         }
-        let mut s = session(); s.set_platform(Platform::Gtk);
+        let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectionBrush);
         s.interaction.modifiers.alt = true;
         assert_eq!(s.effective_selection_mode(), SelectionMode::Subtract);

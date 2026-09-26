@@ -99,8 +99,7 @@ impl NativeHost {
         self.filter_preview_image.take()
     }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
-        let mut session = UiSession::blank(Renderer::default(), [1, 1])?;
-        session.set_platform(platform);
+        let session = UiSession::blank(Renderer::default(), [1, 1], platform)?;
         Ok(Self {
             session,
             ui_color: UiColor::Mapped,
@@ -1642,6 +1641,7 @@ mod tests {
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],
+            layer_ui::Platform::Mac,
         )
         .unwrap();
         host.session.frame(0, 0).unwrap();

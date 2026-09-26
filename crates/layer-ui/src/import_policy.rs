@@ -423,12 +423,3 @@ mod tests {
         assert!(batch.take_sources(false).is_err());
     }
 }
-
-/// Hosts expose HDR only after integrating presentation, recovery and delivery.
-/// Reject before replacing the live document, including recovered/imported masters.
-pub fn require_sdr_host(document: &layer_core::Document, host: &str) -> Result<(), String> {
-    if document.color.depth.is_float() || document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| s.interpretation.depth.is_float())) {
-        return Err(format!("HDR editing is not enabled on {host}. Open this master in GTK or export its SDR rendition there."));
-    }
-    Ok(())
-}

@@ -4,9 +4,7 @@ mod tonal_checks {
     use layer_render::{RegionResult, RegionSource, TonalSample};
     use std::sync::Arc;
     fn start() -> UiSession<Recorder> {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
-        s
+        session(Platform::Gtk)
     }
     fn choose(s: &mut UiSession<Recorder>, index: usize) {
         s.dispatch(UiAction::Tonal {
@@ -36,7 +34,7 @@ mod tonal_checks {
     #[test]
     fn tonal_controls_and_masks_are_available_on_native_hosts() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
-            let mut s = session(); s.set_platform(platform);
+            let mut s = session(platform);
             invoke(&mut s, CommandId::TonalSelect);
             assert!(s.state.tool_set.subtools.iter().any(|item| item.icon == "tonal-select"));
             choose(&mut s, 7); reply(&mut s, None, 0xff804020);
@@ -309,8 +307,7 @@ mod tonal_checks {
                 let mut document = Document::new("tones", 64, 64);
                 document.color.depth = depth;
                 document.color.space = space;
-                let mut s = UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [64; 2]).unwrap();
-                s.set_platform(Platform::Gtk);
+                let mut s = UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [64; 2], Platform::Gtk).unwrap();
                 invoke(&mut s, CommandId::TonalSelect);
                 let ToolOption::Choice { items, .. } = &s.state.tool_extra[0] else { panic!("tones") };
                 let ids: Vec<_> = items.iter().map(|item| match item.action {

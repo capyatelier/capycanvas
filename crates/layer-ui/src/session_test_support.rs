@@ -192,11 +192,12 @@ impl CanvasRenderer for Recorder {
         Ok(())
     }
 }
-pub(crate) fn session() -> UiSession<Recorder> {
+pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
     UiSession::new(
         Recorder::default(),
         Document::new("test", 1000, 1000),
         [1000, 1000],
+        platform,
     )
     .unwrap()
 }

@@ -55,7 +55,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn hold_active(&self, command: CommandId) -> bool {
         command != CommandId::Eyedropper
-            || !self.state.platform.color_picker()
             || self.eyedropper.picking.previous.is_some()
     }
 

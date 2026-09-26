@@ -375,8 +375,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Option<layer_render::SelectionRefinement> {
         let options = &self.selection_tools.options;
         let mode = self.effective_selection_mode();
-        (CommandId::Select.available_on(self.state.platform)
-            && (mode != SelectionMode::New || !options.antialias || options.feather > 0.))
+        (mode != SelectionMode::New || !options.antialias || options.feather > 0.)
             .then(|| layer_render::SelectionRefinement {
                 resize: 0,
                 mode,

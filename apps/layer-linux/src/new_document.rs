@@ -79,7 +79,7 @@ impl Form {
     fn presets(&self, settings: &NewDocumentSettings, selected: u32) {
         self.updating.set(true);
         let mut names = vec!["Custom".to_string()];
-        names.extend(NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk).into_iter().map(|p| p.name));
+        names.extend(NewDocumentPreset::builtins().into_iter().map(|p| p.name));
         names.extend(settings.presets.iter().map(|p| p.name.clone()));
         self.preset.set_model(Some(&gtk::StringList::new(
             &names.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -206,7 +206,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         remove,
         updating: Cell::new(false),
     });
-    let selected = NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk)
+    let selected = NewDocumentPreset::builtins()
         .iter()
         .chain(settings.presets.iter())
         .position(|p| p.options == settings.defaults)
@@ -248,7 +248,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                 .new_document
                 .clone();
             if selected > 0 {
-                if let Some(preset) = NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk)
+                if let Some(preset) = NewDocumentPreset::builtins()
                     .iter()
                     .chain(settings.presets.iter())
                     .nth(selected as usize - 1)

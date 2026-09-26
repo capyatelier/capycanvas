@@ -230,6 +230,7 @@ fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
             layer_ui::new_drawing(32, 24).unwrap(),
             None,
             [32, 24],
+            layer_ui::Platform::Windows,
         )
         .unwrap();
         let epoch = native.session.state().document_file.epoch;
@@ -288,9 +289,9 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
         layer_ui::new_drawing(64, 48).unwrap(),
         None,
         [64, 48],
+        layer_ui::Platform::Windows,
     )
     .unwrap();
-    native.session.set_platform(layer_ui::Platform::Windows);
     native.startup = Default::default();
     native
         .import_layer_image(

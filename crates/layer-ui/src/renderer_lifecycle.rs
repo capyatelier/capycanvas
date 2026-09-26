@@ -254,8 +254,7 @@ mod tests {
 
     #[test]
     fn header_layout_remains_publishable_after_final_document_retirement() {
-        let mut session = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
-        session.set_platform(Platform::Android);
+        let mut session = UiSession::blank(Recorder::default(), [800, 600], Platform::Android).unwrap();
         session.frame(0, 0).unwrap();
         session.dispatch(UiAction::Invoke { command: CommandId::CloseDocument }).unwrap();
         assert!(session.state().document_file.close_ready);
@@ -271,8 +270,8 @@ mod tests {
 
     #[test]
     fn stroke_recording_follows_the_window_when_switching_drawings() {
-        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
         active.stroke_recording().start("test").unwrap();
         let event = layer_engine::PenEvent {
             device_id: 1,
@@ -314,8 +313,8 @@ mod tests {
 
     #[test]
     fn drawing_activation_keeps_native_dialog_request_ids_monotonic() {
-        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
         active.set_platform(Platform::Windows);
         let mut last = 0;
         for _ in 0..3 {
@@ -330,8 +329,8 @@ mod tests {
 
     #[test]
     fn parked_editor_inherits_window_viewport_without_losing_its_history() {
-        let mut active = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
-        let mut parked = UiSession::blank(Recorder::default(), [800, 600]).unwrap();
+        let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
+        let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
         let layers = parked.engine().document().layers.len();
         parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
         let revision = parked.engine().document().revision;
@@ -350,9 +349,9 @@ mod tests {
             Recorder::default(),
             Document::new("recovery", 128, 128),
             [256, 256],
+            Platform::Windows,
         )
         .unwrap();
-        s.set_platform(Platform::Windows);
         let image = ProjectAsset {
             extent: [1, 1],
             format: layer_core::ProjectAssetFormat::Rgba8Srgb,
@@ -398,6 +397,7 @@ mod tests {
             Recorder::default(),
             Document::new("requests", 128, 128),
             [128, 128],
+            Platform::Gtk,
         )
         .unwrap();
         s.frame(0, 0).unwrap();
@@ -466,9 +466,9 @@ mod tests {
             Recorder::default(),
             Document::new("retire", 128, 128),
             [128, 128],
+            Platform::Windows,
         )
         .unwrap();
-        s.set_platform(Platform::Windows);
         s.import_layer_asset(
             "Source",
             ProjectAsset {
@@ -524,6 +524,7 @@ mod tests {
             Recorder::default(),
             Document::new("failed", 128, 128),
             [128, 128],
+            Platform::Gtk,
         )
         .unwrap();
         s.import_layer_asset(

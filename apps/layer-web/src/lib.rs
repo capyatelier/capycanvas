@@ -327,9 +327,9 @@ impl WebApp {
         let mut session = UiSession::blank(
             AttachedRenderer::default(),
             [canvas.width().max(1), canvas.height().max(1)],
+            layer_ui::Platform::Web,
         )
         .map_err(js)?;
-        session.set_platform(layer_ui::Platform::Web);
         session.set_document_replacement(false);
         session
             .dispatch(UiAction::RestoreWorkspace {

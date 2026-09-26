@@ -1273,10 +1273,8 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         let restored = App::new(platform);
         let host = &mut unsafe { &mut *restored.0 }.host;
         host.session =
-            layer_ui::UiSession::new(layer_host::Renderer(Some(gpu.into())), document, [1200, 900])
+            layer_ui::UiSession::new(layer_host::Renderer(Some(gpu.into())), document, [1200, 900], source.host.session.state().platform)
                 .unwrap();
-        host.session
-            .set_platform(source.host.session.state().platform);
         host.resize(1200, 900, 1.).unwrap();
         restored.draw_frame();
         assert!(

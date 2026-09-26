@@ -4,8 +4,7 @@ fn search_action(s: &mut UiSession<Recorder>, action: CommandSearchAction) {
 
 #[test]
 fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let catalog = s.command_catalog();
     let ids: std::collections::BTreeSet<_> = catalog.iter().map(|d| &d.id).collect();
     assert_eq!(ids.len(), catalog.len());
@@ -32,8 +31,7 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
 
 #[test]
 fn command_search_ranking_disabled_reasons_parameters_and_recents() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::SearchCommands);
     search_action(
         &mut s,
@@ -133,8 +131,7 @@ fn command_search_ranking_disabled_reasons_parameters_and_recents() {
 
 #[test]
 fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let clear = s
         .command_catalog()
         .into_iter()
@@ -186,8 +183,7 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
 
 #[test]
 fn command_search_does_not_rebuild_workspace_models() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::SearchCommands);
     let revision = s.workspace_model_revision();
     let start = std::time::Instant::now();
@@ -202,8 +198,7 @@ fn command_search_does_not_rebuild_workspace_models() {
 
 #[test]
 fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::SearchCommands);
     search_action(
         &mut s,
@@ -281,8 +276,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
 
 #[test]
 fn command_opener_works_from_text_focus_without_stealing_plain_typing() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     assert!(!key(&mut s, "p", true, false, true).handled);
     key(&mut s, "p", false, false, true);
     assert!(key(&mut s, "k", true, true, true).handled);
@@ -302,8 +296,7 @@ fn command_opener_works_from_text_focus_without_stealing_plain_typing() {
 
 #[test]
 fn active_layer_command_ids_resolve_new_targets_and_toggle_values() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let first = s.engine.document().active_layer;
     let lock = s
         .command_catalog()
@@ -330,8 +323,7 @@ fn command_search_top_is_a_fifth_of_the_workspace_within_bounds() {
 
 #[test]
 fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let find = |s: &UiSession<Recorder>, label: &str| {
         s.command_catalog()
             .into_iter()
@@ -401,8 +393,7 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
 
 #[test]
 fn equivalent_menu_actions_share_command_identities_and_explain_unavailability() {
-    let mut s = session();
-    s.set_platform(Platform::Gtk);
+    let mut s = session(Platform::Gtk);
     let catalog = s.command_catalog();
     let active = s.engine.document().active_layer.0;
     for action in [

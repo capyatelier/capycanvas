@@ -1,7 +1,6 @@
 fn filters() -> (UiSession<Recorder>, u32) { filters_on(Platform::Gtk) }
 fn filters_on(platform: Platform) -> (UiSession<Recorder>, u32) {
-    let mut s = session();
-    s.set_platform(platform);
+    let mut s = session(platform);
     s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
         layout: WorkspacePreset::Painter.layout(platform), ..WorkspaceState::default()
     }) }).unwrap();
@@ -119,7 +118,7 @@ fn strokes_through_a_selected_filter_keep_selection_and_undo_on_the_drawing_targ
 
 #[test]
 fn paper_color_lock_history_and_blocked_cursor_share_document_policy() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
     let controls = s.state.layer_tools.controls;
     assert!(controls.edit_lock);
@@ -147,7 +146,7 @@ fn paper_color_lock_history_and_blocked_cursor_share_document_policy() {
 
 #[test]
 fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     for id in [1, 2] {
         s.dispatch(UiAction::Layer { action: LayerAction::Delete { id } }).unwrap();
     }
@@ -170,7 +169,7 @@ fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
 
 #[test]
 fn animated_speed_changes_preserve_playback_phase_including_zero_and_restored_speed() {
-    let s = session();
+    let s = session(Platform::Gtk);
     let definition = s.effect_catalog.filters().iter().find(|d| d.program.time && d.program.parameters.iter().any(|p| &*p.key == "speed")).unwrap();
     let mut effect = layer_core::EffectInstance::new(definition.program());
     effect.set("animate", layer_core::EffectValue::Toggle(true)).unwrap();
@@ -211,7 +210,7 @@ fn windows_filter_drawer_uses_shared_replacement_cancel_and_history() {
 
 #[test]
 fn curve_points_detach_off_the_graph_until_release_and_commit_one_step() {
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     choose(&mut s, "curves");
     let layer = s.state.layer_properties.layer.unwrap();
     let curve = |s: &UiSession<Recorder>| match &s.state.layer_properties.controls.iter().find(|c| c.key == "curve_0").unwrap().value {

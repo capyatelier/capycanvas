@@ -238,7 +238,7 @@ mod tests {
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session =
-            UiSession::new(Renderer(Some(gpu.into())), document.clone(), [32, 24]).unwrap();
+            UiSession::new(Renderer(Some(gpu.into())), document.clone(), [32, 24], layer_ui::Platform::Mac).unwrap();
         let mut tone = ToneService::new(None);
         settle(&mut tone, &mut host);
         let guide = tone.current(&host).unwrap();
@@ -257,7 +257,7 @@ mod tests {
             .rasterizer(document.color, &Default::default(), true)
             .unwrap();
         let mut replacement =
-            UiSession::new(Renderer(Some(renderer.into())), document, [32, 24]).unwrap();
+            UiSession::new(Renderer(Some(renderer.into())), document, [32, 24], layer_ui::Platform::Mac).unwrap();
         replacement.inherit_window_state(&host.session).unwrap();
         host.session = replacement;
         assert!(tone.current(&host).is_none());

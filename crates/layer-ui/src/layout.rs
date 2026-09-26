@@ -701,18 +701,6 @@ impl Panel {
         }
     }
 
-    pub fn palettes_presented_on(platform: crate::Platform) -> bool {
-        matches!(
-            platform,
-            crate::Platform::Gtk
-                | crate::Platform::Web
-                | crate::Platform::Android
-                | crate::Platform::Mac
-                | crate::Platform::Ios
-                | crate::Platform::Windows
-        )
-    }
-
     pub fn kind(self) -> PanelKind {
         if matches!(
             self,
@@ -1350,22 +1338,9 @@ pub const PANEL_CONFIGURATION_WIDTH: f32 = 380.0;
 pub const PANEL_EXPANSION_MS: u32 = 200;
 
 impl DockLayout {
-    /// The complete editor preset is enabled as hosts finish their native UI.
-    /// This selects initial/reset geometry, never migrates a saved workspace.
+    /// Selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        let mut layout = if matches!(
-            platform,
-            crate::Platform::Gtk
-                | crate::Platform::Android
-                | crate::Platform::Web
-                | crate::Platform::Ios
-                | crate::Platform::Mac
-                | crate::Platform::Windows
-        ) {
-            Self::editor_default()
-        } else {
-            Self::default()
-        };
+        let mut layout = Self::editor_default();
         layout.header = crate::HeaderLayout::for_platform(platform);
         layout
     }
@@ -3994,8 +3969,9 @@ impl ResolvedLayout {
         }
         None
     }
-    /// Measured native tab rectangles take priority over split zones. Body
-    /// centers append tabs; the top/bottom 20% of the body split vertically.
+    /// Measured native tab rectangles take priority over split zones. The top
+    /// 20% of the body selects a tab slot, the center prepends a tab and the
+    /// bottom 20% splits vertically.
     /// Hidden docks have no targets, including the otherwise bare screen edges.
     pub fn drop_hint(
         &self,
@@ -4003,17 +3979,6 @@ impl ResolvedLayout {
         y: f32,
         tabs: &[TabHit],
         docks_visible: bool,
-    ) -> Option<DropHint> {
-        self.drop_hint_with_group_body(x, y, tabs, docks_visible, false)
-    }
-
-    pub(crate) fn drop_hint_with_group_body(
-        &self,
-        x: f32,
-        y: f32,
-        tabs: &[TabHit],
-        docks_visible: bool,
-        prepend_body: bool,
     ) -> Option<DropHint> {
         let screen = Bounds {
             width: self.viewport[0],
@@ -4034,8 +3999,7 @@ impl ResolvedLayout {
             let body = group.body();
             // Extend every tab strip into the former upper body split
             // zone. The horizontal position still selects the exact tab slot.
-            let tab_reach = if prepend_body { body.height * 0.2 } else { 0. };
-            if group.tabs_visible && y < body.y + tab_reach {
+            if group.tabs_visible && y < body.y + body.height * 0.2 {
                 // Native geometry preferences may arrive in dictionary order.
                 // Resolve the first logical slot independently of that order.
                 let index = tabs
@@ -4068,14 +4032,7 @@ impl ResolvedLayout {
                 bounds: contents,
             };
             if group.floating {
-                if prepend_body { return Some(body_hint()); }
-                return Some(DropHint {
-                    target: DockTarget::Tab {
-                        group: group.id,
-                        index: None,
-                    },
-                    bounds: tab_insertion_line(group, tabs, group.panels.len()),
-                });
+                return Some(body_hint());
             }
             let narrow_center = !group.tabs_visible
                 && group.axis == Axis::Vertical
@@ -4095,8 +4052,6 @@ impl ResolvedLayout {
                 Some(Edge::Left)
             } else if x > body.x + body.width - 18.0 {
                 Some(Edge::Right)
-            } else if y < body.y + body.height * 0.2 && !prepend_body {
-                Some(Edge::Top)
             } else if y > body.y + body.height * 0.8 {
                 Some(Edge::Bottom)
             } else {
@@ -4110,16 +4065,8 @@ impl ResolvedLayout {
                     },
                     bounds: edge_line(b, edge),
                 }
-            } else if prepend_body {
-                body_hint()
             } else {
-                DropHint {
-                    target: DockTarget::Tab {
-                        group: group.id,
-                        index: None,
-                    },
-                    bounds: tab_insertion_line(group, tabs, group.panels.len()),
-                }
+                body_hint()
             });
         }
         if docks_visible
@@ -7204,13 +7151,13 @@ mod tests {
     fn vertical_drop_zones_cover_twenty_percent_but_not_the_tab_bar() {
         let layout = DockLayout::default().workspace(1200.0, 900.0, 48.0, 28.0);
         let b = group(&layout, Panel::Layers);
-        for (fraction, edge) in [
-            (0.01, Some(Edge::Top)),
-            (0.19, Some(Edge::Top)),
-            (0.21, None),
-            (0.79, None),
-            (0.81, Some(Edge::Bottom)),
-            (0.99, Some(Edge::Bottom)),
+        for (fraction, target) in [
+            (0.01, DockTarget::Tab { group: 8, index: Some(3) }),
+            (0.19, DockTarget::Tab { group: 8, index: Some(3) }),
+            (0.21, DockTarget::Tab { group: 8, index: Some(0) }),
+            (0.79, DockTarget::Tab { group: 8, index: Some(0) }),
+            (0.81, DockTarget::Split { group: 8, edge: Edge::Bottom }),
+            (0.99, DockTarget::Split { group: 8, edge: Edge::Bottom }),
         ] {
             let hint = layout
                 .drop_hint(
@@ -7220,16 +7167,7 @@ mod tests {
                     true,
                 )
                 .unwrap();
-            assert_eq!(
-                hint.target,
-                match edge {
-                    Some(edge) => DockTarget::Split { group: 8, edge },
-                    None => DockTarget::Tab {
-                        group: 8,
-                        index: None
-                    },
-                }
-            );
+            assert_eq!(hint.target, target);
         }
         assert!(matches!(
             layout
@@ -7356,31 +7294,12 @@ mod tests {
                     ..b
                 },
             }];
-            let hint = layout
-                .drop_hint(b.x + b.width * 0.5, b.y + b.height * 0.5, &tabs, true)
-                .unwrap();
-            assert_eq!(
-                hint.target,
-                DockTarget::Tab {
-                    group: 8,
-                    index: None
-                }
-            );
+            let hint = layout.drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs, true).unwrap();
+            assert_eq!(hint.target, DockTarget::Tab { group: 8, index: Some(3) });
             assert_eq!(hint.bounds.width, 3.0);
             assert_eq!(hint.bounds.height, TILE_SIZE);
             assert_eq!(hint.bounds.y, b.y);
             assert_eq!(hint.bounds.x, (b.x + width - 1.5).min(b.x + b.width - 23.0));
-            let over_grip = layout
-                .drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs, true)
-                .unwrap();
-            assert_eq!(
-                over_grip.target,
-                DockTarget::Tab {
-                    group: 8,
-                    index: Some(3)
-                }
-            );
-            assert_eq!(over_grip.bounds, hint.bounds);
         }
     }
     #[test]

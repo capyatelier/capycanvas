@@ -185,7 +185,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     tolerance: self.region_tools.tolerance,
                     refinement: layer_render::RegionRefinement {
                         gap_closing: if contiguous { self.region_tools.refinement.gap_closing } else { 0 },
-                        smoothing: if !fill && CommandId::Select.available_on(self.state.platform) && !self.selection_tools.options.antialias { 0. } else { self.region_tools.refinement.smoothing },
+                        smoothing: if !fill && !self.selection_tools.options.antialias { 0. } else { self.region_tools.refinement.smoothing },
                         ..self.region_tools.refinement
                     },
                     limit: if fill && mask_target.is_none() {

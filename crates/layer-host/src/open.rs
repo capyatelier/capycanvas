@@ -12,6 +12,7 @@ pub const PREPARE_DEADLINE: Duration = Duration::from_secs(120);
 
 pub struct OpenEnvironment {
     pub admission: layer_ui::DocumentAdmission,
+    pub platform: layer_ui::Platform,
     pub gpu: GpuContext,
     pub options: RendererOptions,
     pub viewport: [u32; 2],
@@ -34,6 +35,7 @@ impl OpenEnvironment {
             .ok_or("Wait for the canvas to finish starting")?;
         Ok(Self {
             admission,
+            platform: session.state().platform,
             gpu: GpuContext::of(gpu),
             options,
             viewport: session.state().camera.viewport,
@@ -136,7 +138,7 @@ impl OpenEnvironment {
             std::thread::sleep(Duration::from_millis(2));
         }
         let mut candidate =
-            UiSession::from_project(Renderer(Some(gpu.into())), project, None, self.viewport)?;
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, self.viewport, self.platform)?;
         candidate.frame(0, 0)?;
         check()?;
         Ok(Box::new(candidate))
@@ -157,6 +159,7 @@ mod tests {
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [640, 480],
+            layer_ui::Platform::Mac,
         )
         .unwrap();
         let admission = layer_ui::DocumentSessions::<()>::default()

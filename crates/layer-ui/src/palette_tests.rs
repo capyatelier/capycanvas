@@ -2,7 +2,7 @@
 #[test]
 fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase() {
     use layer_core::color::{RgbColor, RgbSpace};
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let color = RgbColor::new(RgbSpace::DisplayP3, [0.7, 0.2, 0.1, 0.8]).unwrap();
     s.dispatch(UiAction::Color {
         action: ColorAction::Definition { color },
@@ -11,14 +11,14 @@ fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase(
     s.dispatch(UiAction::Color {
         action: ColorAction::Library {
             action: crate::ColorLibraryAction::Store {
-                palette: 1,
+                palette: s.state.colors.library.palettes[0].id,
                 name: String::new(),
                 color,
             },
         },
     })
     .unwrap();
-    let id = s.state.colors.library.palettes[0].swatches[0].id;
+    let id = s.state.colors.library.palettes[0].swatches.last().unwrap().id;
     s.dispatch(UiAction::Color {
         action: ColorAction::Library {
             action: crate::ColorLibraryAction::Use { id },
@@ -61,7 +61,7 @@ fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase(
 #[test]
 fn palette_history_records_successful_fill_definitions() {
     use layer_core::color::{RgbColor, RgbSpace};
-    let mut s = session();
+    let mut s = session(Platform::Gtk);
     let color = RgbColor::new(RgbSpace::DisplayP3, [0.9, 0.2, 0.1, 0.5]).unwrap();
     s.dispatch(UiAction::Color {
         action: ColorAction::Definition { color },
