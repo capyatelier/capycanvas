@@ -309,7 +309,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                                 panels[group.getString("active")]?.number("tile_corner_radius") ?: SurfaceRadius.value else SurfaceRadius.value)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
-                        .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)
+                        .then(if (expansion != null) Modifier.shadow(16.dp, shape) else Modifier.panelShadow(6.dp, shape)).clip(shape)
                         .then(if (expansion == null) Modifier.glass(shape) else Modifier)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)

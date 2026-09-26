@@ -181,13 +181,22 @@ The Color panel retains its native hue-ring brush by shape; its shader tracks
 physical drawing size. Color changes and overlapping panel motion reuse it. The
 color-field bitmap remains cached by shape, hue and size.
 `AndroidColorPanelTest` checks rendering and picking across shapes and sizes.
+
+Panel, collapsed-column and drawer shadows use a retained native elevation layer
+clipped outside the panel outline, so translucent fills cannot reveal an inner
+shadow. Cached corner paths and rectangular exterior clips avoid masking the
+entire viewport or rebuilding curved clips during a resize. `AndroidPanelShadowTest`
+compares hardware-rendered interiors with and without shadows across fills,
+corner shapes, sizes and elevations, and checks that exterior shadows and content
+remain visible.
+
 For measured overlap motion, build the release-based benchmark variant and run:
 
 ```bash
 (cd apps/layer-android && ./gradlew :app:assembleBenchmark :app:assembleBenchmarkAndroidTest "-PcapyAbi=$CAPY_TEST_ABI" -PcapyBenchmark)
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/benchmark/app-benchmark.apk
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/androidTest/benchmark/app-benchmark-androidTest.apk
-adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e workspaceBenchmark true -e class art.capycanvas.AndroidWorkspacePerformanceTest#colorPanelOverlapFrameTiming art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e workspaceBenchmark true -e workspaceTransparency 3 -e class art.capycanvas.AndroidWorkspacePerformanceTest#colorPanelOverlapFrameTiming art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
 adb -s "$CAPY_ANDROID_SERIAL" logcat -d -s CapyDragPerf:I
 ```
 
@@ -195,6 +204,9 @@ This uses the real display clock and Android `FrameMetrics`, with typed native
 mouse/touch input over a visible Color wheel. It asserts retained UI models and
 matching placement. The benchmark variant enables measurement without making
 the app debuggable. Reinstall the debug APK afterward for ordinary development.
+`workspaceTransparency` accepts 0–3 (off through high); the test restores the
+previous setting afterward. The same option applies to `continuousDragFrameTiming`
+and `continuousResizeFrameTiming`.
 
 The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
 records the shared source-probe texture reuse fix, tablet measurements, and

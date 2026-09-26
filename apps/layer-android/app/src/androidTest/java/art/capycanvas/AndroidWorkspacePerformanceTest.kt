@@ -92,6 +92,10 @@ class AndroidWorkspacePerformanceTest {
             waitFor { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
             var saved = JSONObject()
             scenario.onActivity { saved = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString()) }
+            var savedTransparency = 0
+            scenario.onActivity { savedTransparency = listOf("off", "low", "medium", "high").indexOf(
+                host.snapshot!!.getJSONObject("state").getJSONObject("settings").getString("transparency")) }
+            val transparency = InstrumentationRegistry.getArguments().getString("workspaceTransparency")?.toInt() ?: savedTransparency
             val fixture = JSONObject(saved.toString())
             fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
                 "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
@@ -136,6 +140,7 @@ class AndroidWorkspacePerformanceTest {
             scenario.onActivity { owner.view.viewTreeObserver.addOnDrawListener(drawListener) }
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
+                action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
                 for (mouse in listOf(true, false)) for (mode in if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")) {
                     if (resize) fixture.getJSONObject("layout").getJSONArray("bands").apply {
                         getJSONObject(0).put("root", tabs(41, mode))
@@ -250,6 +255,7 @@ class AndroidWorkspacePerformanceTest {
                             }
                         }
                         val result = obj("mouse" to mouse, "mode" to mode, "elapsed_ms" to elapsed, "inputs" to samples,
+                            "transparency" to transparency,
                             "display_hz" to refreshRate, "debuggable" to BuildConfig.DEBUG,
                             "trajectory" to if (resize) "triangle" else "sine",
                             "frames" to rows.size, "distinct_vsyncs" to vsyncs.size, "drawn_revisions" to drawn,
@@ -286,6 +292,7 @@ class AndroidWorkspacePerformanceTest {
                 scenario.onActivity { owner.view.viewTreeObserver.removeOnDrawListener(drawListener) }
                 frames.quitSafely()
                 scenario.onActivity { host.clearActionError() }
+                action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to savedTransparency)))
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString() == saved.toString() }
             }

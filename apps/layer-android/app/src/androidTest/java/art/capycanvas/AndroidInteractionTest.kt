@@ -1170,7 +1170,8 @@ class AndroidInteractionTest {
             capture(name) { sample ->
                 assertEquals("$name: connector is not darkened by the drawer shadow", panelColor, sample(bridge))
                 val fill = sample(middle)
-                if (selected) assertTrue("$name: open button is blue", android.graphics.Color.blue(fill) > android.graphics.Color.red(fill))
+                if (selected) assertEquals("$name: open button uses the selection color",
+                    android.graphics.Color.parseColor(state().getJSONObject("palette").getString("selection")), fill)
                 else assertEquals("$name: toolbar source is not darkened", panelColor, fill)
                 (corners + far).forEach { point ->
                     val color = sample(point)

@@ -29,7 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -105,7 +104,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).shadow(6.dp, shape).clip(shape).glass(shape, LocalPalette.current.panelFill)
+                    .chromeRegion(dock).panelShadow(6.dp, shape).clip(shape).glass(shape, LocalPalette.current.panelFill)
                     .combinedClickable(interactionSource = remember { MutableInteractionSource() },
                         indication = rememberChromeFocusIndication(), onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
@@ -235,7 +234,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                 else clipRect(cut.left * dock.density, cut.top * dock.density, cut.right * dock.density, cut.bottom * dock.density,
                     ClipOp.Difference) { this@drawWithContent.drawContent() }
             }
-            .shadow(12.dp, shape, clip = false))
+            .panelShadow(12.dp, shape))
         connection?.let { DrawerBridge(it, dock, z.toFloat()) }
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
             .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
