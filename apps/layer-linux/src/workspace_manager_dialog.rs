@@ -490,7 +490,7 @@ impl ManagerUi {
                             .borrow()
                             .as_ref()
                             .is_some_and(|g| g.session.require_workspace_idle().is_ok());
-                        let details = manager.inspect_details(&stored, idle, now_ms()).await;
+                        let details = manager.details(&stored, idle, now_ms());
                         if w.workspaces.ui.generation.get() == generation {
                             w.workspaces.ui.render(&w, details);
                         }

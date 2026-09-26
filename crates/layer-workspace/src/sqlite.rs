@@ -221,17 +221,6 @@ impl SqliteStore {
                         .collect::<Result<_>>()?,
                 ))
             }
-            StoreRequest::Raw { id } => {
-                let (metadata, content, working): (String, String, Option<String>) =
-                    self.connection.query_row(
-                        "SELECT metadata,content,working FROM items WHERE id=?1",
-                        [&id],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                    )?;
-                Ok(StoreResponse::Raw(serde_json::to_string(
-                    &serde_json::json!({"id":id,"metadata":metadata,"content":content,"working":working}),
-                )?))
-            }
             StoreRequest::Reopen => {
                 self.connection
                     .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;

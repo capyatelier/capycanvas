@@ -64,8 +64,7 @@ class AndroidWorkspaceManagerTest {
     }
     @Test fun restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator() {
         val name="Paint"
-        val workspace=view().getJSONArray("defaults").objects().first{it.getString("title")==name}
-        tap("workspace-switch-${workspace.getString("id")}");idle()
+        tap("workspace-switch-builtin:workspace:painter");idle()
         action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
         menu("Restore Starting Layout…");tap("workspace-submit");idle()
         fun tabs(node:Any?):List<List<Any>> = when(node) {
@@ -132,8 +131,7 @@ class AndroidWorkspaceManagerTest {
         compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("workspace-name")), useUnmergedTree = true).performTextReplacement("Tablet Inking")
         tap("workspace-submit"); idle(); tap("workspace-cancel")
         assertEquals("Tablet Inking", view().getString("name"))
-        for (row in view().array("defaults").objects()) {
-            val id = row.getString("id")
+        for (id in listOf("builtin:workspace:painter", "builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             shot("before-header-switch")
             tap("workspace-switch-$id"); idle()
             if (id != view().getString("id")) {

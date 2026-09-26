@@ -95,7 +95,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
   const shot=async name=>{const image=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${artifacts}/${name}.png`,Buffer.from(image.data,"base64"));};
   await idle();
   await checkWorkspaceFocus({evaluate,settle});
-  const initial=await view(), [p,i,f]=initial.defaults.map(row=>row.id), original=await durable(), originalLayout=await layout();
+  const initial=await view(), [p,i,f]=['builtin:workspace:painter','builtin:workspace:illustrator','builtin:workspace:photographer'], original=await durable(), originalLayout=await layout();
   await evaluate("window.workspacePointerTypes=[];document.addEventListener('pointerdown',e=>workspacePointerTypes.push(e.pointerType));window.workspaceEvents=[];for(const type of ['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture'])document.addEventListener(type,e=>{workspaceEvents.push({type,device:e.pointerType,target:e.target.className?.baseVal??e.target.className,x:e.clientX,y:e.clientY});if(workspaceEvents.length>80)workspaceEvents.shift();},true);");
   try {
     await send({type:"open",page:"workspaces"}); await click(`${row(f)} .workspace-choice`);
@@ -149,7 +149,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     // Create enough real workspace records to exercise the scrolling list and pill.
     const custom=[];
     for(let n=0;n<9;n++) {
-      await send({type:"form",kind:"new"}); await send({type:"submit",name:n?`Study ${n}`:"Sketching",source:null}); custom.push((await view()).id);
+      await send({type:"form",kind:"new"}); await send({type:"submit",name:n?`Study ${n}`:"Sketching"}); custom.push((await view()).id);
       assert.ok((await pins()).includes(custom[n]),"new workspace is pinned by default");
       assert.deepEqual(await shown(),await pins());
     }

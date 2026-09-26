@@ -83,7 +83,7 @@ import org.json.JSONArray
                 if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
             }
         }, dismissButton = { TextButton(cancel) { Text("Cancel") } }, confirmButton = {
-            TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name, "source" to null)) }, enabled = !busy,
+            TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name)) }, enabled = !busy,
                 modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && kind != "recover") "Retry" else form.getString("confirm"),
                 color = if (kind == "delete") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
         })

@@ -25,14 +25,6 @@ impl StoreReply {
             ))),
         }
     }
-    pub fn wait(self) -> Result<StoreResponse> {
-        self.0.recv_blocking().unwrap_or_else(|_| {
-            Err(StoreError::new(
-                ErrorKind::Unavailable,
-                "Workspace storage worker stopped.",
-            ))
-        })
-    }
 }
 struct Worker {
     sender: Option<mpsc::Sender<Message>>,

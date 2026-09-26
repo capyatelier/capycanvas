@@ -127,11 +127,11 @@ window focus. Keep workspace decisions in shared Rust. In particular:
 
 Native hosts use `layer-workspace` with its `native` feature and one
 `StoreWorker::shared` service per installation directory. Keep disk work off the
-UI/render thread; await or poll replies instead of using blocking `StoreReply::wait`
-there. Web needs the actual IndexedDB adapter; native SQLite being complete does
-not mean web storage already exists. IndexedDB must validate generations/ownership
-and atomically publish the complete prepared batch, acknowledging transaction
-completion rather than individual request success.
+UI/render thread; await or poll replies. Web needs the actual IndexedDB adapter;
+native SQLite being complete does not mean web storage already exists. IndexedDB
+must validate generations/ownership and atomically publish the complete prepared
+batch, acknowledging transaction completion rather than individual request
+success.
 
 Hosts do not import workspace state saved before the shared store; a new store
 starts from the included workspaces. Preserve unreadable or newer store data; do

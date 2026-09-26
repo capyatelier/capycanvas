@@ -94,10 +94,10 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await text('.workspace-form input','Web Inking Acceptance'); await click('.workspace-form .suggested-action'); await idle();
     assert.equal((await view()).name,'Web Inking Acceptance'); await click('.workspace-manager footer button');
     // Header switches address stable identities and preserve their arrangements.
-    for (const row of (await view()).defaults) {
-      await click(`.workspace-switcher button[data-workspace-id="${row.id}"]`); await idle();
-      assert.equal((await view()).id,row.id);
-      assert.equal(await evaluate(`document.querySelector('[data-workspace-id="${row.id}"]').getAttribute('aria-pressed')`),'true');
+    for (const id of ['builtin:workspace:painter','builtin:workspace:illustrator','builtin:workspace:photographer']) {
+      await click(`.workspace-switcher button[data-workspace-id="${id}"]`); await idle();
+      assert.equal((await view()).id,id);
+      assert.equal(await evaluate(`document.querySelector('[data-workspace-id="${id}"]').getAttribute('aria-pressed')`),'true');
     }
     await menu('Manage Workspaces…');
     for (const row of (await view()).rows.filter(r=>r.id.startsWith('builtin:workspace:'))) {
@@ -138,7 +138,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await reload(); await wait('window.layerApp?.startupTimes.complete != null', 55000); await idle();
     assert.equal((await view()).id,created); assert.deepEqual((await capture()).working,expectedReset.working);
     const deleted=created, beforeDelete=await capture();
-    const illustrator=(await view()).defaults.find(row=>row.id==='builtin:workspace:illustrator').id;
+    const illustrator='builtin:workspace:illustrator';
     await menu('Manage Workspaces…');
     const rowsBeforeDelete=(await view()).rows.map(row=>row.id);
     const deleteForm=async()=>{
@@ -170,7 +170,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     if (created) {
       await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:${JSON.stringify(original)}}));null`); await idle();
       await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'form',kind:'delete',id:${JSON.stringify(created)}}));null`);
-      await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"submit",name:"",source:null}));null'); await idle();
+      await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"submit",name:""}));null'); await idle();
     }
     assert.equal((await view()).id,original);
     assert.deepEqual(normalized(await capture()),normalized(originalCapture),'Original workspace is preserved');

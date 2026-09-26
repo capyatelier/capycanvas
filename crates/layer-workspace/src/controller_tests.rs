@@ -391,7 +391,7 @@ fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();
     f.input(serde_json::json!({"type":"form","kind":"new","id":null}));
-    f.input(serde_json::json!({"type":"submit","name":"Painting","source":null}));
+    f.input(serde_json::json!({"type":"submit","name":"Painting"}));
     let painting = f.controller.view.id.clone().unwrap();
     assert_ne!(painting, original);
     f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
@@ -414,13 +414,6 @@ fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     f.input(serde_json::json!({"type":"select","id":original}));
     assert_eq!(f.controller.view.id.as_deref(), Some(painting.as_str()));
     assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
-    f.input(serde_json::json!({"type":"filter","query":"Does not match anything"}));
-    assert!(f.controller.view.selected.is_none());
-    assert!(!f.controller.view.enabled);
-    assert_eq!(
-        f.host.session.state().workspace.layout,
-        capture.history.layout().clone()
-    );
     f.input(serde_json::json!({"type":"cancel"}));
     f.input(serde_json::json!({"type":"open","page":"history"}));
     f.input(serde_json::json!({"type":"select","id":"r0"}));
@@ -482,14 +475,6 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();
     let initial = f.host.session.capture_workspace().unwrap();
-    let defaults: Vec<_> = f
-        .controller
-        .view
-        .defaults
-        .iter()
-        .map(|r| r.id.clone())
-        .collect();
-    assert_eq!(defaults.len(), 3);
     let painter = "builtin:workspace:painter";
     f.input(serde_json::json!({"type":"switch","id":painter}));
     f.action(serde_json::json!({"type":"set_brush_size","value":73.0}));
@@ -533,12 +518,13 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     );
     assert_eq!(
         f.controller
-            .view
-            .defaults
+            .manager
+            .items()
             .iter()
-            .find(|r| r.id == painter)
+            .find(|i| i.id == painter)
             .unwrap()
-            .title,
+            .metadata
+            .name,
         "Sketch"
     );
     f.input(serde_json::json!({"type":"cancel"}));

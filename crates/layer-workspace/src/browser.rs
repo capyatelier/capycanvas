@@ -252,7 +252,8 @@ impl BrowserDatabase {
         Ok(())
     }
     /// Failure leaves the original snapshot unchanged, including multi-item
-    /// mutations, ownership changes, migrations, bindings and receipts.
+    /// mutations, ownership changes, bindings and receipts.
+    #[cfg(test)]
     pub fn execute(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         let mut transaction = self.clone();
         let response = transaction.apply(request, now)?;
@@ -261,7 +262,7 @@ impl BrowserDatabase {
     }
     /// Consume a transaction-local database without copying its retained history.
     /// On failure the candidate is dropped; the caller must reload its durable
-    /// snapshot. Callers retaining this instance across failure use `execute`.
+    /// snapshot.
     pub fn execute_owned(mut self, request: StoreRequest, now: u64) -> Result<(Self, StoreResponse)> {
         let response = self.apply(request, now)?;
         Ok((self, response))
@@ -367,7 +368,6 @@ impl BrowserDatabase {
                 s.entity.validate()?;
                 StoreResponse::Entity(Box::new(s))
             }
-            Raw { id } => StoreResponse::Raw(serde_json::to_string(self.record(&id)?)?),
             Claim {
                 id,
                 owner,

@@ -20,7 +20,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const recoveryButton = button("Workspace save failed…", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
   recoveryButton.hidden = true; switcher.root.after(recoveryButton);
   let switcherRevision;
-  let view, lastView, pageKey, rowsKey, formKey, timer, formName, formSource, formError, formSubmit, previousFocus, observePending = false;
+  let view, lastView, pageKey, rowsKey, formKey, timer, formName, formError, formSubmit, previousFocus, observePending = false;
   const expectedCloses = new WeakMap();
   const channel = new BroadcastChannel("capycanvas.workspace.windows");
   channel.addEventListener("message", e => {
@@ -93,9 +93,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
           const label = element("label", "", "Name"); formName = element("input"); formName.value = form.name; formName.maxLength = 100;
           formName.setAttribute("aria-label", "Name"); label.append(formName); formDialog.append(label);
         }
-        formSource = null;
         formError = element("p", "workspace-error"); const footer = element("footer");
-        formSubmit = button(form.confirm, () => send({ type: "submit", name: formName?.value || "", source: formSource?.value || null }), "suggested-action");
+        formSubmit = button(form.confirm, () => send({ type: "submit", name: formName?.value || "" }), "suggested-action");
         if (form.kind === "delete") formSubmit.classList.add("destructive-action");
         footer.append(button("Cancel", cancel), formSubmit); formDialog.append(formError, footer);
       }

@@ -363,7 +363,6 @@ impl NativeWorkspaces {
         if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
             gpu.session.end_workspace_transition();
         }
-        manager.finish_transition();
         self.busy.set(false);
         self.update_input_state(w);
         self.update_status();

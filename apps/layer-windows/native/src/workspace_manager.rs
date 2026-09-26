@@ -936,7 +936,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                                 Some(manager.prepare_switch(&id, wall_ms).await?)
                             }
                             Mutation::Create => {
-                                Some(manager.create_workspace(&name, false, wall_ms).await?)
+                                Some(manager.create_workspace(&name, wall_ms).await?)
                             }
                             Mutation::History(revision) => Some(
                                 manager

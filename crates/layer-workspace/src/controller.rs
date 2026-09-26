@@ -78,7 +78,6 @@ pub struct WorkspaceView {
     pub form: Option<WorkspaceForm>,
     pub error: Option<String>,
     pub focus_window: Option<String>,
-    pub defaults: Vec<WorkspaceRow>,
     /// Persistently pinned choices, used by the manager's visibility controls.
     pub switcher: Vec<WorkspaceRow>,
     /// Header choices, including the current workspace when it is unpinned.
@@ -106,9 +105,6 @@ pub enum WorkspaceInput {
     Select {
         id: Option<String>,
     },
-    Filter {
-        query: String,
-    },
     Cancel,
     Confirm,
     Form {
@@ -117,7 +113,6 @@ pub enum WorkspaceInput {
     },
     Submit {
         name: String,
-        source: Option<String>,
     },
     Switch {
         id: String,
@@ -156,7 +151,6 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     renew: Option<Task<()>>,
     preview: Option<(u64, Task<DockLayout>)>,
     selection_generation: u64,
-    query: String,
     generation: Option<u64>,
     last_renew: u64,
     last_edit: u64,
@@ -189,7 +183,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             renew: None,
             preview: None,
             selection_generation: 0,
-            query: String::new(),
             generation: None,
             last_renew: now,
             last_edit: now,
@@ -265,22 +258,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     fn rows(&mut self, now: u64) {
         self.view.id = self.manager.active_id();
         self.view.name = self.manager.active_name().unwrap_or_default();
-        self.view.defaults = DEFAULT_WORKSPACES
-            .iter()
-            .map(|(id, preset)| WorkspaceRow {
-                id: (*id).into(),
-                title: self
-                    .manager
-                    .items()
-                    .iter()
-                    .find(|i| i.id == *id)
-                    .map(|i| i.metadata.name.clone())
-                    .unwrap_or_else(|| preset.name().into()),
-                subtitle: String::new(),
-                options: false,
-                delete: false,
-            })
-            .collect();
         self.view.order = self.manager.workspace_ids();
         let items = self.manager.items();
         let switcher_rows = |ids: Vec<String>| {
@@ -323,11 +300,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .map(|capture| {
                     layout_history_versions(&capture.history)
                         .into_iter()
-                        .filter(|r| {
-                            r.description
-                                .to_lowercase()
-                                .contains(&self.query.to_lowercase())
-                        })
                         .map(|r| {
                             let subtitle = if r.id == capture.history.current {
                                 format!("Current layout · {}", date(r.timestamp_ms))
@@ -347,7 +319,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .unwrap_or_default()
         } else {
             self.manager
-                .rows(ManagerPage::Workspaces, &self.query, now)
+                .rows(ManagerPage::Workspaces, "", now)
                 .into_iter()
                 .map(|r| {
                     let actions = self
@@ -525,18 +497,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     change = self.select(session, id)?;
                 }
             }
-            WorkspaceInput::Filter { query } => {
-                self.query = query;
-                self.rows(now);
-                if self
-                    .view
-                    .selected
-                    .as_ref()
-                    .is_some_and(|id| !self.view.rows.iter().any(|r| &r.id == id))
-                {
-                    change = self.select(session, None)?;
-                }
-            }
             input => {
                 if matches!(input, WorkspaceInput::Retry)
                     && self.incoming.is_some()
@@ -567,7 +527,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     WorkspaceInput::Open { page } => {
                         self.start_transition(session)?;
                         change = self.stop_preview(session);
-                        self.query.clear();
                         self.view.form = None;
                         self.view.page = Some(page.clone());
                         let id = if page == "workspaces" {
@@ -646,7 +605,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             id,
                         });
                     }
-                    WorkspaceInput::Submit { name, source: _ } => {
+                    WorkspaceInput::Submit { name } => {
                         let form =
                             self.view.form.clone().ok_or_else(|| {
                                 StoreError::invalid("Open a workspace dialog first.")
@@ -676,7 +635,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.task = Some(Task::new(async move {
                             Ok(match form.kind.as_str() {
                                 "new" => Outcome::adopt(
-                                    m.create_workspace(&name, false, now).await?,
+                                    m.create_workspace(&name, now).await?,
                                 ),
                                 "rename" => {
                                     let id = form

@@ -103,9 +103,6 @@ impl NativeWorkspaces {
         if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
             gpu.session.end_workspace_transition();
         }
-        if let Some(manager) = &self.manager {
-            manager.finish_transition();
-        }
         self.busy.set(false);
         self.update_input_state(w);
         self.update_status();
@@ -466,7 +463,7 @@ impl NativeWorkspaces {
             let _operation = self.begin_operation(w).await?;
             let outcome: Result<Option<StoredEntity>> = match &action {
                 A::New => manager
-                    .create_workspace(&name, false, now_ms())
+                    .create_workspace(&name, now_ms())
                     .await
                     .map(Some),
                 A::Duplicate(id)

@@ -2,6 +2,9 @@ use super::*;
 use layer_ui::{DockLayout, WorkspaceCapture};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+fn wait(reply: StoreReply) -> Result<StoreResponse> {
+    pollster::block_on(reply.into_future())
+}
 struct FakeClock(AtomicU64);
 impl Clock for FakeClock {
     fn now_ms(&self) -> u64 {
@@ -158,7 +161,7 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
         .unwrap();
     let worker = StoreWorker::shared(&f.directory).unwrap();
     assert_eq!(
-        worker.request(StoreRequest::List).wait().unwrap_err().kind,
+        wait(worker.request(StoreRequest::List)).unwrap_err().kind,
         ErrorKind::UnsupportedSchema
     );
     #[cfg(windows)]
@@ -168,17 +171,12 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
         "WORKSPACES.SQLITE3-SHM",
         "WORKSPACES.SQLITE3-LOCK",
     ] {
-        assert!(
-            worker
-                .backup_database(&f.directory.join(name))
-                .wait()
-                .is_err()
-        );
+        assert!(wait(worker.backup_database(&f.directory.join(name))).is_err());
     }
     let destination = f.directory.join("original-backup.sqlite3");
     // Native save pickers can authorize replacing an earlier backup.
     std::fs::write(&destination, b"previous successful backup").unwrap();
-    worker.backup_database(&destination).wait().unwrap();
+    wait(worker.backup_database(&destination)).unwrap();
     let backup = Connection::open(&destination).unwrap();
     assert_eq!(
         backup
@@ -198,9 +196,7 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
     );
     for suffix in ["", "-wal", "-shm", "-lock"] {
         assert!(
-            worker
-                .backup_database(&f.directory.join(format!("workspaces.sqlite3{suffix}")))
-                .wait()
+            wait(worker.backup_database(&f.directory.join(format!("workspaces.sqlite3{suffix}"))))
                 .is_err()
         );
     }
@@ -229,7 +225,7 @@ fn failed_database_export_keeps_the_existing_destination() {
     let destination = directory.join("previous-backup.sqlite3");
     std::fs::write(&destination, b"previous successful backup").unwrap();
     let worker = StoreWorker::shared(&directory).unwrap();
-    assert!(worker.backup_database(&destination).wait().is_err());
+    assert!(wait(worker.backup_database(&destination)).is_err());
     assert_eq!(
         std::fs::read(destination).unwrap(),
         b"previous successful backup"
@@ -842,9 +838,6 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
     );
     assert!(f.store.load(&bad.entity.id).is_err());
     assert_eq!(f.store.load(&good.entity.id).unwrap(), good);
-    assert!(
-        matches!(f.store.handle(StoreRequest::Raw { id: bad.entity.id }).unwrap(), StoreResponse::Raw(v) if v.contains("unknown newer payload"))
-    );
     f.store
         .connection
         .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
@@ -892,10 +885,10 @@ fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
     let directory = std::env::temp_dir().join(format!("capy-workspace-joined-{}", new_id()));
     let first = StoreWorker::shared(&directory).unwrap();
     let last = first.clone();
-    first.request(StoreRequest::List).wait().unwrap();
+    wait(first.request(StoreRequest::List)).unwrap();
     drop(first);
     // Closing one window leaves another window's shared worker operational.
-    last.request(StoreRequest::List).wait().unwrap();
+    wait(last.request(StoreRequest::List)).unwrap();
     let entity = workspace("Final accepted workspace");
     let id = entity.id.clone();
     let batch = CommitBatch::prepare(
@@ -940,14 +933,11 @@ fn native_worker_shares_storage_across_window_clients() {
     )
     .unwrap();
     assert!(matches!(
-        first
-            .request(StoreRequest::Commit { batch })
-            .wait()
-            .unwrap(),
+        wait(first.request(StoreRequest::Commit { batch })).unwrap(),
         StoreResponse::Committed(_)
     ));
     assert!(matches!(
-        second.request(StoreRequest::Load { id }).wait().unwrap(),
+        wait(second.request(StoreRequest::Load { id })).unwrap(),
         StoreResponse::Entity(_)
     ));
     drop(first);
@@ -1182,7 +1172,7 @@ fn dropped_window_retires_all_its_claims_after_queued_writes_not_other_windows()
         .unwrap(),
     });
     drop(manager);
-    let StoreResponse::List(items) = worker.request(StoreRequest::List).wait().unwrap() else {
+    let StoreResponse::List(items) = wait(worker.request(StoreRequest::List)).unwrap() else {
         panic!()
     };
     assert!(
@@ -1212,7 +1202,7 @@ fn dropped_window_retires_all_its_claims_after_queued_writes_not_other_windows()
             .owner,
         f.owner
     );
-    assert!(matches!(reply.wait().unwrap(), StoreResponse::Committed(_)));
+    assert!(matches!(wait(reply).unwrap(), StoreResponse::Committed(_)));
     assert!(f.store.claim(&closing.entity.id, Owner::fresh()).is_ok());
 }
 
@@ -1422,13 +1412,13 @@ fn failed_worker_open_can_be_retried_after_storage_becomes_available() {
     std::fs::write(&root, b"not a directory").unwrap();
     let worker = StoreWorker::shared(&root).unwrap();
     assert_eq!(
-        worker.request(StoreRequest::List).wait().unwrap_err().kind,
+        wait(worker.request(StoreRequest::List)).unwrap_err().kind,
         ErrorKind::Unavailable
     );
     std::fs::remove_file(&root).unwrap();
-    worker.request(StoreRequest::Reopen).wait().unwrap();
+    wait(worker.request(StoreRequest::Reopen)).unwrap();
     assert!(
-        matches!(worker.request(StoreRequest::List).wait().unwrap(), StoreResponse::List(v) if v.is_empty())
+        matches!(wait(worker.request(StoreRequest::List)).unwrap(), StoreResponse::List(v) if v.is_empty())
     );
     drop(worker);
     let _ = std::fs::remove_dir_all(root);

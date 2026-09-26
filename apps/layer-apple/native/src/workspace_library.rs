@@ -308,7 +308,6 @@ impl CapyWorkspaceLibrary {
                 };
                 if let Err(error) = self.manager.refresh_switcher().await {
                     self.manager.release(&incoming).await;
-                    self.manager.finish_transition();
                     return Err(error);
                 }
                 self.prepare(incoming)
@@ -340,9 +339,7 @@ impl CapyWorkspaceLibrary {
                                 self.manager.load(&id).await
                             };
                             match entity {
-                                Ok(entity) => {
-                                    Some(self.manager.inspect_details(&entity, idle, now).await)
-                                }
+                                Ok(entity) => Some(self.manager.details(&entity, idle, now)),
                                 Err(error) => {
                                     detail_error = Some(error.to_string());
                                     None
@@ -573,7 +570,6 @@ impl CapyWorkspaceLibrary {
                 if self.manager.active_id().as_deref() != Some(&incoming.entity.id) {
                     self.manager.release(&incoming).await;
                 }
-                self.manager.finish_transition();
                 Ok(Value::Null)
             }
             Request::Operation { operation, now } => self.operation(operation, now).await,
@@ -654,7 +650,7 @@ impl CapyWorkspaceLibrary {
                 self.prepare(incoming)
             }),
             Operation::New { name } => run!({
-                let incoming = self.manager.create_workspace(&name, false, now).await?;
+                let incoming = self.manager.create_workspace(&name, now).await?;
                 self.prepare(incoming)
             }),
             Operation::Duplicate { id, name } => run!({

@@ -80,7 +80,7 @@ pub fn workspace_database(
         }
         let request: StoreRequest = serde_json::from_str(&request)?;
         let read_only = !pending && matches!(&request,
-            StoreRequest::List | StoreRequest::Load { .. } | StoreRequest::Raw { .. }
+            StoreRequest::List | StoreRequest::Load { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
             | StoreRequest::Pending
             | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder

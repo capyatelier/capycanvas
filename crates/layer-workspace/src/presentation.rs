@@ -137,15 +137,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .collect(),
         })
     }
-    pub async fn inspect_details(
-        &self,
-        stored: &StoredEntity,
-        idle: bool,
-        now: u64,
-    ) -> ManagerDetails {
-        self.details(stored, idle, now)
-    }
-
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<ManagerRow> {
         if page == ManagerPage::ThisWorkspace {
             let Some(entity) = self.current() else {

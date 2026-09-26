@@ -29,6 +29,7 @@ class AndroidWorkspaceSwitcherTest {
     private var density = 1f
     private fun view() = host.workspaceManager!!
     private fun ids(field: String) = view().array(field).objects().map { it.getString("id") }
+    private val defaults = listOf("builtin:workspace:painter", "builtin:workspace:illustrator", "builtin:workspace:photographer")
     private fun order() = view().array("order").values().map { it.toString() }
     private fun layout() = host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").toString()
     private fun node(tag: String) = findTag(tag)
@@ -69,7 +70,7 @@ class AndroidWorkspaceSwitcherTest {
     private fun open() { send(obj("type" to "open", "page" to "workspaces")); waitFor("dialog focus") { node("workspace-manager")?.first?.view?.hasWindowFocus() == true } }
     private fun options(id: String, action: String) { tap("workspace-options-$id"); tap("workspace-$action") }
     private fun newWorkspace(name: String): String {
-        send(obj("type" to "form", "kind" to "new")); send(obj("type" to "submit", "name" to name, "source" to null))
+        send(obj("type" to "form", "kind" to "new")); send(obj("type" to "submit", "name" to name))
         return view().getString("id")
     }
     private fun shot(name: String) = screenshot("validation/workspace-switcher/$name.png")
@@ -101,7 +102,6 @@ class AndroidWorkspaceSwitcherTest {
         assertTrue("New workspaces start pinned", custom in ids("switcher"))
         val before = capture()
         val current = view().getString("id")
-        val defaults = ids("defaults")
         open(); tap("workspace-row-${defaults.last()}")
         shot("manager")
         val preview = layout()
@@ -209,7 +209,7 @@ class AndroidWorkspaceSwitcherTest {
         }
     }
 
-    @Test fun pendingRowsRetireOnEscapeBlurAndFiltering() {
+    @Test fun pendingRowsRetireOnEscapeAndBlur() {
         open()
         val before = order(); val a = before.first(); val c = before[2]
         val durable = capture()
@@ -237,17 +237,12 @@ class AndroidWorkspaceSwitcherTest {
             instrumentation.runOnMainSync { blocker.dismiss() }
             waitFor("manager regains focus") { node("workspace-manager")?.first?.view?.hasWindowFocus() == true }
             idle(); assertEquals(before, order())
-            down("workspace-row-$a")
-            send(obj("type" to "filter", "query" to "no rows match this")); SystemClock.sleep(700)
-            event(MotionEvent.ACTION_UP); idle()
-            instrumentation.runOnMainSync { assertNull(node("workspace-row-menu")); assertNull(node("workspace-row-drop-hint")) }
-            send(obj("type" to "filter", "query" to "")); assertEquals(before, order())
         }
         assertEquals(durable, capture())
     }
 
     @Test fun backgroundPreferenceRefreshKeepsWorkspaceButtonsActive() {
-        val target = ids("defaults").first()
+        val target = defaults.first()
         instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "refresh_switcher")) }
         waitFor("background refresh pending") { view().optBoolean("switcher_busy") }
         instrumentation.runOnMainSync {

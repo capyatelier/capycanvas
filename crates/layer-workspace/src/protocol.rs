@@ -370,9 +370,6 @@ pub enum StoreRequest {
         key: String,
     },
     Pending,
-    Raw {
-        id: String,
-    },
     Maintenance {
         owner: Option<Owner>,
         clear_older: bool,
@@ -397,7 +394,6 @@ pub enum StoreResponse {
     Receipt(Option<CommitReceipt>),
     Binding(Option<String>),
     Pending(Vec<CommitBatch>),
-    Raw(String),
     Storage(StorageReport),
     Done,
 }

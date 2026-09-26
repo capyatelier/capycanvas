@@ -648,11 +648,7 @@ fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
         let before = m.items().len();
         m.store.lose_reply.set(true);
         m.store.block_receipts.set(true);
-        assert!(
-            m.create_workspace("Pending Creation", false, 2_000)
-                .await
-                .is_err()
-        );
+        assert!(m.create_workspace("Pending Creation", 2_000).await.is_err());
         assert!(m.has_failed_operation());
         assert_eq!(m.active_id(), Some(outgoing.clone()));
         let mut capture = m.current().unwrap().capture().unwrap();
@@ -708,10 +704,7 @@ fn immediate_receipt_recovery_prevents_duplicate_named_actions() {
         let m = &f.manager;
         let before = m.items().len();
         m.store.lose_reply.set(true);
-        let incoming = m
-            .create_workspace("Accepted Once", false, 2_000)
-            .await
-            .unwrap();
+        let incoming = m.create_workspace("Accepted Once", 2_000).await.unwrap();
         assert_eq!(incoming.entity.metadata.name, "Accepted Once");
         assert_eq!(m.items().len(), before + 1);
         assert!(!m.has_failed_operation());
@@ -729,7 +722,7 @@ fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_at
         let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
         sql.execute_batch("CREATE TRIGGER interrupt_creation BEFORE INSERT ON items WHEN NEW.name='Interrupted Copy' BEGIN SELECT RAISE(ABORT,'interrupted publication'); END;").unwrap();
         assert!(
-            m.create_workspace("Interrupted Copy", true, 3_000)
+            m.create_from_snapshot(m.current().unwrap(), "Interrupted Copy", true, 3_000)
                 .await
                 .is_err()
         );
@@ -808,7 +801,7 @@ fn manager_recovery_library_and_backup_round_trip() {
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        let painting = m.create_workspace("Painting", false, 3_000).await.unwrap();
+        let painting = m.create_workspace("Painting", 3_000).await.unwrap();
         m.activate(painting.clone());
         let original = painting.entity.capture().unwrap().history.layout().clone();
         let mut capture = painting.entity.capture().unwrap();
@@ -822,9 +815,7 @@ fn manager_recovery_library_and_backup_round_trip() {
             .set_override(capture.working.preset, "size", 87.)
             .unwrap();
         m.observe(capture.clone(), 4_000);
-        let details = m
-            .inspect_details(&m.current_record().unwrap(), true, 6_000)
-            .await;
+        let details = m.details(&m.current_record().unwrap(), true, 6_000);
         assert_eq!(
             details
                 .actions
@@ -968,7 +959,10 @@ fn duplication_switching_and_original_baselines_are_independent() {
             .set_override(capture.working.preset, "size", 91.)
             .unwrap();
         m.observe(capture.clone(), 2_000);
-        let duplicate = m.create_workspace("Experiment", true, 4_000).await.unwrap();
+        let duplicate = m
+            .create_from_snapshot(m.current().unwrap(), "Experiment", true, 4_000)
+            .await
+            .unwrap();
         assert_eq!(
             duplicate.entity.capture().unwrap().history.revisions.len(),
             2
@@ -1002,7 +996,7 @@ fn failed_outgoing_save_prevents_switch_and_retains_accepted_edits_for_retry() {
         let f = Fixture::new();
         let m = &f.manager;
         let source = m.current().unwrap();
-        let target = m.create_workspace("Inking", false, 2_000).await.unwrap();
+        let target = m.create_workspace("Inking", 2_000).await.unwrap();
         m.release(&target).await;
         let mut working = source.working.unwrap();
         working.zen_mode = true;

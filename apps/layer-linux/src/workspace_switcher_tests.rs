@@ -394,10 +394,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
     let original = manager.current().unwrap().capture().unwrap();
     let create = |name: &str| {
         glib::MainContext::default().block_on(async {
-            let incoming = manager
-                .create_workspace(name, false, now_ms())
-                .await
-                .unwrap();
+            let incoming = manager.create_workspace(name, now_ms()).await.unwrap();
             w.workspaces.adopt(&w, Ok(incoming)).await;
         });
         pump(100);

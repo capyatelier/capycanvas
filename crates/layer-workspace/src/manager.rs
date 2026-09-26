@@ -29,7 +29,6 @@ pub struct WorkspaceManager<S: WorkspaceStore> {
     pub platform: Platform,
     state: RefCell<State>,
     saving: Cell<bool>,
-    transitioning: Cell<bool>,
 }
 impl<S: WorkspaceStore> Drop for WorkspaceManager<S> {
     fn drop(&mut self) {
@@ -44,7 +43,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             platform,
             state: RefCell::new(State::default()),
             saving: Cell::new(false),
-            transitioning: Cell::new(false),
         }
     }
     pub fn active_id(&self) -> Option<String> {
@@ -101,9 +99,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn saving(&self) -> bool {
         self.saving.get()
     }
-    pub fn transitioning(&self) -> bool {
-        self.transitioning.get()
-    }
     pub fn dirty(&self) -> bool {
         let s = self.state.borrow();
         match (&s.saved, &s.latest) {
@@ -142,20 +137,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         s.pending = None;
         s.error = None;
         s.error_operation = None;
-        self.transitioning.set(false);
         outgoing
-    }
-    pub fn finish_transition(&self) {
-        self.transitioning.set(false);
-    }
-    pub fn begin_transition(&self) -> Result<()> {
-        if self.transitioning.replace(true) {
-            return Err(StoreError::new(
-                ErrorKind::Conflict,
-                "A workspace change is already in progress.",
-            ));
-        }
-        Ok(())
     }
     async fn publish(&self, batch: CommitBatch) -> Result<CommitReceipt> {
         let id = batch.operation_id.clone();
@@ -739,45 +721,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         Ok(())
     }
-    pub async fn create_workspace(
-        &self,
-        name: &str,
-        duplicate: bool,
-        now: u64,
-    ) -> Result<StoredEntity> {
+    pub async fn create_workspace(&self, name: &str, now: u64) -> Result<StoredEntity> {
         validate_name(name.trim())?;
-        self.flush().await?;
-        let entity = if let Some(current) = self.current() {
-            let capture = current.capture()?;
-            let ItemContent::Workspace { baseline, .. } = current.content else {
-                unreachable!()
-            };
-            if duplicate {
-                Entity::workspace(name, capture, *baseline, now)
-            } else {
-                let baseline = capture.history.layout().clone();
-                Entity::workspace(
-                    name,
-                    WorkspaceCapture {
-                        history: layer_ui::LayoutHistory::new(&baseline),
-                        working: capture.working,
-                    },
-                    baseline,
-                    now,
-                )
-            }
-        } else {
-            return Err(StoreError::invalid("No workspace is active."));
-        };
-        self.create_and_bind(
-            entity,
-            if duplicate {
-                NamePolicy::Unique
-            } else {
-                NamePolicy::Exact
-            },
-        )
-        .await
+        let current = self
+            .current()
+            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+        self.create_from_snapshot(current, name, false, now).await
     }
     pub async fn rename(&self, id: &str, name: &str, description: &str, now: u64) -> Result<()> {
         self.flush().await?;

@@ -14,7 +14,7 @@ export async function checkPaintColumns({call,evaluate,settle}) {
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:illustrator'&&${idle}`);
   await input({type:'form',kind:'reset',id:null});
   await wait(`!!JSON.parse(layerApp.app.workspace_view()).form`);
-  await input({type:'submit',name:'',source:null});
+  await input({type:'submit',name:''});
   await wait(idle);
   assert.deepEqual(await evaluate('layerApp.state().workspace.layout.fit_height_groups'),[10,14]);
   const geometry=()=>evaluate(`(()=>{
